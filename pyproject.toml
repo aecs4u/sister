@@ -1,0 +1,69 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.backends._legacy:_Backend"
+
+[project]
+name = "visura-api"
+version = "0.1.0"
+description = "Servizio API per l'estrazione automatizzata di dati catastali dal portale SISTER dell'Agenzia delle Entrate"
+readme = "README.md"
+license = {text = "GPL-3.0-only"}
+requires-python = ">=3.11"
+authors = [
+    {name = "Visura API Contributors"}
+]
+keywords = ["catasto", "visura", "sister", "agenzia-entrate", "api", "fastapi"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Libraries",
+    "Framework :: FastAPI",
+]
+
+dependencies = [
+    "fastapi==0.104.1",
+    "uvicorn==0.24.0",
+    "playwright==1.40.0",
+    "beautifulsoup4",
+    "pydantic==2.5.0",
+    "python-dotenv",
+    "requests==2.31.0",
+    "email-validator",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "pytest-cov>=4.0",
+    "pytest-asyncio>=0.21",
+    "black>=23.0",
+    "ruff>=0.1.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/menimenocchio/visura-api"
+Repository = "https://github.com/menimenocchio/visura-api"
+Issues = "https://github.com/menimenocchio/visura-api/issues"
+Changelog = "https://github.com/menimenocchio/visura-api/blob/main/CHANGELOG.md"
+
+[tool.black]
+line-length = 120
+target-version = ["py311"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I"]
+ignore = ["E501"]
+
+[tool.pytest.ini_options]
+testpaths = ["."]
+python_files = ["test_*.py"]
+python_functions = ["test_*"]
+asyncio_mode = "auto"

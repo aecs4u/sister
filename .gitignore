@@ -1,0 +1,41 @@
+# Ambiente virtuale Python
+.venv/
+venv/
+env/
+
+# Variabili d'ambiente (contiene credenziali!)
+.env
+
+# Log
+logs/
+*.log
+
+# Cache Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+*.egg-info/
+dist/
+build/
+*.egg
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Sistema operativo
+.DS_Store
+Thumbs.db
+
+# File di debug generati dall'applicazione
+/tmp/debug_*.html
+
+# Backup
+backup_original/
+
+# Docker
+docker-compose.override.yaml
