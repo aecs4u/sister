@@ -30,7 +30,7 @@ async def login(page: Page):
     print("[LOGIN] Clicco 'Entra con SPID'...")
     await page.get_by_role("button", name="Entra con SPID").click()
     print("[LOGIN] Clicco 'Sielte ID'...")
-    await page.get_by_role("link", name="Sielte ID").click()
+    await page.locator('a[href*="sielte"]').click()
     print("[LOGIN] Inserisco username...")
     await page.get_by_role("textbox", name="Codice Fiscale / Partita IVA").press("CapsLock")
     await page.get_by_role("textbox", name="Codice Fiscale / Partita IVA").fill(ade_username)
