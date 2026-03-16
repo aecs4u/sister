@@ -29,6 +29,7 @@ Servizio REST per l'estrazione automatizzata di dati catastali dal portale **SIS
 - [Dettagli tecnici](#dettagli-tecnici)
 - [Sviluppo e contribuzione](#sviluppo-e-contribuzione)
 - [Risoluzione dei problemi](#risoluzione-dei-problemi)
+- [Autore](#autore)
 - [Licenza](#licenza)
 
 ---
@@ -719,6 +720,12 @@ Leggi [CONTRIBUTING.md](CONTRIBUTING.md) per il dettaglio completo. In breve:
 | Log HTML vuoti o mancanti | Errore durante il salvataggio | Controlla i permessi sulla directory `logs/pages/` |
 
 Per debug approfondito, ispeziona i file HTML in `logs/pages/` — mostrano esattamente cosa vedeva il browser in ogni step.
+
+---
+
+## Autore
+
+Sviluppato da [zornade](https://zornade.com).
 
 ---
 
