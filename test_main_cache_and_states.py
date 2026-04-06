@@ -1,4 +1,5 @@
 import json
+from contextlib import suppress
 from datetime import datetime, timedelta
 
 import pytest
@@ -140,7 +141,8 @@ async def test_stop_worker_sentinel_shutdown_clears_state(main_module):
     service = main_module.VisuraService()
     service.pending_request_ids.add("req_F_pending_before_stop")
 
-    await service.initialize()
+    service.processing = True
+    service._worker_task = main_module.asyncio.create_task(service._process_requests())
     assert service.processing is True
     assert service._worker_task is not None
     assert service._worker_task.done() is False
@@ -193,3 +195,119 @@ async def test_get_response_expiry_transitions_state_to_expired(main_module):
 
     assert result is None
     assert service.get_request_state(request_id) == "expired"
+
+
+def test_get_request_state_triggers_cleanup_for_expired_entries(main_module):
+    service = main_module.VisuraService()
+    service.response_ttl_seconds = 1
+    request_id = "req_F_state_cleanup"
+    old_ts = datetime.now() - timedelta(seconds=2)
+    service.response_store[request_id] = _response(main_module, request_id, timestamp=old_ts)
+
+    state = service.get_request_state(request_id)
+
+    assert state == "expired"
+    assert request_id not in service.response_store
+    assert request_id in service.expired_request_ids
+
+
+@pytest.mark.asyncio
+async def test_richiedi_visura_returns_429_when_queue_full(main_module):
+    service = main_module.VisuraService()
+    service.processing = True
+    service.request_queue = main_module.asyncio.Queue(maxsize=1)
+    service.request_queue.put_nowait(object())
+    request = main_module.VisuraInput(
+        provincia="Trieste",
+        comune="TRIESTE",
+        foglio="9",
+        particella="166",
+        tipo_catasto="F",
+    )
+
+    with pytest.raises(main_module.HTTPException) as exc_info:
+        await main_module.richiedi_visura(request, service)
+
+    assert exc_info.value.status_code == 429
+
+
+def test_require_api_key_enforced_when_configured(monkeypatch, main_module):
+    monkeypatch.setattr(main_module, "api_key", "super-secret", raising=False)
+
+    with pytest.raises(main_module.HTTPException) as exc_info:
+        main_module.require_api_key(None)
+    assert exc_info.value.status_code == 401
+
+    main_module.require_api_key("super-secret")
+
+
+@pytest.mark.asyncio
+async def test_periodic_cleanup_task_expires_old_entries(main_module):
+    service = main_module.VisuraService()
+    service.processing = True
+    service.response_ttl_seconds = 1
+    service.response_cleanup_interval_seconds = 1
+    request_id = "req_F_periodic_cleanup"
+    old_ts = datetime.now() - timedelta(seconds=2)
+    service.response_store[request_id] = _response(main_module, request_id, timestamp=old_ts)
+
+    task = main_module.asyncio.create_task(service._periodic_cleanup())
+    await main_module.asyncio.sleep(0)
+    service.processing = False
+    task.cancel()
+    with suppress(main_module.asyncio.CancelledError):
+        await task
+
+    assert request_id not in service.response_store
+    assert request_id in service.expired_request_ids
+
+
+@pytest.mark.asyncio
+async def test_richiedi_visura_returns_429_without_partial_enqueue_for_dual_tipo(main_module):
+    service = main_module.VisuraService()
+    service.processing = True
+    service.request_queue = main_module.asyncio.Queue(maxsize=1)
+    request = main_module.VisuraInput(
+        provincia="Trieste",
+        comune="TRIESTE",
+        foglio="9",
+        particella="166",
+    )
+
+    with pytest.raises(main_module.HTTPException) as exc_info:
+        await main_module.richiedi_visura(request, service)
+
+    assert exc_info.value.status_code == 429
+    assert service.request_queue.qsize() == 0
+    assert service.pending_request_ids == set()
+
+
+@pytest.mark.asyncio
+async def test_stop_worker_cancels_task_when_queue_full(main_module):
+    service = main_module.VisuraService()
+    service.processing = True
+    service.request_queue = main_module.asyncio.Queue(maxsize=1)
+    service.request_queue.put_nowait(object())
+
+    async def blocked_worker():
+        await main_module.asyncio.sleep(3600)
+
+    service._worker_task = main_module.asyncio.create_task(blocked_worker())
+
+    await service._stop_worker()
+
+    assert service.processing is False
+    assert service._worker_task is None
+
+
+@pytest.mark.asyncio
+async def test_stop_worker_stops_cleanup_task_even_if_worker_absent(main_module):
+    service = main_module.VisuraService()
+    service.processing = True
+    service._worker_task = None
+    service._cleanup_task = main_module.asyncio.create_task(main_module.asyncio.sleep(3600))
+
+    await service._stop_worker()
+
+    assert service.processing is False
+    assert service._cleanup_task is None

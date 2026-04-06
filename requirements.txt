@@ -7,3 +7,4 @@ python-dotenv
 requests>=2.31.0
 email-validator
 rich>=13.0
+aiosqlite>=0.19.0

@@ -1557,6 +1557,7 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "aecs4u-auth", extra = ["browser"] },
+    { name = "aiosqlite" },
     { name = "beautifulsoup4" },
     { name = "email-validator" },
     { name = "fastapi" },
@@ -1579,6 +1580,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "aecs4u-auth", extras = ["browser"], editable = "../aecs4u-auth" },
+    { name = "aiosqlite", specifier = ">=0.19.0" },
     { name = "beautifulsoup4" },
     { name = "black", marker = "extra == 'dev'", specifier = ">=23.0" },
     { name = "email-validator" },

@@ -37,5 +37,10 @@ Thumbs.db
 # Backup
 backup_original/
 
+# Database
+data/*.sqlite
+data/*.sqlite-wal
+data/*.sqlite-shm
+
 # Docker
 docker-compose.override.yaml

@@ -17,6 +17,7 @@ from playwright.async_api import Page
 from pydantic import BaseModel, Field, field_validator, model_validator
 from rich.logging import RichHandler
 
+from database import cleanup_old_responses, count_responses, find_responses, init_db, save_request, save_response
 from utils import extract_all_sezioni, run_visura, run_visura_immobile
 
 # Carica variabili d'ambiente da .env
@@ -301,7 +302,9 @@ class VisuraService:
     def __init__(self):
         self.browser_manager = BrowserManager()
         self.queue_max_size = self._parse_positive_int_env("QUEUE_MAX_SIZE", 100)
+        self.response_cleanup_interval_seconds = self._parse_positive_int_env("RESPONSE_CLEANUP_INTERVAL_SECONDS", 60)
         self.request_queue: asyncio.Queue = asyncio.Queue(maxsize=self.queue_max_size)
+        self._queue_lock = asyncio.Lock()
         self.response_store: Dict[str, VisuraResponse] = {}
         self.pending_request_ids: set[str] = set()
         self.expired_request_ids: Dict[str, datetime] = {}
@@ -309,6 +312,7 @@ class VisuraService:
         self.response_max_items = self._parse_positive_int_env("RESPONSE_MAX_ITEMS", 5000)
         self.processing = False
         self._worker_task: Optional[asyncio.Task] = None
+        self._cleanup_task: Optional[asyncio.Task] = None
 
     @staticmethod
     def _parse_positive_int_env(var_name: str, default: int) -> int:
@@ -334,6 +338,7 @@ class VisuraService:
         # Avvia il worker per processare le richieste
         self.processing = True
         self._worker_task = asyncio.create_task(self._process_requests(), name="visura-request-worker")
+        self._cleanup_task = asyncio.create_task(self._periodic_cleanup(), name="visura-cache-cleanup")
 
     async def _process_requests(self):
         """Processa le richieste in coda"""
@@ -349,13 +354,13 @@ class VisuraService:
 
                     if isinstance(request, VisuraRequest):
                         response = await self.browser_manager.esegui_visura(request)
-                        self._store_response(response)
+                        await self._store_response(response)
                         logger.info(f"Processata richiesta visura {request.request_id}")
                         should_sleep = True
 
                     elif isinstance(request, VisuraIntestatiRequest):
                         response = await self.browser_manager.esegui_visura_intestati(request)
-                        self._store_response(response)
+                        await self._store_response(response)
                         logger.info(f"Processata richiesta intestati {request.request_id}")
                         should_sleep = True
 
@@ -377,18 +382,53 @@ class VisuraService:
             self.processing = False
             logger.info("Worker richieste terminato")
 
+    async def _periodic_cleanup(self):
+        """Pulisce periodicamente le risposte scadute in cache e nel database."""
+        try:
+            while self.processing:
+                self._cleanup_response_store()
+                try:
+                    deleted = await cleanup_old_responses(self.response_ttl_seconds)
+                    if deleted:
+                        logger.info(f"Cleanup database: rimossi {deleted} record scaduti")
+                except Exception as e:
+                    logger.warning(f"Errore cleanup database: {e}")
+                await asyncio.sleep(self.response_cleanup_interval_seconds)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.error(f"Errore nel cleanup periodico cache: {e}")
+        finally:
+            logger.info("Task cleanup cache terminato")
+
+    async def _stop_cleanup_task(self):
+        task = self._cleanup_task
+        if task is None:
+            return
+        task.cancel()
+        with suppress(asyncio.CancelledError):
+            await task
+        self._cleanup_task = None
+
     async def _stop_worker(self):
         """Ferma il worker in modo pulito e attende la sua terminazione."""
         task = self._worker_task
         self.processing = False
 
         if task is None:
+            await self._stop_cleanup_task()
             return
 
         if not task.done():
-            await self.request_queue.put(None)
+            try:
+                self.request_queue.put_nowait(None)
+            except asyncio.QueueFull:
+                logger.warning("Coda piena durante stop worker; cancello task worker senza sentinel")
+                task.cancel()
             try:
                 await asyncio.wait_for(task, timeout=15)
+            except asyncio.CancelledError:
+                pass
             except asyncio.TimeoutError:
                 logger.warning("Timeout fermando il worker, forzo cancellazione task")
                 task.cancel()
@@ -397,6 +437,7 @@ class VisuraService:
 
         self._worker_task = None
         self.pending_request_ids.clear()
+        await self._stop_cleanup_task()
 
     def _is_response_expired(self, response: VisuraResponse) -> bool:
         age_seconds = (datetime.now() - response.timestamp).total_seconds()
@@ -419,42 +460,109 @@ class VisuraService:
             oldest_request_id = next(iter(self.expired_request_ids))
             self.expired_request_ids.pop(oldest_request_id, None)
 
-    def _store_response(self, response: VisuraResponse):
+    async def _store_response(self, response: VisuraResponse):
         self.response_store[response.request_id] = response
         self.expired_request_ids.pop(response.request_id, None)
         self._cleanup_response_store()
+        await save_response(
+            request_id=response.request_id,
+            success=response.success,
+            tipo_catasto=response.tipo_catasto,
+            data=response.data,
+            error=response.error,
+        )
 
-    async def add_request(self, request: VisuraRequest) -> str:
-        """Aggiunge una richiesta alla coda"""
+    def _queue_limit(self) -> int:
+        queue_maxsize = self.request_queue.maxsize
+        return queue_maxsize if queue_maxsize > 0 else self.queue_max_size
+
+    def _ensure_processing(self):
         if not self.processing:
             raise RuntimeError("Servizio non in esecuzione: impossibile accodare richieste")
 
-        if self.request_queue.full():
-            raise QueueFullError(f"Coda piena (max {self.queue_max_size})")
+    def _ensure_capacity(self, required_slots: int):
+        queue_maxsize = self.request_queue.maxsize
+        if queue_maxsize > 0 and self.request_queue.qsize() + required_slots > queue_maxsize:
+            raise QueueFullError(f"Coda piena (max {self._queue_limit()})")
 
+    def _enqueue_request_nowait(self, request: VisuraRequest | VisuraIntestatiRequest):
         self.pending_request_ids.add(request.request_id)
         self.expired_request_ids.pop(request.request_id, None)
-        await self.request_queue.put(request)
+        try:
+            self.request_queue.put_nowait(request)
+        except asyncio.QueueFull as e:
+            self.pending_request_ids.discard(request.request_id)
+            raise QueueFullError(f"Coda piena (max {self._queue_limit()})") from e
+
+    async def add_request(self, request: VisuraRequest) -> str:
+        """Aggiunge una richiesta alla coda"""
+        async with self._queue_lock:
+            self._ensure_processing()
+            self._ensure_capacity(required_slots=1)
+            self._enqueue_request_nowait(request)
         logger.info(
             f"Richiesta visura {request.request_id} aggiunta alla coda (posizione: {self.request_queue.qsize()})"
+        )
+        await save_request(
+            request_id=request.request_id,
+            request_type="visura",
+            tipo_catasto=request.tipo_catasto,
+            provincia=request.provincia,
+            comune=request.comune,
+            foglio=request.foglio,
+            particella=request.particella,
+            sezione=request.sezione,
+            subalterno=request.subalterno,
         )
         return request.request_id
 
     async def add_intestati_request(self, request: VisuraIntestatiRequest) -> str:
         """Aggiunge una richiesta intestati alla coda"""
-        if not self.processing:
-            raise RuntimeError("Servizio non in esecuzione: impossibile accodare richieste")
-
-        if self.request_queue.full():
-            raise QueueFullError(f"Coda piena (max {self.queue_max_size})")
-
-        self.pending_request_ids.add(request.request_id)
-        self.expired_request_ids.pop(request.request_id, None)
-        await self.request_queue.put(request)
+        async with self._queue_lock:
+            self._ensure_processing()
+            self._ensure_capacity(required_slots=1)
+            self._enqueue_request_nowait(request)
         logger.info(
             f"Richiesta intestati {request.request_id} aggiunta alla coda (posizione: {self.request_queue.qsize()})"
         )
+        await save_request(
+            request_id=request.request_id,
+            request_type="intestati",
+            tipo_catasto=request.tipo_catasto,
+            provincia=request.provincia,
+            comune=request.comune,
+            foglio=request.foglio,
+            particella=request.particella,
+            sezione=request.sezione,
+            subalterno=request.subalterno,
+        )
         return request.request_id
+
+    async def add_requests_batch(self, requests: list[VisuraRequest]) -> list[str]:
+        """Accoda più richieste in modo atomico lato producer."""
+        if not requests:
+            return []
+
+        async with self._queue_lock:
+            self._ensure_processing()
+            self._ensure_capacity(required_slots=len(requests))
+            for request in requests:
+                self._enqueue_request_nowait(request)
+
+        for request in requests:
+            logger.info(f"Richiesta visura {request.request_id} aggiunta alla coda")
+            await save_request(
+                request_id=request.request_id,
+                request_type="visura",
+                tipo_catasto=request.tipo_catasto,
+                provincia=request.provincia,
+                comune=request.comune,
+                foglio=request.foglio,
+                particella=request.particella,
+                sezione=request.sezione,
+                subalterno=request.subalterno,
+            )
+        return [request.request_id for request in requests]
 
     async def get_response(self, request_id: str) -> Optional[VisuraResponse]:
         """Ottiene la risposta per un request_id"""
@@ -466,6 +574,7 @@ class VisuraService:
         return response
 
     def get_request_state(self, request_id: str) -> str:
+        self._cleanup_response_store()
         if request_id in self.response_store:
             return "completed"
         if request_id in self.pending_request_ids:
@@ -533,6 +642,7 @@ def require_shutdown_api_key(x_api_key: Optional[str] = Header(default=None, ali
 async def lifespan(app: FastAPI):
     # Startup
     global visura_service
+    await init_db()
     PageLogger.reset_session()  # Nuova sessione di log per ogni avvio
     visura_service = VisuraService()
     await visura_service.initialize()
@@ -646,22 +756,22 @@ async def richiedi_visura(
         sezione = None if request.sezione == "_" else request.sezione
 
         tipos_catasto = [request.tipo_catasto] if request.tipo_catasto else ["T", "F"]
-        request_ids = []
-
+        visura_requests = []
         for tipo_catasto in tipos_catasto:
             request_id = f"req_{tipo_catasto}_{uuid4().hex}"
-            visura_req = VisuraRequest(
-                request_id=request_id,
-                tipo_catasto=tipo_catasto,
-                provincia=request.provincia,
-                comune=request.comune,
-                sezione=sezione,
-                foglio=request.foglio,
-                particella=request.particella,
-                subalterno=request.subalterno,
+            visura_requests.append(
+                VisuraRequest(
+                    request_id=request_id,
+                    tipo_catasto=tipo_catasto,
+                    provincia=request.provincia,
+                    comune=request.comune,
+                    sezione=sezione,
+                    foglio=request.foglio,
+                    particella=request.particella,
+                    subalterno=request.subalterno,
+                )
             )
-            await service.add_request(visura_req)
-            request_ids.append(request_id)
+        request_ids = await service.add_requests_batch(visura_requests)
 
         return JSONResponse(
             {
@@ -684,7 +794,11 @@ async def richiedi_visura(
 
 
 @app.get("/visura/{request_id}")
-async def ottieni_visura(request_id: str, service: VisuraService = Depends(get_visura_service)):
+async def ottieni_visura(
+    request_id: str,
+    service: VisuraService = Depends(get_visura_service),
+    _: None = Depends(require_api_key),
+):
     """Ottiene il risultato di una visura"""
     try:
         response = await service.get_response(request_id)
@@ -777,6 +891,7 @@ async def richiedi_intestati_immobile(
 @app.get("/health")
 async def health_check(service: VisuraService = Depends(get_visura_service)):
     """Controlla lo stato del servizio"""
+    db_stats = await count_responses()
     return JSONResponse(
         {
             "status": "healthy",
@@ -786,8 +901,35 @@ async def health_check(service: VisuraService = Depends(get_visura_service)):
             "cached_responses": len(service.response_store),
             "response_ttl_seconds": service.response_ttl_seconds,
             "response_max_items": service.response_max_items,
+            "queue_max_size": service.queue_max_size,
+            "response_cleanup_interval_seconds": service.response_cleanup_interval_seconds,
+            "database": db_stats,
         }
     )
+
+
+@app.get("/visura/history")
+async def visura_history(
+    provincia: Optional[str] = None,
+    comune: Optional[str] = None,
+    foglio: Optional[str] = None,
+    particella: Optional[str] = None,
+    tipo_catasto: Optional[str] = None,
+    limit: int = 50,
+    offset: int = 0,
+    _: None = Depends(require_api_key),
+):
+    """Cerca nello storico delle visure salvate nel database."""
+    results = await find_responses(
+        provincia=provincia,
+        comune=comune,
+        foglio=foglio,
+        particella=particella,
+        tipo_catasto=tipo_catasto,
+        limit=min(limit, 200),
+        offset=offset,
+    )
+    return JSONResponse({"count": len(results), "results": results})
 
 
 @app.post("/shutdown")

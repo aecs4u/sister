@@ -188,10 +188,13 @@ ADE_AUTH_METHOD=spid              # spid | cie | cns | fisconline
 ADE_SPID_PROVIDER=sielte          # sielte | aruba | poste | namirial
 
 # Opzionale — Applicazione
+API_KEY=una_chiave_operativa       # Protegge endpoint operativi via X-API-Key
 LOG_LEVEL=INFO                    # DEBUG | INFO | WARNING | ERROR
 SHUTDOWN_API_KEY=una_chiave_lunga # Protegge POST /shutdown via header X-API-Key
+QUEUE_MAX_SIZE=100                # Capienza massima coda richieste
 RESPONSE_TTL_SECONDS=21600        # TTL cache risultati (default 6 ore)
 RESPONSE_MAX_ITEMS=5000           # Massimo risultati in memoria
+RESPONSE_CLEANUP_INTERVAL_SECONDS=60 # Intervallo cleanup cache (secondi)
 ```
 
 | Variabile | Obbligatoria | Default | Descrizione |
@@ -203,10 +206,13 @@ RESPONSE_MAX_ITEMS=5000           # Massimo risultati in memoria
 | `ADE_OTP_SECRET` | | — | Secret TOTP base32 (per provider con OTP) |
 | `BROWSER_HEADLESS` | | `true` | Esegui browser in modalità headless |
 | `BROWSER_MFA_TIMEOUT` | | `120` | Timeout in secondi per approvazione MFA |
+| `API_KEY` | | non impostata | Se impostata, richiede `X-API-Key` sugli endpoint operativi |
 | `LOG_LEVEL` | | `INFO` | Livello di log su console e file |
 | `SHUTDOWN_API_KEY` | | non impostata | Se assente, endpoint `POST /shutdown` disabilitato |
+| `QUEUE_MAX_SIZE` | | `100` | Numero massimo richieste accodabili prima di rispondere `429` |
 | `RESPONSE_TTL_SECONDS` | | `21600` | Tempo massimo (secondi) di retention risultati in memoria |
 | `RESPONSE_MAX_ITEMS` | | `5000` | Numero massimo di risultati mantenuti in cache |
+| `RESPONSE_CLEANUP_INTERVAL_SECONDS` | | `60` | Frequenza cleanup periodico cache risultati |
 
 ---
 
@@ -226,7 +232,9 @@ GET /health
   "pending_requests": 0,
   "cached_responses": 0,
   "response_ttl_seconds": 21600,
-  "response_max_items": 5000
+  "response_max_items": 5000,
+  "queue_max_size": 100,
+  "response_cleanup_interval_seconds": 60
 }
 ```
 
@@ -239,6 +247,7 @@ POST /visura
 ```
 
 Cerca tutti gli immobili su una particella catastale. Se `tipo_catasto` è omesso, vengono accodate **due** richieste (Terreni + Fabbricati).
+Se `API_KEY` è configurata, richiede header `X-API-Key`.
 
 **Request body:**
 
@@ -287,6 +296,7 @@ POST /visura/intestati
 ```
 
 Estrae i titolari (intestati) di uno specifico immobile. Per i Fabbricati è necessario specificare il `subalterno`.
+Se `API_KEY` è configurata, richiede header `X-API-Key`.
 
 **Request body:**
 
@@ -337,6 +347,7 @@ GET /visura/{request_id}
 ```
 
 Recupera lo stato e i dati di una richiesta precedentemente accodata.
+Se `API_KEY` è configurata, richiede header `X-API-Key`.
 
 | Status | Significato |
 |--------|-------------|
@@ -433,6 +444,7 @@ POST /sezioni/extract
 ```
 
 Estrae le sezioni censuarie per tutte le province e comuni d'Italia. **Operazione molto lenta** — può richiedere ore.
+Se `API_KEY` è configurata, richiede header `X-API-Key`.
 
 | Campo | Tipo | Default | Descrizione |
 |-------|------|---------|-------------|

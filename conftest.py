@@ -1,3 +1,4 @@
+import importlib
 import logging
 import sys
 import types
@@ -6,7 +7,9 @@ import pytest
 
 
 def _install_test_stubs() -> None:
-    if "bs4" not in sys.modules:
+    try:
+        importlib.import_module("bs4")
+    except ModuleNotFoundError:
         bs4_mod = types.ModuleType("bs4")
 
         class BeautifulSoup:
@@ -20,7 +23,9 @@ def _install_test_stubs() -> None:
         bs4_mod.BeautifulSoup = BeautifulSoup
         sys.modules["bs4"] = bs4_mod
 
-    if "playwright.async_api" not in sys.modules:
+    try:
+        importlib.import_module("playwright.async_api")
+    except ModuleNotFoundError:
         playwright_pkg = types.ModuleType("playwright")
         async_api_mod = types.ModuleType("playwright.async_api")
 
@@ -31,7 +36,9 @@ def _install_test_stubs() -> None:
         sys.modules["playwright"] = playwright_pkg
         sys.modules["playwright.async_api"] = async_api_mod
 
-    if "rich.logging" not in sys.modules:
+    try:
+        importlib.import_module("rich.logging")
+    except ModuleNotFoundError:
         rich_pkg = types.ModuleType("rich")
         rich_logging_mod = types.ModuleType("rich.logging")
 
@@ -46,7 +53,9 @@ def _install_test_stubs() -> None:
         sys.modules.setdefault("rich", rich_pkg)
         sys.modules["rich.logging"] = rich_logging_mod
 
-    if "aecs4u_auth.browser" not in sys.modules:
+    try:
+        importlib.import_module("aecs4u_auth.browser")
+    except ModuleNotFoundError:
         auth_pkg = types.ModuleType("aecs4u_auth")
         browser_mod = types.ModuleType("aecs4u_auth.browser")
 
