@@ -1,6 +1,6 @@
 [build-system]
 requires = ["setuptools>=68.0", "wheel"]
-build-backend = "setuptools.backends._legacy:_Backend"
+build-backend = "setuptools.build_meta"
 
 [project]
 name = "visura-api"
@@ -26,14 +26,15 @@ classifiers = [
 ]
 
 dependencies = [
+    "aecs4u-auth[browser]",
     "fastapi>=0.115.0",
     "uvicorn>=0.32.0",
-    "playwright>=1.49.0",
     "beautifulsoup4",
     "pydantic>=2.10.0",
     "python-dotenv",
     "requests>=2.31.0",
     "email-validator",
+    "rich>=13.0",
 ]
 
 [project.optional-dependencies]
@@ -50,6 +51,9 @@ Homepage = "https://github.com/zornade/visura-api"
 Repository = "https://github.com/zornade/visura-api"
 Issues = "https://github.com/zornade/visura-api/issues"
 Changelog = "https://github.com/zornade/visura-api/blob/main/CHANGELOG.md"
+
+[tool.uv.sources]
+aecs4u-auth = { path = "../aecs4u-auth", editable = true }
 
 [tool.black]
 line-length = 120

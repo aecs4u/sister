@@ -1,8 +1,9 @@
+aecs4u-auth[browser]
 fastapi>=0.115.0
 uvicorn>=0.32.0
-playwright>=1.49.0
 beautifulsoup4
 pydantic>=2.10.0
 python-dotenv
 requests>=2.31.0
 email-validator
+rich>=13.0

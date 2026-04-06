@@ -27,9 +27,14 @@ RUN apt-get update && apt-get install -y \
 # Crea directory di lavoro
 WORKDIR /app
 
-# Copia e installa dipendenze Python
+# Installa keyring per autenticazione GAR
+RUN pip install --no-cache-dir keyrings.google-artifactregistry-auth
+
+# Copia e installa dipendenze Python (aecs4u-auth da Google Artifact Registry)
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir \
+    --extra-index-url https://europe-west1-python.pkg.dev/aecs4u-it/python-packages/simple/ \
+    -r requirements.txt
 
 # Copia il codice dell'applicazione
 COPY . .

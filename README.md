@@ -4,7 +4,7 @@
 [![Python](https://img.shields.io/badge/Python-3.11%2B-green.svg)](https://www.python.org/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.115-009688.svg)](https://fastapi.tiangolo.com/)
 
-Servizio REST per l'estrazione automatizzata di dati catastali dal portale **SISTER** dell'Agenzia delle Entrate. Utilizza [Playwright](https://playwright.dev/python/) per pilotare un browser headless e [FastAPI](https://fastapi.tiangolo.com/) per esporre gli endpoint.
+Servizio REST per l'estrazione automatizzata di dati catastali dal portale **SISTER** dell'Agenzia delle Entrate. Utilizza [`aecs4u-auth`](https://github.com/aecs4u/aecs4u-auth) per l'autenticazione SPID/CIE via browser headless e [FastAPI](https://fastapi.tiangolo.com/) per esporre gli endpoint.
 
 > **Disclaimer legale** — Questo progetto è uno strumento indipendente e **non** è affiliato, approvato o supportato dall'Agenzia delle Entrate. L'utente è l'unico responsabile del rispetto dei termini di servizio del portale SISTER e della normativa vigente. L'uso di automazione sul portale potrebbe violare i termini d'uso del servizio.
 
@@ -60,7 +60,7 @@ Entrambe le richieste vengono accodate ed eseguite sequenzialmente su un singolo
 
 ### Compatibilità SPID
 
-Il login automatizzato funziona **esclusivamente** con il provider **Sielte ID (CIE Sign)**. Il flusso prevede l'approvazione via push notification sull'app MySielteID. Altri provider SPID non sono supportati e richiederebbero modifiche alla funzione `login()` in `utils.py`.
+L'autenticazione SPID/CIE è gestita dal pacchetto [`aecs4u-auth`](https://github.com/aecs4u/aecs4u-auth), che supporta diversi provider (Sielte, Aruba, Poste, Namirial) e metodi di autenticazione (SPID, CIE, CNS, Fisconline). Il provider e il metodo si configurano tramite variabili d'ambiente (`ADE_AUTH_METHOD`, `ADE_SPID_PROVIDER`). Di default è configurato Sielte ID con approvazione via push notification sull'app MySielteID.
 
 ### Limitazioni note
 
@@ -87,10 +87,10 @@ Client HTTP
 │                   └──────────┬───────────────────┘   │
 │                              │                       │
 │  ┌───────────────────────────▼───────────────────┐   │
-│  │ BrowserManager                                │   │
-│  │  • Playwright browser (Chromium headless)     │   │
-│  │  • Keep-alive task                            │   │
-│  │  • Session recovery / re-login                │   │
+│  │ BrowserManager (thin wrapper)                 │   │
+│  │  → delega a aecs4u_auth.browser               │   │
+│  │  • SPID/CIE login + SISTER navigation         │   │
+│  │  • Keep-alive, recovery, graceful shutdown     │   │
 │  └───────────────────────────┬───────────────────┘   │
 └──────────────────────────────┼───────────────────────┘
                                │
@@ -106,12 +106,12 @@ Client HTTP
 
 | File | Descrizione |
 |------|-------------|
-| `main.py` | Applicazione FastAPI: endpoint, modelli Pydantic, `BrowserManager`, `VisuraService`, lifespan |
-| `utils.py` | Automazione browser: `login()`, `logout()`, `run_visura()`, `run_visura_immobile()`, `extract_all_sezioni()`, `PageLogger`, `parse_table()` |
+| `main.py` | Applicazione FastAPI: endpoint, modelli Pydantic, `BrowserManager` (wrapper su `aecs4u-auth`), `VisuraService`, lifespan |
+| `utils.py` | Automazione visure SISTER: `run_visura()`, `run_visura_immobile()`, `extract_all_sezioni()`, `parse_table()` |
 | `Dockerfile` | Immagine basata su `python:3.11-slim` con dipendenze per Chromium |
 | `docker-compose.yaml` | Orchestrazione con healthcheck, volumi per log, restart automatico |
-| `requirements.txt` | Dipendenze Python |
-| `pyproject.toml` | Metadati di progetto e dipendenze opzionali di sviluppo |
+| `requirements.txt` | Dipendenze Python (include `aecs4u-auth[browser]`) |
+| `pyproject.toml` | Metadati di progetto, dipendenze, source uv per sviluppo locale |
 
 ---
 
@@ -162,6 +162,8 @@ cp .env.example .env
 uvicorn main:app --host 0.0.0.0 --port 8000
 ```
 
+> **Nota:** `aecs4u-auth` è pubblicato su Google Artifact Registry. Per installazione locale in sviluppo, usa `pip install -e ../aecs4u-auth[browser]` oppure `uv sync` (il `pyproject.toml` include già la source locale per uv).
+
 All'avvio il servizio:
 
 1. Lancia un browser Chromium headless
@@ -177,19 +179,34 @@ All'avvio il servizio:
 Crea un file `.env` nella root del progetto (vedi `.env.example`):
 
 ```env
-# Obbligatorio — Credenziali SPID (Sielte ID)
+# Obbligatorio — Credenziali SPID / Agenzia delle Entrate
 ADE_USERNAME=RSSMRA85M01H501Z    # Codice fiscale
 ADE_PASSWORD=la_tua_password
 
-# Opzionale
+# Opzionale — Autenticazione (gestite da aecs4u-auth)
+ADE_AUTH_METHOD=spid              # spid | cie | cns | fisconline
+ADE_SPID_PROVIDER=sielte          # sielte | aruba | poste | namirial
+
+# Opzionale — Applicazione
 LOG_LEVEL=INFO                    # DEBUG | INFO | WARNING | ERROR
+SHUTDOWN_API_KEY=una_chiave_lunga # Protegge POST /shutdown via header X-API-Key
+RESPONSE_TTL_SECONDS=21600        # TTL cache risultati (default 6 ore)
+RESPONSE_MAX_ITEMS=5000           # Massimo risultati in memoria
 ```
 
 | Variabile | Obbligatoria | Default | Descrizione |
 |-----------|:------------:|---------|-------------|
 | `ADE_USERNAME` | ✅ | — | Codice fiscale per il login SPID |
-| `ADE_PASSWORD` | ✅ | — | Password SPID (Sielte ID) |
+| `ADE_PASSWORD` | ✅ | — | Password SPID |
+| `ADE_AUTH_METHOD` | | `spid` | Metodo di autenticazione: `spid`, `cie`, `cns`, `fisconline` |
+| `ADE_SPID_PROVIDER` | | `sielte` | Provider SPID: `sielte`, `aruba`, `poste`, `namirial` |
+| `ADE_OTP_SECRET` | | — | Secret TOTP base32 (per provider con OTP) |
+| `BROWSER_HEADLESS` | | `true` | Esegui browser in modalità headless |
+| `BROWSER_MFA_TIMEOUT` | | `120` | Timeout in secondi per approvazione MFA |
 | `LOG_LEVEL` | | `INFO` | Livello di log su console e file |
+| `SHUTDOWN_API_KEY` | | non impostata | Se assente, endpoint `POST /shutdown` disabilitato |
+| `RESPONSE_TTL_SECONDS` | | `21600` | Tempo massimo (secondi) di retention risultati in memoria |
+| `RESPONSE_MAX_ITEMS` | | `5000` | Numero massimo di risultati mantenuti in cache |
 
 ---
 
@@ -205,7 +222,11 @@ GET /health
 {
   "status": "healthy",
   "authenticated": true,
-  "queue_size": 0
+  "queue_size": 0,
+  "pending_requests": 0,
+  "cached_responses": 0,
+  "response_ttl_seconds": 21600,
+  "response_max_items": 5000
 }
 ```
 
@@ -248,7 +269,7 @@ curl -X POST http://localhost:8000/visura \
 
 ```json
 {
-  "request_ids": ["req_F_1709312400000"],
+  "request_ids": ["req_F_2f7f40f95cfb4bd8a8d8fe7b89612268"],
   "tipos_catasto": ["F"],
   "status": "queued",
   "message": "Richieste aggiunte alla coda per TRIESTE F.9 P.166"
@@ -298,7 +319,7 @@ curl -X POST http://localhost:8000/visura/intestati \
 
 ```json
 {
-  "request_id": "intestati_F_3_1709312500000",
+  "request_id": "intestati_F_9f3fa9cf2fcb49c6a8a21bf2312e3ef3",
   "tipo_catasto": "F",
   "subalterno": "3",
   "status": "queued",
@@ -322,12 +343,16 @@ Recupera lo stato e i dati di una richiesta precedentemente accodata.
 | `processing` | La richiesta è in coda o in esecuzione |
 | `completed` | Dati disponibili nel campo `data` |
 | `error` | Errore — dettagli nel campo `error` |
+| `expired` | Risultato non più disponibile (cache scaduta o evicted) |
+
+Se `request_id` non esiste, l'endpoint risponde con `404`.
+Se il risultato è scaduto, risponde con `410` e `status: "expired"`.
 
 **Risposta completata (Fase 1):**
 
 ```json
 {
-  "request_id": "req_F_1709312400000",
+  "request_id": "req_F_2f7f40f95cfb4bd8a8d8fe7b89612268",
   "tipo_catasto": "F",
   "status": "completed",
   "data": {
@@ -363,7 +388,7 @@ Recupera lo stato e i dati di una richiesta precedentemente accodata.
 
 ```json
 {
-  "request_id": "intestati_F_3_1709312500000",
+  "request_id": "intestati_F_9f3fa9cf2fcb49c6a8a21bf2312e3ef3",
   "status": "completed",
   "data": {
     "immobile": {
@@ -387,7 +412,7 @@ Recupera lo stato e i dati di una richiesta precedentemente accodata.
 
 ```json
 {
-  "request_id": "req_F_1709312400000",
+  "request_id": "req_F_2f7f40f95cfb4bd8a8d8fe7b89612268",
   "status": "completed",
   "data": {
     "immobili": [],
@@ -423,6 +448,14 @@ POST /shutdown
 ```
 
 Esegue un shutdown controllato: logout dal portale SISTER e chiusura del browser.
+Richiede header `X-API-Key` uguale a `SHUTDOWN_API_KEY`.
+
+Esempio:
+
+```bash
+curl -X POST http://localhost:8000/shutdown \
+  -H "X-API-Key: ${SHUTDOWN_API_KEY}"
+```
 
 ---
 
@@ -440,7 +473,7 @@ curl -s -X POST http://localhost:8000/visura \
 # Salva il request_id dalla risposta, poi:
 
 # 2. Polling risultati (ripeti fino a status != "processing")
-curl -s http://localhost:8000/visura/req_F_1709312400000 | jq .
+curl -s http://localhost:8000/visura/req_F_2f7f40f95cfb4bd8a8d8fe7b89612268 | jq .
 
 # 3. Prendi un subalterno dai risultati e chiedi gli intestati
 curl -s -X POST http://localhost:8000/visura/intestati \
@@ -449,7 +482,7 @@ curl -s -X POST http://localhost:8000/visura/intestati \
   | jq .
 
 # 4. Polling intestati
-curl -s http://localhost:8000/visura/intestati_F_3_1709312500000 | jq .
+curl -s http://localhost:8000/visura/intestati_F_9f3fa9cf2fcb49c6a8a21bf2312e3ef3 | jq .
 ```
 
 ### Client Python
@@ -590,21 +623,21 @@ Ogni file HTML include in testa dei commenti con metadati:
 Quando uvicorn riceve `SIGINT` o `SIGTERM`:
 
 1. Il lifespan `shutdown` viene invocato da uvicorn
-2. `logout()` clicca "Esci" sul portale SISTER
-3. `close()` clicca "Torna al portale", chiude il browser context, chiude Chromium
+2. `aecs4u-auth` effettua il logout dal portale SISTER
+3. Il browser context e Chromium vengono chiusi
 
-Il browser viene lanciato con `handle_sigint=False, handle_sigterm=False` per impedire che Chromium intercetti i segnali prima che il logout sia completato.
+### Flusso di autenticazione SPID
 
-### Flusso di autenticazione SPID (Sielte ID)
+L'autenticazione è gestita da `aecs4u-auth` (`BrowserManager.login(service="sister")`):
 
 1. Naviga alla pagina di login dell'Agenzia delle Entrate
-2. Clicca "Entra con SPID" → seleziona provider Sielte ID
-3. Inserisce codice fiscale (con CapsLock attivo) e password
-4. Clicca "Prosegui" → seleziona invio notifica push
-5. Clicca "Autorizza" → **attende fino a 120 secondi** l'approvazione sull'app MySielteID
-6. Cerca "SISTER" tra i servizi → clicca "Vai al servizio"
-7. Verifica assenza di sessione bloccata ("Utente già in sessione")
-8. Naviga: Conferma → Consultazioni e Certificazioni → Visure catastali → Conferma Lettura
+2. Seleziona il metodo di autenticazione configurato (SPID/CIE/CNS/Fisconline)
+3. Per SPID: seleziona il provider configurato, inserisce credenziali, gestisce MFA
+4. Cerca "SISTER" tra i servizi → clicca "Vai al servizio"
+5. Verifica assenza di sessione bloccata ("Utente già in sessione")
+6. Naviga: Conferma → Consultazioni e Certificazioni → Visure catastali → Conferma Lettura
+
+Per maggiori dettagli sui provider e metodi supportati, vedi la [documentazione di aecs4u-auth](https://github.com/aecs4u/aecs4u-auth).
 
 ### Flusso della visura
 
@@ -626,11 +659,15 @@ Il browser viene lanciato con `handle_sigint=False, handle_sigterm=False` per im
 git clone https://github.com/zornade/visura-api.git
 cd visura-api
 
+# Con uv (raccomandato) — risolve automaticamente aecs4u-auth locale
+uv sync --extra dev
+uv run playwright install chromium
+
+# Oppure con pip
 python -m venv .venv
 source .venv/bin/activate
-
-pip install -r requirements.txt
-pip install -e ".[dev]"            # pytest, black, ruff
+pip install -e ../aecs4u-auth[browser]   # dipendenza locale
+pip install -e ".[dev]"                  # pytest, black, ruff
 playwright install chromium
 
 cp .env.example .env
@@ -642,35 +679,39 @@ cp .env.example .env
 **`main.py`** contiene:
 - Modelli Pydantic di input (`VisuraInput`, `VisuraIntestatiInput`, `SezioniExtractionRequest`)
 - Dataclass interne (`VisuraRequest`, `VisuraResponse`, `VisuraIntestatiRequest`)
-- Eccezioni custom (`VisuraError`, `AuthenticationError`, `BrowserError`, `ValidationError`)
-- `BrowserManager` — gestione browser, login, keep-alive, session recovery
+- Eccezioni custom (`VisuraError`, `AuthenticationError`, `BrowserError`)
+- `BrowserManager` — thin wrapper su `aecs4u_auth.browser.BrowserManager`, espone `auth_page` per le visure
 - `VisuraService` — coda, worker, store risultati
 - Lifespan FastAPI (startup/shutdown)
 - Tutti gli endpoint REST
 
 **`utils.py`** contiene:
-- `PageLogger` — salva HTML di ogni pagina visitata, organizzato per sessione/flusso/step
-- `login(page, username, password)` — flusso SPID completo (15 step, ciascuno loggato)
-- `logout(page)` — cerca e clicca "Esci" con fallback su più selettori CSS
 - `run_visura(page, ...)` — visura completa: selezione provincia → estrazione intestati
 - `run_visura_immobile(page, ...)` — visura mirata per un singolo fabbricato con subalterno
 - `extract_all_sezioni(page, ...)` — iterazione su tutte le province/comuni per estrarre sezioni
 - `find_best_option_match(page, selector, text)` — fuzzy matching a 5 livelli su dropdown `<select>`
 - `parse_table(html)` — parsing tabelle HTML con BeautifulSoup → lista di dizionari
 
-### Aggiungere un provider SPID
+> **Nota:** l'autenticazione SPID/CIE, il keep-alive, il `PageLogger` e la gestione del browser sono delegati al pacchetto [`aecs4u-auth`](https://github.com/aecs4u/aecs4u-auth).
 
-Il login è implementato nella funzione `login()` di `utils.py`. Per supportare un altro provider:
+### Cambiare provider SPID o metodo di autenticazione
 
-1. Modifica il selettore del provider (attualmente `a[href*="sielte"]`)
-2. Adatta il form di inserimento credenziali (ogni provider ha layout diversi)
-3. Gestisci il metodo di approvazione (push notification, OTP, etc.)
+Non serve modificare codice. Basta cambiare le variabili d'ambiente:
+
+```env
+ADE_AUTH_METHOD=spid          # oppure: cie, cns, fisconline
+ADE_SPID_PROVIDER=aruba       # oppure: sielte, poste, namirial
+```
+
+Per aggiungere un provider non supportato, contribuisci al pacchetto [`aecs4u-auth`](https://github.com/aecs4u/aecs4u-auth).
 
 ### Convenzioni per il logging HTML
 
-Quando aggiungi nuovi flussi o step, usa `PageLogger`:
+Quando aggiungi nuovi flussi o step, usa `PageLogger` (da `aecs4u-auth`):
 
 ```python
+from aecs4u_auth.browser import PageLogger
+
 logger = PageLogger("nome_flusso")    # Crea logger per questo flusso
 await logger.log(page, "nome_step")   # Salva HTML della pagina corrente
 ```
