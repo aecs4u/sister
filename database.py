@@ -7,7 +7,6 @@ replacing the in-memory dict cache.
 import json
 import logging
 import os
-from datetime import datetime
 from typing import Optional
 
 import aiosqlite
@@ -93,6 +92,41 @@ async def save_request(
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (request_id, request_type, tipo_catasto, provincia, comune, foglio, particella, sezione, subalterno),
+        )
+        await db.commit()
+    finally:
+        await db.close()
+
+
+async def save_requests_batch(requests: list[dict]) -> None:
+    """Persist multiple visura/intestati requests atomically."""
+    if not requests:
+        return
+
+    rows = [
+        (
+            request["request_id"],
+            request["request_type"],
+            request["tipo_catasto"],
+            request["provincia"],
+            request["comune"],
+            request["foglio"],
+            request["particella"],
+            request.get("sezione"),
+            request.get("subalterno"),
+        )
+        for request in requests
+    ]
+
+    db = await get_db()
+    try:
+        await db.executemany(
+            """
+            INSERT INTO visura_requests
+                (request_id, request_type, tipo_catasto, provincia, comune, foglio, particella, sezione, subalterno)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            rows,
         )
         await db.commit()
     finally:

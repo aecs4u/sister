@@ -44,9 +44,9 @@ async def test_store_response_respects_max_items(main_module):
     service.response_max_items = 2
     service.response_ttl_seconds = 3600
 
-    service._store_response(_response(main_module, "r1"))
-    service._store_response(_response(main_module, "r2"))
-    service._store_response(_response(main_module, "r3"))
+    await service._store_response(_response(main_module, "r1"))
+    await service._store_response(_response(main_module, "r2"))
+    await service._store_response(_response(main_module, "r3"))
 
     assert list(service.response_store.keys()) == ["r2", "r3"]
     assert "r1" in service.expired_request_ids
@@ -311,3 +311,78 @@ async def test_stop_worker_stops_cleanup_task_even_if_worker_absent(main_module)
 
     assert service.processing is False
     assert service._cleanup_task is None
+
+
+@pytest.mark.asyncio
+async def test_get_response_loads_from_database_when_not_cached(monkeypatch, main_module):
+    service = main_module.VisuraService()
+    request_id = "req_F_db_hit"
+
+    async def fake_load(_request_id: str):
+        return {
+            "request_id": request_id,
+            "success": True,
+            "tipo_catasto": "F",
+            "data": {"ok": "db"},
+            "error": None,
+            "created_at": datetime.now().isoformat(),
+        }
+
+    monkeypatch.setattr(main_module, "load_stored_response", fake_load, raising=False)
+
+    response = await service.get_response(request_id)
+
+    assert response is not None
+    assert response.success is True
+    assert response.data == {"ok": "db"}
+    assert request_id in service.response_store
+
+
+@pytest.mark.asyncio
+async def test_get_response_marks_expired_for_old_database_record(monkeypatch, main_module):
+    service = main_module.VisuraService()
+    service.response_ttl_seconds = 1
+    request_id = "req_F_db_old"
+
+    async def fake_load(_request_id: str):
+        return {
+            "request_id": request_id,
+            "success": True,
+            "tipo_catasto": "F",
+            "data": {"ok": "db"},
+            "error": None,
+            "created_at": (datetime.now() - timedelta(seconds=2)).isoformat(),
+        }
+
+    monkeypatch.setattr(main_module, "load_stored_response", fake_load, raising=False)
+
+    response = await service.get_response(request_id)
+
+    assert response is None
+    assert request_id not in service.response_store
+    assert request_id in service.expired_request_ids
+
+
+@pytest.mark.asyncio
+async def test_add_request_returns_runtime_error_when_persistence_fails(monkeypatch, main_module):
+    service = main_module.VisuraService()
+    service.processing = True
+    request = main_module.VisuraRequest(
+        request_id="req_F_persist_fail",
+        tipo_catasto="F",
+        provincia="Trieste",
+        comune="TRIESTE",
+        foglio="9",
+        particella="166",
+    )
+
+    async def failing_save(*_args, **_kwargs):
+        raise RuntimeError("db unavailable")
+
+    monkeypatch.setattr(main_module, "save_request", failing_save, raising=False)
+
+    with pytest.raises(RuntimeError):
+        await service.add_request(request)
+
+    assert service.request_queue.qsize() == 0
+    assert request.request_id not in service.pending_request_ids

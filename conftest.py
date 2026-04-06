@@ -115,7 +115,29 @@ _install_test_stubs()
 
 
 @pytest.fixture()
-def main_module():
+def main_module(monkeypatch):
     import importlib
 
-    return importlib.import_module("main")
+    module = importlib.import_module("main")
+
+    async def _noop(*_args, **_kwargs):
+        return None
+
+    async def _zero(*_args, **_kwargs):
+        return 0
+
+    async def _empty_list(*_args, **_kwargs):
+        return []
+
+    async def _db_stats(*_args, **_kwargs):
+        return {"total_requests": 0, "total_responses": 0, "successful": 0, "failed": 0}
+
+    monkeypatch.setattr(module, "save_request", _noop, raising=False)
+    monkeypatch.setattr(module, "save_requests_batch", _noop, raising=False)
+    monkeypatch.setattr(module, "save_response", _noop, raising=False)
+    monkeypatch.setattr(module, "cleanup_old_responses", _zero, raising=False)
+    monkeypatch.setattr(module, "find_responses", _empty_list, raising=False)
+    monkeypatch.setattr(module, "count_responses", _db_stats, raising=False)
+    monkeypatch.setattr(module, "load_stored_response", _noop, raising=False)
+
+    return module

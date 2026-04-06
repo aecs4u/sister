@@ -17,7 +17,18 @@ from playwright.async_api import Page
 from pydantic import BaseModel, Field, field_validator, model_validator
 from rich.logging import RichHandler
 
-from database import cleanup_old_responses, count_responses, find_responses, init_db, save_request, save_response
+from database import (
+    cleanup_old_responses,
+    count_responses,
+    find_responses,
+    init_db,
+    save_request,
+    save_requests_batch,
+    save_response,
+)
+from database import (
+    get_response as load_stored_response,
+)
 from utils import extract_all_sezioni, run_visura, run_visura_immobile
 
 # Carica variabili d'ambiente da .env
@@ -472,6 +483,61 @@ class VisuraService:
             error=response.error,
         )
 
+    @staticmethod
+    def _response_from_db_record(record: dict) -> VisuraResponse:
+        timestamp_raw = record.get("created_at")
+        timestamp = datetime.now()
+        if isinstance(timestamp_raw, str):
+            with suppress(ValueError):
+                timestamp = datetime.fromisoformat(timestamp_raw)
+
+        return VisuraResponse(
+            request_id=record["request_id"],
+            success=bool(record["success"]),
+            tipo_catasto=record["tipo_catasto"],
+            data=record.get("data"),
+            error=record.get("error"),
+            timestamp=timestamp,
+        )
+
+    async def _persist_single_request(self, request_type: str, request: VisuraRequest | VisuraIntestatiRequest):
+        try:
+            await save_request(
+                request_id=request.request_id,
+                request_type=request_type,
+                tipo_catasto=request.tipo_catasto,
+                provincia=request.provincia,
+                comune=request.comune,
+                foglio=request.foglio,
+                particella=request.particella,
+                sezione=request.sezione,
+                subalterno=request.subalterno,
+            )
+        except Exception as e:
+            logger.error(f"Errore persistenza richiesta {request.request_id}: {e}")
+            raise RuntimeError("Errore durante il salvataggio della richiesta") from e
+
+    async def _persist_request_batch(self, requests: list[VisuraRequest]):
+        rows = [
+            {
+                "request_id": request.request_id,
+                "request_type": "visura",
+                "tipo_catasto": request.tipo_catasto,
+                "provincia": request.provincia,
+                "comune": request.comune,
+                "foglio": request.foglio,
+                "particella": request.particella,
+                "sezione": request.sezione,
+                "subalterno": request.subalterno,
+            }
+            for request in requests
+        ]
+        try:
+            await save_requests_batch(rows)
+        except Exception as e:
+            logger.error(f"Errore persistenza batch richieste ({len(requests)} item): {e}")
+            raise RuntimeError("Errore durante il salvataggio delle richieste") from e
+
     def _queue_limit(self) -> int:
         queue_maxsize = self.request_queue.maxsize
         return queue_maxsize if queue_maxsize > 0 else self.queue_max_size
@@ -499,20 +565,10 @@ class VisuraService:
         async with self._queue_lock:
             self._ensure_processing()
             self._ensure_capacity(required_slots=1)
+            await self._persist_single_request("visura", request)
             self._enqueue_request_nowait(request)
         logger.info(
             f"Richiesta visura {request.request_id} aggiunta alla coda (posizione: {self.request_queue.qsize()})"
-        )
-        await save_request(
-            request_id=request.request_id,
-            request_type="visura",
-            tipo_catasto=request.tipo_catasto,
-            provincia=request.provincia,
-            comune=request.comune,
-            foglio=request.foglio,
-            particella=request.particella,
-            sezione=request.sezione,
-            subalterno=request.subalterno,
         )
         return request.request_id
 
@@ -521,20 +577,10 @@ class VisuraService:
         async with self._queue_lock:
             self._ensure_processing()
             self._ensure_capacity(required_slots=1)
+            await self._persist_single_request("intestati", request)
             self._enqueue_request_nowait(request)
         logger.info(
             f"Richiesta intestati {request.request_id} aggiunta alla coda (posizione: {self.request_queue.qsize()})"
-        )
-        await save_request(
-            request_id=request.request_id,
-            request_type="intestati",
-            tipo_catasto=request.tipo_catasto,
-            provincia=request.provincia,
-            comune=request.comune,
-            foglio=request.foglio,
-            particella=request.particella,
-            sezione=request.sezione,
-            subalterno=request.subalterno,
         )
         return request.request_id
 
@@ -546,27 +592,27 @@ class VisuraService:
         async with self._queue_lock:
             self._ensure_processing()
             self._ensure_capacity(required_slots=len(requests))
+            await self._persist_request_batch(requests)
             for request in requests:
                 self._enqueue_request_nowait(request)
 
         for request in requests:
             logger.info(f"Richiesta visura {request.request_id} aggiunta alla coda")
-            await save_request(
-                request_id=request.request_id,
-                request_type="visura",
-                tipo_catasto=request.tipo_catasto,
-                provincia=request.provincia,
-                comune=request.comune,
-                foglio=request.foglio,
-                particella=request.particella,
-                sezione=request.sezione,
-                subalterno=request.subalterno,
-            )
         return [request.request_id for request in requests]
 
     async def get_response(self, request_id: str) -> Optional[VisuraResponse]:
         """Ottiene la risposta per un request_id"""
         response = self.response_store.get(request_id)
+        if response is None:
+            try:
+                record = await load_stored_response(request_id)
+            except Exception as e:
+                logger.warning(f"Errore lettura risposta da database per {request_id}: {e}")
+                record = None
+            if record is not None:
+                response = self._response_from_db_record(record)
+                self.response_store[request_id] = response
+
         if response and self._is_response_expired(response):
             self.response_store.pop(request_id, None)
             self._mark_request_expired(request_id)

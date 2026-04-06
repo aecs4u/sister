@@ -56,6 +56,9 @@ Changelog = "https://github.com/zornade/visura-api/blob/main/CHANGELOG.md"
 [tool.uv.sources]
 aecs4u-auth = { path = "../aecs4u-auth", editable = true }
 
+[tool.setuptools]
+py-modules = ["main", "utils", "database"]
+
 [tool.black]
 line-length = 120
 target-version = ["py311"]
