@@ -4,7 +4,7 @@
 [![Python](https://img.shields.io/badge/Python-3.11%2B-green.svg)](https://www.python.org/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.115-009688.svg)](https://fastapi.tiangolo.com/)
 
-Servizio REST per l'estrazione automatizzata di dati catastali dal portale **SISTER** dell'Agenzia delle Entrate. Utilizza [`aecs4u-auth`](https://github.com/aecs4u/aecs4u-auth) per l'autenticazione SPID/CIE via browser headless e [FastAPI](https://fastapi.tiangolo.com/) per esporre gli endpoint.
+Servizio REST per l'estrazione automatizzata di dati catastali dal portale **SISTER** dell'Agenzia delle Entrate, con CLI integrata. Utilizza [`aecs4u-auth`](https://github.com/aecs4u/aecs4u-auth) per l'autenticazione SPID/CIE via browser headless e [FastAPI](https://fastapi.tiangolo.com/) per esporre gli endpoint.
 
 > **Disclaimer legale** — Questo progetto è uno strumento indipendente e **non** è affiliato, approvato o supportato dall'Agenzia delle Entrate. L'utente è l'unico responsabile del rispetto dei termini di servizio del portale SISTER e della normativa vigente. L'uso di automazione sul portale potrebbe violare i termini d'uso del servizio.
 
@@ -20,13 +20,16 @@ Servizio REST per l'estrazione automatizzata di dati catastali dal portale **SIS
 - [Prerequisiti](#prerequisiti)
 - [Avvio rapido](#avvio-rapido)
 - [Configurazione](#configurazione)
+- [CLI](#cli)
 - [Endpoint API](#endpoint-api)
   - [Health check](#health-check)
   - [Visura immobili (Fase 1)](#visura-immobili-fase-1)
   - [Visura intestati (Fase 2)](#visura-intestati-fase-2)
   - [Polling risultati](#polling-risultati)
+  - [Storico visure](#storico-visure)
   - [Sezioni territoriali](#sezioni-territoriali)
   - [Shutdown](#shutdown)
+- [Client Python](#client-python)
 - [Esempi d'uso](#esempi-duso)
 - [Logging e debug](#logging-e-debug)
 - [Dettagli tecnici](#dettagli-tecnici)
@@ -39,19 +42,22 @@ Servizio REST per l'estrazione automatizzata di dati catastali dal portale **SIS
 
 ## Panoramica
 
-Visura API permette di interrogare i dati catastali italiani tramite una semplice interfaccia HTTP. Il flusso operativo è diviso in due fasi:
+Visura API permette di interrogare i dati catastali italiani tramite una semplice interfaccia HTTP o una CLI dedicata. Il flusso operativo è diviso in due fasi:
 
-| Fase | Endpoint | Descrizione |
-|------|----------|-------------|
-| **1 — Immobili** | `POST /visura` | Cerca gli immobili associati a foglio + particella |
-| **2 — Intestati** | `POST /visura/intestati` | Recupera i titolari di uno specifico subalterno |
+| Fase | Endpoint | CLI | Descrizione |
+|------|----------|-----|-------------|
+| **1 — Immobili** | `POST /visura` | `visura-api search` | Cerca gli immobili associati a foglio + particella |
+| **2 — Intestati** | `POST /visura/intestati` | `visura-api intestati` | Recupera i titolari di uno specifico subalterno |
 
-Entrambe le richieste vengono accodate ed eseguite sequenzialmente su un singolo browser autenticato al portale SISTER. I risultati si recuperano in polling con `GET /visura/{request_id}`.
+Entrambe le richieste vengono accodate ed eseguite sequenzialmente su un singolo browser autenticato al portale SISTER. I risultati si recuperano in polling con `GET /visura/{request_id}` o con `visura-api wait`.
 
 ### Funzionalità principali
 
+- **CLI integrata** — `visura-api` con 7 subcomandi: search, intestati, get, wait, history, health, queries
+- **Client Python** — `VisuraClient` asincrono con polling automatico e timeout configurabili
 - **Autenticazione SPID automatizzata** via provider Sielte ID (CIE Sign) con push notification
 - **Coda sequenziale** — le richieste vengono processate una alla volta per non sovraccaricare il portale
+- **Database SQLite** — persistenza richieste e risposte con query storico
 - **Ri-autenticazione automatica** — alla scadenza della sessione, il servizio tenta prima un recovery diretto e, solo se necessario, un nuovo login SPID
 - **Keep-alive** — la sessione viene mantenuta attiva con un light keep-alive ogni 30 secondi e un refresh profondo ogni 5 minuti
 - **Graceful shutdown** — su `SIGINT`/`SIGTERM` il servizio effettua il logout dal portale prima di chiudere il browser
@@ -73,25 +79,26 @@ L'autenticazione SPID/CIE è gestita dal pacchetto [`aecs4u-auth`](https://githu
 ## Architettura
 
 ```
-Client HTTP
+Client HTTP / CLI
      │
      ▼
 ┌──────────────────────────────────────────────────────┐
-│  FastAPI  (main.py)                                  │
+│  FastAPI  (visura_api/main.py)                       │
 │                                                      │
 │  ┌─────────────┐  ┌──────────────────────────────┐   │
-│  │ Endpoints   │──│ VisuraService                │   │
-│  │ REST        │  │  • asyncio.Queue             │   │
+│  │ Routes      │──│ VisuraService                │   │
+│  │ (routes.py) │  │  • asyncio.Queue             │   │
 │  └─────────────┘  │  • response_store (dict)     │   │
 │                   │  • worker sequenziale        │   │
-│                   └──────────┬───────────────────┘   │
-│                              │                       │
-│  ┌───────────────────────────▼───────────────────┐   │
-│  │ BrowserManager (thin wrapper)                 │   │
-│  │  → delega a aecs4u_auth.browser               │   │
-│  │  • SPID/CIE login + SISTER navigation         │   │
-│  │  • Keep-alive, recovery, graceful shutdown     │   │
-│  └───────────────────────────┬───────────────────┘   │
+│  ┌─────────────┐  └──────────┬───────────────────┘   │
+│  │ Models      │             │                       │
+│  │ (models.py) │  ┌──────────▼───────────────────┐   │
+│  └─────────────┘  │ BrowserManager               │   │
+│                   │  → delega a aecs4u_auth       │   │
+│  ┌─────────────┐  │  • SPID/CIE login + SISTER   │   │
+│  │ Database    │  │  • Keep-alive, recovery       │   │
+│  │ (SQLite)    │  └──────────┬───────────────────┘   │
+│  └─────────────┘             │                       │
 └──────────────────────────────┼───────────────────────┘
                                │
                                ▼
@@ -102,16 +109,38 @@ Client HTTP
                 └──────────────────────────┘
 ```
 
-### File del progetto
+### Struttura del progetto
 
-| File | Descrizione |
-|------|-------------|
-| `main.py` | Applicazione FastAPI: endpoint, modelli Pydantic, `BrowserManager` (wrapper su `aecs4u-auth`), `VisuraService`, lifespan |
-| `utils.py` | Automazione visure SISTER: `run_visura()`, `run_visura_immobile()`, `extract_all_sezioni()`, `parse_table()` |
-| `Dockerfile` | Immagine basata su `python:3.11-slim` con dipendenze per Chromium |
-| `docker-compose.yaml` | Orchestrazione con healthcheck, volumi per log, restart automatico |
-| `requirements.txt` | Dipendenze Python (include `aecs4u-auth[browser]`) |
-| `pyproject.toml` | Metadati di progetto, dipendenze, source uv per sviluppo locale |
+```
+visura-api/
+├── visura_api/             # Codice sorgente
+│   ├── main.py             # App FastAPI, lifespan, dependency injection
+│   ├── routes.py           # Route handler functions
+│   ├── services.py         # BrowserManager, VisuraService (coda + worker)
+│   ├── models.py           # Pydantic input models, dataclass, eccezioni
+│   ├── database.py         # SQLite persistence layer (aiosqlite)
+│   ├── utils.py            # Automazione SISTER: run_visura(), parse_table()
+│   ├── client.py           # VisuraClient — async HTTP client con polling
+│   └── cli.py              # CLI Typer con 7 subcomandi
+├── tests/                  # Test suite (140 test)
+│   ├── conftest.py         # Fixtures e stub dipendenze
+│   ├── test_database.py    # Test SQLite layer
+│   ├── test_client.py      # Test HTTP client
+│   ├── test_cli.py         # Test CLI commands
+│   ├── test_models.py      # Test Pydantic validators
+│   ├── test_fixtures.py    # Test endpoint fixtures
+│   └── test_main_cache_and_states.py  # Test cache, TTL, queue, worker
+├── examples/               # Esempi d'uso
+│   ├── cli_usage.sh        # Tutti i comandi CLI con spiegazioni
+│   ├── client_usage.py     # Script Python con VisuraClient
+│   ├── login_and_visura.py # Browser automation diretta
+│   └── login_and_intestati.py  # Flusso a due fasi con browser
+├── docs/                   # Governance docs
+├── Dockerfile
+├── docker-compose.yaml
+├── pyproject.toml
+└── .env.example
+```
 
 ---
 
@@ -132,7 +161,7 @@ Per Docker:
 ### Con Docker (raccomandato)
 
 ```bash
-git clone https://github.com/zornade/visura-api.git
+git clone https://github.com/aecs4u/visura-api.git
 cd visura-api
 
 cp .env.example .env
@@ -141,25 +170,30 @@ cp .env.example .env
 docker-compose up -d
 
 # Verifica che il servizio sia attivo
-curl http://localhost:8000/health
+visura-api health
+# oppure: curl http://localhost:8000/health
 ```
 
 ### Installazione manuale
 
 ```bash
-git clone https://github.com/zornade/visura-api.git
+git clone https://github.com/aecs4u/visura-api.git
 cd visura-api
 
 python -m venv .venv
 source .venv/bin/activate
 
-pip install -r requirements.txt
+# Con uv (raccomandato) — risolve automaticamente aecs4u-auth locale
+uv sync
+
+# Oppure con pip
+pip install -e .
 playwright install chromium
 
 cp .env.example .env
 # Modifica .env con le tue credenziali SPID
 
-uvicorn main:app --host 0.0.0.0 --port 8000
+uvicorn visura_api.main:app --host 0.0.0.0 --port 8000
 ```
 
 > **Nota:** `aecs4u-auth` è pubblicato su Google Artifact Registry. Per installazione locale in sviluppo, usa `pip install -e ../aecs4u-auth[browser]` oppure `uv sync` (il `pyproject.toml` include già la source locale per uv).
@@ -197,6 +231,8 @@ RESPONSE_MAX_ITEMS=5000           # Massimo risultati in memoria
 RESPONSE_CLEANUP_INTERVAL_SECONDS=60 # Intervallo cleanup cache (secondi)
 ```
 
+### Variabili server
+
 | Variabile | Obbligatoria | Default | Descrizione |
 |-----------|:------------:|---------|-------------|
 | `ADE_USERNAME` | ✅ | — | Codice fiscale per il login SPID |
@@ -213,6 +249,99 @@ RESPONSE_CLEANUP_INTERVAL_SECONDS=60 # Intervallo cleanup cache (secondi)
 | `RESPONSE_TTL_SECONDS` | | `21600` | Tempo massimo (secondi) di retention risultati in memoria |
 | `RESPONSE_MAX_ITEMS` | | `5000` | Numero massimo di risultati mantenuti in cache |
 | `RESPONSE_CLEANUP_INTERVAL_SECONDS` | | `60` | Frequenza cleanup periodico cache risultati |
+
+### Variabili client (CLI e VisuraClient)
+
+| Variabile | Default | Descrizione |
+|-----------|---------|-------------|
+| `VISURA_API_URL` | `http://localhost:8000` | URL base del servizio |
+| `VISURA_API_KEY` | — | Valore per l'header `X-API-Key` |
+| `VISURA_API_TIMEOUT` | `30` | Timeout HTTP in secondi |
+| `VISURA_POLL_INTERVAL` | `5` | Secondi tra un poll e l'altro |
+| `VISURA_POLL_TIMEOUT` | `300` | Tempo massimo di attesa (secondi) |
+
+---
+
+## CLI
+
+Dopo l'installazione (`pip install -e .`), il comando `visura-api` è disponibile:
+
+```bash
+visura-api --help
+```
+
+### Comandi disponibili
+
+| Comando | Descrizione |
+|---------|-------------|
+| `visura-api search` | Cerca immobili su una particella (Fase 1) |
+| `visura-api intestati` | Cerca intestati di un immobile (Fase 2) |
+| `visura-api get <id>` | Recupera il risultato di una richiesta |
+| `visura-api wait <id>` | Attende il completamento di una richiesta |
+| `visura-api history` | Consulta lo storico delle visure |
+| `visura-api health` | Controlla lo stato del servizio |
+| `visura-api queries` | Elenca gli endpoint API disponibili |
+
+### Ricerca immobili
+
+```bash
+# Ricerca fabbricati a Trieste — attende il risultato
+visura-api search \
+    --provincia Trieste \
+    --comune TRIESTE \
+    --foglio 9 \
+    --particella 166 \
+    --tipo-catasto F \
+    --wait
+
+# Ricerca Terreni + Fabbricati (ometti --tipo-catasto)
+visura-api search -P Roma -C ROMA -F 100 -p 50 --wait
+
+# Anteprima senza invio
+visura-api search -P Trieste -C TRIESTE -F 9 -p 166 --dry-run
+
+# Salva risultati su file
+visura-api search -P Trieste -C TRIESTE -F 9 -p 166 --wait --output risultati.json
+```
+
+### Intestati
+
+```bash
+# Fabbricati (subalterno obbligatorio)
+visura-api intestati \
+    -P Trieste -C TRIESTE -F 9 -p 166 \
+    -t F -sub 3 --wait
+
+# Terreni (senza subalterno)
+visura-api intestati \
+    -P Roma -C ROMA -F 100 -p 50 \
+    -t T --wait
+```
+
+### Polling manuale
+
+```bash
+# Invia e recupera il request_id
+visura-api search -P Trieste -C TRIESTE -F 9 -p 166 -t F
+
+# Controlla lo stato
+visura-api get req_F_abc123
+
+# Attendi con timeout personalizzato
+visura-api wait req_F_abc123 --timeout 600 --interval 3
+```
+
+### Storico e salute
+
+```bash
+# Ultime 20 visure filtrate per provincia
+visura-api history --provincia Trieste --limit 20
+
+# Stato del servizio
+visura-api health
+```
+
+Per altri esempi vedi [`examples/cli_usage.sh`](examples/cli_usage.sh).
 
 ---
 
@@ -234,7 +363,13 @@ GET /health
   "response_ttl_seconds": 21600,
   "response_max_items": 5000,
   "queue_max_size": 100,
-  "response_cleanup_interval_seconds": 60
+  "response_cleanup_interval_seconds": 60,
+  "database": {
+    "total_requests": 42,
+    "total_responses": 40,
+    "successful": 38,
+    "failed": 2
+  }
 }
 ```
 
@@ -258,9 +393,10 @@ Se `API_KEY` è configurata, richiede header `X-API-Key`.
 | `foglio` | `string` | ✅ | — | Numero foglio |
 | `particella` | `string` | ✅ | — | Numero particella |
 | `sezione` | `string` | | `null` | Sezione censuaria (se presente) |
+| `subalterno` | `string` | | `null` | Subalterno (opzionale, restringe la ricerca per fabbricati) |
 | `tipo_catasto` | `string` | | `null` | `"T"` = Terreni, `"F"` = Fabbricati. Se omesso: entrambi |
 
-**Esempio:**
+**Esempio con curl:**
 
 ```bash
 curl -X POST http://localhost:8000/visura \
@@ -274,6 +410,12 @@ curl -X POST http://localhost:8000/visura \
   }'
 ```
 
+**Esempio con CLI:**
+
+```bash
+visura-api search -P Trieste -C TRIESTE -F 9 -p 166 -t F
+```
+
 **Risposta:**
 
 ```json
@@ -284,8 +426,6 @@ curl -X POST http://localhost:8000/visura \
   "message": "Richieste aggiunte alla coda per TRIESTE F.9 P.166"
 }
 ```
-
-> **Nota:** per i Terreni (`T`) gli intestati vengono estratti automaticamente. Per i Fabbricati (`F`) vengono restituiti solo gli immobili — per ottenere gli intestati di un singolo fabbricato, usa la Fase 2.
 
 ---
 
@@ -313,6 +453,7 @@ Se `API_KEY` è configurata, richiede header `X-API-Key`.
 **Esempio:**
 
 ```bash
+# curl
 curl -X POST http://localhost:8000/visura/intestati \
   -H "Content-Type: application/json" \
   -d '{
@@ -323,6 +464,9 @@ curl -X POST http://localhost:8000/visura/intestati \
     "tipo_catasto": "F",
     "subalterno": "3"
   }'
+
+# CLI
+visura-api intestati -P Trieste -C TRIESTE -F 9 -p 166 -t F -sub 3
 ```
 
 **Risposta:**
@@ -333,7 +477,7 @@ curl -X POST http://localhost:8000/visura/intestati \
   "tipo_catasto": "F",
   "subalterno": "3",
   "status": "queued",
-  "message": "Richiesta intestati aggiunta alla coda per TRIESTE F.9 P.166 Sub.3",
+  "message": "Richiesta intestati aggiunta alla coda per TRIESTE F.9 P.166",
   "queue_position": 1
 }
 ```
@@ -359,6 +503,17 @@ Se `API_KEY` è configurata, richiede header `X-API-Key`.
 Se `request_id` non esiste, l'endpoint risponde con `404`.
 Se il risultato è scaduto, risponde con `410` e `status: "expired"`.
 
+```bash
+# curl
+curl -s http://localhost:8000/visura/req_F_abc123 | jq .
+
+# CLI — singolo poll
+visura-api get req_F_abc123
+
+# CLI — attesa automatica con timeout
+visura-api wait req_F_abc123 --timeout 600
+```
+
 **Risposta completata (Fase 1):**
 
 ```json
@@ -380,13 +535,7 @@ Se il risultato è scaduto, risponde con `410` e `status: "expired"`.
         "Partita": "12345"
       }
     ],
-    "results": [
-      {
-        "result_index": 1,
-        "immobile": { },
-        "intestati": []
-      }
-    ],
+    "results": [],
     "total_results": 1,
     "intestati": []
   },
@@ -419,20 +568,32 @@ Se il risultato è scaduto, risponde con `410` e `status: "expired"`.
 }
 ```
 
-**Risposta con nessuna corrispondenza:**
+---
 
-```json
-{
-  "request_id": "req_F_2f7f40f95cfb4bd8a8d8fe7b89612268",
-  "status": "completed",
-  "data": {
-    "immobili": [],
-    "results": [],
-    "total_results": 0,
-    "intestati": [],
-    "error": "NESSUNA CORRISPONDENZA TROVATA"
-  }
-}
+### Storico visure
+
+```
+GET /visura/history
+```
+
+Consulta lo storico delle visure salvate nel database SQLite.
+
+| Parametro | Tipo | Default | Descrizione |
+|-----------|------|---------|-------------|
+| `provincia` | `string` | — | Filtra per provincia |
+| `comune` | `string` | — | Filtra per comune |
+| `foglio` | `string` | — | Filtra per foglio |
+| `particella` | `string` | — | Filtra per particella |
+| `tipo_catasto` | `string` | — | Filtra per tipo (`T`/`F`) |
+| `limit` | `int` | `50` | Massimo risultati (max 200) |
+| `offset` | `int` | `0` | Offset per paginazione |
+
+```bash
+# curl
+curl -s "http://localhost:8000/visura/history?provincia=Trieste&limit=20" | jq .
+
+# CLI
+visura-api history --provincia Trieste --limit 20
 ```
 
 ---
@@ -462,8 +623,6 @@ POST /shutdown
 Esegue un shutdown controllato: logout dal portale SISTER e chiusura del browser.
 Richiede header `X-API-Key` uguale a `SHUTDOWN_API_KEY`.
 
-Esempio:
-
 ```bash
 curl -X POST http://localhost:8000/shutdown \
   -H "X-API-Key: ${SHUTDOWN_API_KEY}"
@@ -471,7 +630,61 @@ curl -X POST http://localhost:8000/shutdown \
 
 ---
 
+## Client Python
+
+Il modulo `client.py` fornisce un client asincrono riutilizzabile in script e applicazioni:
+
+```python
+import asyncio
+from visura_api.client import VisuraClient
+
+async def main():
+    client = VisuraClient()  # legge config da env vars
+
+    # Controlla che il servizio sia attivo
+    health = await client.health()
+    print(f"Status: {health['status']}")
+
+    # Cerca fabbricati
+    result = await client.search(
+        provincia="Trieste",
+        comune="TRIESTE",
+        foglio="9",
+        particella="166",
+        tipo_catasto="F",
+    )
+    request_id = result["request_ids"][0]
+
+    # Attendi il risultato (poll automatico)
+    response = await client.wait_for_result(request_id)
+    immobili = response["data"]["immobili"]
+    print(f"Trovati {len(immobili)} immobili")
+
+    # Storico
+    history = await client.history(provincia="Trieste", limit=10)
+    print(f"{history['count']} visure nello storico")
+
+asyncio.run(main())
+```
+
+Per un esempio completo con gestione errori, vedi [`examples/client_usage.py`](examples/client_usage.py).
+
+---
+
 ## Esempi d'uso
+
+### Flusso completo con CLI
+
+```bash
+# 1. Cerca fabbricati e attendi
+visura-api search -P Roma -C ROMA -F 100 -p 50 -t F --wait --output immobili.json
+
+# 2. Prendi un subalterno dai risultati e cerca intestati
+visura-api intestati -P Roma -C ROMA -F 100 -p 50 -t F -sub 3 --wait
+
+# 3. Consulta lo storico
+visura-api history --provincia Roma --limit 10
+```
 
 ### Flusso completo con cURL
 
@@ -482,76 +695,35 @@ curl -s -X POST http://localhost:8000/visura \
   -d '{"provincia":"Roma","comune":"ROMA","foglio":"100","particella":"50","tipo_catasto":"F"}' \
   | jq .
 
-# Salva il request_id dalla risposta, poi:
-
 # 2. Polling risultati (ripeti fino a status != "processing")
-curl -s http://localhost:8000/visura/req_F_2f7f40f95cfb4bd8a8d8fe7b89612268 | jq .
+curl -s http://localhost:8000/visura/req_F_abc123 | jq .
 
-# 3. Prendi un subalterno dai risultati e chiedi gli intestati
+# 3. Chiedi gli intestati per un subalterno specifico
 curl -s -X POST http://localhost:8000/visura/intestati \
   -H "Content-Type: application/json" \
   -d '{"provincia":"Roma","comune":"ROMA","foglio":"100","particella":"50","tipo_catasto":"F","subalterno":"3"}' \
   | jq .
 
 # 4. Polling intestati
-curl -s http://localhost:8000/visura/intestati_F_9f3fa9cf2fcb49c6a8a21bf2312e3ef3 | jq .
+curl -s http://localhost:8000/visura/intestati_F_xyz789 | jq .
 ```
 
-### Client Python
+### Scripting con CLI e jq
 
-```python
-import requests, time
-
-BASE = "http://localhost:8000"
-
-def visura_completa(provincia, comune, foglio, particella, tipo="F", subalterno=None):
-    # Fase 1: immobili
-    r = requests.post(f"{BASE}/visura", json={
-        "provincia": provincia, "comune": comune,
-        "foglio": foglio, "particella": particella,
-        "tipo_catasto": tipo
-    }).json()
-
-    rid = r["request_ids"][0]
-
-    # Polling
-    while True:
-        res = requests.get(f"{BASE}/visura/{rid}").json()
-        if res["status"] != "processing":
-            break
-        time.sleep(5)
-
-    if res["status"] == "error":
-        raise Exception(res["error"])
-
-    immobili = res["data"]["immobili"]
-    print(f"Trovati {len(immobili)} immobili")
-
-    if not subalterno or tipo == "T":
-        return res["data"]
-
-    # Fase 2: intestati per uno specifico subalterno
-    r2 = requests.post(f"{BASE}/visura/intestati", json={
-        "provincia": provincia, "comune": comune,
-        "foglio": foglio, "particella": particella,
-        "tipo_catasto": tipo, "subalterno": subalterno
-    }).json()
-
-    rid2 = r2["request_id"]
-
-    while True:
-        res2 = requests.get(f"{BASE}/visura/{rid2}").json()
-        if res2["status"] != "processing":
-            break
-        time.sleep(5)
-
-    return res2["data"]
-
-
-# Esempio
-dati = visura_completa("Roma", "ROMA", "100", "50", tipo="F", subalterno="3")
-print(dati)
+```bash
+# Invia ricerca, estrai gli ID, attendi ognuno
+visura-api search -P Trieste -C TRIESTE -F 9 -p 166 2>/dev/null \
+  | jq -r '.request_ids[]' \
+  | while read -r rid; do
+      visura-api wait "$rid" --output "result_${rid}.json"
+    done
 ```
+
+Per altri esempi vedi:
+- [`examples/cli_usage.sh`](examples/cli_usage.sh) — tutti i comandi CLI commentati
+- [`examples/client_usage.py`](examples/client_usage.py) — client Python con health check, search, intestati, history
+- [`examples/login_and_visura.py`](examples/login_and_visura.py) — browser automation diretta
+- [`examples/login_and_intestati.py`](examples/login_and_intestati.py) — flusso a due fasi con browser
 
 ---
 
@@ -565,7 +737,7 @@ Scritto su **stdout** e su **file** in `logs/visura.log`. Contiene l'intero flus
 
 ```bash
 # Avvia con log dettagliati
-LOG_LEVEL=DEBUG uvicorn main:app --host 0.0.0.0 --port 8000
+LOG_LEVEL=DEBUG uvicorn visura_api.main:app --host 0.0.0.0 --port 8000
 ```
 
 ### Log HTML delle pagine (`PageLogger`)
@@ -579,33 +751,13 @@ logs/pages/
 └── 2026-03-06_16-28-24/          ← session_id (reset ad ogni avvio del server)
     ├── login/
     │   ├── 01_goto_login.html
-    │   ├── 02_entra_con_spid.html
-    │   ├── 03_sielte.html
-    │   ├── ...
-    │   └── 15_conferma_lettura.html
+    │   └── ...
     ├── visura/
     │   ├── 01_scelta_servizio.html
     │   ├── 02_provincia_applicata.html
-    │   ├── 03_immobile.html
-    │   ├── 04_ricerca.html
-    │   ├── 05_conferma_subalterno.html
-    │   ├── 06_risultati.html
-    │   └── 07_intestati_r1.html
-    ├── visura_002/                ← seconda visura nella stessa sessione
     │   └── ...
     ├── logout/
-    │   ├── 01_before_logout.html
-    │   └── 02_after_logout.html
     └── recovery/
-        └── ...
-```
-
-Ogni file HTML include in testa dei commenti con metadati:
-
-```html
-<!-- URL: https://sister3.agenziaentrate.gov.it/Visure/... -->
-<!-- Step: ricerca -->
-<!-- Timestamp: 2026-03-06T16:30:45 -->
 ```
 
 > **Privacy:** la directory `logs/pages/` è nel `.gitignore` perché i file HTML contengono dati personali (codice fiscale, intestatari, indirizzi). Non committare mai questi file.
@@ -627,8 +779,9 @@ Ogni file HTML include in testa dei commenti con metadati:
 - Unica `asyncio.Queue` con worker sequenziale
 - Pausa di **2 secondi** tra una richiesta e l'altra
 - Pausa di **5 secondi** dopo un errore
-- I risultati restano in memoria (`response_store`) fino al riavvio del servizio
+- I risultati restano in memoria (`response_store`) e nel **database SQLite**
 - Il client fa polling su `GET /visura/{request_id}` — restituisce `"processing"` finché il risultato non è pronto
+- Se il risultato non è in cache, viene cercato automaticamente nel database
 
 ### Graceful shutdown
 
@@ -638,29 +791,6 @@ Quando uvicorn riceve `SIGINT` o `SIGTERM`:
 2. `aecs4u-auth` effettua il logout dal portale SISTER
 3. Il browser context e Chromium vengono chiusi
 
-### Flusso di autenticazione SPID
-
-L'autenticazione è gestita da `aecs4u-auth` (`BrowserManager.login(service="sister")`):
-
-1. Naviga alla pagina di login dell'Agenzia delle Entrate
-2. Seleziona il metodo di autenticazione configurato (SPID/CIE/CNS/Fisconline)
-3. Per SPID: seleziona il provider configurato, inserisce credenziali, gestisce MFA
-4. Cerca "SISTER" tra i servizi → clicca "Vai al servizio"
-5. Verifica assenza di sessione bloccata ("Utente già in sessione")
-6. Naviga: Conferma → Consultazioni e Certificazioni → Visure catastali → Conferma Lettura
-
-Per maggiori dettagli sui provider e metodi supportati, vedi la [documentazione di aecs4u-auth](https://github.com/aecs4u/aecs4u-auth).
-
-### Flusso della visura
-
-1. Naviga a `SceltaServizio.do` — seleziona provincia — clicca Applica
-2. Clicca "Immobile" — seleziona tipo catasto (`T`/`F`), comune, compila foglio e particella
-3. Clicca "Ricerca" — gestisce eventuale "conferma assenza subalterno"
-4. Se "NESSUNA CORRISPONDENZA TROVATA" → ritorna risultato vuoto con `.error`
-5. Estrae la tabella immobili (`table.listaIsp4`)
-6. Per ogni immobile (radio button): seleziona → clicca "Intestati" → estrae tabella intestatari → torna indietro
-7. Gli immobili con `Partita = "Soppressa"` vengono inclusi ma senza estrazione intestati
-
 ---
 
 ## Sviluppo e contribuzione
@@ -668,7 +798,7 @@ Per maggiori dettagli sui provider e metodi supportati, vedi la [documentazione 
 ### Setup ambiente di sviluppo
 
 ```bash
-git clone https://github.com/zornade/visura-api.git
+git clone https://github.com/aecs4u/visura-api.git
 cd visura-api
 
 # Con uv (raccomandato) — risolve automaticamente aecs4u-auth locale
@@ -686,25 +816,36 @@ cp .env.example .env
 # Configura le credenziali
 ```
 
-### Struttura del codice
+### Test
 
-**`main.py`** contiene:
-- Modelli Pydantic di input (`VisuraInput`, `VisuraIntestatiInput`, `SezioniExtractionRequest`)
-- Dataclass interne (`VisuraRequest`, `VisuraResponse`, `VisuraIntestatiRequest`)
-- Eccezioni custom (`VisuraError`, `AuthenticationError`, `BrowserError`)
-- `BrowserManager` — thin wrapper su `aecs4u_auth.browser.BrowserManager`, espone `auth_page` per le visure
-- `VisuraService` — coda, worker, store risultati
-- Lifespan FastAPI (startup/shutdown)
-- Tutti gli endpoint REST
+```bash
+# Tutti i 140 test
+python -m pytest
 
-**`utils.py`** contiene:
-- `run_visura(page, ...)` — visura completa: selezione provincia → estrazione intestati
-- `run_visura_immobile(page, ...)` — visura mirata per un singolo fabbricato con subalterno
-- `extract_all_sezioni(page, ...)` — iterazione su tutte le province/comuni per estrarre sezioni
-- `find_best_option_match(page, selector, text)` — fuzzy matching a 5 livelli su dropdown `<select>`
-- `parse_table(html)` — parsing tabelle HTML con BeautifulSoup → lista di dizionari
+# Con output verbose
+python -m pytest -v
 
-> **Nota:** l'autenticazione SPID/CIE, il keep-alive, il `PageLogger` e la gestione del browser sono delegati al pacchetto [`aecs4u-auth`](https://github.com/aecs4u/aecs4u-auth).
+# Solo un modulo
+python -m pytest tests/test_database.py
+
+# Con coverage
+python -m pytest --cov=visura_api
+```
+
+### Formattazione e linting
+
+```bash
+black .           # formattazione automatica
+ruff check .      # controllo linting
+```
+
+### Docker
+
+```bash
+docker-compose up --build         # build e avvio
+docker-compose logs -f             # segui i log
+docker-compose down                # stop e rimozione container
+```
 
 ### Cambiare provider SPID o metodo di autenticazione
 
@@ -717,43 +858,9 @@ ADE_SPID_PROVIDER=aruba       # oppure: sielte, poste, namirial
 
 Per aggiungere un provider non supportato, contribuisci al pacchetto [`aecs4u-auth`](https://github.com/aecs4u/aecs4u-auth).
 
-### Convenzioni per il logging HTML
-
-Quando aggiungi nuovi flussi o step, usa `PageLogger` (da `aecs4u-auth`):
-
-```python
-from aecs4u_auth.browser import PageLogger
-
-logger = PageLogger("nome_flusso")    # Crea logger per questo flusso
-await logger.log(page, "nome_step")   # Salva HTML della pagina corrente
-```
-
-I file vengono numerati automaticamente (`01_nome_step.html`, `02_...`). Flussi ripetuti nella stessa sessione ricevono un suffisso incrementale (`visura`, `visura_002`, `visura_003`, ...).
-
-### Formattazione e linting
-
-```bash
-black .           # formattazione automatica
-ruff check .      # controllo linting
-```
-
-### Test
-
-```bash
-python -m pytest test_*.py -v
-```
-
-### Docker
-
-```bash
-docker-compose up --build         # build e avvio
-docker-compose logs -f             # segui i log
-docker-compose down                # stop e rimozione container
-```
-
 ### Linee guida
 
-Leggi [CONTRIBUTING.md](CONTRIBUTING.md) per il dettaglio completo. In breve:
+Leggi [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md) per il dettaglio completo. In breve:
 
 - Crea un branch dal `main` con un nome descrittivo (`fix/...`, `feat/...`)
 - Ogni modifica significativa deve includere i log `PageLogger` nei punti critici
@@ -771,9 +878,9 @@ Leggi [CONTRIBUTING.md](CONTRIBUTING.md) per il dettaglio completo. In breve:
 | "Utente già in sessione" | Sessione precedente non chiusa | Attendi qualche minuto o chiudi manualmente dal portale |
 | Sessione scaduta durante visura | Inattività prolungata | Il servizio tenta il recovery automatico; se fallisce, ri-esegue il login |
 | "NESSUNA CORRISPONDENZA TROVATA" | Dati catastali inesistenti | Verifica foglio, particella, tipo catasto e comune |
-| Risposte lente | Coda piena | Controlla `queue_size` con `GET /health` |
+| Risposte lente | Coda piena | Controlla `queue_size` con `visura-api health` |
 | Chromium non si avvia in Docker | Dipendenze di sistema mancanti | Usa il Dockerfile fornito che include tutte le librerie necessarie |
-| Log HTML vuoti o mancanti | Errore durante il salvataggio | Controlla i permessi sulla directory `logs/pages/` |
+| CLI non trova il servizio | URL sbagliato | Imposta `VISURA_API_URL` nel `.env` o via env var |
 
 Per debug approfondito, ispeziona i file HTML in `logs/pages/` — mostrano esattamente cosa vedeva il browser in ogni step.
 
@@ -788,7 +895,3 @@ Sviluppato da [zornade](https://zornade.com).
 ## Licenza
 
 Distribuito sotto licenza [GNU Affero General Public License v3.0](LICENSE).
-
----
-
-*Ultimo aggiornamento: marzo 2026*
