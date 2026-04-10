@@ -6,7 +6,7 @@ from aecs4u_auth.browser import PageLogger
 from bs4 import BeautifulSoup
 from playwright.async_api import Page
 
-log = logging.getLogger("visura-api.utils")
+log = logging.getLogger("sister.utils")
 
 SISTER_SCELTA_SERVIZIO_URL = "https://sister3.agenziaentrate.gov.it/Visure/SceltaServizio.do?tipo=/T/TM/VCVC_"
 

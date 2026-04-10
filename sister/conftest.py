@@ -132,9 +132,9 @@ async def _db_stats(*_args, **_kwargs):
 
 @pytest.fixture()
 def main_module(monkeypatch):
-    module = importlib.import_module("main")
-    services_mod = importlib.import_module("services")
-    routes_mod = importlib.import_module("routes")
+    module = importlib.import_module("sister.main")
+    services_mod = importlib.import_module("sister.services")
+    routes_mod = importlib.import_module("sister.routes")
 
     # Stub DB functions on the modules that actually import them
     monkeypatch.setattr(services_mod, "save_request", _noop, raising=False)

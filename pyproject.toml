@@ -3,16 +3,16 @@ requires = ["setuptools>=68.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "visura-api"
-version = "0.1.0"
-description = "Servizio API per l'estrazione automatizzata di dati catastali dal portale SISTER dell'Agenzia delle Entrate"
+name = "sister"
+version = "0.2.0"
+description = "SISTER — Servizio API e CLI per l'estrazione automatizzata di dati catastali dal portale SISTER dell'Agenzia delle Entrate"
 readme = "README.md"
 license = {text = "AGPL-3.0-only"}
 requires-python = ">=3.11"
 authors = [
-    {name = "Visura API Contributors"}
+    {name = "SISTER Contributors"}
 ]
-keywords = ["catasto", "visura", "sister", "agenzia-entrate", "api", "fastapi"]
+keywords = ["catasto", "visura", "sister", "agenzia-entrate", "api", "fastapi", "cli"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
@@ -48,19 +48,19 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/zornade/visura-api"
-Repository = "https://github.com/zornade/visura-api"
-Issues = "https://github.com/zornade/visura-api/issues"
-Changelog = "https://github.com/zornade/visura-api/blob/main/CHANGELOG.md"
+Homepage = "https://github.com/aecs4u/sister"
+Repository = "https://github.com/aecs4u/sister"
+Issues = "https://github.com/aecs4u/sister/issues"
+Changelog = "https://github.com/aecs4u/sister/blob/main/CHANGELOG.md"
 
 [project.scripts]
-visura-api = "cli:run"
+sister = "sister.cli:run"
 
 [tool.uv.sources]
 aecs4u-auth = { path = "../aecs4u-auth", editable = true }
 
 [tool.setuptools]
-py-modules = ["main", "models", "services", "routes", "utils", "database", "client", "cli"]
+packages = ["sister"]
 
 [tool.black]
 line-length = 120

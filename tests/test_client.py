@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, patch
 import httpx
 import pytest
 
-from client import VisuraAPIError, VisuraClient
+from sister.client import VisuraAPIError, VisuraClient
 
 # Save the real class before any patching
 _RealAsyncClient = httpx.AsyncClient
@@ -335,7 +335,7 @@ async def test_health_calls_correct_endpoint(client, monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_visura_api_error_attributes():
+def test_sister_error_attributes():
     e = VisuraAPIError(422, "Validation error")
     assert e.status_code == 422
     assert e.detail == "Validation error"

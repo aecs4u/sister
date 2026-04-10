@@ -1,4 +1,4 @@
-"""SQLite database layer for visura-api.
+"""SQLite database layer for sister.
 
 Provides persistent storage for visura requests and responses,
 replacing the in-memory dict cache.
@@ -11,9 +11,9 @@ from typing import Optional
 
 import aiosqlite
 
-logger = logging.getLogger("visura-api")
+logger = logging.getLogger("sister")
 
-DB_PATH = os.getenv("VISURA_DB_PATH", os.path.join(os.path.dirname(__file__), "data", "visura_api.sqlite"))
+DB_PATH = os.getenv("SISTER_DB_PATH", os.path.join(os.path.dirname(__file__), "data", "sister.sqlite"))
 
 
 async def get_db() -> aiosqlite.Connection:

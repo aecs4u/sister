@@ -10,7 +10,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException
 from rich.logging import RichHandler
 
 # Re-export for tests using main_module.*
-from database import (  # noqa: F401
+from .database import (  # noqa: F401
     cleanup_old_responses,
     count_responses,
     find_responses,
@@ -19,15 +19,15 @@ from database import (  # noqa: F401
     save_requests_batch,
     save_response,
 )
-from database import get_response as load_stored_response  # noqa: F401
-from models import (  # noqa: F401
+from .database import get_response as load_stored_response  # noqa: F401
+from .models import (  # noqa: F401
     SezioniExtractionRequest,
     VisuraInput,
     VisuraIntestatiInput,
     VisuraRequest,
     VisuraResponse,
 )
-from routes import (
+from .routes import (
     extract_sezioni,
     graceful_shutdown_endpoint,
     health_check,
@@ -36,7 +36,7 @@ from routes import (
     richiedi_visura,
     visura_history,
 )
-from services import PageLogger, VisuraService
+from .services import PageLogger, VisuraService
 
 # Carica variabili d'ambiente da .env
 load_dotenv()
@@ -72,7 +72,7 @@ logging.basicConfig(
     datefmt="[%X]",
     handlers=log_handlers,
 )
-logger = logging.getLogger("visura-api")
+logger = logging.getLogger("sister")
 
 
 # ---------------------------------------------------------------------------

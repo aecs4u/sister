@@ -1,4 +1,4 @@
-"""Test configuration — adds visura_api/ to sys.path and provides shared fixtures."""
+"""Test configuration — stubs heavy optional dependencies and provides shared fixtures."""
 
 import importlib
 import logging
@@ -7,15 +7,6 @@ import sys
 import types
 
 import pytest
-
-# ---------------------------------------------------------------------------
-# Path setup: add visura_api/ so bare imports like "from models import ..."
-# resolve to the package source, not the (deleted) root-level modules.
-# ---------------------------------------------------------------------------
-
-_visura_api_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "visura_api")
-if _visura_api_dir not in sys.path:
-    sys.path.insert(0, _visura_api_dir)
 
 
 # ---------------------------------------------------------------------------
@@ -160,9 +151,9 @@ async def _db_stats(*_args, **_kwargs):
 @pytest.fixture()
 def main_module(monkeypatch):
     """Import main.py and patch all DB functions to noops."""
-    module = importlib.import_module("main")
-    services_mod = importlib.import_module("services")
-    routes_mod = importlib.import_module("routes")
+    module = importlib.import_module("sister.main")
+    services_mod = importlib.import_module("sister.services")
+    routes_mod = importlib.import_module("sister.routes")
 
     # Stub DB functions on the modules that actually import them
     monkeypatch.setattr(services_mod, "save_request", _noop, raising=False)

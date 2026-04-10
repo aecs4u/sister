@@ -1,4 +1,4 @@
-"""FastAPI route handler functions for visura-api.
+"""FastAPI route handler functions for sister.
 
 These are plain async functions that accept their dependencies as arguments.
 They are registered with FastAPI decorators in main.py.
@@ -11,8 +11,8 @@ from uuid import uuid4
 from fastapi import HTTPException
 from fastapi.responses import JSONResponse
 
-from database import count_responses, find_responses
-from models import (
+from .database import count_responses, find_responses
+from .models import (
     AuthenticationError,
     QueueFullError,
     SezioniExtractionRequest,
@@ -21,9 +21,9 @@ from models import (
     VisuraIntestatiRequest,
     VisuraRequest,
 )
-from services import VisuraService
+from .services import VisuraService
 
-logger = logging.getLogger("visura-api")
+logger = logging.getLogger("sister")
 
 
 async def richiedi_visura(request: VisuraInput, service: VisuraService):

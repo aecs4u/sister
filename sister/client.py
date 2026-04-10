@@ -1,9 +1,9 @@
-"""Async HTTP client for the visura-api service.
+"""Async HTTP client for the sister service.
 
 Wraps the REST API with typed methods and built-in polling support.
 Configuration is read from environment variables:
 
-    VISURA_API_URL        — Base URL (default: http://localhost:8000)
+    VISURA_API_URL        — Base URL (default: http://localhost:8025)
     VISURA_API_KEY        — Optional X-API-Key header value
     VISURA_API_TIMEOUT    — HTTP request timeout in seconds (default: 30)
     VISURA_POLL_INTERVAL  — Seconds between polls (default: 5)
@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 # Defaults
 # ---------------------------------------------------------------------------
 
-DEFAULT_BASE_URL = "http://localhost:8000"
+DEFAULT_BASE_URL = "http://localhost:8025"
 DEFAULT_TIMEOUT = 30.0
 DEFAULT_POLL_INTERVAL = 5.0
 DEFAULT_POLL_TIMEOUT = 300.0
@@ -38,7 +38,7 @@ DEFAULT_POLL_TIMEOUT = 300.0
 
 
 class VisuraAPIError(Exception):
-    """Error returned by the visura-api service."""
+    """Error returned by the sister service."""
 
     def __init__(self, status_code: int, detail: str):
         self.status_code = status_code
@@ -52,7 +52,7 @@ class VisuraAPIError(Exception):
 
 
 class VisuraClient:
-    """Async HTTP client for the visura-api service."""
+    """Async HTTP client for the sister service."""
 
     def __init__(
         self,

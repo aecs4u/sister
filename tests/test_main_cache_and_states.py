@@ -328,7 +328,7 @@ async def test_get_response_loads_from_database_when_not_cached(monkeypatch, mai
             "created_at": datetime.now().isoformat(),
         }
 
-    import services as services_mod
+    import sister.services as services_mod
 
     monkeypatch.setattr(services_mod, "load_stored_response", fake_load, raising=False)
 
@@ -342,7 +342,7 @@ async def test_get_response_loads_from_database_when_not_cached(monkeypatch, mai
 
 @pytest.mark.asyncio
 async def test_get_response_marks_expired_for_old_database_record(monkeypatch, main_module):
-    import services as services_mod
+    import sister.services as services_mod
 
     service = main_module.VisuraService()
     service.response_ttl_seconds = 1
@@ -369,7 +369,7 @@ async def test_get_response_marks_expired_for_old_database_record(monkeypatch, m
 
 @pytest.mark.asyncio
 async def test_add_request_returns_runtime_error_when_persistence_fails(monkeypatch, main_module):
-    import services as services_mod
+    import sister.services as services_mod
 
     service = main_module.VisuraService()
     service.processing = True

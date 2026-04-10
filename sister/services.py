@@ -1,4 +1,4 @@
-"""Service layer: BrowserManager and VisuraService for visura-api."""
+"""Service layer: BrowserManager and VisuraService for sister."""
 
 import asyncio
 import logging
@@ -11,16 +11,16 @@ from aecs4u_auth.browser import BrowserConfig, PageLogger  # noqa: F401 (PageLog
 from aecs4u_auth.browser import BrowserManager as AuthBrowserManager
 from playwright.async_api import Page
 
-from database import (
+from .database import (
     cleanup_old_responses,
     save_request,
     save_requests_batch,
     save_response,
 )
-from database import (
+from .database import (
     get_response as load_stored_response,
 )
-from models import (
+from .models import (
     AuthenticationError,
     BrowserError,
     QueueFullError,
@@ -28,9 +28,9 @@ from models import (
     VisuraRequest,
     VisuraResponse,
 )
-from utils import extract_all_sezioni, run_visura, run_visura_immobile
+from .utils import extract_all_sezioni, run_visura, run_visura_immobile
 
-logger = logging.getLogger("visura-api")
+logger = logging.getLogger("sister")
 
 
 class BrowserManager:

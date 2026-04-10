@@ -1,4 +1,4 @@
-"""Data models, exceptions, and Pydantic input schemas for visura-api."""
+"""Data models, exceptions, and Pydantic input schemas for sister."""
 
 from dataclasses import dataclass
 from datetime import datetime

@@ -1207,6 +1207,52 @@ wheels = [
 ]
 
 [[package]]
+name = "sister"
+version = "0.2.0"
+source = { editable = "." }
+dependencies = [
+    { name = "aecs4u-auth", extra = ["browser"] },
+    { name = "aiosqlite" },
+    { name = "beautifulsoup4" },
+    { name = "fastapi" },
+    { name = "httpx" },
+    { name = "pydantic" },
+    { name = "python-dotenv" },
+    { name = "rich" },
+    { name = "typer" },
+    { name = "uvicorn" },
+]
+
+[package.optional-dependencies]
+dev = [
+    { name = "black" },
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
+    { name = "pytest-cov" },
+    { name = "ruff" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "aecs4u-auth", extras = ["browser"], editable = "../aecs4u-auth" },
+    { name = "aiosqlite", specifier = ">=0.19.0" },
+    { name = "beautifulsoup4" },
+    { name = "black", marker = "extra == 'dev'", specifier = ">=23.0" },
+    { name = "fastapi", specifier = ">=0.115.0" },
+    { name = "httpx", specifier = ">=0.27.0" },
+    { name = "pydantic", specifier = ">=2.10.0" },
+    { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.0" },
+    { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.21" },
+    { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=4.0" },
+    { name = "python-dotenv" },
+    { name = "rich", specifier = ">=13.0" },
+    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.1.0" },
+    { name = "typer", specifier = ">=0.9.0" },
+    { name = "uvicorn", specifier = ">=0.32.0" },
+]
+provides-extras = ["dev"]
+
+[[package]]
 name = "six"
 version = "1.17.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1415,49 +1461,3 @@ sdist = { url = "https://files.pythonhosted.org/packages/5e/da/6eee1ff8b6cbeed47
 wheels = [
     { url = "https://files.pythonhosted.org/packages/b7/23/a5bbd9600dd607411fa644c06ff4951bec3a4d82c4b852374024359c19c0/uvicorn-0.44.0-py3-none-any.whl", hash = "sha256:ce937c99a2cc70279556967274414c087888e8cec9f9c94644dfca11bd3ced89", size = 69425, upload-time = "2026-04-06T09:23:21.524Z" },
 ]
-
-[[package]]
-name = "visura-api"
-version = "0.1.0"
-source = { editable = "." }
-dependencies = [
-    { name = "aecs4u-auth", extra = ["browser"] },
-    { name = "aiosqlite" },
-    { name = "beautifulsoup4" },
-    { name = "fastapi" },
-    { name = "httpx" },
-    { name = "pydantic" },
-    { name = "python-dotenv" },
-    { name = "rich" },
-    { name = "typer" },
-    { name = "uvicorn" },
-]
-
-[package.optional-dependencies]
-dev = [
-    { name = "black" },
-    { name = "pytest" },
-    { name = "pytest-asyncio" },
-    { name = "pytest-cov" },
-    { name = "ruff" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "aecs4u-auth", extras = ["browser"], editable = "../aecs4u-auth" },
-    { name = "aiosqlite", specifier = ">=0.19.0" },
-    { name = "beautifulsoup4" },
-    { name = "black", marker = "extra == 'dev'", specifier = ">=23.0" },
-    { name = "fastapi", specifier = ">=0.115.0" },
-    { name = "httpx", specifier = ">=0.27.0" },
-    { name = "pydantic", specifier = ">=2.10.0" },
-    { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.0" },
-    { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.21" },
-    { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=4.0" },
-    { name = "python-dotenv" },
-    { name = "rich", specifier = ">=13.0" },
-    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.1.0" },
-    { name = "typer", specifier = ">=0.9.0" },
-    { name = "uvicorn", specifier = ">=0.32.0" },
-]
-provides-extras = ["dev"]

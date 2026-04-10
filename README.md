@@ -1,4 +1,4 @@
-# Visura API
+# SISTER
 
 [![Licenza](https://img.shields.io/badge/Licenza-AGPL%20v3-blue.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/Python-3.11%2B-green.svg)](https://www.python.org/)
@@ -42,18 +42,18 @@ Servizio REST per l'estrazione automatizzata di dati catastali dal portale **SIS
 
 ## Panoramica
 
-Visura API permette di interrogare i dati catastali italiani tramite una semplice interfaccia HTTP o una CLI dedicata. Il flusso operativo è diviso in due fasi:
+SISTER permette di interrogare i dati catastali italiani tramite una semplice interfaccia HTTP o una CLI dedicata. Il flusso operativo è diviso in due fasi:
 
 | Fase | Endpoint | CLI | Descrizione |
 |------|----------|-----|-------------|
-| **1 — Immobili** | `POST /visura` | `visura-api search` | Cerca gli immobili associati a foglio + particella |
-| **2 — Intestati** | `POST /visura/intestati` | `visura-api intestati` | Recupera i titolari di uno specifico subalterno |
+| **1 — Immobili** | `POST /visura` | `sister query search` | Cerca gli immobili associati a foglio + particella |
+| **2 — Intestati** | `POST /visura/intestati` | `sister query intestati` | Recupera i titolari di uno specifico subalterno |
 
-Entrambe le richieste vengono accodate ed eseguite sequenzialmente su un singolo browser autenticato al portale SISTER. I risultati si recuperano in polling con `GET /visura/{request_id}` o con `visura-api wait`.
+Entrambe le richieste vengono accodate ed eseguite sequenzialmente su un singolo browser autenticato al portale SISTER. I risultati si recuperano in polling con `GET /visura/{request_id}` o con `sister wait`.
 
 ### Funzionalità principali
 
-- **CLI integrata** — `visura-api` con 7 subcomandi: search, intestati, get, wait, history, health, queries
+- **CLI integrata** — `sister` con comandi query (search, intestati, workflow, batch), get, wait, requests, history, health
 - **Client Python** — `VisuraClient` asincrono con polling automatico e timeout configurabili
 - **Autenticazione SPID automatizzata** via provider Sielte ID (CIE Sign) con push notification
 - **Coda sequenziale** — le richieste vengono processate una alla volta per non sovraccaricare il portale
@@ -83,7 +83,7 @@ Client HTTP / CLI
      │
      ▼
 ┌──────────────────────────────────────────────────────┐
-│  FastAPI  (visura_api/main.py)                       │
+│  FastAPI  (sister/main.py)                       │
 │                                                      │
 │  ┌─────────────┐  ┌──────────────────────────────┐   │
 │  │ Routes      │──│ VisuraService                │   │
@@ -113,7 +113,7 @@ Client HTTP / CLI
 
 ```
 visura-api/
-├── visura_api/             # Codice sorgente
+├── sister/             # Codice sorgente
 │   ├── main.py             # App FastAPI, lifespan, dependency injection
 │   ├── routes.py           # Route handler functions
 │   ├── services.py         # BrowserManager, VisuraService (coda + worker)
@@ -121,8 +121,8 @@ visura-api/
 │   ├── database.py         # SQLite persistence layer (aiosqlite)
 │   ├── utils.py            # Automazione SISTER: run_visura(), parse_table()
 │   ├── client.py           # VisuraClient — async HTTP client con polling
-│   └── cli.py              # CLI Typer con 7 subcomandi
-├── tests/                  # Test suite (140 test)
+│   └── cli.py              # CLI Typer: query (search, intestati, workflow, batch), get, wait, requests, history, health
+├── tests/                  # Test suite (156 test)
 │   ├── conftest.py         # Fixtures e stub dipendenze
 │   ├── test_database.py    # Test SQLite layer
 │   ├── test_client.py      # Test HTTP client
@@ -161,8 +161,8 @@ Per Docker:
 ### Con Docker (raccomandato)
 
 ```bash
-git clone https://github.com/aecs4u/visura-api.git
-cd visura-api
+git clone https://github.com/aecs4u/sister.git
+cd sister
 
 cp .env.example .env
 # Modifica .env con le tue credenziali SPID
@@ -170,15 +170,15 @@ cp .env.example .env
 docker-compose up -d
 
 # Verifica che il servizio sia attivo
-visura-api health
-# oppure: curl http://localhost:8000/health
+uv run sister health
+# oppure: curl http://localhost:8025/health
 ```
 
 ### Installazione manuale
 
 ```bash
-git clone https://github.com/aecs4u/visura-api.git
-cd visura-api
+git clone https://github.com/aecs4u/sister.git
+cd sister
 
 python -m venv .venv
 source .venv/bin/activate
@@ -193,7 +193,7 @@ playwright install chromium
 cp .env.example .env
 # Modifica .env con le tue credenziali SPID
 
-uvicorn visura_api.main:app --host 0.0.0.0 --port 8000
+./scripts/start.sh
 ```
 
 > **Nota:** `aecs4u-auth` è pubblicato su Google Artifact Registry. Per installazione locale in sviluppo, usa `pip install -e ../aecs4u-auth[browser]` oppure `uv sync` (il `pyproject.toml` include già la source locale per uv).
@@ -254,7 +254,7 @@ RESPONSE_CLEANUP_INTERVAL_SECONDS=60 # Intervallo cleanup cache (secondi)
 
 | Variabile | Default | Descrizione |
 |-----------|---------|-------------|
-| `VISURA_API_URL` | `http://localhost:8000` | URL base del servizio |
+| `VISURA_API_URL` | `http://localhost:8025` | URL base del servizio |
 | `VISURA_API_KEY` | — | Valore per l'header `X-API-Key` |
 | `VISURA_API_TIMEOUT` | `30` | Timeout HTTP in secondi |
 | `VISURA_POLL_INTERVAL` | `5` | Secondi tra un poll e l'altro |
@@ -264,29 +264,34 @@ RESPONSE_CLEANUP_INTERVAL_SECONDS=60 # Intervallo cleanup cache (secondi)
 
 ## CLI
 
-Dopo l'installazione (`pip install -e .`), il comando `visura-api` è disponibile:
+Dopo l'installazione (`uv sync` o `pip install -e .`), il comando `sister` è disponibile:
 
 ```bash
-visura-api --help
+uv run sister --help
 ```
 
 ### Comandi disponibili
 
-| Comando | Descrizione |
-|---------|-------------|
-| `visura-api search` | Cerca immobili su una particella (Fase 1) |
-| `visura-api intestati` | Cerca intestati di un immobile (Fase 2) |
-| `visura-api get <id>` | Recupera il risultato di una richiesta |
-| `visura-api wait <id>` | Attende il completamento di una richiesta |
-| `visura-api history` | Consulta lo storico delle visure |
-| `visura-api health` | Controlla lo stato del servizio |
-| `visura-api queries` | Elenca gli endpoint API disponibili |
+```
+sister
+├── query                              # Submit cadastral queries
+│   ├── search                         # Fase 1 — immobili
+│   ├── intestati                      # Fase 2 — owners
+│   ├── workflow                       # Full two-phase automation
+│   └── batch                          # Batch search from CSV
+├── get <request_id>                   # Poll a single result
+├── wait <request_id>                  # Poll until complete
+├── requests                           # List all requests with status
+├── history                            # Query response history
+├── health                             # Service health check
+└── queries                            # List available endpoints
+```
 
 ### Ricerca immobili
 
 ```bash
 # Ricerca fabbricati a Trieste — attende il risultato
-visura-api search \
+uv run sister query search \
     --provincia Trieste \
     --comune TRIESTE \
     --foglio 9 \
@@ -295,50 +300,87 @@ visura-api search \
     --wait
 
 # Ricerca Terreni + Fabbricati (ometti --tipo-catasto)
-visura-api search -P Roma -C ROMA -F 100 -p 50 --wait
+uv run sister query search -P Roma -C ROMA -F 100 -p 50 --wait
 
 # Anteprima senza invio
-visura-api search -P Trieste -C TRIESTE -F 9 -p 166 --dry-run
+uv run sister query search -P Trieste -C TRIESTE -F 9 -p 166 --dry-run
 
 # Salva risultati su file
-visura-api search -P Trieste -C TRIESTE -F 9 -p 166 --wait --output risultati.json
+uv run sister query search -P Trieste -C TRIESTE -F 9 -p 166 --wait --output risultati.json
 ```
 
 ### Intestati
 
 ```bash
 # Fabbricati (subalterno obbligatorio)
-visura-api intestati \
+uv run sister query intestati \
     -P Trieste -C TRIESTE -F 9 -p 166 \
     -t F -sub 3 --wait
 
 # Terreni (senza subalterno)
-visura-api intestati \
+uv run sister query intestati \
     -P Roma -C ROMA -F 100 -p 50 \
     -t T --wait
+```
+
+### Workflow (ricerca + intestati automatica)
+
+```bash
+# Cerca immobili, poi recupera intestati per ogni subalterno trovato
+uv run sister query workflow -P Trieste -C TRIESTE -F 9 -p 166 -t F
+
+# Limita a un subalterno specifico
+uv run sister query workflow -P Trieste -C TRIESTE -F 9 -p 166 -t F -sub 3
+
+# Salva tutto su file
+uv run sister query workflow -P Roma -C ROMA -F 100 -p 50 --output full.json
+```
+
+### Batch (ricerca multipla da CSV)
+
+```bash
+# Invia tutte le righe dal file CSV
+uv run sister query batch --input parcelle.csv
+
+# Con attesa e output per riga
+uv run sister query batch -I parcelle.csv --wait -O ./results/
+
+# Anteprima
+uv run sister query batch -I parcelle.csv --dry-run
+```
+
+Formato CSV:
+```csv
+provincia,comune,foglio,particella,tipo_catasto
+Trieste,TRIESTE,9,166,F
+Roma,ROMA,100,50,T
 ```
 
 ### Polling manuale
 
 ```bash
 # Invia e recupera il request_id
-visura-api search -P Trieste -C TRIESTE -F 9 -p 166 -t F
+uv run sister query search -P Trieste -C TRIESTE -F 9 -p 166 -t F
 
 # Controlla lo stato
-visura-api get req_F_abc123
+uv run sister get req_F_abc123
 
 # Attendi con timeout personalizzato
-visura-api wait req_F_abc123 --timeout 600 --interval 3
+uv run sister wait req_F_abc123 --timeout 600 --interval 3
 ```
 
-### Storico e salute
+### Requests, storico e salute
 
 ```bash
-# Ultime 20 visure filtrate per provincia
-visura-api history --provincia Trieste --limit 20
+# Lista richieste con filtro stato
+uv run sister requests --status pending
+uv run sister requests --status completed --provincia Trieste
+
+# Storico visure
+uv run sister history --provincia Trieste --limit 20
 
 # Stato del servizio
-visura-api health
+uv run sister health
 ```
 
 Per altri esempi vedi [`examples/cli_usage.sh`](examples/cli_usage.sh).
@@ -399,7 +441,7 @@ Se `API_KEY` è configurata, richiede header `X-API-Key`.
 **Esempio con curl:**
 
 ```bash
-curl -X POST http://localhost:8000/visura \
+curl -X POST http://localhost:8025/visura \
   -H "Content-Type: application/json" \
   -d '{
     "provincia": "Trieste",
@@ -413,7 +455,7 @@ curl -X POST http://localhost:8000/visura \
 **Esempio con CLI:**
 
 ```bash
-visura-api search -P Trieste -C TRIESTE -F 9 -p 166 -t F
+uv run sister query search -P Trieste -C TRIESTE -F 9 -p 166 -t F
 ```
 
 **Risposta:**
@@ -454,7 +496,7 @@ Se `API_KEY` è configurata, richiede header `X-API-Key`.
 
 ```bash
 # curl
-curl -X POST http://localhost:8000/visura/intestati \
+curl -X POST http://localhost:8025/visura/intestati \
   -H "Content-Type: application/json" \
   -d '{
     "provincia": "Trieste",
@@ -466,7 +508,7 @@ curl -X POST http://localhost:8000/visura/intestati \
   }'
 
 # CLI
-visura-api intestati -P Trieste -C TRIESTE -F 9 -p 166 -t F -sub 3
+uv run sister query intestati -P Trieste -C TRIESTE -F 9 -p 166 -t F -sub 3
 ```
 
 **Risposta:**
@@ -505,13 +547,13 @@ Se il risultato è scaduto, risponde con `410` e `status: "expired"`.
 
 ```bash
 # curl
-curl -s http://localhost:8000/visura/req_F_abc123 | jq .
+curl -s http://localhost:8025/visura/req_F_abc123 | jq .
 
 # CLI — singolo poll
-visura-api get req_F_abc123
+uv run sister get req_F_abc123
 
 # CLI — attesa automatica con timeout
-visura-api wait req_F_abc123 --timeout 600
+uv run sister wait req_F_abc123 --timeout 600
 ```
 
 **Risposta completata (Fase 1):**
@@ -590,10 +632,10 @@ Consulta lo storico delle visure salvate nel database SQLite.
 
 ```bash
 # curl
-curl -s "http://localhost:8000/visura/history?provincia=Trieste&limit=20" | jq .
+curl -s "http://localhost:8025/visura/history?provincia=Trieste&limit=20" | jq .
 
 # CLI
-visura-api history --provincia Trieste --limit 20
+uv run sister history --provincia Trieste --limit 20
 ```
 
 ---
@@ -624,7 +666,7 @@ Esegue un shutdown controllato: logout dal portale SISTER e chiusura del browser
 Richiede header `X-API-Key` uguale a `SHUTDOWN_API_KEY`.
 
 ```bash
-curl -X POST http://localhost:8000/shutdown \
+curl -X POST http://localhost:8025/shutdown \
   -H "X-API-Key: ${SHUTDOWN_API_KEY}"
 ```
 
@@ -636,7 +678,7 @@ Il modulo `client.py` fornisce un client asincrono riutilizzabile in script e ap
 
 ```python
 import asyncio
-from visura_api.client import VisuraClient
+from sister.client import VisuraClient
 
 async def main():
     client = VisuraClient()  # legge config da env vars
@@ -677,45 +719,51 @@ Per un esempio completo con gestione errori, vedi [`examples/client_usage.py`](e
 
 ```bash
 # 1. Cerca fabbricati e attendi
-visura-api search -P Roma -C ROMA -F 100 -p 50 -t F --wait --output immobili.json
+uv run sister query search -P Roma -C ROMA -F 100 -p 50 -t F --wait --output immobili.json
 
 # 2. Prendi un subalterno dai risultati e cerca intestati
-visura-api intestati -P Roma -C ROMA -F 100 -p 50 -t F -sub 3 --wait
+uv run sister query intestati -P Roma -C ROMA -F 100 -p 50 -t F -sub 3 --wait
 
-# 3. Consulta lo storico
-visura-api history --provincia Roma --limit 10
+# 3. Oppure: workflow automatico (fase 1 + fase 2 in un solo comando)
+uv run sister query workflow -P Roma -C ROMA -F 100 -p 50 -t F --output full.json
+
+# 4. Batch da file CSV
+uv run sister query batch -I parcelle.csv --wait -O ./results/
+
+# 5. Consulta lo storico
+uv run sister history --provincia Roma --limit 10
 ```
 
 ### Flusso completo con cURL
 
 ```bash
 # 1. Avvia l'estrazione dei fabbricati
-curl -s -X POST http://localhost:8000/visura \
+curl -s -X POST http://localhost:8025/visura \
   -H "Content-Type: application/json" \
   -d '{"provincia":"Roma","comune":"ROMA","foglio":"100","particella":"50","tipo_catasto":"F"}' \
   | jq .
 
 # 2. Polling risultati (ripeti fino a status != "processing")
-curl -s http://localhost:8000/visura/req_F_abc123 | jq .
+curl -s http://localhost:8025/visura/req_F_abc123 | jq .
 
 # 3. Chiedi gli intestati per un subalterno specifico
-curl -s -X POST http://localhost:8000/visura/intestati \
+curl -s -X POST http://localhost:8025/visura/intestati \
   -H "Content-Type: application/json" \
   -d '{"provincia":"Roma","comune":"ROMA","foglio":"100","particella":"50","tipo_catasto":"F","subalterno":"3"}' \
   | jq .
 
 # 4. Polling intestati
-curl -s http://localhost:8000/visura/intestati_F_xyz789 | jq .
+curl -s http://localhost:8025/visura/intestati_F_xyz789 | jq .
 ```
 
 ### Scripting con CLI e jq
 
 ```bash
 # Invia ricerca, estrai gli ID, attendi ognuno
-visura-api search -P Trieste -C TRIESTE -F 9 -p 166 2>/dev/null \
+uv run sister query search -P Trieste -C TRIESTE -F 9 -p 166 2>/dev/null \
   | jq -r '.request_ids[]' \
   | while read -r rid; do
-      visura-api wait "$rid" --output "result_${rid}.json"
+      uv run sister wait "$rid" --output "result_${rid}.json"
     done
 ```
 
@@ -737,7 +785,7 @@ Scritto su **stdout** e su **file** in `logs/visura.log`. Contiene l'intero flus
 
 ```bash
 # Avvia con log dettagliati
-LOG_LEVEL=DEBUG uvicorn visura_api.main:app --host 0.0.0.0 --port 8000
+LOG_LEVEL=DEBUG ./scripts/start.sh
 ```
 
 ### Log HTML delle pagine (`PageLogger`)
@@ -798,8 +846,8 @@ Quando uvicorn riceve `SIGINT` o `SIGTERM`:
 ### Setup ambiente di sviluppo
 
 ```bash
-git clone https://github.com/aecs4u/visura-api.git
-cd visura-api
+git clone https://github.com/aecs4u/sister.git
+cd sister
 
 # Con uv (raccomandato) — risolve automaticamente aecs4u-auth locale
 uv sync --extra dev
@@ -819,7 +867,7 @@ cp .env.example .env
 ### Test
 
 ```bash
-# Tutti i 140 test
+# Tutti i 156 test
 python -m pytest
 
 # Con output verbose
@@ -829,7 +877,7 @@ python -m pytest -v
 python -m pytest tests/test_database.py
 
 # Con coverage
-python -m pytest --cov=visura_api
+python -m pytest --cov=sister
 ```
 
 ### Formattazione e linting
@@ -878,7 +926,7 @@ Leggi [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md) per il dettaglio completo. In
 | "Utente già in sessione" | Sessione precedente non chiusa | Attendi qualche minuto o chiudi manualmente dal portale |
 | Sessione scaduta durante visura | Inattività prolungata | Il servizio tenta il recovery automatico; se fallisce, ri-esegue il login |
 | "NESSUNA CORRISPONDENZA TROVATA" | Dati catastali inesistenti | Verifica foglio, particella, tipo catasto e comune |
-| Risposte lente | Coda piena | Controlla `queue_size` con `visura-api health` |
+| Risposte lente | Coda piena | Controlla `queue_size` con `uv run sister health` |
 | Chromium non si avvia in Docker | Dipendenze di sistema mancanti | Usa il Dockerfile fornito che include tutte le librerie necessarie |
 | CLI non trova il servizio | URL sbagliato | Imposta `VISURA_API_URL` nel `.env` o via env var |
 

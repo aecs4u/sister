@@ -9,7 +9,7 @@ import tempfile
 
 import pytest
 
-import database
+import sister.database as database
 
 
 # ---------------------------------------------------------------------------

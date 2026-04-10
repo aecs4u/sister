@@ -4,7 +4,7 @@ import pytest
 from pydantic import ValidationError
 
 # Stubs are installed by conftest._install_test_stubs() at import time
-from models import (
+from sister.models import (
     SezioniExtractionRequest,
     VisuraInput,
     VisuraIntestatiInput,
