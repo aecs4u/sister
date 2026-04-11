@@ -11,6 +11,8 @@ from typing import Optional
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
+from fastapi.responses import FileResponse
+
 from .database import count_responses, find_responses, get_response
 from .form_config import get_available_form_groups
 
@@ -32,6 +34,22 @@ def _get_theme(request: Request):
 # ---------------------------------------------------------------------------
 # Public routes (no auth)
 # ---------------------------------------------------------------------------
+
+
+@router.get("/favicon.ico", include_in_schema=False)
+async def favicon():
+    """Serve favicon."""
+    import os
+    icon = os.path.join(os.path.dirname(__file__), "static", "icons", "favicon.ico")
+    if os.path.exists(icon):
+        return FileResponse(icon)
+    return HTMLResponse("", status_code=204)
+
+
+@router.get("/auth/login", response_class=HTMLResponse, include_in_schema=False)
+async def auth_login_redirect(request: Request, next: str = "/web/"):
+    """Placeholder auth route — redirects to dashboard (auth not yet configured)."""
+    return RedirectResponse(url=next)
 
 
 @router.get("/", response_class=HTMLResponse)
