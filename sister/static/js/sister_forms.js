@@ -13,9 +13,42 @@
   // Available workflow flowcharts
   const WORKFLOW_PRESETS = ['due-diligence', 'patrimonio', 'fondiario', 'aziendale', 'storico'];
 
+  // CSV placeholder templates per query type
+  const BATCH_CSV_TEMPLATES = {
+    'search':              'provincia,comune,foglio,particella,tipo_catasto\nRoma,ROMA,100,50,T\nTrieste,TRIESTE,9,166,F',
+    'intestati':           'provincia,comune,foglio,particella,tipo_catasto,subalterno\nRoma,ROMA,100,50,F,3\nTrieste,TRIESTE,9,166,F,1',
+    'soggetto':            'codice_fiscale,tipo_catasto,provincia\nRSSMRI85E28H501E,,\nBNCLRA90A41H501Z,F,Roma',
+    'persona-giuridica':   'identificativo,tipo_catasto,provincia\n02471840997,,\nTIGULLIO IMMOBILIARE SRL,,Torino',
+    'elenco-immobili':     'provincia,comune,tipo_catasto,foglio\nRoma,ROMA,T,100\nTrieste,TRIESTE,F,',
+    'indirizzo':           'provincia,comune,indirizzo,tipo_catasto\nRoma,ROMA,VIA ROMA,T\nTerni,TERNI,DEL RIVO,F',
+    'partita':             'provincia,comune,partita,tipo_catasto\nRoma,ROMA,12345,T\nBologna,BOLOGNA,67890,F',
+  };
+
   document.querySelectorAll('.sister-form').forEach(form => {
     form.addEventListener('submit', handleFormSubmit);
   });
+
+  // --- Batch: update CSV placeholder when query type changes ---
+  const batchCommandSelect = document.getElementById('param-batch-command');
+  if (batchCommandSelect) {
+    batchCommandSelect.addEventListener('change', updateBatchPlaceholder);
+    updateBatchPlaceholder();
+  }
+
+  function updateBatchPlaceholder() {
+    const textarea = document.getElementById('param-batch-csv_data');
+    if (!textarea || !batchCommandSelect) return;
+    const cmd = batchCommandSelect.value;
+    const template = BATCH_CSV_TEMPLATES[cmd] || BATCH_CSV_TEMPLATES['search'];
+    textarea.placeholder = template;
+    // Also update if textarea is empty or still has a previous template
+    const currentVal = textarea.value.trim();
+    const isTemplate = Object.values(BATCH_CSV_TEMPLATES).some(t => currentVal === t);
+    if (!currentVal || isTemplate) {
+      textarea.value = '';
+      textarea.placeholder = template;
+    }
+  }
 
   // --- Workflow flowchart: show SVG when preset changes ---
   const presetSelect = document.getElementById('param-workflow-preset');
