@@ -1,0 +1,115 @@
+/* Catasto API Forms Styles */
+
+/* ==================== API Endpoint Badges ==================== */
+.endpoint-badge {
+    font-family: 'Courier New', monospace;
+    font-size: 0.85rem;
+}
+
+.endpoint-badge-sm {
+    font-family: 'Courier New', monospace;
+    font-size: 0.7rem;
+    font-weight: 600;
+}
+
+/* ==================== Endpoint Selector Card ==================== */
+.endpoint-selector-card {
+    border: 2px solid rgba(var(--bs-primary-rgb), 0.2);
+    background-color: rgba(var(--bs-primary-rgb), 0.02);
+}
+
+.endpoint-option .form-check-label {
+    cursor: pointer;
+    padding: 1rem 1rem 1rem 3rem;
+    border: 2px solid #dee2e6;
+    border-radius: 0.375rem;
+    transition: all 0.2s;
+    display: block;
+    background-color: #fff;
+}
+
+.endpoint-option .form-check-input {
+    position: absolute;
+    margin-top: 1.2rem;
+    margin-left: 1rem;
+}
+
+.endpoint-option .form-check-label:hover {
+    border-color: var(--bs-primary);
+    background-color: rgba(var(--bs-primary-rgb), 0.05);
+}
+
+.endpoint-option .form-check-input:checked + .form-check-label {
+    border-color: var(--bs-primary);
+    background-color: rgba(var(--bs-primary-rgb), 0.1);
+    font-weight: 500;
+}
+
+/* ==================== Compact Menu Styling ==================== */
+.nav-pills .nav-link {
+    padding: 0.5rem 0.75rem;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.nav-pills .nav-link small {
+    font-size: 0.75rem;
+    opacity: 0.7;
+}
+
+/* ==================== Response Display ==================== */
+#response-content pre {
+    white-space: pre-wrap;
+    word-wrap: break-word;
+}
+
+/* ==================== Form Loading States ==================== */
+.catasto-form button[type="submit"]:disabled {
+    cursor: not-allowed;
+}
+
+.catasto-form.loading {
+    opacity: 0.6;
+    pointer-events: none;
+}
+
+/* ==================== History Items ==================== */
+.history-item {
+    padding: 1rem;
+    border: 1px solid #dee2e6;
+    border-radius: 0.375rem;
+    margin-bottom: 0.75rem;
+    transition: all 0.2s;
+}
+
+.history-item:hover {
+    border-color: var(--bs-primary);
+    background-color: rgba(var(--bs-primary-rgb), 0.02);
+    cursor: pointer;
+}
+
+.history-item-timestamp {
+    font-size: 0.85rem;
+    color: #6c757d;
+}
+
+.history-item-endpoint {
+    font-family: 'Courier New', monospace;
+    font-size: 0.9rem;
+    font-weight: 600;
+    color: var(--bs-primary);
+}
+
+.history-item-params {
+    font-size: 0.85rem;
+    color: #495057;
+}
+
+/* ==================== Responsive Adjustments ==================== */
+@media (max-width: 991.98px) {
+    .sticky-top {
+        position: relative !important;
+        top: 0 !important;
+    }
+}

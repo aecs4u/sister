@@ -1,0 +1,40 @@
+{% extends "sister/base.html" %}
+{% block page_title %}Privacy Policy{% endblock %}
+
+{% block content %}
+<div class="container py-5">
+    <h1>Privacy Policy</h1>
+    <p class="text-muted">Last updated: April 2026</p>
+
+    <h2>1. Introduction</h2>
+    <p>AECS4U Srl respects your privacy and is committed to protecting your personal data.
+    This privacy policy explains how we collect, use, and protect your information when you use SISTER.</p>
+
+    <h2>2. Data We Collect</h2>
+    <p>When using SISTER, we process:</p>
+    <ul>
+        <li><strong>Authentication data:</strong> Email address and identity information via Clerk SSO.</li>
+        <li><strong>Query data:</strong> Cadastral search parameters you submit (province, municipality, sheet, parcel, tax codes).</li>
+        <li><strong>Results data:</strong> Property and owner information retrieved from the SISTER portal.</li>
+        <li><strong>Usage data:</strong> Request timestamps, query types, and service health metrics.</li>
+    </ul>
+
+    <h2>3. How We Use Your Data</h2>
+    <ul>
+        <li>To process your cadastral search requests.</li>
+        <li>To store search results for your future reference.</li>
+        <li>To improve service reliability and performance.</li>
+    </ul>
+
+    <h2>4. Data Retention</h2>
+    <p>Search results are retained in the database for the configured TTL period (default: 6 hours in cache, permanent in database).
+    You may request deletion of your data at any time.</p>
+
+    <h2>5. Data Security</h2>
+    <p>We use industry-standard security measures including encrypted connections (TLS), secure authentication (Clerk SSO),
+    and access controls to protect your data.</p>
+
+    <h2>6. Contact</h2>
+    <p>For privacy-related inquiries, contact us at: <strong>privacy@aecs4u.com</strong></p>
+</div>
+{% endblock %}

@@ -1,0 +1,119 @@
+{% extends "base.html" %}
+
+{% block title %}SISTER - Italian Cadastral Data Service{% endblock %}
+
+{% block content %}
+<div class="container py-5">
+    <!-- Hero -->
+    <div class="text-center mb-5">
+        <h1 class="display-4 fw-bold mb-3">
+            <i class="fas fa-landmark text-primary me-2"></i>SISTER
+        </h1>
+        <p class="lead text-muted mb-4">
+            Automated cadastral data extraction from the Italian Land Registry (Agenzia delle Entrate).
+        </p>
+        <div class="d-flex justify-content-center gap-3">
+            <a href="/web/" class="btn btn-primary btn-lg">
+                <i class="fas fa-rocket me-2"></i>Get Started
+            </a>
+            <a href="/docs" class="btn btn-outline-primary btn-lg" target="_blank">
+                <i class="fas fa-book me-2"></i>API Docs
+            </a>
+        </div>
+    </div>
+
+    <!-- Features -->
+    <div class="row g-4 mb-5">
+        <div class="col-md-4">
+            <div class="card h-100 border-0 shadow-sm">
+                <div class="card-body text-center p-4">
+                    <i class="fas fa-search fa-3x text-primary mb-3"></i>
+                    <h5>Property Search</h5>
+                    <p class="text-muted">Search properties by cadastral coordinates, address, or owner across all of Italy.</p>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-4">
+            <div class="card h-100 border-0 shadow-sm">
+                <div class="card-body text-center p-4">
+                    <i class="fas fa-user fa-3x text-info mb-3"></i>
+                    <h5>Owner Lookup</h5>
+                    <p class="text-muted">Find all properties owned by a person or company using codice fiscale or P.IVA.</p>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-4">
+            <div class="card h-100 border-0 shadow-sm">
+                <div class="card-body text-center p-4">
+                    <i class="fas fa-project-diagram fa-3x text-success mb-3"></i>
+                    <h5>Automated Workflows</h5>
+                    <p class="text-muted">Run multi-phase investigations: due diligence, asset audit, land survey, and more.</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Available Services -->
+    <div class="row g-4 mb-5">
+        <div class="col-12">
+            <h2 class="h4 mb-3 text-center">Available Search Types</h2>
+        </div>
+        <div class="col-md-3 col-6">
+            <div class="text-center p-3">
+                <i class="fas fa-home fa-2x text-primary mb-2"></i>
+                <div class="small fw-semibold">Immobili</div>
+            </div>
+        </div>
+        <div class="col-md-3 col-6">
+            <div class="text-center p-3">
+                <i class="fas fa-users fa-2x text-info mb-2"></i>
+                <div class="small fw-semibold">Intestati</div>
+            </div>
+        </div>
+        <div class="col-md-3 col-6">
+            <div class="text-center p-3">
+                <i class="fas fa-user fa-2x text-success mb-2"></i>
+                <div class="small fw-semibold">Soggetto</div>
+            </div>
+        </div>
+        <div class="col-md-3 col-6">
+            <div class="text-center p-3">
+                <i class="fas fa-building fa-2x text-warning mb-2"></i>
+                <div class="small fw-semibold">Azienda</div>
+            </div>
+        </div>
+        <div class="col-md-3 col-6">
+            <div class="text-center p-3">
+                <i class="fas fa-list fa-2x text-danger mb-2"></i>
+                <div class="small fw-semibold">Elenco</div>
+            </div>
+        </div>
+        <div class="col-md-3 col-6">
+            <div class="text-center p-3">
+                <i class="fas fa-map-marker-alt fa-2x text-secondary mb-2"></i>
+                <div class="small fw-semibold">Indirizzo</div>
+            </div>
+        </div>
+        <div class="col-md-3 col-6">
+            <div class="text-center p-3">
+                <i class="fas fa-hashtag fa-2x text-dark mb-2"></i>
+                <div class="small fw-semibold">Partita</div>
+            </div>
+        </div>
+        <div class="col-md-3 col-6">
+            <div class="text-center p-3">
+                <i class="fas fa-terminal fa-2x text-muted mb-2"></i>
+                <div class="small fw-semibold">CLI</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Footer CTA -->
+    <div class="text-center">
+        <p class="text-muted mb-3">Powered by browser automation against the SISTER portal.</p>
+        <a href="/web/" class="btn btn-primary">
+            <i class="fas fa-sign-in-alt me-2"></i>Sign In to Dashboard
+        </a>
+    </div>
+</div>
+{% endblock %}

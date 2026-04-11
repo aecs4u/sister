@@ -143,7 +143,51 @@ async def lifespan(app: FastAPI):
 # App + route registration
 # ---------------------------------------------------------------------------
 
-app = FastAPI(title="Servizio Visure Catastali", lifespan=lifespan)
+app = FastAPI(title="SISTER - Cadastral Data Service", lifespan=lifespan)
+
+# ---------------------------------------------------------------------------
+# Theme, static files, and web UI
+# ---------------------------------------------------------------------------
+
+from pathlib import Path
+from fastapi.staticfiles import StaticFiles
+
+try:
+    from aecs4u_theme import ThemeConfig, setup_theme
+
+    _sister_dir = Path(__file__).parent
+    _templates_dir = _sister_dir / "templates"
+    _static_dir = _sister_dir / "static"
+
+    theme_config = ThemeConfig(
+        site_id="sister",
+        site_name="SISTER",
+        site_tagline="Cadastral Data Extraction Service",
+        primary_color="#1e40af",
+        sidebar_enabled=True,
+        footer_enabled=True,
+        footer_copyright="AECS4U Srl",
+    )
+
+    theme_setup = setup_theme(
+        app,
+        config=theme_config,
+        templates_dir=str(_templates_dir),
+        mount_static=True,
+    )
+    app.state.theme_setup = theme_setup
+
+    # Mount sister-specific static files
+    if _static_dir.exists():
+        app.mount("/static", StaticFiles(directory=str(_static_dir)), name="static")
+
+    # Include web routes
+    from .web import router as web_router
+    app.include_router(web_router)
+
+    logger.info("Web UI inizializzata")
+except ImportError:
+    logger.warning("aecs4u-theme non disponibile: web UI disabilitata")
 
 
 @app.post("/visura")

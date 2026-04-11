@@ -1,0 +1,150 @@
+{% extends "sister/base.html" %}
+{% block page_title %}Query Forms{% endblock %}
+
+{% macro render_grouped_form(form_group, is_first=False) %}
+<div class="tab-pane fade {% if is_first %}show active{% endif %}" id="form-group-{{ form_group.id }}" role="tabpanel">
+    <div class="card border-0 shadow-sm">
+        <div class="card-header">
+            <h4 class="mb-0">
+                <i class="fas {{ form_group.icon }} text-{{ form_group.color }} me-2"></i>{{ form_group.name }}
+            </h4>
+            <p class="text-muted mb-0 mt-2">{{ form_group.description }}</p>
+        </div>
+        <div class="card-body">
+            <form id="form-{{ form_group.id }}" class="sister-form" data-form-group="{{ form_group.id }}">
+                {% if form_group.endpoints|length > 1 %}
+                <div class="card mb-4 bg-light">
+                    <div class="card-body">
+                        <label class="form-label fw-bold">
+                            <i class="fas fa-bullseye me-2"></i>Select Endpoint
+                        </label>
+                        <div class="row g-2">
+                            {% for endpoint in form_group.endpoints %}
+                            <div class="col-12">
+                                <div class="form-check">
+                                    <input class="form-check-input" type="radio"
+                                           name="endpoint-{{ form_group.id }}"
+                                           id="endpoint-{{ form_group.id }}-{{ endpoint.id }}"
+                                           value="{{ endpoint.id }}"
+                                           data-path="{{ endpoint.path }}"
+                                           {% if loop.first %}checked{% endif %}>
+                                    <label class="form-check-label" for="endpoint-{{ form_group.id }}-{{ endpoint.id }}">
+                                        <span class="fw-bold">{{ endpoint.name }}</span>
+                                        <small class="text-muted d-block">{{ endpoint.description }}</small>
+                                    </label>
+                                </div>
+                            </div>
+                            {% endfor %}
+                        </div>
+                    </div>
+                </div>
+                {% else %}
+                <input type="hidden" name="endpoint-{{ form_group.id }}"
+                       value="{{ form_group.endpoints[0].id }}"
+                       data-path="{{ form_group.endpoints[0].path }}">
+                {% endif %}
+
+                <div class="row g-3">
+                    {% for param in form_group.params %}
+                    <div class="col-md-6">
+                        <label for="param-{{ form_group.id }}-{{ param.name }}" class="form-label">
+                            {{ param.label }}
+                            {% if param.required %}<span class="text-danger">*</span>{% endif %}
+                        </label>
+                        {% if param.input_type == 'select' %}
+                        <select class="form-select"
+                                id="param-{{ form_group.id }}-{{ param.name }}"
+                                name="{{ param.name }}"
+                                {% if param.required %}required{% endif %}>
+                            {% for value, label in param.options %}
+                            <option value="{{ value }}" {% if param.example == value %}selected{% endif %}>{{ label }}</option>
+                            {% endfor %}
+                        </select>
+                        {% else %}
+                        <input type="{{ param.input_type }}" class="form-control"
+                               id="param-{{ form_group.id }}-{{ param.name }}"
+                               name="{{ param.name }}"
+                               placeholder="{{ param.placeholder }}"
+                               {% if param.example %}value="{{ param.example }}"{% endif %}
+                               {% if param.required %}required{% endif %}>
+                        {% endif %}
+                        {% if param.help_text %}
+                        <div class="form-text">{{ param.help_text }}</div>
+                        {% endif %}
+                    </div>
+                    {% endfor %}
+                </div>
+
+                <div class="d-flex gap-2 mt-4">
+                    <button type="submit" class="btn btn-primary">
+                        <i class="fas fa-paper-plane me-2"></i>Submit Request
+                    </button>
+                    <button type="reset" class="btn btn-outline-secondary">
+                        <i class="fas fa-times me-2"></i>Clear
+                    </button>
+                </div>
+            </form>
+
+            <!-- Response Area -->
+            <div id="response-{{ form_group.id }}" class="mt-4" style="display: none;">
+                <div class="card">
+                    <div class="card-header bg-light d-flex justify-content-between align-items-center">
+                        <h5 class="mb-0"><i class="fas fa-reply me-2"></i>Response</h5>
+                        <div class="btn-group btn-group-sm">
+                            <button class="btn btn-outline-primary btn-copy-response" data-form-group="{{ form_group.id }}">
+                                <i class="fas fa-copy me-1"></i>Copy
+                            </button>
+                        </div>
+                    </div>
+                    <div class="card-body">
+                        <div id="response-status-{{ form_group.id }}" class="mb-3"></div>
+                        <pre id="response-content-{{ form_group.id }}" class="bg-dark text-light p-3 rounded" style="max-height: 500px; overflow-y: auto;"></pre>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endmacro %}
+
+{% block content %}
+<div class="container-fluid py-4">
+    <h1 class="mb-4">
+        <i class="fas fa-clipboard-list text-primary me-2"></i>Query Forms
+    </h1>
+
+    <div class="row">
+        <!-- Sidebar nav -->
+        <div class="col-lg-3 mb-4">
+            <div class="card border-0 shadow-sm sticky-top" style="top: 1rem;">
+                <div class="card-header bg-light">
+                    <h5 class="mb-0"><i class="fas fa-list me-2"></i>Query Types</h5>
+                </div>
+                <div class="card-body p-2">
+                    <div class="nav flex-column nav-pills" id="form-group-tabs" role="tablist">
+                        {% for form_group in form_groups %}
+                        <button class="nav-link text-start {% if loop.first %}active{% endif %}"
+                                data-bs-toggle="pill"
+                                data-bs-target="#form-group-{{ form_group.id }}"
+                                type="button" role="tab">
+                            <i class="fas {{ form_group.icon }} me-2"></i>
+                            {{ form_group.name }}
+                            <small class="text-muted ms-auto">({{ form_group.endpoints|length }})</small>
+                        </button>
+                        {% endfor %}
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Forms -->
+        <div class="col-lg-9">
+            <div class="tab-content" id="form-group-tabContent">
+                {% for form_group in form_groups %}
+                {{ render_grouped_form(form_group, loop.first) }}
+                {% endfor %}
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

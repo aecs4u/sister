@@ -1,0 +1,114 @@
+{% extends "sister/base.html" %}
+{% block page_title %}Results{% endblock %}
+
+{% block content %}
+<div class="container-fluid py-4">
+    <h1 class="mb-4"><i class="fas fa-database text-primary me-2"></i>Results</h1>
+
+    <!-- Stats bar -->
+    <div class="d-flex gap-3 mb-4">
+        <span class="badge bg-primary fs-6">{{ stats.total_requests }} requests</span>
+        <span class="badge bg-success fs-6">{{ stats.successful }} successful</span>
+        <span class="badge bg-danger fs-6">{{ stats.failed }} failed</span>
+    </div>
+
+    <!-- Filter bar -->
+    <form class="row g-2 mb-4" method="get" action="/web/results">
+        <div class="col-md-3">
+            <input type="text" class="form-control form-control-sm" name="provincia"
+                   placeholder="Filter by provincia" value="{{ provincia or '' }}">
+        </div>
+        <div class="col-md-3">
+            <input type="text" class="form-control form-control-sm" name="comune"
+                   placeholder="Filter by comune" value="{{ comune or '' }}">
+        </div>
+        <div class="col-md-2">
+            <select class="form-select form-select-sm" name="tipo_catasto">
+                <option value="">All types</option>
+                <option value="T" {% if tipo_catasto == 'T' %}selected{% endif %}>Terreni (T)</option>
+                <option value="F" {% if tipo_catasto == 'F' %}selected{% endif %}>Fabbricati (F)</option>
+            </select>
+        </div>
+        <div class="col-md-2">
+            <button type="submit" class="btn btn-primary btn-sm w-100">
+                <i class="fas fa-filter me-1"></i>Filter
+            </button>
+        </div>
+        <div class="col-md-2">
+            <a href="/web/results" class="btn btn-outline-secondary btn-sm w-100">Clear</a>
+        </div>
+    </form>
+
+    <!-- Results table -->
+    {% if results %}
+    <div class="table-responsive">
+        <table class="table table-hover">
+            <thead class="table-light">
+                <tr>
+                    <th>#</th>
+                    <th>Request ID</th>
+                    <th>Type</th>
+                    <th>Cat.</th>
+                    <th>Provincia</th>
+                    <th>Comune</th>
+                    <th>F.</th>
+                    <th>P.</th>
+                    <th>Status</th>
+                    <th>Date</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for r in results %}
+                <tr>
+                    <td>{{ loop.index + offset }}</td>
+                    <td>
+                        <a href="/web/results/{{ r.request_id }}" class="text-decoration-none">
+                            {{ r.request_id[:20] }}...
+                        </a>
+                    </td>
+                    <td><span class="badge bg-secondary">{{ r.request_type or '-' }}</span></td>
+                    <td>{{ r.tipo_catasto or '-' }}</td>
+                    <td>{{ r.provincia or '-' }}</td>
+                    <td>{{ r.comune or '-' }}</td>
+                    <td>{{ r.foglio or '-' }}</td>
+                    <td>{{ r.particella or '-' }}</td>
+                    <td>
+                        {% if r.success is true %}
+                        <span class="badge bg-success">Completed</span>
+                        {% elif r.success is false %}
+                        <span class="badge bg-danger">Failed</span>
+                        {% else %}
+                        <span class="badge bg-warning">Pending</span>
+                        {% endif %}
+                    </td>
+                    <td><small>{{ r.requested_at[:16] if r.requested_at else '-' }}</small></td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+
+    <!-- Pagination -->
+    <nav>
+        <ul class="pagination justify-content-center">
+            {% if offset > 0 %}
+            <li class="page-item">
+                <a class="page-link" href="/web/results?offset={{ offset - limit }}&limit={{ limit }}{% if provincia %}&provincia={{ provincia }}{% endif %}{% if comune %}&comune={{ comune }}{% endif %}{% if tipo_catasto %}&tipo_catasto={{ tipo_catasto }}{% endif %}">&laquo; Previous</a>
+            </li>
+            {% endif %}
+            {% if results|length == limit %}
+            <li class="page-item">
+                <a class="page-link" href="/web/results?offset={{ offset + limit }}&limit={{ limit }}{% if provincia %}&provincia={{ provincia }}{% endif %}{% if comune %}&comune={{ comune }}{% endif %}{% if tipo_catasto %}&tipo_catasto={{ tipo_catasto }}{% endif %}">Next &raquo;</a>
+            </li>
+            {% endif %}
+        </ul>
+    </nav>
+    {% else %}
+    <div class="text-center py-5">
+        <i class="fas fa-inbox fa-3x text-muted mb-3"></i>
+        <p class="text-muted">No results found.</p>
+        <a href="/web/forms" class="btn btn-primary">Submit a Query</a>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

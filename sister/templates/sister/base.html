@@ -1,0 +1,86 @@
+{% extends "base.html" %}
+
+{% block title %}SISTER - {% block page_title %}{% endblock %}{% endblock %}
+
+{% block extra_css %}
+<link rel="stylesheet" href="/static/css/sister.css">
+{% endblock %}
+
+{% block sidebar_content %}
+<div class="sidebar-group" data-group="main">
+    <button class="sidebar-group-header" type="button" aria-expanded="true">
+        <span class="sidebar-group-label">
+            <i class="fas fa-compass"></i>
+            Navigation
+        </span>
+        <i class="fas fa-chevron-down toggle-icon ms-auto"></i>
+    </button>
+    <div class="sidebar-group-content" id="sidebar-group-main">
+        <div class="nav-item">
+            <a class="nav-link{% if request.url.path == '/web/' %} active{% endif %}" href="/web/">
+                <i class="fas fa-tachometer-alt"></i>
+                <span>Dashboard</span>
+            </a>
+        </div>
+        <div class="nav-item">
+            <a class="nav-link{% if '/web/forms' in request.url.path %} active{% endif %}" href="/web/forms">
+                <i class="fas fa-clipboard-list"></i>
+                <span>Query Forms</span>
+            </a>
+        </div>
+        <div class="nav-item">
+            <a class="nav-link{% if '/web/results' in request.url.path %} active{% endif %}" href="/web/results">
+                <i class="fas fa-database"></i>
+                <span>Results</span>
+            </a>
+        </div>
+    </div>
+</div>
+
+<div class="nav-divider"></div>
+
+<div class="sidebar-group" data-group="info">
+    <button class="sidebar-group-header" type="button" aria-expanded="false">
+        <span class="sidebar-group-label">
+            <i class="fas fa-info-circle"></i>
+            Info
+        </span>
+        <i class="fas fa-chevron-down toggle-icon ms-auto"></i>
+    </button>
+    <div class="sidebar-group-content" id="sidebar-group-info">
+        <div class="nav-item">
+            <a class="nav-link" href="/web/about">
+                <i class="fas fa-building"></i>
+                <span>About</span>
+            </a>
+        </div>
+        <div class="nav-item">
+            <a class="nav-link" href="/docs" target="_blank">
+                <i class="fas fa-book"></i>
+                <span>API Docs</span>
+            </a>
+        </div>
+        <div class="nav-item">
+            <a class="nav-link" href="/web/privacy">
+                <i class="fas fa-shield-alt"></i>
+                <span>Privacy</span>
+            </a>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block footer_sections %}
+<div class="footer-section">
+    <h6 class="footer-title">SISTER</h6>
+    <ul class="footer-links">
+        <li><a href="/web/about"><i class="fas fa-info-circle"></i>About</a></li>
+        <li><a href="/web/privacy"><i class="fas fa-shield-alt"></i>Privacy Policy</a></li>
+        <li><a href="/docs"><i class="fas fa-book"></i>API Documentation</a></li>
+    </ul>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script src="/static/js/sister_forms.js" defer></script>
+{% endblock %}

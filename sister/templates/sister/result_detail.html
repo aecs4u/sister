@@ -1,0 +1,132 @@
+{% extends "sister/base.html" %}
+{% block page_title %}Result {{ request_id[:20] }}{% endblock %}
+
+{% block content %}
+<div class="container-fluid py-4">
+    <nav class="mb-3" aria-label="breadcrumb">
+        <ol class="breadcrumb">
+            <li class="breadcrumb-item"><a href="/web/results">Results</a></li>
+            <li class="breadcrumb-item active">{{ request_id[:30] }}</li>
+        </ol>
+    </nav>
+
+    {% if result %}
+    <!-- Metadata -->
+    <div class="card border-0 shadow-sm mb-4">
+        <div class="card-header d-flex justify-content-between align-items-center">
+            <h4 class="mb-0"><i class="fas fa-info-circle text-primary me-2"></i>Request Details</h4>
+            <span class="badge bg-{{ 'success' if result.success else 'danger' }} fs-6">
+                {{ 'Completed' if result.success else 'Failed' }}
+            </span>
+        </div>
+        <div class="card-body">
+            <div class="row">
+                <div class="col-md-6">
+                    <p><strong>Request ID:</strong> <code>{{ result.request_id }}</code></p>
+                    <p><strong>Type:</strong> {{ result.tipo_catasto }}</p>
+                    <p><strong>Created:</strong> {{ result.created_at }}</p>
+                </div>
+                <div class="col-md-6">
+                    {% if result.error %}
+                    <div class="alert alert-danger">
+                        <i class="fas fa-exclamation-triangle me-2"></i>{{ result.error }}
+                    </div>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+
+    {% if result.data %}
+    {% set data = result.data %}
+
+    <!-- Immobili table -->
+    {% if data.immobili is defined and data.immobili %}
+    <div class="card border-0 shadow-sm mb-4">
+        <div class="card-header">
+            <h5 class="mb-0"><i class="fas fa-home text-success me-2"></i>Immobili ({{ data.immobili|length }})</h5>
+        </div>
+        <div class="card-body p-0">
+            <div class="table-responsive">
+                <table class="table table-sm table-hover mb-0">
+                    <thead class="table-light">
+                        <tr>
+                            {% for key in data.immobili[0].keys() %}
+                            <th>{{ key }}</th>
+                            {% endfor %}
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for row in data.immobili %}
+                        <tr>
+                            {% for val in row.values() %}
+                            <td>{{ val }}</td>
+                            {% endfor %}
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+
+    <!-- Intestati table -->
+    {% if data.intestati is defined and data.intestati %}
+    <div class="card border-0 shadow-sm mb-4">
+        <div class="card-header">
+            <h5 class="mb-0"><i class="fas fa-users text-info me-2"></i>Intestati ({{ data.intestati|length }})</h5>
+        </div>
+        <div class="card-body p-0">
+            <div class="table-responsive">
+                <table class="table table-sm table-hover mb-0">
+                    <thead class="table-light">
+                        <tr>
+                            {% for key in data.intestati[0].keys() %}
+                            <th>{{ key }}</th>
+                            {% endfor %}
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for row in data.intestati %}
+                        <tr>
+                            {% for val in row.values() %}
+                            <td>{{ val }}</td>
+                            {% endfor %}
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+
+    <!-- Raw JSON -->
+    <div class="card border-0 shadow-sm">
+        <div class="card-header">
+            <h5 class="mb-0">
+                <i class="fas fa-code text-muted me-2"></i>Raw JSON
+                <button class="btn btn-sm btn-outline-secondary float-end" type="button"
+                        data-bs-toggle="collapse" data-bs-target="#raw-json">
+                    Toggle
+                </button>
+            </h5>
+        </div>
+        <div class="collapse" id="raw-json">
+            <div class="card-body">
+                <pre class="bg-dark text-light p-3 rounded" style="max-height: 500px; overflow-y: auto;">{{ data | tojson(indent=2) }}</pre>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+
+    {% else %}
+    <div class="alert alert-warning">
+        <i class="fas fa-exclamation-triangle me-2"></i>
+        Result not found for request ID <code>{{ request_id }}</code>.
+    </div>
+    <a href="/web/results" class="btn btn-primary">Back to Results</a>
+    {% endif %}
+</div>
+{% endblock %}
