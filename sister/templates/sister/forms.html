@@ -77,36 +77,43 @@
                     </div>
 
                     <div class="col-md-7">
-                        {# Remaining params (skip first which is the preset) #}
-                        <div class="row g-3">
-                            {% for param in form_group.params[1:] %}
-                            <div class="col-md-6">
-                                <label for="param-{{ form_group.id }}-{{ param.name }}" class="form-label">
-                                    {{ param.label }}
-                                    {% if param.required %}<span class="text-danger">*</span>{% endif %}
-                                </label>
-                                {% if param.input_type == 'select' %}
-                                <select class="form-select"
-                                        id="param-{{ form_group.id }}-{{ param.name }}"
-                                        name="{{ param.name }}"
-                                        {% if param.required %}required{% endif %}>
-                                    {% for value, label in param.options %}
-                                    <option value="{{ value }}">{{ label }}</option>
-                                    {% endfor %}
-                                </select>
-                                {% else %}
-                                <input type="{{ param.input_type }}" class="form-control"
-                                       id="param-{{ form_group.id }}-{{ param.name }}"
-                                       name="{{ param.name }}"
-                                       placeholder="{{ param.placeholder }}"
-                                       {% if param.example %}value="{{ param.example }}"{% endif %}
-                                       {% if param.required %}required{% endif %}>
-                                {% endif %}
-                                {% if param.help_text %}
-                                <div class="form-text">{{ param.help_text }}</div>
-                                {% endif %}
-                            </div>
-                            {% endfor %}
+                        {# Remaining params — single column, buttons at bottom #}
+                        {% for param in form_group.params[1:] %}
+                        <div class="mb-3">
+                            <label for="param-{{ form_group.id }}-{{ param.name }}" class="form-label">
+                                {{ param.label }}
+                                {% if param.required %}<span class="text-danger">*</span>{% endif %}
+                            </label>
+                            {% if param.input_type == 'select' %}
+                            <select class="form-select"
+                                    id="param-{{ form_group.id }}-{{ param.name }}"
+                                    name="{{ param.name }}"
+                                    {% if param.required %}required{% endif %}>
+                                {% for value, label in param.options %}
+                                <option value="{{ value }}">{{ label }}</option>
+                                {% endfor %}
+                            </select>
+                            {% else %}
+                            <input type="{{ param.input_type }}" class="form-control"
+                                   id="param-{{ form_group.id }}-{{ param.name }}"
+                                   name="{{ param.name }}"
+                                   placeholder="{{ param.placeholder }}"
+                                   {% if param.example %}value="{{ param.example }}"{% endif %}
+                                   {% if param.required %}required{% endif %}>
+                            {% endif %}
+                            {% if param.help_text %}
+                            <div class="form-text">{{ param.help_text }}</div>
+                            {% endif %}
+                        </div>
+                        {% endfor %}
+
+                        <div class="d-flex gap-2 mt-2">
+                            <button type="submit" class="btn btn-primary">
+                                <i class="fas fa-paper-plane me-2"></i>Submit Request
+                            </button>
+                            <button type="reset" class="btn btn-outline-secondary">
+                                <i class="fas fa-times me-2"></i>Clear
+                            </button>
                         </div>
                     </div>
                 </div>
@@ -162,6 +169,7 @@
                 </div>
                 {% endif %}
 
+                {% if form_group.id != 'workflow' %}
                 <div class="d-flex gap-2 mt-4">
                     <button type="submit" class="btn btn-primary">
                         <i class="fas fa-paper-plane me-2"></i>Submit Request
@@ -170,6 +178,7 @@
                         <i class="fas fa-times me-2"></i>Clear
                     </button>
                 </div>
+                {% endif %}
             </form>
 
             <!-- Response Area -->
