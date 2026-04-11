@@ -44,60 +44,8 @@
                        data-path="{{ form_group.endpoints[0].path }}">
                 {% endif %}
 
-                {% if form_group.flowchart %}
-                {# Workflow: show flowchart + params side by side #}
-                <div class="row g-4">
-                    <div class="col-md-5">
-                        <div class="card bg-light border-0">
-                            <div class="card-body text-center py-3">
-                                <img src="/static/images/workflows/{{ form_group.flowchart }}.svg"
-                                     alt="{{ form_group.name }} flowchart" class="img-fluid"
-                                     style="max-height: 300px;" onerror="this.style.display='none'">
-                            </div>
-                        </div>
-                    </div>
-                    <div class="col-md-7">
-                        {% for param in form_group.params %}
-                        <div class="mb-3">
-                            <label for="param-{{ form_group.id }}-{{ param.name }}" class="form-label">
-                                {{ param.label }}
-                                {% if param.required %}<span class="text-danger">*</span>{% endif %}
-                            </label>
-                            {% if param.input_type == 'select' %}
-                            <select class="form-select"
-                                    id="param-{{ form_group.id }}-{{ param.name }}"
-                                    name="{{ param.name }}"
-                                    {% if param.required %}required{% endif %}>
-                                {% for value, label in param.options %}
-                                <option value="{{ value }}">{{ label }}</option>
-                                {% endfor %}
-                            </select>
-                            {% else %}
-                            <input type="{{ param.input_type }}" class="form-control"
-                                   id="param-{{ form_group.id }}-{{ param.name }}"
-                                   name="{{ param.name }}"
-                                   placeholder="{{ param.placeholder }}"
-                                   {% if param.example %}value="{{ param.example }}"{% endif %}
-                                   {% if param.required %}required{% endif %}>
-                            {% endif %}
-                            {% if param.help_text %}
-                            <div class="form-text">{{ param.help_text }}</div>
-                            {% endif %}
-                        </div>
-                        {% endfor %}
-                        <div class="d-flex gap-2 mt-2">
-                            <button type="submit" class="btn btn-primary">
-                                <i class="fas fa-paper-plane me-2"></i>Submit
-                            </button>
-                            <button type="reset" class="btn btn-outline-secondary">
-                                <i class="fas fa-times me-2"></i>Clear
-                            </button>
-                        </div>
-                    </div>
-                </div>
-
-                {% else %}
-                {# Standard layout for all other form groups #}
+                {# Single-job form fields (hidden in batch mode) #}
+                <div class="single-job-content">
                 <div class="row g-3">
                     {% for param in form_group.params %}
                     <div class="{% if param.input_type == 'textarea' %}col-12{% else %}col-md-6{% endif %}">
@@ -270,7 +218,6 @@
                 </div>
                 {% endif %}
 
-                {% if not form_group.flowchart %}
                 <div class="d-flex gap-2 mt-4">
                     <button type="submit" class="btn btn-primary">
                         <i class="fas fa-paper-plane me-2"></i>Submit Request
@@ -279,7 +226,7 @@
                         <i class="fas fa-times me-2"></i>Clear
                     </button>
                 </div>
-                {% endif %}
+                </div>{# /single-job-content #}
             </form>
 
             <!-- Response Area -->
@@ -574,16 +521,16 @@ function toggleQueryCategory(category) {
 function toggleQueryMode(mode) {
     const batchPanel = document.getElementById('batch-panel');
     const banner = document.getElementById('batch-mode-banner');
-    const singleForms = document.querySelectorAll('.tab-pane .d-flex.gap-2.mt-4, .tab-pane .d-flex.gap-2.mt-2');
+    const singleJobContent = document.querySelectorAll('.single-job-content');
 
     if (mode === 'batch') {
         batchPanel.classList.remove('d-none');
         banner.classList.remove('d-none');
-        singleForms.forEach(f => f.classList.add('d-none'));
+        singleJobContent.forEach(f => f.classList.add('d-none'));
     } else {
         batchPanel.classList.add('d-none');
         banner.classList.add('d-none');
-        singleForms.forEach(f => f.classList.remove('d-none'));
+        singleJobContent.forEach(f => f.classList.remove('d-none'));
     }
 }
 
