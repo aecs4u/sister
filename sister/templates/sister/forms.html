@@ -136,6 +136,47 @@
                             <option value="{{ value }}" {% if param.example == value %}selected{% endif %}>{{ label }}</option>
                             {% endfor %}
                         </select>
+                        {% elif param.input_type == 'textarea' and param.name == 'csv_data' %}
+                        {# Drop zone + textarea + preview table #}
+                        <div id="dropzone-{{ form_group.id }}"
+                             class="border border-2 border-dashed rounded p-4 text-center position-relative"
+                             style="min-height: 180px; cursor: pointer; transition: border-color 0.15s, background-color 0.15s;"
+                             ondragover="event.preventDefault(); this.classList.add('border-primary', 'bg-light');"
+                             ondragleave="this.classList.remove('border-primary', 'bg-light');"
+                             ondrop="handleCSVDrop(event, '{{ form_group.id }}', '{{ param.name }}');"
+                             onclick="document.getElementById('file-input-{{ form_group.id }}').click();">
+                            <div id="dropzone-hint-{{ form_group.id }}">
+                                <i class="fas fa-cloud-upload-alt fa-2x text-muted mb-2"></i>
+                                <p class="mb-1 fw-semibold">Drop CSV file here or click to browse</p>
+                                <p class="text-muted small mb-0">You can also paste CSV data directly</p>
+                            </div>
+                            <textarea class="form-control font-monospace position-absolute top-0 start-0 w-100 h-100"
+                                      id="param-{{ form_group.id }}-{{ param.name }}"
+                                      name="{{ param.name }}"
+                                      placeholder="{{ param.placeholder }}"
+                                      style="opacity: 0; resize: none;"
+                                      onfocus="showCSVTextarea('{{ form_group.id }}')"
+                                      {% if param.required %}required{% endif %}>{{ param.example or '' }}</textarea>
+                            <input type="file" id="file-input-{{ form_group.id }}" accept=".csv,.txt" class="d-none"
+                                   onchange="loadCSVFile(this, '{{ form_group.id }}', '{{ param.name }}')">
+                        </div>
+                        <div id="csv-file-info-{{ form_group.id }}" class="mt-2 d-none">
+                            <span class="badge bg-success me-2"><i class="fas fa-file-csv me-1"></i><span id="csv-file-name-{{ form_group.id }}"></span></span>
+                            <span class="text-muted small" id="csv-row-count-{{ form_group.id }}"></span>
+                            <button type="button" class="btn btn-link btn-sm text-danger p-0 ms-2" onclick="clearCSVData('{{ form_group.id }}', '{{ param.name }}')">
+                                <i class="fas fa-times"></i> Clear
+                            </button>
+                        </div>
+                        <div class="mt-2">
+                            <button type="button" class="btn btn-outline-primary btn-sm" onclick="validateAndPreviewCSV('{{ form_group.id }}', '{{ param.name }}')">
+                                <i class="fas fa-table me-1"></i>Validate &amp; Preview
+                            </button>
+                        </div>
+                        <div id="csv-preview-{{ form_group.id }}" class="mt-3 d-none">
+                            <div class="table-responsive">
+                                <table class="table table-sm table-bordered" id="csv-table-{{ form_group.id }}"></table>
+                            </div>
+                        </div>
                         {% elif param.input_type == 'textarea' %}
                         <textarea class="form-control font-monospace"
                                   id="param-{{ form_group.id }}-{{ param.name }}"
@@ -143,16 +184,6 @@
                                   placeholder="{{ param.placeholder }}"
                                   rows="6"
                                   {% if param.required %}required{% endif %}>{{ param.example or '' }}</textarea>
-                        {% if param.name == 'csv_data' %}
-                        <div class="mt-2">
-                            <label class="btn btn-outline-secondary btn-sm">
-                                <i class="fas fa-file-upload me-1"></i>Or upload CSV file
-                                <input type="file" accept=".csv,.txt" class="d-none"
-                                       onchange="loadCSVFile(this, '{{ form_group.id }}', '{{ param.name }}')">
-                            </label>
-                            <span id="file-name-{{ form_group.id }}" class="ms-2 text-muted small"></span>
-                        </div>
-                        {% endif %}
                         {% else %}
                         <input type="{{ param.input_type }}" class="form-control"
                                id="param-{{ form_group.id }}-{{ param.name }}"

@@ -28,3 +28,28 @@
 .badge.fs-6 {
     font-weight: 500;
 }
+
+/* CSV drop zone */
+.border-dashed {
+    border-style: dashed !important;
+    border-color: #dee2e6;
+}
+.border-dashed:hover {
+    border-color: #3b82f6 !important;
+    background-color: #f8fafc;
+}
+.border-dashed.border-primary {
+    border-color: #3b82f6 !important;
+}
+
+/* CSV preview table */
+#csv-preview-batch .table {
+    font-size: 0.85rem;
+}
+#csv-preview-batch .table td,
+#csv-preview-batch .table th {
+    white-space: nowrap;
+    max-width: 200px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}

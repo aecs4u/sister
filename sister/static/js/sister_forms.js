@@ -199,22 +199,171 @@
     }
   }
 
-  // --- CSV file loader for batch form ---
+  // --- CSV drop zone, file loader, validation & preview ---
+
+  function setCSVData(groupId, paramName, text, fileName) {
+    const textarea = document.getElementById('param-' + groupId + '-' + paramName);
+    if (textarea) {
+      textarea.value = text;
+      textarea.style.opacity = '1';
+      textarea.style.position = 'relative';
+      textarea.style.height = 'auto';
+      textarea.rows = Math.min(Math.max(text.split('\n').length + 1, 4), 15);
+    }
+
+    // Hide drop hint, show file info
+    const hint = document.getElementById('dropzone-hint-' + groupId);
+    if (hint) hint.classList.add('d-none');
+
+    const info = document.getElementById('csv-file-info-' + groupId);
+    if (info) info.classList.remove('d-none');
+
+    const nameEl = document.getElementById('csv-file-name-' + groupId);
+    if (nameEl) nameEl.textContent = fileName || 'pasted data';
+
+    const lines = text.trim().split('\n').filter(l => l.trim() && !l.trim().startsWith('#'));
+    const rowCount = document.getElementById('csv-row-count-' + groupId);
+    if (rowCount) rowCount.textContent = (lines.length - 1) + ' data row(s)';
+  }
+
+  window.showCSVTextarea = function(groupId) {
+    const textarea = document.querySelector('#dropzone-' + groupId + ' textarea');
+    if (textarea && textarea.style.opacity === '0') {
+      textarea.style.opacity = '1';
+      textarea.style.position = 'relative';
+      textarea.rows = 6;
+      const hint = document.getElementById('dropzone-hint-' + groupId);
+      if (hint) hint.classList.add('d-none');
+    }
+  };
+
   window.loadCSVFile = function(input, groupId, paramName) {
     const file = input.files[0];
     if (!file) return;
-
-    const nameSpan = document.getElementById('file-name-' + groupId);
-    if (nameSpan) nameSpan.textContent = file.name;
-
     const reader = new FileReader();
     reader.onload = function(e) {
-      const textarea = document.getElementById('param-' + groupId + '-' + paramName);
-      if (textarea) {
-        textarea.value = e.target.result;
-      }
+      setCSVData(groupId, paramName, e.target.result, file.name);
     };
     reader.readAsText(file);
   };
+
+  window.handleCSVDrop = function(event, groupId, paramName) {
+    event.preventDefault();
+    const dropzone = document.getElementById('dropzone-' + groupId);
+    if (dropzone) dropzone.classList.remove('border-primary', 'bg-light');
+
+    // Check for file
+    if (event.dataTransfer.files && event.dataTransfer.files.length > 0) {
+      const file = event.dataTransfer.files[0];
+      const reader = new FileReader();
+      reader.onload = function(e) {
+        setCSVData(groupId, paramName, e.target.result, file.name);
+      };
+      reader.readAsText(file);
+      return;
+    }
+
+    // Check for pasted text
+    const text = event.dataTransfer.getData('text');
+    if (text) {
+      setCSVData(groupId, paramName, text, null);
+    }
+  };
+
+  window.clearCSVData = function(groupId, paramName) {
+    const textarea = document.getElementById('param-' + groupId + '-' + paramName);
+    if (textarea) {
+      textarea.value = '';
+      textarea.style.opacity = '0';
+      textarea.style.position = 'absolute';
+    }
+
+    const hint = document.getElementById('dropzone-hint-' + groupId);
+    if (hint) hint.classList.remove('d-none');
+
+    const info = document.getElementById('csv-file-info-' + groupId);
+    if (info) info.classList.add('d-none');
+
+    const preview = document.getElementById('csv-preview-' + groupId);
+    if (preview) preview.classList.add('d-none');
+
+    // Reset file input
+    const fileInput = document.getElementById('file-input-' + groupId);
+    if (fileInput) fileInput.value = '';
+  };
+
+  window.validateAndPreviewCSV = function(groupId, paramName) {
+    const textarea = document.getElementById('param-' + groupId + '-' + paramName);
+    const previewDiv = document.getElementById('csv-preview-' + groupId);
+    const tableEl = document.getElementById('csv-table-' + groupId);
+    if (!textarea || !previewDiv || !tableEl) return;
+
+    const text = textarea.value.trim();
+    if (!text) {
+      previewDiv.classList.add('d-none');
+      alert('No CSV data to validate. Paste data or drop a file.');
+      return;
+    }
+
+    // Parse CSV
+    const lines = text.split('\n').filter(l => l.trim() && !l.trim().startsWith('#'));
+    if (lines.length < 2) {
+      previewDiv.classList.add('d-none');
+      alert('CSV must have a header row and at least one data row.');
+      return;
+    }
+
+    const headers = lines[0].split(',').map(h => h.trim());
+    const rows = [];
+    const errors = [];
+
+    for (let i = 1; i < lines.length; i++) {
+      const cells = lines[i].split(',').map(c => c.trim());
+      if (cells.length !== headers.length) {
+        errors.push('Row ' + i + ': expected ' + headers.length + ' columns, got ' + cells.length);
+      }
+      rows.push(cells);
+    }
+
+    // Build table
+    let html = '<thead class="table-light"><tr><th class="text-muted">#</th>';
+    headers.forEach(h => { html += '<th>' + escapeHtml(h) + '</th>'; });
+    html += '<th>Status</th></tr></thead><tbody>';
+
+    rows.forEach((cells, idx) => {
+      const hasError = cells.length !== headers.length;
+      const rowClass = hasError ? 'table-danger' : '';
+      html += '<tr class="' + rowClass + '"><td class="text-muted">' + (idx + 1) + '</td>';
+      cells.forEach(c => { html += '<td>' + escapeHtml(c || '—') + '</td>'; });
+      // Pad if fewer columns
+      for (let j = cells.length; j < headers.length; j++) { html += '<td class="text-danger">—</td>'; }
+      html += '<td>' + (hasError ? '<span class="badge bg-danger">Error</span>' : '<span class="badge bg-success">OK</span>') + '</td>';
+      html += '</tr>';
+    });
+    html += '</tbody>';
+
+    tableEl.innerHTML = html;
+    previewDiv.classList.remove('d-none');
+
+    // Show summary
+    const validCount = rows.length - errors.length;
+    const summary = validCount + ' valid, ' + errors.length + ' error(s) — ' + rows.length + ' total row(s)';
+    const alertType = errors.length > 0 ? 'warning' : 'success';
+    const icon = errors.length > 0 ? 'fa-exclamation-triangle' : 'fa-check-circle';
+
+    // Insert summary before table
+    const existingSummary = previewDiv.querySelector('.csv-summary');
+    if (existingSummary) existingSummary.remove();
+    const summaryEl = document.createElement('div');
+    summaryEl.className = 'csv-summary alert alert-' + alertType + ' py-2 mb-2';
+    summaryEl.innerHTML = '<i class="fas ' + icon + ' me-2"></i>' + summary;
+    previewDiv.insertBefore(summaryEl, previewDiv.firstChild);
+  };
+
+  function escapeHtml(str) {
+    const div = document.createElement('div');
+    div.textContent = str;
+    return div.innerHTML;
+  }
 
 })();
