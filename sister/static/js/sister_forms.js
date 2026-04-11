@@ -384,6 +384,83 @@
     if (fileInput) fileInput.value = '';
   };
 
+  // --- Field validation rules per query type ---
+  const FIELD_VALIDATORS = {
+    'identificativo': function(val) {
+      if (!val) return { valid: false, msg: 'Required' };
+      // P.IVA: 11 digits, or CF: 16 alphanumeric, or company name
+      const cleaned = val.replace(/[\s\-\.]/g, '');
+      if (/^\d{11}$/.test(cleaned)) return { valid: true, cleaned: cleaned };
+      if (/^[A-Z0-9]{16}$/i.test(cleaned)) return { valid: true, cleaned: cleaned.toUpperCase() };
+      if (val.length >= 3) return { valid: true, cleaned: val.trim() }; // company name
+      return { valid: false, msg: 'Must be P.IVA (11 digits), CF (16 chars), or company name' };
+    },
+    'codice_fiscale': function(val) {
+      if (!val) return { valid: false, msg: 'Required' };
+      const cleaned = val.replace(/[\s\-]/g, '').toUpperCase();
+      if (/^[A-Z]{6}\d{2}[A-Z]\d{2}[A-Z]\d{3}[A-Z]$/.test(cleaned)) return { valid: true, cleaned: cleaned };
+      if (/^\d{11}$/.test(cleaned)) return { valid: true, cleaned: cleaned }; // P.IVA also accepted
+      return { valid: false, msg: 'Invalid CF format (expected 16 chars e.g. RSSMRI85E28H501E)' };
+    },
+    'provincia': function(val) {
+      if (!val) return { valid: true, cleaned: '' }; // optional in some contexts
+      return { valid: true, cleaned: val.trim() };
+    },
+    'comune': function(val) {
+      if (!val) return { valid: true, cleaned: '' };
+      return { valid: true, cleaned: val.trim().toUpperCase() };
+    },
+    'foglio': function(val) {
+      if (!val) return { valid: true, cleaned: '' };
+      const cleaned = val.replace(/[\s\-]/g, '');
+      if (/^\d+$/.test(cleaned)) return { valid: true, cleaned: cleaned };
+      return { valid: false, msg: 'Must be numeric' };
+    },
+    'particella': function(val) {
+      if (!val) return { valid: true, cleaned: '' };
+      const cleaned = val.replace(/[\s\-]/g, '');
+      if (/^\d+$/.test(cleaned)) return { valid: true, cleaned: cleaned };
+      return { valid: false, msg: 'Must be numeric' };
+    },
+    'subalterno': function(val) {
+      if (!val) return { valid: true, cleaned: '' };
+      const cleaned = val.replace(/[\s\-]/g, '');
+      if (/^\d+$/.test(cleaned)) return { valid: true, cleaned: cleaned };
+      return { valid: false, msg: 'Must be numeric' };
+    },
+    'tipo_catasto': function(val) {
+      if (!val) return { valid: true, cleaned: '' };
+      const upper = val.trim().toUpperCase();
+      if (['T', 'F', 'E', 'TF'].includes(upper)) return { valid: true, cleaned: upper };
+      return { valid: false, msg: 'Must be T, F, or E' };
+    },
+    'indirizzo': function(val) {
+      if (!val) return { valid: true, cleaned: '' };
+      return { valid: true, cleaned: val.trim() };
+    },
+    'partita': function(val) {
+      if (!val) return { valid: true, cleaned: '' };
+      const cleaned = val.replace(/[\s\-]/g, '');
+      if (/^\d+$/.test(cleaned)) return { valid: true, cleaned: cleaned };
+      return { valid: false, msg: 'Must be numeric' };
+    },
+  };
+
+  // Skip values that mean "empty"
+  const SKIP_VALUES = new Set(['-', '—', 'n/a', 'na', 'null', 'none', '', 'undefined']);
+
+  function cleanCellValue(val) {
+    if (!val) return '';
+    let trimmed = val.trim();
+    // Strip leading/trailing quotes
+    if ((trimmed.startsWith('"') && trimmed.endsWith('"')) ||
+        (trimmed.startsWith("'") && trimmed.endsWith("'"))) {
+      trimmed = trimmed.slice(1, -1).trim();
+    }
+    if (SKIP_VALUES.has(trimmed.toLowerCase())) return '';
+    return trimmed;
+  }
+
   window.validateAndPreviewCSV = function(groupId, paramName) {
     const textarea = document.getElementById('param-' + groupId + '-' + paramName);
     const previewDiv = document.getElementById('csv-preview-' + groupId);
@@ -405,52 +482,185 @@
       return;
     }
 
-    const headers = lines[0].split(',').map(h => h.trim());
-    const rows = [];
-    const errors = [];
+    const headers = lines[0].split(',').map(h => h.trim().toLowerCase());
+    const dataRows = [];
+    let validCount = 0;
+    let errorCount = 0;
+    let skippedCount = 0;
 
     for (let i = 1; i < lines.length; i++) {
-      const cells = lines[i].split(',').map(c => c.trim());
-      if (cells.length !== headers.length) {
-        errors.push('Row ' + i + ': expected ' + headers.length + ' columns, got ' + cells.length);
+      const cells = lines[i].split(',').map(c => cleanCellValue(c));
+      const rowData = {};
+      const rowErrors = {};
+      let allEmpty = true;
+
+      headers.forEach((h, idx) => {
+        const rawVal = cells[idx] || '';
+        rowData[h] = rawVal;
+        if (rawVal) allEmpty = false;
+
+        // Validate
+        const validator = FIELD_VALIDATORS[h];
+        if (validator) {
+          const result = validator(rawVal);
+          if (!result.valid) {
+            rowErrors[h] = result.msg;
+          } else if (result.cleaned !== undefined) {
+            rowData[h] = result.cleaned;
+          }
+        }
+      });
+
+      // Skip entirely empty rows
+      if (allEmpty) {
+        skippedCount++;
+        continue;
       }
-      rows.push(cells);
+
+      const hasErrors = Object.keys(rowErrors).length > 0;
+      if (hasErrors) errorCount++; else validCount++;
+
+      dataRows.push({ index: i, data: rowData, errors: rowErrors, hasErrors: hasErrors });
     }
 
-    // Build table
-    let html = '<thead class="table-light"><tr><th class="text-muted">#</th>';
+    // Load Tabulator if not available, otherwise render directly
+    if (typeof Tabulator === 'undefined') {
+      // Load Tabulator CSS + JS
+      if (!document.getElementById('tabulator-css')) {
+        const css = document.createElement('link');
+        css.id = 'tabulator-css';
+        css.rel = 'stylesheet';
+        css.href = 'https://unpkg.com/tabulator-tables@6.3.1/dist/css/tabulator_bootstrap5.min.css';
+        document.head.appendChild(css);
+      }
+      const script = document.createElement('script');
+      script.src = 'https://unpkg.com/tabulator-tables@6.3.1/dist/js/tabulator.min.js';
+      script.onload = function() { renderTabulatorPreview(groupId, headers, dataRows, validCount, errorCount, skippedCount); };
+      script.onerror = function() { renderFallbackTable(groupId, tableEl, headers, dataRows, validCount, errorCount, skippedCount); };
+      document.head.appendChild(script);
+    } else {
+      renderTabulatorPreview(groupId, headers, dataRows, validCount, errorCount, skippedCount);
+    }
+
+    previewDiv.classList.remove('d-none');
+  };
+
+  function renderTabulatorPreview(groupId, headers, dataRows, validCount, errorCount, skippedCount) {
+    const previewDiv = document.getElementById('csv-preview-' + groupId);
+    const tableEl = document.getElementById('csv-table-' + groupId);
+
+    // Build Tabulator columns
+    const columns = [
+      { title: '#', field: '_row', width: 50, hozAlign: 'right', headerSort: false,
+        formatter: function(cell) { return cell.getValue(); } },
+    ];
+
+    headers.forEach(h => {
+      columns.push({
+        title: h,
+        field: h,
+        editor: 'input',
+        headerFilter: 'input',
+        formatter: function(cell) {
+          const row = cell.getRow().getData();
+          const errors = row._errors || {};
+          const val = cell.getValue() || '';
+          if (errors[h]) {
+            return '<span class="text-danger" title="' + escapeHtml(errors[h]) + '"><i class="fas fa-exclamation-circle me-1"></i>' + escapeHtml(val || '—') + '</span>';
+          }
+          return escapeHtml(val || '');
+        },
+      });
+    });
+
+    columns.push({
+      title: 'Status', field: '_status', width: 90, hozAlign: 'center', headerSort: false,
+      formatter: function(cell) {
+        const hasErrors = cell.getRow().getData()._hasErrors;
+        return hasErrors
+          ? '<span class="badge bg-danger">Error</span>'
+          : '<span class="badge bg-success">OK</span>';
+      },
+    });
+
+    // Build row data
+    const tabulatorData = dataRows.map(r => ({
+      _row: r.index,
+      ...r.data,
+      _errors: r.errors,
+      _hasErrors: r.hasErrors,
+      _status: r.hasErrors ? 'error' : 'ok',
+    }));
+
+    // Clear and render
+    tableEl.innerHTML = '';
+    tableEl.className = '';
+
+    new Tabulator(tableEl, {
+      data: tabulatorData,
+      columns: columns,
+      layout: 'fitDataFill',
+      height: Math.min(400, 50 + dataRows.length * 38),
+      pagination: dataRows.length > 50,
+      paginationSize: 50,
+      rowFormatter: function(row) {
+        if (row.getData()._hasErrors) {
+          row.getElement().style.backgroundColor = '#fff5f5';
+        }
+      },
+    });
+
+    // Summary
+    renderSummary(previewDiv, validCount, errorCount, skippedCount, dataRows.length);
+  }
+
+  function renderFallbackTable(groupId, tableEl, headers, dataRows, validCount, errorCount, skippedCount) {
+    // Fallback if Tabulator fails to load
+    const previewDiv = document.getElementById('csv-preview-' + groupId);
+    let html = '<thead class="table-light"><tr><th>#</th>';
     headers.forEach(h => { html += '<th>' + escapeHtml(h) + '</th>'; });
     html += '<th>Status</th></tr></thead><tbody>';
 
-    rows.forEach((cells, idx) => {
-      const hasError = cells.length !== headers.length;
-      const rowClass = hasError ? 'table-danger' : '';
-      html += '<tr class="' + rowClass + '"><td class="text-muted">' + (idx + 1) + '</td>';
-      cells.forEach(c => { html += '<td>' + escapeHtml(c || '—') + '</td>'; });
-      // Pad if fewer columns
-      for (let j = cells.length; j < headers.length; j++) { html += '<td class="text-danger">—</td>'; }
-      html += '<td>' + (hasError ? '<span class="badge bg-danger">Error</span>' : '<span class="badge bg-success">OK</span>') + '</td>';
+    dataRows.forEach(r => {
+      const cls = r.hasErrors ? 'table-danger' : '';
+      html += '<tr class="' + cls + '"><td class="text-muted">' + r.index + '</td>';
+      headers.forEach(h => {
+        const val = r.data[h] || '';
+        const err = r.errors[h];
+        if (err) {
+          html += '<td class="text-danger" title="' + escapeHtml(err) + '"><i class="fas fa-exclamation-circle me-1"></i>' + escapeHtml(val || '—') + '</td>';
+        } else {
+          html += '<td>' + escapeHtml(val || '') + '</td>';
+        }
+      });
+      html += '<td>' + (r.hasErrors ? '<span class="badge bg-danger">Error</span>' : '<span class="badge bg-success">OK</span>') + '</td>';
       html += '</tr>';
     });
     html += '</tbody>';
 
+    tableEl.className = 'table table-sm table-bordered';
     tableEl.innerHTML = html;
-    previewDiv.classList.remove('d-none');
 
-    // Show summary
-    const validCount = rows.length - errors.length;
-    const summary = validCount + ' valid, ' + errors.length + ' error(s) — ' + rows.length + ' total row(s)';
-    const alertType = errors.length > 0 ? 'warning' : 'success';
-    const icon = errors.length > 0 ? 'fa-exclamation-triangle' : 'fa-check-circle';
+    renderSummary(previewDiv, validCount, errorCount, skippedCount, dataRows.length);
+  }
 
-    // Insert summary before table
-    const existingSummary = previewDiv.querySelector('.csv-summary');
-    if (existingSummary) existingSummary.remove();
-    const summaryEl = document.createElement('div');
-    summaryEl.className = 'csv-summary alert alert-' + alertType + ' py-2 mb-2';
-    summaryEl.innerHTML = '<i class="fas ' + icon + ' me-2"></i>' + summary;
-    previewDiv.insertBefore(summaryEl, previewDiv.firstChild);
-  };
+  function renderSummary(container, validCount, errorCount, skippedCount, totalRows) {
+    const existing = container.querySelector('.csv-summary');
+    if (existing) existing.remove();
+
+    const parts = [validCount + ' valid'];
+    if (errorCount > 0) parts.push(errorCount + ' error(s)');
+    if (skippedCount > 0) parts.push(skippedCount + ' skipped');
+    parts.push(totalRows + ' total');
+
+    const alertType = errorCount > 0 ? 'warning' : 'success';
+    const icon = errorCount > 0 ? 'fa-exclamation-triangle' : 'fa-check-circle';
+
+    const el = document.createElement('div');
+    el.className = 'csv-summary alert alert-' + alertType + ' py-2 mb-2';
+    el.innerHTML = '<i class="fas ' + icon + ' me-2"></i>' + parts.join(' &middot; ');
+    container.insertBefore(el, container.firstChild);
+  }
 
   function escapeHtml(str) {
     const div = document.createElement('div');
