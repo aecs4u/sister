@@ -82,7 +82,6 @@
 {% endblock %}
 
 {% block extra_js %}
-<!-- SheetJS for XLSX parsing (loaded only when needed) -->
-<script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js" defer></script>
+<!-- SheetJS loaded on demand by sister_forms.js when XLSX file is dropped -->
 <script src="/static/js/sister_forms.js" defer></script>
 {% endblock %}

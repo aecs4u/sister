@@ -99,8 +99,17 @@
     if (!endpointEl) return;
 
     let path = endpointEl.dataset.path || endpointEl.value;
-    // Normalize: remove leading /visura/ to get the endpoint name for the proxy
-    const proxyEndpoint = path.replace(/^\/visura\//, '').replace(/^\/visura$/, '');
+
+    // Determine the API URL to post to
+    let apiUrl;
+    if (path.startsWith('/web/api/')) {
+      // Direct proxy path (e.g. /web/api/batch) — use as-is
+      apiUrl = path;
+    } else {
+      // Sister API path (e.g. /visura/soggetto) — route through proxy
+      const proxyEndpoint = path.replace(/^\/visura\//, '').replace(/^\/visura$/, '');
+      apiUrl = proxyEndpoint ? '/web/api/' + proxyEndpoint : '/web/api/';
+    }
 
     // Collect form parameters (inputs, selects, and textareas)
     const body = {};
@@ -121,8 +130,7 @@
 
     try {
       // POST to proxy
-      const apiPath = proxyEndpoint ? '/web/api/' + proxyEndpoint : '/web/api/';
-      const res = await fetch(apiPath, {
+      const res = await fetch(apiUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
@@ -132,6 +140,17 @@
 
       if (!res.ok) {
         statusDiv.innerHTML = '<div class="alert alert-danger"><i class="fas fa-times-circle me-2"></i>Error: ' + (data.detail || res.statusText) + '</div>';
+        contentDiv.textContent = JSON.stringify(data, null, 2);
+        return;
+      }
+
+      // Check for batch response (has results array, no request_ids)
+      if (data.total_rows !== undefined && data.results) {
+        const submitted = data.results.filter(r => r.status === 'submitted').length;
+        const errors = data.results.filter(r => r.status === 'error').length;
+        const alertClass = errors > 0 ? 'alert-warning' : 'alert-success';
+        const icon = errors > 0 ? 'fa-exclamation-triangle' : 'fa-check-circle';
+        statusDiv.innerHTML = '<div class="alert ' + alertClass + '"><i class="fas ' + icon + ' me-2"></i>Batch: ' + submitted + ' submitted, ' + errors + ' error(s) out of ' + data.total_rows + ' rows</div>';
         contentDiv.textContent = JSON.stringify(data, null, 2);
         return;
       }
@@ -243,23 +262,32 @@
     const ext = name.split('.').pop();
 
     if (ext === 'xlsx' || ext === 'xls') {
-      // XLSX — use SheetJS
-      const reader = new FileReader();
-      reader.onload = function(e) {
-        try {
-          if (typeof XLSX === 'undefined') {
-            callback('Error: XLSX library not loaded. Please reload the page.', null);
-            return;
+      // XLSX — load SheetJS on demand if not already loaded
+      const doParseXLSX = function() {
+        const reader = new FileReader();
+        reader.onload = function(e) {
+          try {
+            const wb = XLSX.read(e.target.result, { type: 'array' });
+            const ws = wb.Sheets[wb.SheetNames[0]];
+            const csv = XLSX.utils.sheet_to_csv(ws);
+            callback(null, csv);
+          } catch (err) {
+            callback('Error parsing XLSX: ' + err.message, null);
           }
-          const wb = XLSX.read(e.target.result, { type: 'array' });
-          const ws = wb.Sheets[wb.SheetNames[0]];
-          const csv = XLSX.utils.sheet_to_csv(ws);
-          callback(null, csv);
-        } catch (err) {
-          callback('Error parsing XLSX: ' + err.message, null);
-        }
+        };
+        reader.readAsArrayBuffer(file);
       };
-      reader.readAsArrayBuffer(file);
+
+      if (typeof XLSX !== 'undefined') {
+        doParseXLSX();
+      } else {
+        // Lazy-load SheetJS
+        const script = document.createElement('script');
+        script.src = 'https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js';
+        script.onload = doParseXLSX;
+        script.onerror = function() { callback('Error: Could not load XLSX library.', null); };
+        document.head.appendChild(script);
+      }
 
     } else if (ext === 'json') {
       // JSON — convert array of objects to CSV

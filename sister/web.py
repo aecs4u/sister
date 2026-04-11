@@ -32,7 +32,10 @@ def _get_theme(request: Request):
 
 def _get_user(request: Request):
     """Get current user from request state (set by auth middleware)."""
-    return getattr(request.state, "user", None) or getattr(request, "user", None)
+    try:
+        return getattr(request.state, "user", None)
+    except Exception:
+        return None
 
 
 async def _require_auth(request: Request):
@@ -185,6 +188,22 @@ async def web_api_batch(request: Request, user=Depends(_require_auth)):
 
     if not rows:
         return JSONResponse({"error": "No valid data rows found"}, status_code=400)
+
+    # Map common CSV column aliases to API field names
+    _COLUMN_ALIASES = {
+        "p.iva": "identificativo", "piva": "identificativo", "partita_iva": "identificativo",
+        "vat": "identificativo", "organization": "identificativo", "company": "identificativo",
+        "denominazione": "identificativo", "ragione_sociale": "identificativo",
+        "cf": "codice_fiscale", "tax_code": "codice_fiscale",
+        "province": "provincia", "municipality": "comune", "city": "comune",
+        "sheet": "foglio", "parcel": "particella", "sub": "subalterno",
+        "type": "tipo_catasto", "catasto": "tipo_catasto",
+        "address": "indirizzo", "via": "indirizzo",
+    }
+    for row in rows:
+        for alias, canonical in _COLUMN_ALIASES.items():
+            if alias in row and canonical not in row:
+                row[canonical] = row.pop(alias)
 
     # Map command to API endpoint
     endpoint_map = {

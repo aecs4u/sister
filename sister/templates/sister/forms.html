@@ -205,9 +205,11 @@
                     <button type="submit" class="btn btn-primary">
                         <i class="fas fa-paper-plane me-2"></i>Submit Request
                     </button>
+                    {% if form_group.id != 'batch' %}
                     <button type="reset" class="btn btn-outline-secondary">
                         <i class="fas fa-times me-2"></i>Clear
                     </button>
+                    {% endif %}
                 </div>
                 {% endif %}
             </form>
