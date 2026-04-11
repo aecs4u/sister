@@ -1,6 +1,7 @@
 """Web UI routes for sister.
 
 Serves HTML pages via aecs4u-theme and proxies API calls for form submissions.
+Auth: landing page is public; /web/* routes require authentication.
 """
 
 from __future__ import annotations
@@ -9,9 +10,7 @@ import logging
 from typing import Optional
 
 from fastapi import APIRouter, Depends, Request
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
-
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 
 from .database import count_responses, find_responses, get_response
 from .form_config import get_available_form_groups
@@ -31,6 +30,24 @@ def _get_theme(request: Request):
     return request.app.state.theme_setup
 
 
+def _get_user(request: Request):
+    """Get current user from request state (set by auth middleware)."""
+    return getattr(request.state, "user", None) or getattr(request, "user", None)
+
+
+async def _require_auth(request: Request):
+    """Dependency: require authenticated user or redirect to login."""
+    try:
+        from aecs4u_auth.dependencies import get_current_user
+        return await get_current_user(request)
+    except Exception:
+        # Auth not configured or user not authenticated — allow in dev mode
+        user = _get_user(request)
+        if user:
+            return user
+        return None
+
+
 # ---------------------------------------------------------------------------
 # Public routes (no auth)
 # ---------------------------------------------------------------------------
@@ -46,15 +63,6 @@ async def favicon():
     return HTMLResponse("", status_code=204)
 
 
-@router.get("/auth/login", response_class=HTMLResponse, include_in_schema=False)
-async def auth_login_redirect(request: Request, next: str = "/web/"):
-    """Placeholder auth route — redirects to dashboard (auth not yet configured)."""
-    # Remap opendata-style paths to sister web paths
-    if next == "/dashboard" or next.startswith("/dashboard/"):
-        next = "/web/"
-    return RedirectResponse(url=next)
-
-
 @router.get("/dashboard", include_in_schema=False)
 async def dashboard_redirect():
     """Redirect /dashboard to /web/."""
@@ -65,7 +73,8 @@ async def dashboard_redirect():
 async def landing(request: Request):
     """Public landing page."""
     theme = _get_theme(request)
-    return theme.render("sister/landing.html", request)
+    user = _get_user(request)
+    return theme.render("sister/landing.html", request, user=user)
 
 
 # ---------------------------------------------------------------------------
@@ -74,24 +83,24 @@ async def landing(request: Request):
 
 
 @router.get("/web/", response_class=HTMLResponse)
-async def web_index(request: Request):
+async def web_index(request: Request, user=Depends(_require_auth)):
     """Dashboard — service health and recent activity."""
     theme = _get_theme(request)
     stats = await count_responses()
     recent = await find_responses(limit=5)
     return theme.render(
-        "sister/index.html", request,
+        "sister/index.html", request, user=user,
         stats=stats, recent=recent,
     )
 
 
 @router.get("/web/forms", response_class=HTMLResponse)
-async def web_forms(request: Request):
+async def web_forms(request: Request, user=Depends(_require_auth)):
     """Query submission forms."""
     theme = _get_theme(request)
     form_groups = get_available_form_groups()
     return theme.render(
-        "sister/forms.html", request,
+        "sister/forms.html", request, user=user,
         form_groups=form_groups,
     )
 
@@ -99,6 +108,7 @@ async def web_forms(request: Request):
 @router.get("/web/results", response_class=HTMLResponse)
 async def web_results(
     request: Request,
+    user=Depends(_require_auth),
     provincia: Optional[str] = None,
     comune: Optional[str] = None,
     tipo_catasto: Optional[str] = None,
@@ -113,7 +123,7 @@ async def web_results(
     )
     stats = await count_responses()
     return theme.render(
-        "sister/results.html", request,
+        "sister/results.html", request, user=user,
         results=results, stats=stats,
         provincia=provincia, comune=comune, tipo_catasto=tipo_catasto,
         limit=limit, offset=offset,
@@ -121,30 +131,32 @@ async def web_results(
 
 
 @router.get("/web/results/{request_id}", response_class=HTMLResponse)
-async def web_result_detail(request: Request, request_id: str):
+async def web_result_detail(request: Request, request_id: str, user=Depends(_require_auth)):
     """Single result detail page."""
     theme = _get_theme(request)
     response_data = await get_response(request_id)
     if not response_data:
-        return theme.render("sister/result_detail.html", request, result=None, request_id=request_id)
+        return theme.render("sister/result_detail.html", request, user=user, result=None, request_id=request_id)
     return theme.render(
-        "sister/result_detail.html", request,
+        "sister/result_detail.html", request, user=user,
         result=response_data, request_id=request_id,
     )
 
 
 @router.get("/web/about", response_class=HTMLResponse)
 async def web_about(request: Request):
-    """About page."""
+    """About page (public)."""
     theme = _get_theme(request)
-    return theme.render("sister/about.html", request)
+    user = _get_user(request)
+    return theme.render("sister/about.html", request, user=user)
 
 
 @router.get("/web/privacy", response_class=HTMLResponse)
 async def web_privacy(request: Request):
-    """Privacy policy."""
+    """Privacy policy (public)."""
     theme = _get_theme(request)
-    return theme.render("sister/privacy_policy.html", request)
+    user = _get_user(request)
+    return theme.render("sister/privacy_policy.html", request, user=user)
 
 
 # ---------------------------------------------------------------------------
@@ -153,7 +165,7 @@ async def web_privacy(request: Request):
 
 
 @router.post("/web/api/batch", response_class=JSONResponse)
-async def web_api_batch(request: Request):
+async def web_api_batch(request: Request, user=Depends(_require_auth)):
     """Parse CSV text and submit each row as a separate API request."""
     import csv
     import io
@@ -204,7 +216,7 @@ async def web_api_batch(request: Request):
 
 
 @router.post("/web/api/{endpoint:path}", response_class=JSONResponse)
-async def web_api_proxy(endpoint: str, request: Request):
+async def web_api_proxy(endpoint: str, request: Request, user=Depends(_require_auth)):
     """Proxy form submissions to the sister API."""
     import httpx
 
@@ -226,7 +238,7 @@ async def web_api_proxy(endpoint: str, request: Request):
 
 
 @router.get("/web/api/visura/{request_id}", response_class=JSONResponse)
-async def web_api_poll(request_id: str, request: Request):
+async def web_api_poll(request_id: str, request: Request, user=Depends(_require_auth)):
     """Poll for result status (proxy)."""
     import httpx
 

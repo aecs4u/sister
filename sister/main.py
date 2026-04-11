@@ -159,6 +159,32 @@ try:
     _templates_dir = _sister_dir / "templates"
     _static_dir = _sister_dir / "static"
 
+    # --- Auth setup (before theme) ---
+    try:
+        from aecs4u_auth import AuthConfig, setup_auth
+
+        auth_config = AuthConfig(
+            AECS4U_SITE_ID="sister",
+            AECS4U_SITE_NAME="SISTER",
+            CLERK_AFTER_SIGN_IN_URL="/web/",
+            CLERK_AFTER_SIGN_UP_URL="/web/",
+        )
+        auth_setup = setup_auth(
+            app,
+            config=auth_config,
+            include_routes=True,
+            mount_static=True,
+            setup_exception_handlers=True,
+        )
+        app.state.auth_setup = auth_setup
+        app.state.auth_config = auth_config
+        logger.info("Autenticazione configurata (mode=%s)", auth_config.AUTH_MODE)
+    except ImportError:
+        logger.warning("aecs4u-auth non disponibile: autenticazione disabilitata")
+    except Exception as e:
+        logger.warning("Errore configurazione auth: %s", e)
+
+    # --- Theme setup ---
     theme_config = ThemeConfig(
         site_id="sister",
         site_name="SISTER",
