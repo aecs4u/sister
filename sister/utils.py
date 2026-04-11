@@ -848,11 +848,14 @@ async def run_elenco_immobili(
     except Exception as e:
         log.warning("Errore selezione tipo catasto: %s", e)
 
-    # STEP 4: Select comune
-    comune_value = await find_best_option_match(page, "select[name='denomComune']", comune)
+    # STEP 4: Select comune (EIMM uses comuneCat, not denomComune)
+    comune_selector = "select[name='comuneCat']"
+    if await page.locator(comune_selector).count() == 0:
+        comune_selector = "select[name='denomComune']"
+    comune_value = await find_best_option_match(page, comune_selector, comune)
     if not comune_value:
         raise Exception(f"Comune '{comune}' non trovato per provincia '{provincia}'")
-    await page.locator("select[name='denomComune']").select_option(comune_value)
+    await page.locator(comune_selector).select_option(comune_value)
 
     # STEP 4.1: Optionally select sezione
     if sezione:
