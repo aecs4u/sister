@@ -24,7 +24,7 @@ config = context.config
 # Override sqlalchemy.url from environment if set
 db_path = os.getenv(
     "SISTER_DB_PATH",
-    os.path.join(os.path.dirname(os.path.dirname(__file__)), "sister", "data", "sister.sqlite"),
+    os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "sister.sqlite"),
 )
 config.set_main_option("sqlalchemy.url", f"sqlite:///{db_path}")
 

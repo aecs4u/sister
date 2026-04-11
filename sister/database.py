@@ -40,7 +40,7 @@ _SISTER_TABLES = [
 
 logger = logging.getLogger("sister")
 
-DB_PATH = os.getenv("SISTER_DB_PATH", os.path.join(os.path.dirname(__file__), "data", "sister.sqlite"))
+DB_PATH = os.getenv("SISTER_DB_PATH", os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "sister.sqlite"))
 
 # ---------------------------------------------------------------------------
 # Engine and session
