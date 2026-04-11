@@ -502,6 +502,861 @@ async def run_visura(
     return result
 
 
+async def run_visura_soggetto(
+    page,
+    codice_fiscale,
+    tipo_catasto="E",
+    provincia=None,
+    comune=None,
+    motivo="",
+    per_conto_di=None,
+):
+    import os
+    if per_conto_di is None:
+        per_conto_di = os.getenv("ADE_USERNAME", "")
+    """National search by codice fiscale on the SISTER portal.
+
+    If provincia is None, selects "NAZIONALE" for a nationwide search.
+    tipo_catasto: 'E' = both, 'T' = Terreni, 'F' = Fabbricati.
+    """
+    time0 = time.time()
+    page_logger = PageLogger("soggetto")
+    prov_label = provincia or "NAZIONALE"
+    log.info(
+        "[bold]Ricerca soggetto[/bold] CF=%s tipo=%s provincia=%s",
+        codice_fiscale, tipo_catasto, prov_label,
+    )
+
+    # STEP 1: Navigate to SceltaServizio
+    await _navigate_to_scelta_servizio(page, page_logger)
+
+    # STEP 2: Select province (NAZIONALE or specific)
+    if provincia:
+        provincia_value = await find_best_option_match(page, "select[name='listacom']", provincia)
+        if not provincia_value:
+            raise Exception(f"Provincia '{provincia}' non trovata")
+        log.info("Provincia: [cyan]%s[/cyan]", provincia_value)
+    else:
+        # Select NAZIONALE for nationwide search
+        provincia_value = await find_best_option_match(page, "select[name='listacom']", "NAZIONALE")
+        if not provincia_value:
+            raise Exception("Opzione NAZIONALE non trovata nel dropdown province")
+        log.info("Ricerca nazionale")
+
+    await page.locator("select[name='listacom']").select_option(provincia_value)
+    await page.locator("input[type='submit'][value='Applica']").click()
+    await page.wait_for_load_state("networkidle", timeout=30000)
+    await page_logger.log(page, "provincia_applicata")
+
+    # STEP 3: Click "Persona fisica" in the left menu
+    log.info("Navigando a Persona fisica...")
+    await page.get_by_role("link", name="Persona fisica").click()
+    await page.wait_for_load_state("networkidle", timeout=30000)
+    await page_logger.log(page, "persona_fisica")
+
+    # STEP 4: Select tipo catasto
+    log.info("Tipo catasto: [cyan]%s[/cyan]", tipo_catasto)
+    try:
+        await page.locator("select[name='tipoCatasto']").select_option(tipo_catasto)
+    except Exception as e:
+        log.warning("Errore selezione tipo catasto: %s", e)
+
+    # STEP 5: Select "Codice Fiscale" radio button and fill the field
+    log.info("Codice fiscale: [cyan]%s[/cyan]", codice_fiscale)
+
+    # Click the Codice Fiscale radio button (field name: selDatiAna, value: CF)
+    cf_radio = page.locator("input[name='selDatiAna'][value='CF']")
+    if await cf_radio.count() == 0:
+        cf_radio = page.locator("input[type='radio'][value='CF']")
+    if await cf_radio.count() == 0:
+        cf_radio = page.locator("input[type='radio']").last
+    await cf_radio.click()
+
+    # Fill the codice fiscale field (field name: cod_fisc_pf)
+    cf_field = page.locator("input[name='cod_fisc_pf']")
+    if await cf_field.count() == 0:
+        cf_field = page.locator("input[name='codFiscale']")
+    if await cf_field.count() == 0:
+        cf_field = page.locator("input[name='codiceFiscale']")
+    await cf_field.click()
+    await cf_field.fill(codice_fiscale.upper())
+
+    # STEP 5.1: Fill richiedente and motivo
+    if per_conto_di:
+        richiedente = page.locator("input[name='richiedente']")
+        if await richiedente.count() > 0:
+            await richiedente.fill(per_conto_di)
+
+    if motivo:
+        motivo_field = page.locator("input[name='motivoText']")
+        if await motivo_field.count() == 0:
+            motivo_field = page.locator("input[name='motivo']")
+        if await motivo_field.count() > 0:
+            await motivo_field.fill(motivo)
+
+    # STEP 6: Submit search
+    log.info("Esecuzione ricerca soggetto...")
+    ricerca_btn = page.locator("input[name='ricerca'][value='Ricerca']")
+    if await ricerca_btn.count() == 0:
+        ricerca_btn = page.locator("input[type='submit'][value='Ricerca']")
+    await ricerca_btn.click()
+    await page.wait_for_load_state("networkidle", timeout=60000)
+    await page_logger.log(page, "risultati_soggetto")
+
+    # STEP 7: Check for errors
+    page_text = await page.inner_text("body")
+    if "NESSUNA CORRISPONDENZA TROVATA" in page_text:
+        elapsed = time.time() - time0
+        log.warning("Nessuna corrispondenza trovata (%.1fs)", elapsed)
+        return {
+            "soggetto": codice_fiscale,
+            "immobili": [],
+            "total_results": 0,
+            "error": "NESSUNA CORRISPONDENZA TROVATA",
+        }
+
+    # STEP 8: Extract results table
+    log.info("Estraendo risultati soggetto...")
+    immobili = []
+    try:
+        selectors = [
+            "table.listaIsp4",
+            "table[class*='lista']",
+            "table:has(th:text('Foglio'))",
+            "table:has(th:text('Comune'))",
+            "table",
+        ]
+
+        for selector in selectors:
+            try:
+                table_locator = page.locator(selector)
+                count = await table_locator.count()
+                if count > 0:
+                    for i in range(count):
+                        try:
+                            table_elem = table_locator.nth(i)
+                            table_html = await table_elem.inner_html(timeout=10000)
+                            if any(kw in table_html for kw in ("Foglio", "Particella", "Comune", "Provincia")):
+                                immobili = parse_table(table_html)
+                                log.info("[green]%d risultati[/green] estratti (%s)", len(immobili), selector)
+                                break
+                        except Exception as e:
+                            log.debug("Errore tabella %d: %s", i, e)
+                            continue
+                    if immobili:
+                        break
+            except Exception as e:
+                log.debug("Errore selettore '%s': %s", selector, e)
+                continue
+    except Exception as e:
+        log.error("Errore estrazione risultati soggetto: %s", e)
+
+    elapsed = time.time() - time0
+    log.info(
+        "[green]Ricerca soggetto completata[/green] in %.1fs — %d risultati",
+        elapsed, len(immobili),
+    )
+
+    return {
+        "soggetto": codice_fiscale,
+        "immobili": immobili,
+        "total_results": len(immobili),
+    }
+
+
+async def run_visura_persona_giuridica(
+    page,
+    identificativo,
+    tipo_catasto="E",
+    provincia=None,
+    motivo="",
+    per_conto_di=None,
+):
+    """Search by legal entity (P.IVA or denominazione) on SISTER.
+
+    identificativo: partita IVA (11 digits) or company name (denominazione).
+    If provincia is None, selects "NAZIONALE" for nationwide search.
+    """
+    import os
+    if per_conto_di is None:
+        per_conto_di = os.getenv("ADE_USERNAME", "")
+
+    time0 = time.time()
+    page_logger = PageLogger("persona_giuridica")
+    prov_label = provincia or "NAZIONALE"
+    log.info(
+        "[bold]Ricerca persona giuridica[/bold] id=%s tipo=%s provincia=%s",
+        identificativo, tipo_catasto, prov_label,
+    )
+
+    # STEP 1: Navigate to SceltaServizio
+    await _navigate_to_scelta_servizio(page, page_logger)
+
+    # STEP 2: Select province
+    if provincia:
+        provincia_value = await find_best_option_match(page, "select[name='listacom']", provincia)
+        if not provincia_value:
+            raise Exception(f"Provincia '{provincia}' non trovata")
+    else:
+        provincia_value = await find_best_option_match(page, "select[name='listacom']", "NAZIONALE")
+        if not provincia_value:
+            raise Exception("Opzione NAZIONALE non trovata nel dropdown province")
+
+    await page.locator("select[name='listacom']").select_option(provincia_value)
+    await page.locator("input[type='submit'][value='Applica']").click()
+    await page.wait_for_load_state("networkidle", timeout=30000)
+    await page_logger.log(page, "provincia_applicata")
+
+    # STEP 3: Click "Persona giuridica" in the left menu
+    log.info("Navigando a Persona giuridica...")
+    await page.get_by_role("link", name="Persona giuridica").click()
+    await page.wait_for_load_state("networkidle", timeout=30000)
+    await page_logger.log(page, "persona_giuridica")
+
+    # STEP 4: Select tipo catasto
+    try:
+        await page.locator("select[name='tipoCatasto']").select_option(tipo_catasto)
+    except Exception as e:
+        log.warning("Errore selezione tipo catasto: %s", e)
+
+    # STEP 5: Fill the search field
+    # PNF form has denominazione and/or codice fiscale/P.IVA fields
+    # If the identifier looks like a P.IVA (11 digits) or CF (16 chars), use the CF field
+    is_fiscal_code = len(identificativo.strip()) in (11, 16) and identificativo.strip().isalnum()
+
+    if is_fiscal_code:
+        log.info("Codice fiscale/P.IVA: [cyan]%s[/cyan]", identificativo)
+        # Try CF radio first
+        cf_radio = page.locator("input[name='selDatiAna'][value='CF']")
+        if await cf_radio.count() == 0:
+            cf_radio = page.locator("input[type='radio'][value='CF']")
+        if await cf_radio.count() > 0:
+            await cf_radio.click()
+
+        cf_field = page.locator("input[name='cod_fisc_pnf']")
+        if await cf_field.count() == 0:
+            cf_field = page.locator("input[name='cod_fisc_pf']")
+        if await cf_field.count() == 0:
+            cf_field = page.locator("input[name='codFiscale']")
+        await cf_field.click()
+        await cf_field.fill(identificativo.upper())
+    else:
+        log.info("Denominazione: [cyan]%s[/cyan]", identificativo)
+        # Select denominazione radio
+        denom_radio = page.locator("input[name='selDatiAna'][value='DA']")
+        if await denom_radio.count() == 0:
+            denom_radio = page.locator("input[type='radio']").first
+        if await denom_radio.count() > 0:
+            await denom_radio.click()
+
+        denom_field = page.locator("input[name='denominazione']")
+        if await denom_field.count() == 0:
+            denom_field = page.locator("input[name='ragsoc']")
+        await denom_field.click()
+        await denom_field.fill(identificativo.upper())
+
+    # STEP 5.1: Fill richiedente and motivo
+    if per_conto_di:
+        richiedente = page.locator("input[name='richiedente']")
+        if await richiedente.count() > 0:
+            await richiedente.fill(per_conto_di)
+    if motivo:
+        motivo_field = page.locator("input[name='motivoText']")
+        if await motivo_field.count() == 0:
+            motivo_field = page.locator("input[name='motivo']")
+        if await motivo_field.count() > 0:
+            await motivo_field.fill(motivo)
+
+    # STEP 6: Submit
+    log.info("Esecuzione ricerca persona giuridica...")
+    ricerca_btn = page.locator("input[name='ricerca'][value='Ricerca']")
+    if await ricerca_btn.count() == 0:
+        ricerca_btn = page.locator("input[type='submit'][value='Ricerca']")
+    await ricerca_btn.click()
+    await page.wait_for_load_state("networkidle", timeout=60000)
+    await page_logger.log(page, "risultati_pnf")
+
+    # STEP 7: Check for errors
+    page_text = await page.inner_text("body")
+    if "NESSUNA CORRISPONDENZA TROVATA" in page_text:
+        elapsed = time.time() - time0
+        log.warning("Nessuna corrispondenza trovata (%.1fs)", elapsed)
+        return {
+            "soggetto": identificativo,
+            "immobili": [],
+            "total_results": 0,
+            "error": "NESSUNA CORRISPONDENZA TROVATA",
+        }
+
+    # STEP 8: Extract results
+    immobili = _extract_result_tables(await page.content())
+    log.info("[green]%d risultati[/green] estratti", len(immobili))
+
+    elapsed = time.time() - time0
+    log.info("[green]Ricerca PNF completata[/green] in %.1fs — %d risultati", elapsed, len(immobili))
+
+    return {
+        "soggetto": identificativo,
+        "immobili": immobili,
+        "total_results": len(immobili),
+    }
+
+
+async def run_elenco_immobili(
+    page,
+    provincia,
+    comune,
+    tipo_catasto="T",
+    foglio=None,
+    sezione=None,
+    motivo="",
+    per_conto_di=None,
+):
+    """List all properties in a comune (optionally filtered by foglio).
+
+    Uses the EIMM (Elenco immobili) service on SISTER.
+    """
+    import os
+    if per_conto_di is None:
+        per_conto_di = os.getenv("ADE_USERNAME", "")
+
+    time0 = time.time()
+    page_logger = PageLogger("elenco_immobili")
+    foglio_info = f" F.{foglio}" if foglio else ""
+    log.info(
+        "[bold]Elenco immobili[/bold] %s/%s%s tipo=%s",
+        provincia, comune, foglio_info, tipo_catasto,
+    )
+
+    # STEP 1: Navigate and select province
+    await _navigate_to_scelta_servizio(page, page_logger)
+
+    provincia_value = await find_best_option_match(page, "select[name='listacom']", provincia)
+    if not provincia_value:
+        raise Exception(f"Provincia '{provincia}' non trovata")
+
+    await page.locator("select[name='listacom']").select_option(provincia_value)
+    await page.locator("input[type='submit'][value='Applica']").click()
+    await page.wait_for_load_state("networkidle", timeout=30000)
+    await page_logger.log(page, "provincia_applicata")
+
+    # STEP 2: Click "Elenco immobili" in the left menu
+    log.info("Navigando a Elenco immobili...")
+    await page.get_by_role("link", name="Elenco immobili").click()
+    await page.wait_for_load_state("networkidle", timeout=30000)
+    await page_logger.log(page, "elenco_immobili_form")
+
+    # STEP 3: Select tipo catasto
+    try:
+        await page.locator("select[name='tipoCatasto']").select_option(tipo_catasto)
+    except Exception as e:
+        log.warning("Errore selezione tipo catasto: %s", e)
+
+    # STEP 4: Select comune
+    comune_value = await find_best_option_match(page, "select[name='denomComune']", comune)
+    if not comune_value:
+        raise Exception(f"Comune '{comune}' non trovato per provincia '{provincia}'")
+    await page.locator("select[name='denomComune']").select_option(comune_value)
+
+    # STEP 4.1: Optionally select sezione
+    if sezione:
+        log.info("Selezionando sezione: [cyan]%s[/cyan]", sezione)
+        sel_sezione = page.locator("input[name='selSezione'][value='scegli la sezione']")
+        if await sel_sezione.count() > 0:
+            await sel_sezione.click()
+            await page.wait_for_load_state("networkidle", timeout=30000)
+            sezione_value = await find_best_option_match(page, "select[name='sezione']", sezione)
+            if sezione_value:
+                await page.locator("select[name='sezione']").select_option(sezione_value)
+
+    # STEP 4.2: Optionally fill foglio
+    if foglio:
+        log.info("Foglio: [cyan]%s[/cyan]", foglio)
+        foglio_field = page.locator("input[name='foglio']")
+        if await foglio_field.count() > 0:
+            await foglio_field.fill(str(foglio))
+
+    # STEP 5: Submit
+    log.info("Esecuzione elenco immobili...")
+    ricerca_btn = page.locator("input[name='ricerca'][value='Ricerca']")
+    if await ricerca_btn.count() == 0:
+        ricerca_btn = page.locator("input[type='submit'][value='Ricerca']")
+    if await ricerca_btn.count() == 0:
+        ricerca_btn = page.locator("input[name='scelta'][value='Ricerca']")
+    await ricerca_btn.click()
+    await page.wait_for_load_state("networkidle", timeout=60000)
+    await page_logger.log(page, "risultati_elenco")
+
+    # STEP 6: Check for errors
+    page_text = await page.inner_text("body")
+    if "NESSUNA CORRISPONDENZA TROVATA" in page_text:
+        elapsed = time.time() - time0
+        log.warning("Nessuna corrispondenza trovata (%.1fs)", elapsed)
+        return {
+            "provincia": provincia,
+            "comune": comune,
+            "foglio": foglio,
+            "immobili": [],
+            "total_results": 0,
+            "error": "NESSUNA CORRISPONDENZA TROVATA",
+        }
+
+    # STEP 7: Extract results
+    immobili = _extract_result_tables(await page.content())
+    log.info("[green]%d immobili[/green] estratti", len(immobili))
+
+    elapsed = time.time() - time0
+    log.info("[green]Elenco immobili completato[/green] in %.1fs — %d risultati", elapsed, len(immobili))
+
+    return {
+        "provincia": provincia,
+        "comune": comune,
+        "foglio": foglio,
+        "immobili": immobili,
+        "total_results": len(immobili),
+    }
+
+
+def _extract_result_tables(page_html: str) -> list:
+    """Extract data rows from result tables in SISTER HTML."""
+    soup = BeautifulSoup(page_html, "html.parser")
+    for table in soup.find_all("table"):
+        headers_text = " ".join(th.get_text(strip=True) for th in table.find_all("th"))
+        if any(kw in headers_text for kw in ("Foglio", "Particella", "Comune", "Provincia", "Denominazione",
+                                              "Nota", "Partita", "Indirizzo", "Fiduciale", "Mappa")):
+            return parse_table(str(table))
+    return []
+
+
+async def _navigate_select_province_and_click(page, page_logger, provincia, menu_link_name):
+    """Shared helper: navigate to SceltaServizio, select province, click a menu link."""
+    await _navigate_to_scelta_servizio(page, page_logger)
+
+    if provincia:
+        provincia_value = await find_best_option_match(page, "select[name='listacom']", provincia)
+        if not provincia_value:
+            raise Exception(f"Provincia '{provincia}' non trovata")
+    else:
+        provincia_value = await find_best_option_match(page, "select[name='listacom']", "NAZIONALE")
+        if not provincia_value:
+            raise Exception("Opzione NAZIONALE non trovata")
+
+    await page.locator("select[name='listacom']").select_option(provincia_value)
+    await page.locator("input[type='submit'][value='Applica']").click()
+    await page.wait_for_load_state("networkidle", timeout=30000)
+    await page_logger.log(page, "provincia_applicata")
+
+    await page.get_by_role("link", name=menu_link_name).click()
+    await page.wait_for_load_state("networkidle", timeout=30000)
+    await page_logger.log(page, menu_link_name.lower().replace(" ", "_"))
+
+
+async def _fill_richiedente_motivo(page, motivo="Search", per_conto_di=None):
+    """Fill the richiedente and motivo fields if present."""
+    import os
+    if per_conto_di is None:
+        per_conto_di = os.getenv("ADE_USERNAME", "")
+
+    if per_conto_di:
+        field = page.locator("input[name='richiedente']")
+        if await field.count() > 0:
+            await field.fill(per_conto_di)
+    if motivo:
+        field = page.locator("input[name='motivoText']")
+        if await field.count() == 0:
+            field = page.locator("input[name='motivo']")
+        if await field.count() > 0:
+            await field.fill(motivo)
+
+
+async def _submit_and_extract(page, page_logger, step_name):
+    """Submit a SISTER search form and extract results table."""
+    ricerca_btn = page.locator("input[name='ricerca'][value='Ricerca']")
+    if await ricerca_btn.count() == 0:
+        ricerca_btn = page.locator("input[type='submit'][value='Ricerca']")
+    if await ricerca_btn.count() == 0:
+        ricerca_btn = page.locator("input[name='scelta'][value='Ricerca']")
+    await ricerca_btn.click()
+    await page.wait_for_load_state("networkidle", timeout=60000)
+    await page_logger.log(page, f"risultati_{step_name}")
+
+    page_text = await page.inner_text("body")
+    if "NESSUNA CORRISPONDENZA TROVATA" in page_text:
+        return None
+
+    return _extract_result_tables(await page.content())
+
+
+# ---------------------------------------------------------------------------
+# Additional SISTER search types
+# ---------------------------------------------------------------------------
+
+
+async def run_ricerca_indirizzo(
+    page, provincia, comune, indirizzo, tipo_catasto="T", sezione=None,
+):
+    """Search by address (IND) on SISTER."""
+    time0 = time.time()
+    page_logger = PageLogger("indirizzo")
+    log.info("[bold]Ricerca indirizzo[/bold] %s/%s '%s'", provincia, comune, indirizzo)
+
+    await _navigate_select_province_and_click(page, page_logger, provincia, "Indirizzo")
+
+    try:
+        await page.locator("select[name='tipoCatasto']").select_option(tipo_catasto)
+    except Exception:
+        pass
+
+    comune_value = await find_best_option_match(page, "select[name='denomComune']", comune)
+    if not comune_value:
+        raise Exception(f"Comune '{comune}' non trovato")
+    await page.locator("select[name='denomComune']").select_option(comune_value)
+
+    if sezione:
+        sel = page.locator("input[name='selSezione'][value='scegli la sezione']")
+        if await sel.count() > 0:
+            await sel.click()
+            await page.wait_for_load_state("networkidle", timeout=30000)
+            sv = await find_best_option_match(page, "select[name='sezione']", sezione)
+            if sv:
+                await page.locator("select[name='sezione']").select_option(sv)
+
+    ind_field = page.locator("input[name='indirizzo']")
+    if await ind_field.count() == 0:
+        ind_field = page.locator("input[name='via']")
+    if await ind_field.count() > 0:
+        await ind_field.fill(indirizzo)
+
+    await _fill_richiedente_motivo(page)
+
+    results = await _submit_and_extract(page, page_logger, "indirizzo")
+    elapsed = time.time() - time0
+    immobili = results or []
+    log.info("[green]Ricerca indirizzo completata[/green] in %.1fs — %d risultati", elapsed, len(immobili))
+
+    return {
+        "provincia": provincia, "comune": comune, "indirizzo": indirizzo,
+        "immobili": immobili, "total_results": len(immobili),
+        **({"error": "NESSUNA CORRISPONDENZA TROVATA"} if results is None else {}),
+    }
+
+
+async def run_ricerca_partita(
+    page, provincia, comune, partita, tipo_catasto="T", sezione=None,
+):
+    """Search by partita catastale (PART) on SISTER."""
+    time0 = time.time()
+    page_logger = PageLogger("partita")
+    log.info("[bold]Ricerca partita[/bold] %s/%s P.%s", provincia, comune, partita)
+
+    await _navigate_select_province_and_click(page, page_logger, provincia, "Partita")
+
+    try:
+        await page.locator("select[name='tipoCatasto']").select_option(tipo_catasto)
+    except Exception:
+        pass
+
+    comune_value = await find_best_option_match(page, "select[name='denomComune']", comune)
+    if not comune_value:
+        raise Exception(f"Comune '{comune}' non trovato")
+    await page.locator("select[name='denomComune']").select_option(comune_value)
+
+    partita_field = page.locator("input[name='partita']")
+    if await partita_field.count() == 0:
+        partita_field = page.locator("input[name='numPartita']")
+    await partita_field.fill(str(partita))
+
+    await _fill_richiedente_motivo(page)
+
+    results = await _submit_and_extract(page, page_logger, "partita")
+    elapsed = time.time() - time0
+    immobili = results or []
+    log.info("[green]Ricerca partita completata[/green] in %.1fs — %d risultati", elapsed, len(immobili))
+
+    return {
+        "provincia": provincia, "comune": comune, "partita": partita,
+        "immobili": immobili, "total_results": len(immobili),
+        **({"error": "NESSUNA CORRISPONDENZA TROVATA"} if results is None else {}),
+    }
+
+
+async def run_ricerca_nota(
+    page, provincia, numero_nota, anno_nota=None, tipo_catasto="T",
+):
+    """Search by annotation/note reference (NOTA) on SISTER."""
+    time0 = time.time()
+    page_logger = PageLogger("nota")
+    log.info("[bold]Ricerca nota[/bold] %s nota=%s anno=%s", provincia, numero_nota, anno_nota)
+
+    await _navigate_select_province_and_click(page, page_logger, provincia, "Nota")
+
+    try:
+        await page.locator("select[name='tipoCatasto']").select_option(tipo_catasto)
+    except Exception:
+        pass
+
+    nota_field = page.locator("input[name='numNota']")
+    if await nota_field.count() == 0:
+        nota_field = page.locator("input[name='nota']")
+    if await nota_field.count() == 0:
+        nota_field = page.locator("input[name='numero']")
+    await nota_field.fill(str(numero_nota))
+
+    if anno_nota:
+        anno_field = page.locator("input[name='annoNota']")
+        if await anno_field.count() == 0:
+            anno_field = page.locator("input[name='anno']")
+        if await anno_field.count() > 0:
+            await anno_field.fill(str(anno_nota))
+
+    await _fill_richiedente_motivo(page)
+
+    results = await _submit_and_extract(page, page_logger, "nota")
+    elapsed = time.time() - time0
+    rows = results or []
+    log.info("[green]Ricerca nota completata[/green] in %.1fs — %d risultati", elapsed, len(rows))
+
+    return {
+        "provincia": provincia, "numero_nota": numero_nota, "anno_nota": anno_nota,
+        "risultati": rows, "total_results": len(rows),
+        **({"error": "NESSUNA CORRISPONDENZA TROVATA"} if results is None else {}),
+    }
+
+
+async def run_ricerca_mappa(
+    page, provincia, comune, foglio, tipo_catasto="T", sezione=None,
+):
+    """View/extract cadastral map data (EM) on SISTER."""
+    time0 = time.time()
+    page_logger = PageLogger("mappa")
+    log.info("[bold]Ricerca mappa[/bold] %s/%s F.%s", provincia, comune, foglio)
+
+    await _navigate_select_province_and_click(page, page_logger, provincia, "Mappa")
+
+    try:
+        await page.locator("select[name='tipoCatasto']").select_option(tipo_catasto)
+    except Exception:
+        pass
+
+    comune_value = await find_best_option_match(page, "select[name='denomComune']", comune)
+    if comune_value:
+        await page.locator("select[name='denomComune']").select_option(comune_value)
+
+    await page.locator("input[name='foglio']").fill(str(foglio))
+
+    await _fill_richiedente_motivo(page)
+
+    results = await _submit_and_extract(page, page_logger, "mappa")
+    elapsed = time.time() - time0
+    rows = results or []
+    log.info("[green]Ricerca mappa completata[/green] in %.1fs — %d risultati", elapsed, len(rows))
+
+    return {
+        "provincia": provincia, "comune": comune, "foglio": foglio,
+        "risultati": rows, "total_results": len(rows),
+        **({"error": "NESSUNA CORRISPONDENZA TROVATA"} if results is None else {}),
+    }
+
+
+async def run_export_mappa(
+    page, provincia, comune, foglio, tipo_catasto="T", sezione=None,
+):
+    """Export cadastral map data (EXPM) on SISTER."""
+    time0 = time.time()
+    page_logger = PageLogger("export_mappa")
+    log.info("[bold]Export mappa[/bold] %s/%s F.%s", provincia, comune, foglio)
+
+    await _navigate_select_province_and_click(page, page_logger, provincia, "Export Mappa")
+
+    try:
+        await page.locator("select[name='tipoCatasto']").select_option(tipo_catasto)
+    except Exception:
+        pass
+
+    comune_value = await find_best_option_match(page, "select[name='denomComune']", comune)
+    if comune_value:
+        await page.locator("select[name='denomComune']").select_option(comune_value)
+
+    await page.locator("input[name='foglio']").fill(str(foglio))
+
+    await _fill_richiedente_motivo(page)
+
+    results = await _submit_and_extract(page, page_logger, "export_mappa")
+    elapsed = time.time() - time0
+    rows = results or []
+    log.info("[green]Export mappa completata[/green] in %.1fs — %d risultati", elapsed, len(rows))
+
+    return {
+        "provincia": provincia, "comune": comune, "foglio": foglio,
+        "risultati": rows, "total_results": len(rows),
+        **({"error": "NESSUNA CORRISPONDENZA TROVATA"} if results is None else {}),
+    }
+
+
+async def run_originali_impianto(
+    page, provincia, comune, tipo_catasto="T", foglio=None,
+):
+    """Retrieve original registration records (OOII) on SISTER."""
+    time0 = time.time()
+    page_logger = PageLogger("originali_impianto")
+    log.info("[bold]Originali di impianto[/bold] %s/%s", provincia, comune)
+
+    await _navigate_select_province_and_click(page, page_logger, provincia, "Originali di impianto")
+
+    try:
+        await page.locator("select[name='tipoCatasto']").select_option(tipo_catasto)
+    except Exception:
+        pass
+
+    comune_value = await find_best_option_match(page, "select[name='denomComune']", comune)
+    if comune_value:
+        await page.locator("select[name='denomComune']").select_option(comune_value)
+
+    if foglio:
+        foglio_field = page.locator("input[name='foglio']")
+        if await foglio_field.count() > 0:
+            await foglio_field.fill(str(foglio))
+
+    await _fill_richiedente_motivo(page)
+
+    results = await _submit_and_extract(page, page_logger, "originali_impianto")
+    elapsed = time.time() - time0
+    rows = results or []
+    log.info("[green]Originali impianto completati[/green] in %.1fs — %d risultati", elapsed, len(rows))
+
+    return {
+        "provincia": provincia, "comune": comune,
+        "risultati": rows, "total_results": len(rows),
+        **({"error": "NESSUNA CORRISPONDENZA TROVATA"} if results is None else {}),
+    }
+
+
+async def run_punti_fiduciali(
+    page, provincia, comune, tipo_catasto="T", foglio=None,
+):
+    """Retrieve survey reference points (FID) on SISTER."""
+    time0 = time.time()
+    page_logger = PageLogger("punti_fiduciali")
+    log.info("[bold]Punti fiduciali[/bold] %s/%s", provincia, comune)
+
+    await _navigate_select_province_and_click(page, page_logger, provincia, "Punti fiduciali")
+
+    try:
+        await page.locator("select[name='tipoCatasto']").select_option(tipo_catasto)
+    except Exception:
+        pass
+
+    comune_value = await find_best_option_match(page, "select[name='denomComune']", comune)
+    if comune_value:
+        await page.locator("select[name='denomComune']").select_option(comune_value)
+
+    if foglio:
+        foglio_field = page.locator("input[name='foglio']")
+        if await foglio_field.count() > 0:
+            await foglio_field.fill(str(foglio))
+
+    await _fill_richiedente_motivo(page)
+
+    results = await _submit_and_extract(page, page_logger, "punti_fiduciali")
+    elapsed = time.time() - time0
+    rows = results or []
+    log.info("[green]Punti fiduciali completati[/green] in %.1fs — %d risultati", elapsed, len(rows))
+
+    return {
+        "provincia": provincia, "comune": comune,
+        "risultati": rows, "total_results": len(rows),
+        **({"error": "NESSUNA CORRISPONDENZA TROVATA"} if results is None else {}),
+    }
+
+
+async def run_ispezioni(
+    page, provincia, comune, tipo_catasto="T", foglio=None, particella=None, tipo_ricerca="PF",
+):
+    """Search property inspection records (ISP) on SISTER."""
+    time0 = time.time()
+    page_logger = PageLogger("ispezioni")
+    log.info("[bold]Ispezioni[/bold] %s/%s tipo_ricerca=%s", provincia, comune, tipo_ricerca)
+
+    await _navigate_select_province_and_click(page, page_logger, provincia, "Passa a Ispezioni")
+
+    try:
+        await page.locator("select[name='tipoCatasto']").select_option(tipo_catasto)
+    except Exception:
+        pass
+
+    comune_value = await find_best_option_match(page, "select[name='denomComune']", comune)
+    if comune_value:
+        await page.locator("select[name='denomComune']").select_option(comune_value)
+
+    if foglio:
+        foglio_field = page.locator("input[name='foglio']")
+        if await foglio_field.count() > 0:
+            await foglio_field.fill(str(foglio))
+    if particella:
+        part_field = page.locator("input[name='particella1']")
+        if await part_field.count() == 0:
+            part_field = page.locator("input[name='particella']")
+        if await part_field.count() > 0:
+            await part_field.fill(str(particella))
+
+    await _fill_richiedente_motivo(page)
+
+    results = await _submit_and_extract(page, page_logger, "ispezioni")
+    elapsed = time.time() - time0
+    rows = results or []
+    log.info("[green]Ispezioni completate[/green] in %.1fs — %d risultati", elapsed, len(rows))
+
+    return {
+        "provincia": provincia, "comune": comune,
+        "risultati": rows, "total_results": len(rows),
+        **({"error": "NESSUNA CORRISPONDENZA TROVATA"} if results is None else {}),
+    }
+
+
+async def run_ispezioni_cartacee(
+    page, provincia, comune, tipo_catasto="T", foglio=None, particella=None,
+):
+    """Search paper inspection records (ISPCART) on SISTER."""
+    time0 = time.time()
+    page_logger = PageLogger("ispezioni_cartacee")
+    log.info("[bold]Ispezioni cartacee[/bold] %s/%s", provincia, comune)
+
+    await _navigate_select_province_and_click(page, page_logger, provincia, "Passa a Ispezioni Cartacee")
+
+    try:
+        await page.locator("select[name='tipoCatasto']").select_option(tipo_catasto)
+    except Exception:
+        pass
+
+    comune_value = await find_best_option_match(page, "select[name='denomComune']", comune)
+    if comune_value:
+        await page.locator("select[name='denomComune']").select_option(comune_value)
+
+    if foglio:
+        foglio_field = page.locator("input[name='foglio']")
+        if await foglio_field.count() > 0:
+            await foglio_field.fill(str(foglio))
+    if particella:
+        part_field = page.locator("input[name='particella1']")
+        if await part_field.count() == 0:
+            part_field = page.locator("input[name='particella']")
+        if await part_field.count() > 0:
+            await part_field.fill(str(particella))
+
+    await _fill_richiedente_motivo(page)
+
+    results = await _submit_and_extract(page, page_logger, "ispezioni_cartacee")
+    elapsed = time.time() - time0
+    rows = results or []
+    log.info("[green]Ispezioni cartacee completate[/green] in %.1fs — %d risultati", elapsed, len(rows))
+
+    return {
+        "provincia": provincia, "comune": comune,
+        "risultati": rows, "total_results": len(rows),
+        **({"error": "NESSUNA CORRISPONDENZA TROVATA"} if results is None else {}),
+    }
+
+
 async def extract_all_sezioni(page: Page, tipo_catasto: str = "T", max_province: int = 200) -> list:
     """
     Estrae tutte le sezioni per tutte le province e comuni d'Italia.

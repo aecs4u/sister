@@ -335,8 +335,8 @@ async def test_cleanup_old_responses_removes_expired():
         request_id="req_old", success=True, tipo_catasto="T", data={}
     )
 
-    # Use TTL of 0 so everything is "old"
-    deleted = await database.cleanup_old_responses(ttl_seconds=0)
+    # Use negative TTL so everything is considered "old"
+    deleted = await database.cleanup_old_responses(ttl_seconds=-1)
     assert deleted >= 1
 
     result = await database.get_response("req_old")

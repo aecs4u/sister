@@ -21,19 +21,26 @@ from .database import (  # noqa: F401
 )
 from .database import get_response as load_stored_response  # noqa: F401
 from .models import (  # noqa: F401
+    ElencoImmobiliInput,
     SezioniExtractionRequest,
     VisuraInput,
     VisuraIntestatiInput,
+    VisuraPersonaGiuridicaInput,
     VisuraRequest,
     VisuraResponse,
+    VisuraSoggettoInput,
 )
 from .routes import (
     extract_sezioni,
     graceful_shutdown_endpoint,
     health_check,
     ottieni_visura,
+    richiedi_elenco_immobili,
+    richiedi_generic_sister,
     richiedi_intestati_immobile,
     richiedi_visura,
+    richiedi_visura_persona_giuridica,
+    richiedi_visura_soggetto,
     visura_history,
 )
 from .services import PageLogger, VisuraService
@@ -155,6 +162,77 @@ async def _richiedi_intestati_immobile(
     _: None = Depends(require_api_key),
 ):
     return await richiedi_intestati_immobile(request, service)
+
+
+@app.post("/visura/soggetto")
+async def _richiedi_visura_soggetto(
+    request: VisuraSoggettoInput,
+    service: VisuraService = Depends(get_visura_service),
+    _: None = Depends(require_api_key),
+):
+    return await richiedi_visura_soggetto(request, service)
+
+
+@app.post("/visura/persona-giuridica")
+async def _richiedi_visura_persona_giuridica(
+    request: VisuraPersonaGiuridicaInput,
+    service: VisuraService = Depends(get_visura_service),
+    _: None = Depends(require_api_key),
+):
+    return await richiedi_visura_persona_giuridica(request, service)
+
+
+@app.post("/visura/elenco-immobili")
+async def _richiedi_elenco_immobili(
+    request: ElencoImmobiliInput,
+    service: VisuraService = Depends(get_visura_service),
+    _: None = Depends(require_api_key),
+):
+    return await richiedi_elenco_immobili(request, service)
+
+
+@app.post("/visura/{search_type}")
+async def _richiedi_generic(
+    search_type: str,
+    provincia: str,
+    service: VisuraService = Depends(get_visura_service),
+    _: None = Depends(require_api_key),
+    comune: Optional[str] = None,
+    tipo_catasto: str = "T",
+    foglio: Optional[str] = None,
+    particella: Optional[str] = None,
+    indirizzo: Optional[str] = None,
+    numero_nota: Optional[str] = None,
+    anno_nota: Optional[str] = None,
+    partita: Optional[str] = None,
+):
+    valid_types = {"indirizzo", "partita", "nota", "mappa", "export-mappa", "originali", "fiduciali", "ispezioni", "ispezioni-cartacee"}
+    normalized = search_type.replace("-", "_")
+    if normalized.replace("_", "-") not in {t.replace("_", "-") for t in valid_types}:
+        raise HTTPException(status_code=404, detail=f"Search type '{search_type}' not found")
+
+    params = {}
+    if foglio:
+        params["foglio"] = foglio
+    if particella:
+        params["particella"] = particella
+    if indirizzo:
+        params["indirizzo"] = indirizzo
+    if numero_nota:
+        params["numero_nota"] = numero_nota
+    if anno_nota:
+        params["anno_nota"] = anno_nota
+    if partita:
+        params["partita"] = partita
+
+    return await richiedi_generic_sister(
+        search_type=normalized,
+        provincia=provincia,
+        service=service,
+        comune=comune,
+        tipo_catasto=tipo_catasto,
+        params=params,
+    )
 
 
 @app.get("/health")

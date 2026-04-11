@@ -52,7 +52,12 @@ class VisuraAPIError(Exception):
 
 
 class VisuraClient:
-    """Async HTTP client for the sister service."""
+    """Async HTTP client for the sister service.
+
+    Maintains a persistent httpx.AsyncClient across requests to reuse
+    TCP connections. Use as a context manager for explicit cleanup, or
+    let the finalizer close the client.
+    """
 
     def __init__(
         self,
@@ -67,6 +72,33 @@ class VisuraClient:
         self.timeout = timeout or float(os.getenv("VISURA_API_TIMEOUT", DEFAULT_TIMEOUT))
         self.poll_interval = poll_interval or float(os.getenv("VISURA_POLL_INTERVAL", DEFAULT_POLL_INTERVAL))
         self.poll_timeout = poll_timeout or float(os.getenv("VISURA_POLL_TIMEOUT", DEFAULT_POLL_TIMEOUT))
+        self._client: httpx.AsyncClient | None = None
+
+    # -- lifecycle ------------------------------------------------------------
+
+    def _get_client(self) -> httpx.AsyncClient:
+        if self._client is None or self._client.is_closed:
+            headers: dict[str, str] = {"Content-Type": "application/json"}
+            if self.api_key:
+                headers["X-API-Key"] = self.api_key
+            self._client = httpx.AsyncClient(
+                base_url=self.base_url,
+                headers=headers,
+                timeout=self.timeout,
+            )
+        return self._client
+
+    async def close(self) -> None:
+        """Close the underlying HTTP client."""
+        if self._client and not self._client.is_closed:
+            await self._client.aclose()
+            self._client = None
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        await self.close()
 
     # -- internal helpers -----------------------------------------------------
 
@@ -84,9 +116,8 @@ class VisuraClient:
         json: dict | None = None,
         params: dict | None = None,
     ) -> dict:
-        url = f"{self.base_url}{path}"
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
-            resp = await client.request(method, url, headers=self._headers(), json=json, params=params)
+        client = self._get_client()
+        resp = await client.request(method, path, json=json, params=params)
         if resp.status_code >= 400:
             detail = resp.text
             try:
@@ -148,6 +179,77 @@ class VisuraClient:
         if sezione:
             payload["sezione"] = sezione
         return await self._request("POST", "/visura/intestati", json=payload)
+
+    async def soggetto(
+        self,
+        *,
+        codice_fiscale: str,
+        tipo_catasto: str | None = None,
+        provincia: str | None = None,
+    ) -> dict:
+        """Submit a national subject search by codice fiscale (POST /visura/soggetto)."""
+        payload: dict[str, Any] = {
+            "codice_fiscale": codice_fiscale.upper(),
+        }
+        if tipo_catasto:
+            payload["tipo_catasto"] = tipo_catasto.upper()
+        if provincia:
+            payload["provincia"] = provincia
+        return await self._request("POST", "/visura/soggetto", json=payload)
+
+    async def persona_giuridica(
+        self,
+        *,
+        identificativo: str,
+        tipo_catasto: str | None = None,
+        provincia: str | None = None,
+    ) -> dict:
+        """Submit a legal entity search by P.IVA or name (POST /visura/persona-giuridica)."""
+        payload: dict[str, Any] = {"identificativo": identificativo}
+        if tipo_catasto:
+            payload["tipo_catasto"] = tipo_catasto.upper()
+        if provincia:
+            payload["provincia"] = provincia
+        return await self._request("POST", "/visura/persona-giuridica", json=payload)
+
+    async def elenco_immobili(
+        self,
+        *,
+        provincia: str,
+        comune: str,
+        tipo_catasto: str | None = None,
+        foglio: str | None = None,
+        sezione: str | None = None,
+    ) -> dict:
+        """Submit a property listing request (POST /visura/elenco-immobili)."""
+        payload: dict[str, Any] = {"provincia": provincia, "comune": comune}
+        if tipo_catasto:
+            payload["tipo_catasto"] = tipo_catasto.upper()
+        if foglio:
+            payload["foglio"] = foglio
+        if sezione:
+            payload["sezione"] = sezione
+        return await self._request("POST", "/visura/elenco-immobili", json=payload)
+
+    async def generic_search(
+        self,
+        *,
+        search_type: str,
+        provincia: str,
+        comune: str | None = None,
+        tipo_catasto: str | None = None,
+        **params,
+    ) -> dict:
+        """Submit a generic SISTER search (POST /visura/{search_type})."""
+        query: dict[str, Any] = {"provincia": provincia}
+        if comune:
+            query["comune"] = comune
+        if tipo_catasto:
+            query["tipo_catasto"] = tipo_catasto.upper()
+        for k, v in params.items():
+            if v is not None:
+                query[k] = v
+        return await self._request("POST", f"/visura/{search_type}", params=query)
 
     async def get_result(self, request_id: str) -> dict:
         """Poll a single request result (GET /visura/{request_id})."""

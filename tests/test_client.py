@@ -8,9 +8,6 @@ import pytest
 
 from sister.client import VisuraAPIError, VisuraClient
 
-# Save the real class before any patching
-_RealAsyncClient = httpx.AsyncClient
-
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -28,19 +25,15 @@ def client():
     )
 
 
-def _mock_transport(handler):
-    """Create an httpx mock transport from a sync/async handler."""
-    return httpx.MockTransport(handler)
-
-
-def _patched_client_factory(handler):
-    """Return a factory that replaces httpx.AsyncClient with one using a mock transport."""
-
-    def factory(**kw):
-        kw.pop("transport", None)
-        return _RealAsyncClient(transport=_mock_transport(handler), **kw)
-
-    return factory
+def _inject_transport(client: VisuraClient, handler):
+    """Inject a mock transport into the client's persistent httpx.AsyncClient."""
+    transport = httpx.MockTransport(handler)
+    client._client = httpx.AsyncClient(
+        base_url=client.base_url,
+        headers=client._headers(),
+        timeout=client.timeout,
+        transport=transport,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -83,28 +76,43 @@ def test_headers_omit_api_key_when_empty():
     assert "X-API-Key" not in headers
 
 
+def test_client_reuses_session():
+    c = VisuraClient(base_url="http://x")
+    c1 = c._get_client()
+    c2 = c._get_client()
+    assert c1 is c2
+
+
+@pytest.mark.asyncio
+async def test_client_context_manager():
+    async with VisuraClient(base_url="http://x") as c:
+        inner = c._get_client()
+        assert not inner.is_closed
+    assert inner.is_closed
+
+
 # ---------------------------------------------------------------------------
 # _request (low-level, uses mock transport)
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_request_success(client, monkeypatch):
+async def test_request_success(client):
     async def handler(request: httpx.Request):
         return httpx.Response(200, json={"status": "ok"})
 
-    monkeypatch.setattr(httpx, "AsyncClient", _patched_client_factory(handler))
+    _inject_transport(client, handler)
 
     result = await client._request("GET", "/test")
     assert result == {"status": "ok"}
 
 
 @pytest.mark.asyncio
-async def test_request_raises_on_4xx(client, monkeypatch):
+async def test_request_raises_on_4xx(client):
     async def handler(request: httpx.Request):
         return httpx.Response(404, json={"detail": "Not found"})
 
-    monkeypatch.setattr(httpx, "AsyncClient", _patched_client_factory(handler))
+    _inject_transport(client, handler)
 
     with pytest.raises(VisuraAPIError) as exc_info:
         await client._request("GET", "/missing")
@@ -114,11 +122,11 @@ async def test_request_raises_on_4xx(client, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_request_raises_on_5xx(client, monkeypatch):
+async def test_request_raises_on_5xx(client):
     async def handler(request: httpx.Request):
         return httpx.Response(500, text="Internal error")
 
-    monkeypatch.setattr(httpx, "AsyncClient", _patched_client_factory(handler))
+    _inject_transport(client, handler)
 
     with pytest.raises(VisuraAPIError) as exc_info:
         await client._request("GET", "/fail")
@@ -127,11 +135,11 @@ async def test_request_raises_on_5xx(client, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_request_extracts_detail_from_plain_text(client, monkeypatch):
+async def test_request_extracts_detail_from_plain_text(client):
     async def handler(request: httpx.Request):
         return httpx.Response(400, text="Bad request body")
 
-    monkeypatch.setattr(httpx, "AsyncClient", _patched_client_factory(handler))
+    _inject_transport(client, handler)
 
     with pytest.raises(VisuraAPIError) as exc_info:
         await client._request("POST", "/bad")
@@ -145,7 +153,7 @@ async def test_request_extracts_detail_from_plain_text(client, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_search_sends_correct_payload(client, monkeypatch):
+async def test_search_sends_correct_payload(client):
     captured = {}
 
     async def handler(request: httpx.Request):
@@ -154,7 +162,7 @@ async def test_search_sends_correct_payload(client, monkeypatch):
         captured["body"] = json.loads(request.content)
         return httpx.Response(200, json={"request_ids": ["req_T_abc"], "status": "queued"})
 
-    monkeypatch.setattr(httpx, "AsyncClient", _patched_client_factory(handler))
+    _inject_transport(client, handler)
 
     result = await client.search(
         provincia="Trieste", comune="TRIESTE", foglio="9", particella="166",
@@ -170,14 +178,14 @@ async def test_search_sends_correct_payload(client, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_search_omits_optional_fields(client, monkeypatch):
+async def test_search_omits_optional_fields(client):
     captured = {}
 
     async def handler(request: httpx.Request):
         captured["body"] = json.loads(request.content)
         return httpx.Response(200, json={"request_ids": [], "status": "queued"})
 
-    monkeypatch.setattr(httpx, "AsyncClient", _patched_client_factory(handler))
+    _inject_transport(client, handler)
 
     await client.search(provincia="Trieste", comune="TRIESTE", foglio="9", particella="166")
 
@@ -192,14 +200,14 @@ async def test_search_omits_optional_fields(client, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_intestati_sends_correct_payload(client, monkeypatch):
+async def test_intestati_sends_correct_payload(client):
     captured = {}
 
     async def handler(request: httpx.Request):
         captured["body"] = json.loads(request.content)
         return httpx.Response(200, json={"request_id": "intestati_F_xyz", "status": "queued"})
 
-    monkeypatch.setattr(httpx, "AsyncClient", _patched_client_factory(handler))
+    _inject_transport(client, handler)
 
     result = await client.intestati(
         provincia="Trieste", comune="TRIESTE", foglio="9", particella="166",
@@ -217,14 +225,14 @@ async def test_intestati_sends_correct_payload(client, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_get_result_calls_correct_url(client, monkeypatch):
+async def test_get_result_calls_correct_url(client):
     captured = {}
 
     async def handler(request: httpx.Request):
         captured["url"] = str(request.url)
         return httpx.Response(200, json={"request_id": "abc", "status": "completed"})
 
-    monkeypatch.setattr(httpx, "AsyncClient", _patched_client_factory(handler))
+    _inject_transport(client, handler)
 
     result = await client.get_result("abc")
     assert captured["url"].endswith("/visura/abc")
@@ -232,7 +240,7 @@ async def test_get_result_calls_correct_url(client, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# wait_for_result (mock at _request level for simplicity)
+# wait_for_result (mock at method level)
 # ---------------------------------------------------------------------------
 
 
@@ -293,14 +301,14 @@ async def test_wait_for_result_raises_timeout(client):
 
 
 @pytest.mark.asyncio
-async def test_history_sends_query_params(client, monkeypatch):
+async def test_history_sends_query_params(client):
     captured = {}
 
     async def handler(request: httpx.Request):
         captured["params"] = dict(request.url.params)
         return httpx.Response(200, json={"results": [], "count": 0})
 
-    monkeypatch.setattr(httpx, "AsyncClient", _patched_client_factory(handler))
+    _inject_transport(client, handler)
 
     await client.history(provincia="Roma", tipo_catasto="t", limit=10, offset=5)
 
@@ -316,14 +324,14 @@ async def test_history_sends_query_params(client, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_health_calls_correct_endpoint(client, monkeypatch):
+async def test_health_calls_correct_endpoint(client):
     captured = {}
 
     async def handler(request: httpx.Request):
         captured["url"] = str(request.url)
         return httpx.Response(200, json={"status": "healthy"})
 
-    monkeypatch.setattr(httpx, "AsyncClient", _patched_client_factory(handler))
+    _inject_transport(client, handler)
 
     result = await client.health()
     assert captured["url"].endswith("/health")

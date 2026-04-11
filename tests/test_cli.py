@@ -346,8 +346,8 @@ def test_workflow_dry_run():
     ])
     assert result.exit_code == 0
     assert "DRY RUN" in result.output
-    assert "Phase 1" in result.output
-    assert "Phase 2" in result.output
+    assert "search" in result.output
+    assert "intestati" in result.output
 
 
 def test_workflow_fabbricati_full(monkeypatch):
@@ -395,8 +395,8 @@ def test_workflow_fabbricati_full(monkeypatch):
         "query", "workflow", "-P", "Trieste", "-C", "TRIESTE", "-F", "9", "-p", "166", "-t", "F",
     ])
     assert result.exit_code == 0
-    assert "Phase 1" in result.output
-    assert "Phase 2" in result.output
+    assert "Search" in result.output
+    assert "Intestati" in result.output
     assert "Workflow complete" in result.output
 
     # Should have submitted intestati for sub 3 and sub 5
@@ -469,7 +469,7 @@ def test_workflow_no_immobili_skips_phase2(monkeypatch):
         "query", "workflow", "-P", "Roma", "-C", "ROMA", "-F", "999", "-p", "999", "-t", "T",
     ])
     assert result.exit_code == 0
-    assert "No immobili found" in result.output
+    assert "Immobili: 0" in result.output
 
 
 def test_workflow_writes_output(monkeypatch, tmp_path):

@@ -14,12 +14,19 @@ from fastapi.responses import JSONResponse
 from .database import count_responses, find_responses
 from .models import (
     AuthenticationError,
+    ElencoImmobiliInput,
+    ElencoImmobiliRequest,
+    GenericSisterRequest,
     QueueFullError,
     SezioniExtractionRequest,
     VisuraInput,
     VisuraIntestatiInput,
     VisuraIntestatiRequest,
+    VisuraPersonaGiuridicaInput,
+    VisuraPersonaGiuridicaRequest,
     VisuraRequest,
+    VisuraSoggettoInput,
+    VisuraSoggettoRequest,
 )
 from .services import VisuraService
 
@@ -242,4 +249,159 @@ async def extract_sezioni(request: SezioniExtractionRequest, service: VisuraServ
         raise HTTPException(status_code=503, detail=str(e))
     except Exception as e:
         logger.error("Errore durante estrazione sezioni: %s", e)
+        raise HTTPException(status_code=500, detail="Errore interno del server")
+
+
+async def richiedi_visura_soggetto(request: VisuraSoggettoInput, service: VisuraService):
+    """Ricerca per soggetto (codice fiscale) — ambito nazionale o provinciale."""
+    try:
+        tipo_catasto = request.tipo_catasto or "E"
+        request_id = f"soggetto_{tipo_catasto}_{uuid4().hex}"
+
+        soggetto_request = VisuraSoggettoRequest(
+            request_id=request_id,
+            codice_fiscale=request.codice_fiscale,
+            tipo_catasto=tipo_catasto,
+            provincia=request.provincia,
+        )
+
+        await service.add_soggetto_request(soggetto_request)
+
+        return JSONResponse(
+            {
+                "request_id": request_id,
+                "codice_fiscale": request.codice_fiscale,
+                "tipo_catasto": tipo_catasto,
+                "provincia": request.provincia or "NAZIONALE",
+                "status": "queued",
+                "message": f"Ricerca soggetto {request.codice_fiscale} aggiunta alla coda",
+                "queue_position": service.request_queue.qsize(),
+            }
+        )
+
+    except HTTPException:
+        raise
+    except QueueFullError as e:
+        raise HTTPException(status_code=429, detail=str(e))
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    except Exception as e:
+        logger.error("Errore nella richiesta soggetto: %s", e)
+        raise HTTPException(status_code=500, detail="Errore interno del server")
+
+
+async def richiedi_visura_persona_giuridica(request: VisuraPersonaGiuridicaInput, service: VisuraService):
+    """Ricerca per persona giuridica (P.IVA o denominazione)."""
+    try:
+        tipo_catasto = request.tipo_catasto or "E"
+        request_id = f"pnf_{tipo_catasto}_{uuid4().hex}"
+
+        pnf_request = VisuraPersonaGiuridicaRequest(
+            request_id=request_id,
+            identificativo=request.identificativo,
+            tipo_catasto=tipo_catasto,
+            provincia=request.provincia,
+        )
+
+        await service.add_persona_giuridica_request(pnf_request)
+
+        return JSONResponse({
+            "request_id": request_id,
+            "identificativo": request.identificativo,
+            "tipo_catasto": tipo_catasto,
+            "provincia": request.provincia or "NAZIONALE",
+            "status": "queued",
+            "message": f"Ricerca persona giuridica {request.identificativo} aggiunta alla coda",
+            "queue_position": service.request_queue.qsize(),
+        })
+
+    except HTTPException:
+        raise
+    except QueueFullError as e:
+        raise HTTPException(status_code=429, detail=str(e))
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    except Exception as e:
+        logger.error("Errore nella richiesta PNF: %s", e)
+        raise HTTPException(status_code=500, detail="Errore interno del server")
+
+
+async def richiedi_elenco_immobili(request: ElencoImmobiliInput, service: VisuraService):
+    """Elenco immobili per un comune."""
+    try:
+        tipo_catasto = request.tipo_catasto or "T"
+        request_id = f"eimm_{tipo_catasto}_{uuid4().hex}"
+
+        eimm_request = ElencoImmobiliRequest(
+            request_id=request_id,
+            provincia=request.provincia,
+            comune=request.comune,
+            tipo_catasto=tipo_catasto,
+            foglio=request.foglio,
+            sezione=request.sezione,
+        )
+
+        await service.add_elenco_immobili_request(eimm_request)
+
+        return JSONResponse({
+            "request_id": request_id,
+            "provincia": request.provincia,
+            "comune": request.comune,
+            "tipo_catasto": tipo_catasto,
+            "status": "queued",
+            "message": f"Elenco immobili per {request.comune} aggiunto alla coda",
+            "queue_position": service.request_queue.qsize(),
+        })
+
+    except HTTPException:
+        raise
+    except QueueFullError as e:
+        raise HTTPException(status_code=429, detail=str(e))
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    except Exception as e:
+        logger.error("Errore nella richiesta elenco immobili: %s", e)
+        raise HTTPException(status_code=500, detail="Errore interno del server")
+
+
+async def richiedi_generic_sister(
+    search_type: str,
+    provincia: str,
+    service: VisuraService,
+    comune: Optional[str] = None,
+    tipo_catasto: str = "T",
+    params: Optional[dict] = None,
+):
+    """Generic handler for SISTER search types (IND, PART, NOTA, EM, EXPM, OOII, FID, ISP, ISPCART)."""
+    try:
+        request_id = f"{search_type}_{tipo_catasto}_{uuid4().hex}"
+
+        request = GenericSisterRequest(
+            request_id=request_id,
+            search_type=search_type,
+            provincia=provincia,
+            comune=comune,
+            tipo_catasto=tipo_catasto,
+            params=params or {},
+        )
+
+        await service.add_generic_request(request)
+
+        return JSONResponse({
+            "request_id": request_id,
+            "search_type": search_type,
+            "provincia": provincia,
+            "tipo_catasto": tipo_catasto,
+            "status": "queued",
+            "queue_position": service.request_queue.qsize(),
+        })
+
+    except HTTPException:
+        raise
+    except QueueFullError as e:
+        raise HTTPException(status_code=429, detail=str(e))
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    except Exception as e:
+        logger.error("Errore nella richiesta %s: %s", search_type, e)
         raise HTTPException(status_code=500, detail="Errore interno del server")

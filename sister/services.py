@@ -23,12 +23,44 @@ from .database import (
 from .models import (
     AuthenticationError,
     BrowserError,
+    ElencoImmobiliRequest,
+    GenericSisterRequest,
     QueueFullError,
     VisuraIntestatiRequest,
+    VisuraPersonaGiuridicaRequest,
     VisuraRequest,
     VisuraResponse,
+    VisuraSoggettoRequest,
 )
-from .utils import extract_all_sezioni, run_visura, run_visura_immobile
+from .utils import (
+    extract_all_sezioni,
+    run_elenco_immobili,
+    run_export_mappa,
+    run_ispezioni,
+    run_ispezioni_cartacee,
+    run_originali_impianto,
+    run_punti_fiduciali,
+    run_ricerca_indirizzo,
+    run_ricerca_mappa,
+    run_ricerca_nota,
+    run_ricerca_partita,
+    run_visura,
+    run_visura_immobile,
+    run_visura_persona_giuridica,
+    run_visura_soggetto,
+)
+
+_GENERIC_DISPATCHERS = {
+    "indirizzo": run_ricerca_indirizzo,
+    "partita": run_ricerca_partita,
+    "nota": run_ricerca_nota,
+    "mappa": run_ricerca_mappa,
+    "export_mappa": run_export_mappa,
+    "originali": run_originali_impianto,
+    "fiduciali": run_punti_fiduciali,
+    "ispezioni": run_ispezioni,
+    "ispezioni_cart": run_ispezioni_cartacee,
+}
 
 logger = logging.getLogger("sister")
 
@@ -184,6 +216,153 @@ class BrowserManager:
                 error=str(e),
             )
 
+    async def esegui_visura_soggetto(self, request: VisuraSoggettoRequest) -> VisuraResponse:
+        """Esegue una ricerca nazionale per soggetto (codice fiscale)."""
+        try:
+            async with self._page_lock:
+                page = await self._get_authenticated_page()
+                try:
+                    result = await run_visura_soggetto(
+                        page,
+                        codice_fiscale=request.codice_fiscale,
+                        tipo_catasto=request.tipo_catasto,
+                        provincia=request.provincia,
+                        motivo="Search",
+                    )
+                except Exception as e:
+                    raise BrowserError(f"Failed to execute soggetto search: {e}") from e
+
+            logger.info("Ricerca soggetto completata per request %s", request.request_id)
+            return VisuraResponse(
+                request_id=request.request_id,
+                success=True,
+                tipo_catasto=request.tipo_catasto,
+                data=result,
+            )
+
+        except (AuthenticationError, BrowserError) as e:
+            logger.error("Errore in ricerca soggetto %s: %s", request.request_id, e)
+            return VisuraResponse(
+                request_id=request.request_id,
+                success=False,
+                tipo_catasto=request.tipo_catasto,
+                error=str(e),
+            )
+        except Exception as e:
+            logger.error("Errore inatteso in ricerca soggetto %s: %s", request.request_id, e)
+            return VisuraResponse(
+                request_id=request.request_id,
+                success=False,
+                tipo_catasto=request.tipo_catasto,
+                error=f"Errore inatteso: {str(e)}",
+            )
+
+    async def esegui_visura_persona_giuridica(self, request: VisuraPersonaGiuridicaRequest) -> VisuraResponse:
+        """Esegue una ricerca per persona giuridica (P.IVA o denominazione)."""
+        try:
+            async with self._page_lock:
+                page = await self._get_authenticated_page()
+                try:
+                    result = await run_visura_persona_giuridica(
+                        page,
+                        identificativo=request.identificativo,
+                        tipo_catasto=request.tipo_catasto,
+                        provincia=request.provincia,
+                        motivo="Search",
+                    )
+                except Exception as e:
+                    raise BrowserError(f"Failed to execute PNF search: {e}") from e
+
+            return VisuraResponse(
+                request_id=request.request_id, success=True,
+                tipo_catasto=request.tipo_catasto, data=result,
+            )
+        except (AuthenticationError, BrowserError) as e:
+            logger.error("Errore in ricerca PNF %s: %s", request.request_id, e)
+            return VisuraResponse(
+                request_id=request.request_id, success=False,
+                tipo_catasto=request.tipo_catasto, error=str(e),
+            )
+        except Exception as e:
+            logger.error("Errore inatteso in ricerca PNF %s: %s", request.request_id, e)
+            return VisuraResponse(
+                request_id=request.request_id, success=False,
+                tipo_catasto=request.tipo_catasto, error=f"Errore inatteso: {str(e)}",
+            )
+
+    async def esegui_elenco_immobili(self, request: ElencoImmobiliRequest) -> VisuraResponse:
+        """Esegue un elenco immobili per un comune."""
+        try:
+            async with self._page_lock:
+                page = await self._get_authenticated_page()
+                try:
+                    result = await run_elenco_immobili(
+                        page,
+                        provincia=request.provincia,
+                        comune=request.comune,
+                        tipo_catasto=request.tipo_catasto,
+                        foglio=request.foglio,
+                        sezione=request.sezione,
+                        motivo="Search",
+                    )
+                except Exception as e:
+                    raise BrowserError(f"Failed to execute EIMM: {e}") from e
+
+            return VisuraResponse(
+                request_id=request.request_id, success=True,
+                tipo_catasto=request.tipo_catasto, data=result,
+            )
+        except (AuthenticationError, BrowserError) as e:
+            logger.error("Errore in elenco immobili %s: %s", request.request_id, e)
+            return VisuraResponse(
+                request_id=request.request_id, success=False,
+                tipo_catasto=request.tipo_catasto, error=str(e),
+            )
+        except Exception as e:
+            logger.error("Errore inatteso in elenco immobili %s: %s", request.request_id, e)
+            return VisuraResponse(
+                request_id=request.request_id, success=False,
+                tipo_catasto=request.tipo_catasto, error=f"Errore inatteso: {str(e)}",
+            )
+
+    async def esegui_generic(self, request: GenericSisterRequest) -> VisuraResponse:
+        """Execute a generic SISTER search (IND, PART, NOTA, EM, EXPM, OOII, FID, ISP, ISPCART)."""
+        dispatcher = _GENERIC_DISPATCHERS.get(request.search_type)
+        if not dispatcher:
+            return VisuraResponse(
+                request_id=request.request_id, success=False,
+                tipo_catasto=request.tipo_catasto,
+                error=f"Unknown search type: {request.search_type}",
+            )
+        try:
+            async with self._page_lock:
+                page = await self._get_authenticated_page()
+                kwargs = {
+                    "page": page,
+                    "provincia": request.provincia,
+                    **({"comune": request.comune} if request.comune else {}),
+                    **({"tipo_catasto": request.tipo_catasto} if request.tipo_catasto else {}),
+                    **request.params,
+                }
+                result = await dispatcher(**kwargs)
+
+            return VisuraResponse(
+                request_id=request.request_id, success=True,
+                tipo_catasto=request.tipo_catasto, data=result,
+            )
+        except (AuthenticationError, BrowserError) as e:
+            logger.error("Errore in %s %s: %s", request.search_type, request.request_id, e)
+            return VisuraResponse(
+                request_id=request.request_id, success=False,
+                tipo_catasto=request.tipo_catasto, error=str(e),
+            )
+        except Exception as e:
+            logger.error("Errore inatteso in %s %s: %s", request.search_type, request.request_id, e)
+            return VisuraResponse(
+                request_id=request.request_id, success=False,
+                tipo_catasto=request.tipo_catasto, error=f"Errore inatteso: {str(e)}",
+            )
+
     async def esegui_extract_sezioni(self, tipo_catasto: str, max_province: int) -> list:
         """Esegue l'estrazione sezioni in modo esclusivo sulla sessione browser condivisa."""
         async with self._page_lock:
@@ -268,6 +447,30 @@ class VisuraService:
                         logger.info(f"Processata richiesta intestati {request.request_id}")
                         should_sleep = True
 
+                    elif isinstance(request, VisuraSoggettoRequest):
+                        response = await self.browser_manager.esegui_visura_soggetto(request)
+                        await self._store_response(response)
+                        logger.info(f"Processata richiesta soggetto {request.request_id}")
+                        should_sleep = True
+
+                    elif isinstance(request, VisuraPersonaGiuridicaRequest):
+                        response = await self.browser_manager.esegui_visura_persona_giuridica(request)
+                        await self._store_response(response)
+                        logger.info(f"Processata richiesta PNF {request.request_id}")
+                        should_sleep = True
+
+                    elif isinstance(request, ElencoImmobiliRequest):
+                        response = await self.browser_manager.esegui_elenco_immobili(request)
+                        await self._store_response(response)
+                        logger.info(f"Processata richiesta elenco immobili {request.request_id}")
+                        should_sleep = True
+
+                    elif isinstance(request, GenericSisterRequest):
+                        response = await self.browser_manager.esegui_generic(request)
+                        await self._store_response(response)
+                        logger.info(f"Processata richiesta {request.search_type} {request.request_id}")
+                        should_sleep = True
+
                     else:
                         logger.error(f"Tipo di richiesta sconosciuto: {type(request)}")
 
@@ -275,7 +478,7 @@ class VisuraService:
                     logger.error(f"Errore nel processare richieste: {e}")
                     await asyncio.sleep(5)
                 finally:
-                    if isinstance(request, (VisuraRequest, VisuraIntestatiRequest)):
+                    if isinstance(request, (VisuraRequest, VisuraIntestatiRequest, VisuraSoggettoRequest, VisuraPersonaGiuridicaRequest, ElencoImmobiliRequest, GenericSisterRequest)):
                         self.pending_request_ids.discard(request.request_id)
                     self.request_queue.task_done()
 
@@ -393,18 +596,20 @@ class VisuraService:
             timestamp=timestamp,
         )
 
-    async def _persist_single_request(self, request_type: str, request: VisuraRequest | VisuraIntestatiRequest):
+    async def _persist_single_request(
+        self, request_type: str, request: VisuraRequest | VisuraIntestatiRequest | VisuraSoggettoRequest
+    ):
         try:
             await save_request(
                 request_id=request.request_id,
                 request_type=request_type,
                 tipo_catasto=request.tipo_catasto,
-                provincia=request.provincia,
-                comune=request.comune,
-                foglio=request.foglio,
-                particella=request.particella,
-                sezione=request.sezione,
-                subalterno=request.subalterno,
+                provincia=getattr(request, "provincia", None) or "",
+                comune=getattr(request, "comune", None) or "",
+                foglio=getattr(request, "foglio", None) or "",
+                particella=getattr(request, "particella", None) or getattr(request, "codice_fiscale", ""),
+                sezione=getattr(request, "sezione", None),
+                subalterno=getattr(request, "subalterno", None),
             )
         except Exception as e:
             logger.error(f"Errore persistenza richiesta {request.request_id}: {e}")
@@ -474,6 +679,54 @@ class VisuraService:
             self._enqueue_request_nowait(request)
         logger.info(
             f"Richiesta intestati {request.request_id} aggiunta alla coda (posizione: {self.request_queue.qsize()})"
+        )
+        return request.request_id
+
+    async def add_soggetto_request(self, request: VisuraSoggettoRequest) -> str:
+        """Aggiunge una richiesta soggetto alla coda"""
+        async with self._queue_lock:
+            self._ensure_processing()
+            self._ensure_capacity(required_slots=1)
+            await self._persist_single_request("soggetto", request)
+            self._enqueue_request_nowait(request)
+        logger.info(
+            f"Richiesta soggetto {request.request_id} aggiunta alla coda (posizione: {self.request_queue.qsize()})"
+        )
+        return request.request_id
+
+    async def add_persona_giuridica_request(self, request: VisuraPersonaGiuridicaRequest) -> str:
+        """Aggiunge una richiesta persona giuridica alla coda"""
+        async with self._queue_lock:
+            self._ensure_processing()
+            self._ensure_capacity(required_slots=1)
+            await self._persist_single_request("persona_giuridica", request)
+            self._enqueue_request_nowait(request)
+        logger.info(
+            f"Richiesta PNF {request.request_id} aggiunta alla coda (posizione: {self.request_queue.qsize()})"
+        )
+        return request.request_id
+
+    async def add_generic_request(self, request: GenericSisterRequest) -> str:
+        """Aggiunge una richiesta generica alla coda"""
+        async with self._queue_lock:
+            self._ensure_processing()
+            self._ensure_capacity(required_slots=1)
+            await self._persist_single_request(request.search_type, request)
+            self._enqueue_request_nowait(request)
+        logger.info(
+            f"Richiesta {request.search_type} {request.request_id} aggiunta alla coda (posizione: {self.request_queue.qsize()})"
+        )
+        return request.request_id
+
+    async def add_elenco_immobili_request(self, request: ElencoImmobiliRequest) -> str:
+        """Aggiunge una richiesta elenco immobili alla coda"""
+        async with self._queue_lock:
+            self._ensure_processing()
+            self._ensure_capacity(required_slots=1)
+            await self._persist_single_request("elenco_immobili", request)
+            self._enqueue_request_nowait(request)
+        logger.info(
+            f"Richiesta elenco immobili {request.request_id} aggiunta alla coda (posizione: {self.request_queue.qsize()})"
         )
         return request.request_id
 

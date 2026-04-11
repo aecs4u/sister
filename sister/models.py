@@ -155,6 +155,135 @@ class VisuraIntestatiInput(BaseModel):
         return self
 
 
+class VisuraSoggettoInput(BaseModel):
+    """Richiesta per una ricerca per soggetto (codice fiscale) su SISTER"""
+
+    codice_fiscale: str = Field(..., min_length=11, max_length=16, description="Codice fiscale del soggetto")
+    tipo_catasto: Optional[str] = Field(
+        None, pattern=r"^[TFE]$", description="'T' = Terreni, 'F' = Fabbricati, 'E' = Entrambi (default)"
+    )
+    provincia: Optional[str] = Field(None, description="Provincia (ometti per ricerca nazionale)")
+
+    @field_validator("tipo_catasto", mode="before")
+    @classmethod
+    def validate_tipo_catasto(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        normalized = value.strip().upper()
+        if normalized not in {"T", "F", "E"}:
+            raise ValueError(f"tipo_catasto deve essere 'T', 'F' o 'E', ricevuto {value}")
+        return normalized
+
+    @field_validator("codice_fiscale", mode="before")
+    @classmethod
+    def normalize_codice_fiscale(cls, value: str) -> str:
+        return value.strip().upper()
+
+
+@dataclass
+class VisuraSoggettoRequest:
+    """Internal request for soggetto search"""
+
+    request_id: str
+    codice_fiscale: str
+    tipo_catasto: str = "E"
+    provincia: Optional[str] = None
+    timestamp: datetime = None
+
+    def __post_init__(self):
+        if self.timestamp is None:
+            self.timestamp = datetime.now()
+
+
+class VisuraPersonaGiuridicaInput(BaseModel):
+    """Richiesta per ricerca persona giuridica (P.IVA o denominazione)"""
+
+    identificativo: str = Field(..., min_length=1, description="P.IVA (11 cifre) o denominazione azienda")
+    tipo_catasto: Optional[str] = Field(
+        None, pattern=r"^[TFE]$", description="'T' = Terreni, 'F' = Fabbricati, 'E' = Entrambi"
+    )
+    provincia: Optional[str] = Field(None, description="Provincia (ometti per ricerca nazionale)")
+
+    @field_validator("tipo_catasto", mode="before")
+    @classmethod
+    def validate_tipo_catasto(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        normalized = value.strip().upper()
+        if normalized not in {"T", "F", "E"}:
+            raise ValueError(f"tipo_catasto deve essere 'T', 'F' o 'E', ricevuto {value}")
+        return normalized
+
+
+@dataclass
+class VisuraPersonaGiuridicaRequest:
+    request_id: str
+    identificativo: str
+    tipo_catasto: str = "E"
+    provincia: Optional[str] = None
+    timestamp: datetime = None
+
+    def __post_init__(self):
+        if self.timestamp is None:
+            self.timestamp = datetime.now()
+
+
+class ElencoImmobiliInput(BaseModel):
+    """Richiesta per elenco immobili di un comune"""
+
+    provincia: str = Field(..., min_length=1, description="Nome della provincia")
+    comune: str = Field(..., min_length=1, description="Nome del comune")
+    tipo_catasto: Optional[str] = Field(
+        None, pattern=r"^[TF]$", description="'T' = Terreni, 'F' = Fabbricati"
+    )
+    foglio: Optional[str] = Field(None, description="Foglio (opzionale, filtra per foglio)")
+    sezione: Optional[str] = Field(None, description="Sezione (opzionale)")
+
+    @field_validator("tipo_catasto", mode="before")
+    @classmethod
+    def validate_tipo_catasto(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        normalized = value.strip().upper()
+        if normalized not in {"T", "F"}:
+            raise ValueError(f"tipo_catasto deve essere 'T' o 'F', ricevuto {value}")
+        return normalized
+
+
+@dataclass
+class ElencoImmobiliRequest:
+    request_id: str
+    provincia: str
+    comune: str
+    tipo_catasto: str = "T"
+    foglio: Optional[str] = None
+    sezione: Optional[str] = None
+    timestamp: datetime = None
+
+    def __post_init__(self):
+        if self.timestamp is None:
+            self.timestamp = datetime.now()
+
+
+@dataclass
+class GenericSisterRequest:
+    """Generic request for SISTER search types (IND, PART, NOTA, EM, EXPM, OOII, FID, ISP, ISPCART)."""
+
+    request_id: str
+    search_type: str  # indirizzo, partita, nota, mappa, export_mappa, originali, fiduciali, ispezioni, ispezioni_cart
+    provincia: str
+    comune: Optional[str] = None
+    tipo_catasto: str = "T"
+    params: Optional[Dict] = None  # type-specific params (foglio, indirizzo, numero_nota, etc.)
+    timestamp: datetime = None
+
+    def __post_init__(self):
+        if self.timestamp is None:
+            self.timestamp = datetime.now()
+        if self.params is None:
+            self.params = {}
+
+
 class SezioniExtractionRequest(BaseModel):
     """Richiesta per l'estrazione delle sezioni territoriali"""
 
