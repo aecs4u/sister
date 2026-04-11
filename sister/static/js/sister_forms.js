@@ -243,6 +243,11 @@
     const lines = text.trim().split('\n').filter(l => l.trim() && !l.trim().startsWith('#'));
     const rowCount = document.getElementById('csv-row-count-' + groupId);
     if (rowCount) rowCount.textContent = (lines.length - 1) + ' data row(s)';
+
+    // Trigger batch wizard if data was loaded into the batch textarea
+    if (groupId === 'batch' && window.batchWizard) {
+      batchWizard.onDataLoaded();
+    }
   }
 
   window.showCSVTextarea = function(groupId) {
