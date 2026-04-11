@@ -60,6 +60,13 @@
                             <option value="{{ value }}" {% if param.example == value %}selected{% endif %}>{{ label }}</option>
                             {% endfor %}
                         </select>
+                        {% elif param.input_type == 'textarea' %}
+                        <textarea class="form-control font-monospace"
+                                  id="param-{{ form_group.id }}-{{ param.name }}"
+                                  name="{{ param.name }}"
+                                  placeholder="{{ param.placeholder }}"
+                                  rows="6"
+                                  {% if param.required %}required{% endif %}>{{ param.example or '' }}</textarea>
                         {% else %}
                         <input type="{{ param.input_type }}" class="form-control"
                                id="param-{{ form_group.id }}-{{ param.name }}"

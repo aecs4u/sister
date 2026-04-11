@@ -49,7 +49,16 @@ async def favicon():
 @router.get("/auth/login", response_class=HTMLResponse, include_in_schema=False)
 async def auth_login_redirect(request: Request, next: str = "/web/"):
     """Placeholder auth route — redirects to dashboard (auth not yet configured)."""
+    # Remap opendata-style paths to sister web paths
+    if next == "/dashboard" or next.startswith("/dashboard/"):
+        next = "/web/"
     return RedirectResponse(url=next)
+
+
+@router.get("/dashboard", include_in_schema=False)
+async def dashboard_redirect():
+    """Redirect /dashboard to /web/."""
+    return RedirectResponse(url="/web/")
 
 
 @router.get("/", response_class=HTMLResponse)
@@ -143,6 +152,57 @@ async def web_privacy(request: Request):
 # ---------------------------------------------------------------------------
 
 
+@router.post("/web/api/batch", response_class=JSONResponse)
+async def web_api_batch(request: Request):
+    """Parse CSV text and submit each row as a separate API request."""
+    import csv
+    import io
+    import httpx
+
+    body = await request.json()
+    csv_data = body.get("csv_data", "")
+    command = body.get("command", "search")
+
+    # Parse CSV
+    lines = [line for line in csv_data.strip().split("\n") if line.strip() and not line.strip().startswith("#")]
+    if len(lines) < 2:
+        return JSONResponse({"error": "CSV must have a header row and at least one data row"}, status_code=400)
+
+    reader = csv.DictReader(io.StringIO("\n".join(lines)))
+    rows = [{k.strip().lower(): v.strip() for k, v in row.items() if v and v.strip()} for row in reader]
+
+    if not rows:
+        return JSONResponse({"error": "No valid data rows found"}, status_code=400)
+
+    # Map command to API endpoint
+    endpoint_map = {
+        "search": "/visura",
+        "intestati": "/visura/intestati",
+        "soggetto": "/visura/soggetto",
+        "persona-giuridica": "/visura/persona-giuridica",
+        "elenco-immobili": "/visura/elenco-immobili",
+        "indirizzo": "/visura/indirizzo",
+        "partita": "/visura/partita",
+    }
+    api_path = endpoint_map.get(command, f"/visura/{command}")
+    base = f"http://localhost:{request.url.port or 8025}"
+
+    results = []
+    async with httpx.AsyncClient(timeout=120) as client:
+        for i, row in enumerate(rows):
+            try:
+                resp = await client.post(f"{base}{api_path}", json=row)
+                results.append({"row": i + 1, "status": "submitted", "data": resp.json()})
+            except Exception as e:
+                results.append({"row": i + 1, "status": "error", "error": str(e)})
+
+    return JSONResponse({
+        "command": command,
+        "total_rows": len(rows),
+        "results": results,
+    })
+
+
 @router.post("/web/api/{endpoint:path}", response_class=JSONResponse)
 async def web_api_proxy(endpoint: str, request: Request):
     """Proxy form submissions to the sister API."""
@@ -150,6 +210,12 @@ async def web_api_proxy(endpoint: str, request: Request):
 
     body = await request.json()
     base = f"http://localhost:{request.url.port or 8025}"
+
+    # For workflow, pass params as query string (not JSON body)
+    if endpoint == "workflow":
+        async with httpx.AsyncClient(timeout=120) as client:
+            resp = await client.post(f"{base}/visura", json=body, params={"force": "false"})
+        return JSONResponse(content=resp.json(), status_code=resp.status_code)
 
     async with httpx.AsyncClient(timeout=120) as client:
         resp = await client.post(

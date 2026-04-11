@@ -41,9 +41,9 @@
     // Normalize: remove leading /visura/ to get the endpoint name for the proxy
     const proxyEndpoint = path.replace(/^\/visura\//, '').replace(/^\/visura$/, '');
 
-    // Collect form parameters
+    // Collect form parameters (inputs, selects, and textareas)
     const body = {};
-    form.querySelectorAll('input[type="text"], input[type="email"], select').forEach(input => {
+    form.querySelectorAll('input[type="text"], input[type="email"], select, textarea').forEach(input => {
       const name = input.name;
       if (name && !name.startsWith('endpoint-') && input.value.trim()) {
         body[name] = input.value.trim();

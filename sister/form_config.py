@@ -291,7 +291,45 @@ FORM_GROUPS: list[FormGroup] = [
             ),
         ],
         default_endpoint_id="workflow",
-        available=False,  # Enable when workflow API endpoint exists
+        available=True,
+    ),
+
+    FormGroup(
+        id="batch",
+        name="Batch Upload",
+        description="Submit multiple queries from CSV. Paste CSV rows below — one query per line.",
+        icon="fa-file-csv",
+        color="dark",
+        category="advanced",
+        params=[
+            EndpointParam(
+                name="command", label="Query Type", placeholder="Select type",
+                input_type="select", required=True,
+                options=[
+                    ("search", "Property Search"),
+                    ("intestati", "Owner Lookup"),
+                    ("soggetto", "Person Search (CF)"),
+                    ("persona-giuridica", "Company Search (P.IVA)"),
+                    ("elenco-immobili", "Property List"),
+                    ("indirizzo", "Address Search"),
+                    ("partita", "Partita Search"),
+                ],
+                help_text="All rows will use this query type",
+            ),
+            EndpointParam(
+                name="csv_data", label="CSV Data", placeholder="provincia,comune,foglio,particella,tipo_catasto\nRoma,ROMA,100,50,T\nTrieste,TRIESTE,9,166,F",
+                input_type="textarea", required=True,
+                help_text="First line = header, subsequent lines = data rows. Required columns depend on the query type.",
+            ),
+        ],
+        endpoints=[
+            EndpointOption(
+                id="batch", name="Batch Submit",
+                path="/web/api/batch", method="POST",
+                description="Submit all rows as queued requests",
+            ),
+        ],
+        default_endpoint_id="batch",
     ),
 ]
 
