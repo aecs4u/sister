@@ -490,6 +490,22 @@
   // Skip values that mean "empty"
   const SKIP_VALUES = new Set(['-', '—', 'n/a', 'na', 'null', 'none', '', 'undefined']);
 
+  // Required fields per command (includes aliases)
+  const REQUIRED_BY_COMMAND = {
+    'search': ['provincia', 'comune', 'foglio', 'particella'],
+    'intestati': ['provincia', 'comune', 'foglio', 'particella', 'tipo_catasto'],
+    'soggetto': ['codice_fiscale', 'cf', 'tax_code'],
+    'persona-giuridica': ['identificativo', 'piva', 'p.iva', 'partita_iva', 'vat', 'vat_code', 'p_iva'],
+    'elenco-immobili': ['provincia', 'comune'],
+    'indirizzo': ['provincia', 'comune', 'indirizzo'],
+    'partita': ['provincia', 'comune', 'partita'],
+    'workflow-due-diligence': ['provincia', 'comune', 'foglio', 'particella'],
+    'workflow-patrimonio': ['codice_fiscale'],
+    'workflow-fondiario': ['provincia', 'comune'],
+    'workflow-aziendale': ['identificativo', 'vat_code'],
+    'workflow-storico': ['provincia', 'comune', 'foglio', 'particella'],
+  };
+
   function cleanCellValue(val) {
     if (!val) return '';
     let trimmed = val.trim();
@@ -557,17 +573,6 @@
     const commandSelect = document.getElementById('param-batch-command');
     const batchCommand = commandSelect ? commandSelect.value : '';
 
-    // Fields that are required (non-empty) based on the batch command
-    // Includes aliases so CSV columns like "piva" or "cf" are also enforced
-    const REQUIRED_BY_COMMAND = {
-      'search': ['provincia', 'comune', 'foglio', 'particella'],
-      'intestati': ['provincia', 'comune', 'foglio', 'particella', 'tipo_catasto'],
-      'soggetto': ['codice_fiscale', 'cf', 'tax_code'],
-      'persona-giuridica': ['identificativo', 'piva', 'p.iva', 'partita_iva', 'vat', 'vat_code', 'p_iva'],
-      'elenco-immobili': ['provincia', 'comune'],
-      'indirizzo': ['provincia', 'comune', 'indirizzo'],
-      'partita': ['provincia', 'comune', 'partita'],
-    };
     const allRequired = REQUIRED_BY_COMMAND[batchCommand] || [];
     // Only mark as required if the column actually exists in the CSV
     const requiredFields = new Set(allRequired.filter(f => headers.includes(f)));
@@ -761,5 +766,350 @@
   function toTitleCase(str) {
     return str.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
   }
+
+  // =========================================================================
+  // Batch Wizard — multi-step import → map → validate → confirm → submit
+  // =========================================================================
+
+  const GROUP_ID = 'batch';
+  const PARAM_NAME = 'csv_data';
+
+  // Expected API fields per command
+  const API_FIELDS = {
+    'search': ['provincia', 'comune', 'foglio', 'particella', 'tipo_catasto', 'sezione', 'subalterno'],
+    'intestati': ['provincia', 'comune', 'foglio', 'particella', 'tipo_catasto', 'subalterno', 'sezione'],
+    'soggetto': ['codice_fiscale', 'tipo_catasto', 'provincia'],
+    'persona-giuridica': ['identificativo', 'tipo_catasto', 'provincia'],
+    'elenco-immobili': ['provincia', 'comune', 'tipo_catasto', 'foglio', 'sezione'],
+    'indirizzo': ['provincia', 'comune', 'indirizzo', 'tipo_catasto'],
+    'partita': ['provincia', 'comune', 'partita', 'tipo_catasto'],
+    'workflow-due-diligence': ['provincia', 'comune', 'foglio', 'particella', 'tipo_catasto'],
+    'workflow-patrimonio': ['codice_fiscale', 'tipo_catasto'],
+    'workflow-fondiario': ['provincia', 'comune', 'foglio', 'tipo_catasto'],
+    'workflow-aziendale': ['identificativo', 'tipo_catasto'],
+    'workflow-storico': ['provincia', 'comune', 'foglio', 'particella', 'tipo_catasto'],
+  };
+
+  // Auto-mapping suggestions: CSV column → API field
+  const AUTO_MAP = {
+    'provincia': 'provincia', 'province': 'provincia',
+    'comune': 'comune', 'municipality': 'comune', 'city': 'comune',
+    'foglio': 'foglio', 'sheet': 'foglio',
+    'particella': 'particella', 'parcel': 'particella',
+    'subalterno': 'subalterno', 'sub': 'subalterno',
+    'sezione': 'sezione', 'section': 'sezione',
+    'tipo_catasto': 'tipo_catasto', 'type': 'tipo_catasto', 'catasto': 'tipo_catasto',
+    'codice_fiscale': 'codice_fiscale', 'cf': 'codice_fiscale', 'tax_code': 'codice_fiscale',
+    'identificativo': 'identificativo',
+    'piva': 'identificativo', 'p.iva': 'identificativo', 'p_iva': 'identificativo',
+    'vat': 'identificativo', 'vat_code': 'identificativo', 'partita_iva': 'identificativo',
+    'organization': 'identificativo', 'organization_name': 'identificativo',
+    'company': 'identificativo', 'denominazione': 'identificativo',
+    'indirizzo': 'indirizzo', 'address': 'indirizzo', 'via': 'indirizzo',
+    'partita': 'partita',
+  };
+
+  window.batchWizard = {
+    _rawHeaders: [],
+    _rawRows: [],
+    _mapping: {},      // csvCol → apiField
+    _validatedRows: [],
+    _currentStep: 1,
+
+    onDataLoaded: function() {
+      // Called after file drop/load — parse raw data and enable Next
+      setTimeout(function() {
+        const textarea = document.getElementById('param-' + GROUP_ID + '-' + PARAM_NAME);
+        if (!textarea || !textarea.value.trim()) return;
+
+        const lines = textarea.value.trim().split('\n').filter(l => l.trim() && !l.trim().startsWith('#'));
+        if (lines.length < 2) return;
+
+        batchWizard._rawHeaders = parseCSVLine(lines[0]).map(h => h.replace(/^["']+|["']+$/g, '').trim());
+        batchWizard._rawRows = [];
+        for (let i = 1; i < lines.length; i++) {
+          const cells = parseCSVLine(lines[i]).map(c => cleanCellValue(c));
+          if (cells.some(c => c)) batchWizard._rawRows.push(cells);
+        }
+
+        const btn = document.getElementById('batch-btn-to-step2');
+        if (btn) btn.disabled = false;
+
+        // Update file info
+        const rowCount = document.getElementById('csv-row-count-' + GROUP_ID);
+        if (rowCount) rowCount.textContent = batchWizard._rawRows.length + ' data row(s), ' + batchWizard._rawHeaders.length + ' columns';
+      }, 200);
+    },
+
+    goTo: function(step) {
+      // Hide all steps
+      document.querySelectorAll('.batch-step').forEach(s => s.classList.add('d-none'));
+      // Show target
+      const target = document.getElementById('batch-step-' + step);
+      if (target) target.classList.remove('d-none');
+      // Update badges
+      for (let i = 1; i <= 5; i++) {
+        const badge = document.getElementById('batch-step-badge-' + i);
+        if (badge) badge.className = 'badge ' + (i === step ? 'bg-primary' : i < step ? 'bg-success' : 'bg-secondary');
+      }
+      batchWizard._currentStep = step;
+
+      // Step-specific init
+      if (step === 2) batchWizard._buildMappingUI();
+      if (step === 3) batchWizard._runValidation();
+      if (step === 4) batchWizard._buildConfirmation();
+    },
+
+    reset: function() {
+      clearCSVData(GROUP_ID, PARAM_NAME);
+      batchWizard._rawHeaders = [];
+      batchWizard._rawRows = [];
+      batchWizard._mapping = {};
+      batchWizard._validatedRows = [];
+      const btn = document.getElementById('batch-btn-to-step2');
+      if (btn) btn.disabled = true;
+      batchWizard.goTo(1);
+    },
+
+    _getCommand: function() {
+      const sel = document.getElementById('param-batch-command');
+      return sel ? sel.value : 'search';
+    },
+
+    _buildMappingUI: function() {
+      const cmd = batchWizard._getCommand();
+      const apiFields = API_FIELDS[cmd] || [];
+      const tbody = document.getElementById('batch-mapping-rows');
+      if (!tbody) return;
+
+      let html = '';
+      batchWizard._rawHeaders.forEach((col, idx) => {
+        // Sample values (first 3 non-empty)
+        const samples = batchWizard._rawRows.slice(0, 5).map(r => r[idx]).filter(Boolean).slice(0, 3);
+        const sampleText = samples.length ? samples.join(', ') : '<em class="text-muted">empty</em>';
+
+        // Auto-suggest mapping
+        const autoField = AUTO_MAP[col.toLowerCase()] || '';
+
+        html += '<tr>';
+        html += '<td><code>' + escapeHtml(col) + '</code></td>';
+        html += '<td class="small text-muted">' + sampleText + '</td>';
+        html += '<td class="text-center"><i class="fas fa-arrow-right text-muted"></i></td>';
+        html += '<td><select class="form-select form-select-sm batch-map-select" data-csv-col="' + escapeHtml(col) + '">';
+        html += '<option value="">(skip this column)</option>';
+        apiFields.forEach(f => {
+          const selected = (f === autoField) ? ' selected' : '';
+          html += '<option value="' + f + '"' + selected + '>' + toTitleCase(f) + '</option>';
+        });
+        html += '</select></td>';
+        html += '</tr>';
+      });
+      tbody.innerHTML = html;
+    },
+
+    _readMapping: function() {
+      batchWizard._mapping = {};
+      document.querySelectorAll('.batch-map-select').forEach(sel => {
+        const csvCol = sel.dataset.csvCol;
+        const apiField = sel.value;
+        if (csvCol && apiField) {
+          batchWizard._mapping[csvCol] = apiField;
+        }
+      });
+    },
+
+    _runValidation: function() {
+      batchWizard._readMapping();
+      const cmd = batchWizard._getCommand();
+      const requiredSet = new Set(REQUIRED_BY_COMMAND[cmd] || REQUIRED_BY_COMMAND[cmd.replace('workflow-', '')] || []);
+
+      // Map raw data through column mapping
+      batchWizard._validatedRows = [];
+      let validCount = 0, errorCount = 0;
+
+      batchWizard._rawRows.forEach((cells, rowIdx) => {
+        const mapped = {};
+        const errors = {};
+        let allEmpty = true;
+
+        batchWizard._rawHeaders.forEach((col, colIdx) => {
+          const apiField = batchWizard._mapping[col];
+          if (!apiField) return; // skipped column
+          const val = cells[colIdx] || '';
+          mapped[apiField] = val;
+          if (val) allEmpty = false;
+
+          // Required check
+          if (requiredSet.has(apiField) && !val) {
+            errors[apiField] = 'Required';
+            return;
+          }
+
+          // Field validator
+          const validator = FIELD_VALIDATORS[apiField];
+          if (validator && (val || requiredSet.has(apiField))) {
+            const result = validator(val);
+            if (!result.valid) {
+              errors[apiField] = result.msg;
+            } else if (result.cleaned !== undefined) {
+              mapped[apiField] = result.cleaned;
+            }
+          }
+        });
+
+        if (allEmpty) return; // skip empty rows
+
+        const hasErrors = Object.keys(errors).length > 0;
+        if (hasErrors) errorCount++; else validCount++;
+        batchWizard._validatedRows.push({
+          index: rowIdx + 1,
+          data: mapped,
+          errors: errors,
+          hasErrors: hasErrors,
+          skip: false,
+        });
+      });
+
+      // Show summary
+      const summaryDiv = document.getElementById('batch-validation-summary');
+      if (summaryDiv) {
+        const cls = errorCount > 0 ? 'warning' : 'success';
+        const icon = errorCount > 0 ? 'fa-exclamation-triangle' : 'fa-check-circle';
+        summaryDiv.innerHTML = '<div class="alert alert-' + cls + ' py-2"><i class="fas ' + icon + ' me-2"></i>' +
+          validCount + ' valid &middot; ' + errorCount + ' error(s) &middot; ' +
+          batchWizard._validatedRows.length + ' total rows</div>';
+      }
+
+      // Render Tabulator with mapped fields
+      const mappedFields = [...new Set(Object.values(batchWizard._mapping))];
+      batchWizard._renderValidationTable(mappedFields);
+    },
+
+    _renderValidationTable: function(fields) {
+      const tableEl = document.getElementById('csv-table-' + GROUP_ID);
+      if (!tableEl) return;
+
+      function doRender() {
+        const columns = [
+          { title: '#', field: '_row', width: 50, hozAlign: 'right', headerSort: false },
+        ];
+        fields.forEach(f => {
+          columns.push({
+            title: toTitleCase(f), field: f, editor: 'input', headerFilter: 'input',
+            formatter: function(cell) {
+              const errs = cell.getRow().getData()._errors || {};
+              const val = cell.getValue() || '';
+              if (errs[f]) return '<span class="text-danger" title="' + escapeHtml(errs[f]) + '"><i class="fas fa-exclamation-circle me-1"></i>' + escapeHtml(val || '—') + '</span>';
+              return escapeHtml(val);
+            },
+          });
+        });
+        columns.push({
+          title: 'Status', field: '_status', width: 90, hozAlign: 'center', headerSort: false,
+          formatter: function(cell) {
+            return cell.getRow().getData()._hasErrors
+              ? '<span class="badge bg-danger">Error</span>'
+              : '<span class="badge bg-success">OK</span>';
+          },
+        });
+
+        const data = batchWizard._validatedRows.map(r => ({
+          _row: r.index, ...r.data, _errors: r.errors, _hasErrors: r.hasErrors,
+        }));
+
+        tableEl.innerHTML = '';
+        tableEl.className = '';
+        new Tabulator(tableEl, {
+          data: data, columns: columns, layout: 'fitDataFill',
+          height: Math.min(350, 50 + data.length * 38),
+          pagination: data.length > 50, paginationSize: 50,
+          rowFormatter: function(row) {
+            if (row.getData()._hasErrors) row.getElement().style.backgroundColor = '#fff5f5';
+          },
+        });
+      }
+
+      if (typeof Tabulator === 'undefined') {
+        if (!document.getElementById('tabulator-css')) {
+          const css = document.createElement('link'); css.id = 'tabulator-css'; css.rel = 'stylesheet';
+          css.href = 'https://unpkg.com/tabulator-tables@6.3.1/dist/css/tabulator_bootstrap5.min.css';
+          document.head.appendChild(css);
+        }
+        const s = document.createElement('script');
+        s.src = 'https://unpkg.com/tabulator-tables@6.3.1/dist/js/tabulator.min.js';
+        s.onload = doRender; document.head.appendChild(s);
+      } else { doRender(); }
+    },
+
+    _buildConfirmation: function() {
+      const rows = batchWizard._validatedRows;
+      const valid = rows.filter(r => !r.hasErrors).length;
+      const errors = rows.filter(r => r.hasErrors).length;
+      const cmd = batchWizard._getCommand();
+
+      const div = document.getElementById('batch-confirm-summary');
+      if (div) {
+        div.innerHTML =
+          '<p class="mb-2"><strong>Query type:</strong> ' + escapeHtml(toTitleCase(cmd.replace(/-/g, ' '))) + '</p>' +
+          '<p class="mb-2"><strong>Total rows:</strong> ' + rows.length + '</p>' +
+          '<p class="mb-2"><span class="badge bg-success">' + valid + ' valid</span> ' +
+          (errors > 0 ? '<span class="badge bg-danger">' + errors + ' errors</span>' : '') + '</p>';
+      }
+
+      const skipCheck = document.getElementById('batch-skip-errors');
+      const submitCount = skipCheck && skipCheck.checked ? valid : rows.length;
+      const countSpan = document.getElementById('batch-submit-count');
+      if (countSpan) countSpan.textContent = '(' + submitCount + ')';
+
+      // Update count when checkbox changes
+      if (skipCheck) {
+        skipCheck.onchange = function() {
+          const n = this.checked ? valid : rows.length;
+          if (countSpan) countSpan.textContent = '(' + n + ')';
+        };
+      }
+    },
+
+    submit: function() {
+      const skipErrors = document.getElementById('batch-skip-errors');
+      const rows = batchWizard._validatedRows.filter(r => !(skipErrors && skipErrors.checked && r.hasErrors));
+
+      if (!rows.length) {
+        alert('No rows to submit.');
+        return;
+      }
+
+      // Build CSV from mapped data for the batch API
+      const fields = [...new Set(Object.values(batchWizard._mapping))];
+      const csvLines = [fields.join(',')];
+      rows.forEach(r => {
+        csvLines.push(fields.map(f => {
+          const val = r.data[f] || '';
+          return val.includes(',') ? '"' + val + '"' : val;
+        }).join(','));
+      });
+
+      // Put into hidden textarea and submit the form
+      const textarea = document.getElementById('param-' + GROUP_ID + '-' + PARAM_NAME);
+      if (textarea) textarea.value = csvLines.join('\n');
+
+      batchWizard.goTo(5);
+
+      // Submit via the existing form handler
+      const form = document.getElementById('form-' + GROUP_ID);
+      if (form) {
+        form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+      }
+    },
+  };
+
+  // Override loadDataFile callback to also trigger wizard
+  const _origLoadDataFile = window.loadDataFile;
+  window.loadDataFile = function(input, groupId, paramName) {
+    _origLoadDataFile(input, groupId, paramName);
+    if (groupId === GROUP_ID) {
+      setTimeout(function() { batchWizard.onDataLoaded(); }, 300);
+    }
+  };
 
 })();
