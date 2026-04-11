@@ -51,4 +51,11 @@ export PYTHONPATH="$(pwd):${PYTHONPATH:-}"
 
 echo -e "${BLUE}Starting ${APP_NAME} → http://${HOST}:${PORT}${NC}"
 
-exec uv run uvicorn "$MODULE" --host "$HOST" --port "$PORT" --workers 1 $RELOAD
+if [ -n "$RELOAD" ]; then
+    # Only reload on Python file changes — avoid restarting on template/CSS/JS edits
+    # which would kill the authenticated browser session
+    exec uv run uvicorn "$MODULE" --host "$HOST" --port "$PORT" --workers 1 \
+        $RELOAD --reload-include "*.py" --reload-exclude "templates/*" --reload-exclude "static/*"
+else
+    exec uv run uvicorn "$MODULE" --host "$HOST" --port "$PORT" --workers 1
+fi
