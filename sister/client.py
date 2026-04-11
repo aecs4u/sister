@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 DEFAULT_BASE_URL = "http://localhost:8025"
-DEFAULT_TIMEOUT = 30.0
+DEFAULT_TIMEOUT = 120.0
 DEFAULT_POLL_INTERVAL = 5.0
 DEFAULT_POLL_TIMEOUT = 300.0
 
@@ -77,16 +77,20 @@ class VisuraClient:
     # -- lifecycle ------------------------------------------------------------
 
     def _get_client(self) -> httpx.AsyncClient:
-        if self._client is None or self._client.is_closed:
-            headers: dict[str, str] = {"Content-Type": "application/json"}
-            if self.api_key:
-                headers["X-API-Key"] = self.api_key
-            self._client = httpx.AsyncClient(
-                base_url=self.base_url,
-                headers=headers,
-                timeout=self.timeout,
-            )
-        return self._client
+        # If a client was injected (e.g. tests) or set via context manager, reuse it
+        if self._client is not None and not self._client.is_closed:
+            return self._client
+        # Otherwise create a fresh client per call — the CLI uses multiple
+        # asyncio.run() calls which close the event loop between invocations,
+        # invalidating any persistent connection pool.
+        headers: dict[str, str] = {"Content-Type": "application/json"}
+        if self.api_key:
+            headers["X-API-Key"] = self.api_key
+        return httpx.AsyncClient(
+            base_url=self.base_url,
+            headers=headers,
+            timeout=self.timeout,
+        )
 
     async def close(self) -> None:
         """Close the underlying HTTP client."""
@@ -116,8 +120,8 @@ class VisuraClient:
         json: dict | None = None,
         params: dict | None = None,
     ) -> dict:
-        client = self._get_client()
-        resp = await client.request(method, path, json=json, params=params)
+        async with self._get_client() as client:
+            resp = await client.request(method, path, json=json, params=params)
         if resp.status_code >= 400:
             detail = resp.text
             try:

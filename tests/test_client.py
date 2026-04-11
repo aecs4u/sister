@@ -76,19 +76,21 @@ def test_headers_omit_api_key_when_empty():
     assert "X-API-Key" not in headers
 
 
-def test_client_reuses_session():
+def test_client_reuses_injected_session():
     c = VisuraClient(base_url="http://x")
+    # When _client is injected (e.g. tests), it's reused
+    c._client = httpx.AsyncClient(base_url="http://x")
     c1 = c._get_client()
     c2 = c._get_client()
     assert c1 is c2
 
 
-@pytest.mark.asyncio
-async def test_client_context_manager():
-    async with VisuraClient(base_url="http://x") as c:
-        inner = c._get_client()
-        assert not inner.is_closed
-    assert inner.is_closed
+def test_client_creates_fresh_when_no_injection():
+    c = VisuraClient(base_url="http://x")
+    c1 = c._get_client()
+    c2 = c._get_client()
+    # Without injection, each call creates a fresh client
+    assert c1 is not c2
 
 
 # ---------------------------------------------------------------------------

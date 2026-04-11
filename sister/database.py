@@ -34,8 +34,8 @@ async def init_db() -> None:
             """
             CREATE TABLE IF NOT EXISTS visura_requests (
                 request_id   TEXT PRIMARY KEY,
-                request_type TEXT NOT NULL CHECK(request_type IN ('visura', 'intestati')),
-                tipo_catasto TEXT NOT NULL CHECK(tipo_catasto IN ('T', 'F')),
+                request_type TEXT NOT NULL,
+                tipo_catasto TEXT NOT NULL,
                 provincia    TEXT NOT NULL,
                 comune       TEXT NOT NULL,
                 foglio       TEXT NOT NULL,
@@ -48,7 +48,7 @@ async def init_db() -> None:
             CREATE TABLE IF NOT EXISTS visura_responses (
                 request_id   TEXT PRIMARY KEY REFERENCES visura_requests(request_id),
                 success      INTEGER NOT NULL CHECK(success IN (0, 1)),
-                tipo_catasto TEXT NOT NULL CHECK(tipo_catasto IN ('T', 'F')),
+                tipo_catasto TEXT NOT NULL,
                 data         TEXT,
                 error        TEXT,
                 created_at   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now', 'localtime'))
