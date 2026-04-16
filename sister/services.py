@@ -95,6 +95,11 @@ class BrowserManager:
         return self._auth.is_authenticated
 
     @property
+    def is_cdp(self) -> bool:
+        """True when connected to a shared browser via CDP."""
+        return self._auth.is_cdp
+
+    @property
     def auth_page(self) -> Optional[Page]:
         session = self._auth.session
         if session and session.is_valid:
@@ -102,37 +107,37 @@ class BrowserManager:
         return None
 
     async def initialize(self):
-        """Inizializza il browser e il contexto (maximized window)"""
+        """Initialize the browser.
+
+        When BROWSER_CDP_ENDPOINT is set in the environment, aecs4u-auth
+        connects to a running Chrome/Chromium process via CDP instead of
+        launching a new one.  This allows sister and opendata (or any other
+        service using aecs4u-auth) to share the same browser and session.
+        """
         try:
-            # Inject --start-maximized into chromium args before launch
-            from aecs4u_auth.browser import manager as _auth_manager
-            if hasattr(_auth_manager, '_CHROMIUM_ARGS'):
-                if "--start-maximized" not in _auth_manager._CHROMIUM_ARGS:
-                    _auth_manager._CHROMIUM_ARGS.append("--start-maximized")
-
-            # Monkey-patch new_context to use no_viewport=True for maximized window
-            _orig_new_context = None
-
-            async def _patched_new_context(**kwargs):
-                kwargs.setdefault("no_viewport", True)
-                return await _orig_new_context(**kwargs)
+            if not self._auth.config.cdp_endpoint:
+                # Local launch — inject --start-maximized for full viewport
+                from aecs4u_auth.browser import manager as _auth_manager
+                if hasattr(_auth_manager, '_CHROMIUM_ARGS'):
+                    if "--start-maximized" not in _auth_manager._CHROMIUM_ARGS:
+                        _auth_manager._CHROMIUM_ARGS.append("--start-maximized")
 
             await self._auth.initialize()
 
-            # After initialize, the browser exists — re-create context with no_viewport
-            browser = self._auth._browser
-            if browser:
-                _orig_new_context = browser.new_context
-                browser.new_context = _patched_new_context
-                # Close old context and clear stale page references
-                self._auth._auth_page = None
-                if self._auth._context:
-                    await self._auth._context.close()
-                self._auth._context = await _orig_new_context(no_viewport=True)
+            # For local launch, re-create context with no_viewport=True
+            if not self.is_cdp:
+                browser = self._auth._browser
+                if browser:
+                    _orig_new_context = browser.new_context
+                    self._auth._auth_page = None
+                    if self._auth._context:
+                        await self._auth._context.close()
+                    self._auth._context = await _orig_new_context(no_viewport=True)
 
-            logger.info("Browser inizializzato (maximized)")
+            mode = "CDP" if self.is_cdp else "local"
+            logger.info("Browser inizializzato (%s)", mode)
         except Exception as e:
-            logger.error(f"Failed to initialize browser: {e}")
+            logger.error("Failed to initialize browser: %s", e)
             raise BrowserError(f"Browser initialization failed: {e}") from e
 
     async def login(self):
@@ -142,27 +147,31 @@ class BrowserManager:
             self.last_login_time = datetime.now()
             logger.info("Login completato con successo")
         except Exception as e:
-            logger.error(f"Errore durante il login: {e}")
+            logger.error("Errore durante il login: %s", e)
             raise AuthenticationError(f"Login failed: {e}") from e
 
     async def start_keep_alive(self):
-        """Mantiene la sessione attiva"""
         await self._auth.start_keepalive()
 
     async def stop_keep_alive(self):
-        """Ferma il keep-alive"""
         await self._auth.stop_keepalive()
 
     async def _ensure_authenticated(self):
-        """Assicura che il sistema sia autenticato, ri-autentica se necessario."""
         try:
             await self._auth.ensure_authenticated()
             self.last_login_time = datetime.now()
         except Exception as e:
-            logger.error(f"Errore nella re-autenticazione: {e}")
+            logger.error("Errore nella re-autenticazione: %s", e)
             raise AuthenticationError(f"Re-authentication failed: {e}") from e
 
     async def _get_authenticated_page(self) -> Page:
+        # In CDP mode, check if the connection is still alive and reconnect if needed
+        if self.is_cdp and (self._auth._browser is None or not self._auth._browser.is_connected()):
+            logger.warning("CDP connection lost — reconnecting")
+            await self._auth.initialize()
+            await self.login()
+            await self.start_keep_alive()
+
         await self._ensure_authenticated()
         page = self.auth_page
         if page is None:
@@ -472,14 +481,14 @@ class BrowserManager:
             return await _download_richieste_documents(page, page_logger)
 
     async def close(self):
-        """Chiude il browser"""
+        """Close browser resources (delegates to aecs4u-auth)."""
         await self._auth.close()
         logger.info("Browser chiuso")
 
     async def graceful_shutdown(self):
-        """Effettua uno shutdown graceful con logout dalla sessione SISTER"""
+        """Logout from SISTER session, then close browser resources."""
         logger.info("Iniziando shutdown graceful...")
-        # Close SISTER session first (prevents "active session" on next start)
+        # Close SISTER sessions before the general logout
         try:
             page = self.auth_page
             if page and not page.is_closed():
@@ -487,11 +496,9 @@ class BrowserManager:
                     "https://sister3.agenziaentrate.gov.it/Servizi/CloseSessionsSis",
                     "https://sister3.agenziaentrate.gov.it/Servizi/CloseSessions",
                 ]:
-                    try:
+                    with suppress(Exception):
                         await page.goto(url, timeout=10000)
                         logger.info("Sessione SISTER chiusa: %s", url)
-                    except Exception:
-                        pass
         except Exception as e:
             logger.warning("Errore chiusura sessione SISTER: %s", e)
         await self._auth.graceful_shutdown()
@@ -577,6 +584,7 @@ class VisuraService:
                     wait = 15 * attempt
                     logger.info("Riprovo tra %ds...", wait)
                     await asyncio.sleep(wait)
+        self._auth_failed_message = f"Authentication failed after {max_retries} attempts"
         logger.error("Autenticazione browser fallita dopo %d tentativi — le query browser non funzioneranno", max_retries)
 
     async def _try_close_stale_session(self):
@@ -613,6 +621,20 @@ class VisuraService:
     @property
     def auth_ready(self) -> bool:
         return getattr(self, "_auth_ready", False)
+
+    @property
+    def auth_status(self) -> dict:
+        """Structured auth/browser health state for /health and dashboard."""
+        mode = "cdp" if self.browser_manager.is_cdp else "local"
+        if self.auth_ready:
+            return {"state": "ready", "mode": mode, "message": "Browser authenticated"}
+        failed_msg = getattr(self, "_auth_failed_message", None)
+        if failed_msg:
+            return {"state": "unavailable", "mode": mode, "message": failed_msg}
+        auth_task = getattr(self, "_auth_task", None)
+        if auth_task is not None and not auth_task.done():
+            return {"state": "connecting", "mode": mode, "message": "Authentication in progress..."}
+        return {"state": "unavailable", "mode": mode, "message": "Browser not initialized"}
 
     async def _process_requests(self):
         """Processa le richieste in coda"""
@@ -700,15 +722,18 @@ class VisuraService:
 
     async def _periodic_cleanup(self):
         """Pulisce periodicamente le risposte scadute in cache e nel database."""
+        from .database import is_db_writable
+
         try:
             while self.processing:
                 self._cleanup_response_store()
-                try:
-                    deleted = await cleanup_old_responses(self.response_ttl_seconds)
-                    if deleted:
-                        logger.info(f"Cleanup database: rimossi {deleted} record scaduti")
-                except Exception as e:
-                    logger.warning(f"Errore cleanup database: {e}")
+                if is_db_writable():
+                    try:
+                        deleted = await cleanup_old_responses(self.response_ttl_seconds)
+                        if deleted:
+                            logger.info("Cleanup database: rimossi %d record scaduti", deleted)
+                    except Exception as e:
+                        logger.warning("Errore cleanup database: %s", e)
                 await asyncio.sleep(self.response_cleanup_interval_seconds)
         except asyncio.CancelledError:
             raise

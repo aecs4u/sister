@@ -135,9 +135,13 @@ async def lifespan(app: FastAPI):
     global visura_service
     await init_db()
     PageLogger.reset_session()
-    visura_service = VisuraService()
-    await visura_service.initialize(background_auth=True)
-    logger.info("Servizio visure avviato (autenticazione in background)")
+    try:
+        visura_service = VisuraService()
+        await visura_service.initialize(background_auth=True)
+        logger.info("Servizio visure avviato (autenticazione in background)")
+    except Exception as e:
+        logger.warning("Browser service unavailable — web UI will run in read-only mode: %s", e)
+        visura_service = None
 
     try:
         yield
@@ -148,7 +152,6 @@ async def lifespan(app: FastAPI):
                 await visura_service.graceful_shutdown()
             except Exception as e:
                 logger.error("Errore durante graceful shutdown: %s", e)
-                # Last resort: try to close browser directly
                 try:
                     await visura_service.browser_manager.close()
                 except Exception:
@@ -372,8 +375,19 @@ async def _richiedi_generic(
 
 
 @app.get("/health")
-async def _health_check(service: VisuraService = Depends(get_visura_service)):
-    return await health_check(service)
+async def _health_check():
+    if visura_service is not None:
+        return await health_check(visura_service)
+    db_stats = await count_responses()
+    return JSONResponse({
+        "status": "degraded",
+        "auth": {"state": "unavailable", "message": "Browser service not initialized"},
+        "auth_ready": False,
+        "authenticated": False,
+        "queue_size": 0,
+        "pending_requests": 0,
+        "database": db_stats,
+    })
 
 
 @app.get("/visura/history")

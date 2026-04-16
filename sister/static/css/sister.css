@@ -10,9 +10,17 @@
     font-size: 0.85rem;
 }
 
-/* Results table */
+/* Results table — clickable rows */
 .table-hover tbody tr {
     cursor: pointer;
+}
+
+/* Results Tabulator — clickable rows */
+#tabulator-results .tabulator-row {
+    cursor: pointer;
+}
+#tabulator-results .tabulator-row:hover {
+    background-color: rgba(var(--bs-primary-rgb, 13, 110, 253), 0.06);
 }
 
 /* Stat cards */

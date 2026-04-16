@@ -5,7 +5,7 @@ requires-python = ">=3.11"
 [[package]]
 name = "aecs4u-auth"
 version = "1.7.0"
-source = { git = "https://github.com/aecs4u/aecs4u-auth.git#78caa2a723fe9d202559b1d2f72d7b88f5a9726a" }
+source = { git = "https://github.com/aecs4u/aecs4u-auth.git#3414a482a53c86353a19b072331af8aed470560f" }
 dependencies = [
     { name = "aiosqlite" },
     { name = "authlib" },

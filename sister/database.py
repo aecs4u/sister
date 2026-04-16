@@ -10,6 +10,7 @@ import hashlib
 import json
 import logging
 import os
+import sqlite3
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Optional
@@ -17,9 +18,7 @@ from typing import Any, Optional
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
-from sqlmodel import SQLModel, select
-
-from sqlalchemy import MetaData
+from sqlmodel import select
 
 from .db_models import (
     IMMOBILE_FIELD_MAP,
@@ -56,6 +55,22 @@ DB_PATH = os.getenv("SISTER_DB_PATH", os.path.join(os.path.dirname(os.path.dirna
 # ---------------------------------------------------------------------------
 
 _engine = None
+_db_writable: Optional[bool] = None
+
+
+def is_db_writable() -> bool:
+    """Check if the database file is writable. Cached after first call."""
+    global _db_writable
+    if _db_writable is not None:
+        return _db_writable
+    db_path = Path(DB_PATH)
+    if not db_path.exists():
+        _db_writable = os.access(str(db_path.parent), os.W_OK)
+    else:
+        _db_writable = os.access(str(db_path), os.W_OK)
+    if not _db_writable:
+        logger.warning("Database is read-only: %s — write operations will be skipped", DB_PATH)
+    return _db_writable
 
 
 def _get_engine():
@@ -74,16 +89,16 @@ def _get_session_factory():
 async def init_db() -> None:
     """Create sister tables if they don't exist."""
     engine = _get_engine()
+    writable = is_db_writable()
     async with engine.begin() as conn:
-        # Only create sister's tables, not all SQLModel-registered tables
-        # (avoids conflicts with opendata models in shared venvs)
-        def _create_sister_tables(sync_conn):
-            for table in _SISTER_TABLES:
-                table.create(sync_conn, checkfirst=True)
-        await conn.run_sync(_create_sister_tables)
-        await conn.execute(text("PRAGMA journal_mode=WAL"))
+        if writable:
+            def _create_sister_tables(sync_conn):
+                for table in _SISTER_TABLES:
+                    table.create(sync_conn, checkfirst=True)
+            await conn.run_sync(_create_sister_tables)
+            await conn.execute(text("PRAGMA journal_mode=WAL"))
         await conn.execute(text("PRAGMA foreign_keys=ON"))
-    logger.info("Database inizializzato: %s", DB_PATH)
+    logger.info("Database inizializzato: %s (writable=%s)", DB_PATH, writable)
 
 
 # ---------------------------------------------------------------------------
@@ -395,6 +410,86 @@ async def get_result_record(request_id: str) -> Optional[dict]:
         }
 
 
+async def get_workflow_result_record(workflow_id: str) -> Optional[dict]:
+    """Fetch workflow run data in the same shape used by result_detail.html."""
+    if not os.path.exists(DB_PATH):
+        return None
+
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.row_factory = sqlite3.Row
+        run = conn.execute(
+            """
+            SELECT workflow_id, preset, status, input_json, output_json, created_at, updated_at
+            FROM workflow_runs
+            WHERE workflow_id = ?
+            """,
+            (workflow_id,),
+        ).fetchone()
+        if run is None:
+            return None
+        step_rows = conn.execute(
+            """
+            SELECT step_key, status, result_json, error, started_at, finished_at
+            FROM workflow_steps
+            WHERE workflow_id = ?
+            ORDER BY id
+            """,
+            (workflow_id,),
+        ).fetchall()
+
+    def _loads(raw: Optional[str], fallback):
+        if not raw:
+            return fallback
+        try:
+            return json.loads(raw)
+        except (TypeError, json.JSONDecodeError):
+            return fallback
+
+    input_data = _loads(run["input_json"], {})
+    output_data = _loads(run["output_json"], {})
+    step_data = []
+    for step in step_rows:
+        step_data.append({
+            "step_key": step["step_key"],
+            "status": step["status"],
+            "result": _loads(step["result_json"], None),
+            "error": step["error"],
+            "started_at": step["started_at"],
+            "finished_at": step["finished_at"],
+        })
+
+    data: dict[str, Any] = {}
+    if isinstance(input_data, dict):
+        data["input"] = input_data
+    if isinstance(output_data, dict):
+        data.update(output_data)
+    elif output_data:
+        data["output"] = output_data
+    if step_data and "persisted_steps" not in data:
+        data["persisted_steps"] = step_data
+
+    return {
+        "request_id": run["workflow_id"],
+        "request_type": f"workflow:{run['preset']}",
+        "tipo_catasto": input_data.get("tipo_catasto", "") if isinstance(input_data, dict) else "",
+        "provincia": input_data.get("provincia", "") if isinstance(input_data, dict) else "",
+        "comune": input_data.get("comune", "") if isinstance(input_data, dict) else "",
+        "foglio": input_data.get("foglio", "") if isinstance(input_data, dict) else "",
+        "particella": input_data.get("particella", "") if isinstance(input_data, dict) else "",
+        "sezione": input_data.get("sezione") if isinstance(input_data, dict) else None,
+        "subalterno": input_data.get("subalterno") if isinstance(input_data, dict) else None,
+        "cost_text": None,
+        "cost_value": None,
+        "requested_at": run["created_at"],
+        "responded_at": run["updated_at"],
+        "success": run["status"] == "completed",
+        "status": run["status"],
+        "data": data,
+        "error": None if run["status"] in ("completed", "partial", "running") else run["status"],
+        "page_visits": [],
+    }
+
+
 async def get_documents_for_response(request_id: str, foglio: str = None, particella: str = None) -> list[dict]:
     """Fetch visura_documents linked to a response_id OR matching foglio/particella."""
     session_factory = _get_session_factory()
@@ -431,6 +526,7 @@ async def get_documents_for_response(request_id: str, foglio: str = None, partic
             "dati_immobile": _dati.get("immobile", {}) if (_dati := json.loads(row.dati_immobile_json) if row.dati_immobile_json else {}) else {},
             "classamento": _dati.get("classamento", []),
             "indirizzo": _dati.get("indirizzo", ""),
+            "xml_content": row.xml_content or "",
             "created_at": row.created_at.isoformat() if row.created_at else None,
         }
         docs.append(doc)
@@ -528,6 +624,174 @@ async def find_responses(
         ]
 
 
+async def find_workflow_runs(
+    status: Optional[str] = None,
+    limit: int = 50,
+    offset: int = 0,
+) -> list[dict]:
+    """Return workflow runs with step counts for the workflow list page."""
+    if not os.path.exists(DB_PATH):
+        return []
+
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.row_factory = sqlite3.Row
+        where_clause, params = _build_workflow_where(status=status)
+        sql = """
+            SELECT
+                wf.workflow_id, wf.preset, wf.status, wf.input_json,
+                wf.created_at, wf.updated_at,
+                (SELECT count(*) FROM workflow_steps ws WHERE ws.workflow_id = wf.workflow_id) AS total_steps,
+                (SELECT count(*) FROM workflow_steps ws WHERE ws.workflow_id = wf.workflow_id AND ws.status = 'completed') AS completed_steps
+            FROM workflow_runs AS wf
+        """
+        if where_clause:
+            sql += f" WHERE {where_clause}"
+        sql += " ORDER BY wf.created_at DESC LIMIT ? OFFSET ?"
+        params.extend([limit, offset])
+
+        rows = []
+        for run in conn.execute(sql, params).fetchall():
+            input_data = _decode_json_object(run["input_json"])
+            rows.append({
+                "workflow_id": run["workflow_id"],
+                "preset": run["preset"],
+                "status": run["status"],
+                "provincia": input_data.get("provincia", ""),
+                "comune": input_data.get("comune", ""),
+                "foglio": input_data.get("foglio", ""),
+                "particella": input_data.get("particella", ""),
+                "tipo_catasto": input_data.get("tipo_catasto", ""),
+                "total_steps": run["total_steps"],
+                "completed_steps": run["completed_steps"],
+                "created_at": run["created_at"],
+                "updated_at": run["updated_at"],
+            })
+        return rows
+
+
+def _decode_json_object(raw: Optional[str]) -> dict[str, Any]:
+    if not raw:
+        return {}
+    try:
+        decoded = json.loads(raw)
+    except (TypeError, json.JSONDecodeError):
+        return {}
+    return decoded if isinstance(decoded, dict) else {}
+
+
+def _single_result_status(success: Optional[bool]) -> str:
+    if success is True:
+        return "completed"
+    if success is False:
+        return "failed"
+    return "pending"
+
+
+async def find_result_rows(
+    provincia: Optional[str] = None,
+    comune: Optional[str] = None,
+    foglio: Optional[str] = None,
+    particella: Optional[str] = None,
+    tipo_catasto: Optional[str] = None,
+    source: Optional[str] = None,
+    status: Optional[str] = None,
+    limit: int = 50,
+    offset: int = 0,
+) -> list[dict]:
+    """Search single-query responses and workflow runs for the web results page."""
+    if not os.path.exists(DB_PATH):
+        return []
+
+    if source not in {"single", "workflow"}:
+        source = None
+    if status not in {"completed", "partial", "failed", "error", "pending", "running"}:
+        status = None
+
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.row_factory = sqlite3.Row
+        single_rows: list[dict] = []
+        if source in (None, "single"):
+            where_clause, params = _build_single_where(
+                provincia, comune, foglio, particella, tipo_catasto, status,
+            )
+            sql = """
+                SELECT
+                    req.request_id,
+                    req.request_type,
+                    req.tipo_catasto,
+                    req.provincia,
+                    req.comune,
+                    req.foglio,
+                    req.particella,
+                    req.sezione,
+                    req.subalterno,
+                    req.created_at AS requested_at,
+                    resp.success,
+                    resp.error,
+                    resp.created_at AS responded_at
+                FROM visura_requests AS req
+                LEFT JOIN visura_responses AS resp ON req.request_id = resp.request_id
+            """
+            if where_clause:
+                sql += f" WHERE {where_clause}"
+            for row in conn.execute(sql, params).fetchall():
+                success = bool(row["success"]) if row["success"] is not None else None
+                single_rows.append({
+                    "request_id": row["request_id"],
+                    "request_type": row["request_type"],
+                    "source": "single",
+                    "tipo_catasto": row["tipo_catasto"],
+                    "provincia": row["provincia"],
+                    "comune": row["comune"],
+                    "foglio": row["foglio"],
+                    "particella": row["particella"],
+                    "sezione": row["sezione"],
+                    "subalterno": row["subalterno"],
+                    "requested_at": row["requested_at"],
+                    "success": success,
+                    "status": _single_result_status(success),
+                    "data": None,
+                    "error": row["error"],
+                    "responded_at": row["responded_at"],
+                })
+
+        workflow_rows: list[dict] = []
+        if source in (None, "workflow"):
+            where_clause, params = _build_workflow_where(
+                provincia, comune, foglio, particella, tipo_catasto, status,
+            )
+            sql = """
+                SELECT workflow_id, preset, status, input_json, created_at, updated_at
+                FROM workflow_runs AS wf
+            """
+            if where_clause:
+                sql += f" WHERE {where_clause}"
+            for run in conn.execute(sql, params).fetchall():
+                input_data = _decode_json_object(run["input_json"])
+                workflow_rows.append({
+                    "request_id": run["workflow_id"],
+                    "request_type": f"workflow:{run['preset']}",
+                    "source": "workflow",
+                    "tipo_catasto": input_data.get("tipo_catasto"),
+                    "provincia": input_data.get("provincia"),
+                    "comune": input_data.get("comune"),
+                    "foglio": input_data.get("foglio"),
+                    "particella": input_data.get("particella"),
+                    "sezione": input_data.get("sezione"),
+                    "subalterno": input_data.get("subalterno"),
+                    "requested_at": run["created_at"],
+                    "success": run["status"] == "completed",
+                    "status": run["status"],
+                    "data": None,
+                    "error": None if run["status"] in ("completed", "partial", "running") else run["status"],
+                    "responded_at": run["updated_at"],
+                })
+
+    rows = [*single_rows, *workflow_rows]
+    rows.sort(key=lambda row: row.get("requested_at") or "", reverse=True)
+    return rows[offset:offset + limit]
+
+
 async def cleanup_old_responses(ttl_seconds: int) -> int:
     """Delete responses older than ttl_seconds. Returns count of deleted rows."""
     session_factory = _get_session_factory()
@@ -557,8 +821,8 @@ async def cleanup_old_responses(ttl_seconds: int) -> int:
 
         await session.commit()
 
-        # Checkpoint WAL so writes flush to the main .sqlite file
-        await session.execute(text("PRAGMA wal_checkpoint(TRUNCATE)"))
+        if is_db_writable():
+            await session.execute(text("PRAGMA wal_checkpoint(TRUNCATE)"))
 
         return deleted
 
@@ -590,3 +854,190 @@ async def count_responses() -> dict:
             "failed": failed,
             "pending": max(total_requests - total_responses, 0),
         }
+
+
+def _build_single_where(
+    provincia: Optional[str] = None,
+    comune: Optional[str] = None,
+    foglio: Optional[str] = None,
+    particella: Optional[str] = None,
+    tipo_catasto: Optional[str] = None,
+    status: Optional[str] = None,
+) -> tuple[str, list]:
+    """Build WHERE clause + params for single-result queries on visura_requests/responses."""
+    conditions: list[str] = []
+    params: list = []
+    if provincia:
+        conditions.append("req.provincia = ?")
+        params.append(provincia)
+    if comune:
+        conditions.append("req.comune = ?")
+        params.append(comune)
+    if foglio:
+        conditions.append("req.foglio = ?")
+        params.append(str(foglio))
+    if particella:
+        conditions.append("req.particella = ?")
+        params.append(str(particella))
+    if tipo_catasto:
+        conditions.append("req.tipo_catasto = ?")
+        params.append(tipo_catasto)
+    if status == "completed":
+        conditions.append("resp.success = 1")
+    elif status in ("failed", "error"):
+        conditions.append("resp.success = 0")
+    elif status == "pending":
+        conditions.append("resp.request_id IS NULL")
+    return (" AND ".join(conditions), params)
+
+
+def _build_workflow_where(
+    provincia: Optional[str] = None,
+    comune: Optional[str] = None,
+    foglio: Optional[str] = None,
+    particella: Optional[str] = None,
+    tipo_catasto: Optional[str] = None,
+    status: Optional[str] = None,
+) -> tuple[str, list]:
+    """Build WHERE clause + params for workflow_runs queries.
+
+    Property filters match against the JSON stored in input_json via json_extract.
+    """
+    conditions: list[str] = []
+    params: list = []
+    if provincia:
+        conditions.append("json_extract(input_json, '$.provincia') = ?")
+        params.append(provincia)
+    if comune:
+        conditions.append("json_extract(input_json, '$.comune') = ?")
+        params.append(comune)
+    if foglio:
+        conditions.append("json_extract(input_json, '$.foglio') = ?")
+        params.append(str(foglio))
+    if particella:
+        conditions.append("json_extract(input_json, '$.particella') = ?")
+        params.append(str(particella))
+    if tipo_catasto:
+        conditions.append("json_extract(input_json, '$.tipo_catasto') = ?")
+        params.append(tipo_catasto)
+    if status == "completed":
+        conditions.append("wf.status = 'completed'")
+    elif status in ("failed", "error"):
+        conditions.append("wf.status IN ('failed', 'error')")
+    elif status == "partial":
+        conditions.append("wf.status = 'partial'")
+    elif status == "pending":
+        conditions.append("wf.status = 'pending'")
+    elif status == "running":
+        conditions.append("wf.status = 'running'")
+    return (" AND ".join(conditions), params)
+
+
+async def count_total_result_rows(
+    provincia: Optional[str] = None,
+    comune: Optional[str] = None,
+    foglio: Optional[str] = None,
+    particella: Optional[str] = None,
+    tipo_catasto: Optional[str] = None,
+    source: Optional[str] = None,
+    status: Optional[str] = None,
+) -> int:
+    """Return total count of result rows matching filters, using SQL COUNT(*)."""
+    if not os.path.exists(DB_PATH):
+        return 0
+
+    if source not in {"single", "workflow"}:
+        source = None
+    if status not in {"completed", "partial", "failed", "error", "pending", "running"}:
+        status = None
+
+    total = 0
+    with sqlite3.connect(DB_PATH) as conn:
+        if source in (None, "single"):
+            where_clause, params = _build_single_where(
+                provincia, comune, foglio, particella, tipo_catasto, status,
+            )
+            sql = """
+                SELECT count(*) FROM visura_requests AS req
+                LEFT JOIN visura_responses AS resp ON req.request_id = resp.request_id
+            """
+            if where_clause:
+                sql += f" WHERE {where_clause}"
+            total += conn.execute(sql, params).fetchone()[0] or 0
+
+        if source in (None, "workflow"):
+            where_clause, params = _build_workflow_where(
+                provincia, comune, foglio, particella, tipo_catasto, status,
+            )
+            sql = "SELECT count(*) FROM workflow_runs AS wf"
+            if where_clause:
+                sql += f" WHERE {where_clause}"
+            total += conn.execute(sql, params).fetchone()[0] or 0
+
+    return total
+
+
+async def count_result_rows(
+    provincia: Optional[str] = None,
+    comune: Optional[str] = None,
+    foglio: Optional[str] = None,
+    particella: Optional[str] = None,
+    tipo_catasto: Optional[str] = None,
+    source: Optional[str] = None,
+) -> dict:
+    """Return web result stats including single-query requests and workflows."""
+    if not os.path.exists(DB_PATH):
+        return {
+            "total_requests": 0,
+            "total_responses": 0,
+            "successful": 0,
+            "failed": 0,
+            "partial": 0,
+            "pending": 0,
+        }
+
+    if source not in {"single", "workflow"}:
+        source = None
+
+    common = dict(provincia=provincia, comune=comune, foglio=foglio, particella=particella, tipo_catasto=tipo_catasto, source=source)
+
+    with sqlite3.connect(DB_PATH) as conn:
+        def _count_single(where_clause: str, params: list) -> int:
+            sql = """
+                SELECT count(*) FROM visura_requests AS req
+                LEFT JOIN visura_responses AS resp ON req.request_id = resp.request_id
+            """
+            if where_clause:
+                sql += f" WHERE {where_clause}"
+            return conn.execute(sql, params).fetchone()[0] or 0
+
+        def _count_workflow(where_clause: str, params: list) -> int:
+            sql = "SELECT count(*) FROM workflow_runs AS wf"
+            if where_clause:
+                sql += f" WHERE {where_clause}"
+            return conn.execute(sql, params).fetchone()[0] or 0
+
+        s_total = s_ok = s_fail = s_pending = 0
+        if source in (None, "single"):
+            base_where, base_params = _build_single_where(provincia, comune, foglio, particella, tipo_catasto)
+            s_total = _count_single(base_where, base_params)
+            s_ok = _count_single(*_build_single_where(provincia, comune, foglio, particella, tipo_catasto, status="completed"))
+            s_fail = _count_single(*_build_single_where(provincia, comune, foglio, particella, tipo_catasto, status="failed"))
+            s_pending = _count_single(*_build_single_where(provincia, comune, foglio, particella, tipo_catasto, status="pending"))
+
+        w_total = w_ok = w_fail = w_partial = w_pending = 0
+        if source in (None, "workflow"):
+            w_total = _count_workflow(*_build_workflow_where(provincia, comune, foglio, particella, tipo_catasto))
+            w_ok = _count_workflow(*_build_workflow_where(provincia, comune, foglio, particella, tipo_catasto, status="completed"))
+            w_fail = _count_workflow(*_build_workflow_where(provincia, comune, foglio, particella, tipo_catasto, status="failed"))
+            w_partial = _count_workflow(*_build_workflow_where(provincia, comune, foglio, particella, tipo_catasto, status="partial"))
+            w_pending = _count_workflow(*_build_workflow_where(provincia, comune, foglio, particella, tipo_catasto, status="pending"))
+
+    return {
+        "total_requests": s_total + w_total,
+        "total_responses": (s_total - s_pending) + w_total,
+        "successful": s_ok + w_ok,
+        "failed": s_fail + w_fail,
+        "partial": w_partial,
+        "pending": s_pending + w_pending,
+    }

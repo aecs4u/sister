@@ -511,7 +511,9 @@ class TestHealthEndpoint:
         response = await main_module.health_check(service)
         payload = json.loads(response.body)
 
-        assert payload["status"] == "healthy"
+        assert payload["status"] in ("healthy", "degraded")
+        assert "auth" in payload
+        assert payload["auth"]["state"] in ("ready", "connecting", "unavailable")
         assert "authenticated" in payload
         assert "queue_size" in payload
         assert "pending_requests" in payload

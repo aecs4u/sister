@@ -1,132 +1,213 @@
 {% extends "sister/base.html" %}
 {% block page_title %}Results{% endblock %}
 
+{% block extra_css %}
+{{ super() }}
+<link href="https://unpkg.com/tabulator-tables@6.3.1/dist/css/tabulator_bootstrap5.min.css" rel="stylesheet">
+<style>
+    .tabulator { font-size: 0.85rem; }
+    .tabulator .tabulator-header .tabulator-col { padding: 6px 8px; }
+    .tabulator .tabulator-cell { padding: 4px 8px; }
+    .tabulator-row.tabulator-row-even { background-color: #f8f9fa; }
+    .stats-card-link { color: inherit; display: block; text-decoration: none; }
+    .stats-card-link .card { transition: transform 0.15s ease, box-shadow 0.15s ease; }
+    .stats-card-link:hover .card { transform: translateY(-1px); box-shadow: 0 .5rem 1rem rgba(0,0,0,.12) !important; }
+    .filter-chip { display: inline-flex; align-items: center; gap: .35rem; }
+    .filter-chip .btn-close { width: .55rem; height: .55rem; padding: 0; }
+</style>
+{% endblock %}
+
 {% block content %}
 <div class="container-fluid py-4">
     <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-4">
         <h1 class="mb-0"><i class="fas fa-database text-primary me-2"></i>Results</h1>
-        {% if current_count %}
-        <span class="text-muted small">Showing {{ offset + 1 }}-{{ offset + current_count }} of recent requests</span>
-        {% endif %}
+        <div class="d-flex align-items-center gap-3">
+            {% if current_count %}
+            <span class="text-muted small">Showing {{ offset + 1 }}&ndash;{{ offset + current_count }} of {{ total_count }} result{% if total_count != 1 %}s{% endif %}</span>
+            {% endif %}
+            <form method="post" action="/web/results/refresh" class="d-inline" id="import-outputs-form">
+                <button type="submit" class="btn btn-outline-primary btn-sm">
+                    <i class="fas fa-file-import me-1"></i>Import Outputs
+                </button>
+            </form>
+        </div>
     </div>
 
-    <!-- Stats bar -->
-    <div class="d-flex flex-wrap gap-2 mb-4">
-        <span class="badge bg-primary fs-6">{{ stats.total_requests }} requests</span>
-        <span class="badge bg-success fs-6">{{ stats.successful }} successful</span>
-        <span class="badge bg-danger fs-6">{{ stats.failed }} failed</span>
-        <span class="badge bg-warning text-dark fs-6">{{ stats.pending }} pending</span>
+    <!-- Stats cards -->
+    <div class="row g-3 mb-4">
+        <div class="col-lg col-md-4 col-6">
+            <a href="{{ stats_urls.total }}" class="stats-card-link">
+            <div class="card border-0 shadow-sm h-100">
+                <div class="card-body text-center py-3">
+                    <i class="fas fa-paper-plane fa-lg text-primary mb-1"></i>
+                    <h4 class="mb-0">{{ stats.total_requests }}</h4>
+                    <small class="text-muted">Total</small>
+                </div>
+            </div>
+            </a>
+        </div>
+        <div class="col-lg col-md-4 col-6">
+            <a href="{{ stats_urls.completed }}" class="stats-card-link">
+            <div class="card border-0 shadow-sm h-100">
+                <div class="card-body text-center py-3">
+                    <i class="fas fa-check-circle fa-lg text-success mb-1"></i>
+                    <h4 class="mb-0">{{ stats.successful }}</h4>
+                    <small class="text-muted">Successful</small>
+                </div>
+            </div>
+            </a>
+        </div>
+        <div class="col-lg col-md-4 col-6">
+            <a href="{{ stats_urls.partial }}" class="stats-card-link">
+            <div class="card border-0 shadow-sm h-100">
+                <div class="card-body text-center py-3">
+                    <i class="fas fa-adjust fa-lg text-warning mb-1"></i>
+                    <h4 class="mb-0">{{ stats.partial or 0 }}</h4>
+                    <small class="text-muted">Partial</small>
+                </div>
+            </div>
+            </a>
+        </div>
+        <div class="col-lg col-md-4 col-6">
+            <a href="{{ stats_urls.failed }}" class="stats-card-link">
+            <div class="card border-0 shadow-sm h-100">
+                <div class="card-body text-center py-3">
+                    <i class="fas fa-times-circle fa-lg text-danger mb-1"></i>
+                    <h4 class="mb-0">{{ stats.failed }}</h4>
+                    <small class="text-muted">Failed</small>
+                </div>
+            </div>
+            </a>
+        </div>
+        <div class="col-lg col-md-4 col-6">
+            <a href="{{ stats_urls.pending }}" class="stats-card-link">
+            <div class="card border-0 shadow-sm h-100">
+                <div class="card-body text-center py-3">
+                    <i class="fas fa-hourglass-half fa-lg text-warning mb-1"></i>
+                    <h4 class="mb-0">{{ stats.pending }}</h4>
+                    <small class="text-muted">Pending</small>
+                </div>
+            </div>
+            </a>
+        </div>
     </div>
 
     <!-- Filter bar -->
-    <form class="row g-2 mb-4" method="get" action="/web/results">
-        <div class="col-md-3">
-            <label for="filter-provincia" class="form-label form-label-sm mb-1">Provincia</label>
-            <input type="text" class="form-control form-control-sm" name="provincia"
-                   id="filter-provincia" placeholder="e.g. Trieste" value="{{ provincia or '' }}">
+    <div class="card border-0 shadow-sm mb-4">
+        <div class="card-body py-3">
+            <form class="row g-2 align-items-end" method="get" action="/web/results">
+                <div class="col-lg col-md-4 col-6">
+                    <label for="filter-provincia" class="form-label form-label-sm mb-1">Provincia</label>
+                    <input type="text" class="form-control form-control-sm" name="provincia"
+                           id="filter-provincia" placeholder="e.g. Trieste" value="{{ provincia or '' }}">
+                </div>
+                <div class="col-lg col-md-4 col-6">
+                    <label for="filter-comune" class="form-label form-label-sm mb-1">Comune</label>
+                    <input type="text" class="form-control form-control-sm" name="comune"
+                           id="filter-comune" placeholder="e.g. TRIESTE" value="{{ comune or '' }}">
+                </div>
+                <div class="col-lg-1 col-md-2 col-6">
+                    <label for="filter-foglio" class="form-label form-label-sm mb-1">Foglio</label>
+                    <input type="text" class="form-control form-control-sm" name="foglio"
+                           id="filter-foglio" placeholder="9" value="{{ foglio or '' }}">
+                </div>
+                <div class="col-lg-1 col-md-2 col-6">
+                    <label for="filter-particella" class="form-label form-label-sm mb-1">Particella</label>
+                    <input type="text" class="form-control form-control-sm" name="particella"
+                           id="filter-particella" placeholder="166" value="{{ particella or '' }}">
+                </div>
+                <div class="col-lg-2 col-md-3 col-6">
+                    <label for="filter-tipo-catasto" class="form-label form-label-sm mb-1">Catasto</label>
+                    <select class="form-select form-select-sm" name="tipo_catasto" id="filter-tipo-catasto">
+                        <option value="">All types</option>
+                        <option value="T" {% if tipo_catasto == 'T' %}selected{% endif %}>Terreni (T)</option>
+                        <option value="F" {% if tipo_catasto == 'F' %}selected{% endif %}>Fabbricati (F)</option>
+                        <option value="E" {% if tipo_catasto == 'E' %}selected{% endif %}>Entrambi (E)</option>
+                    </select>
+                </div>
+                <div class="col-lg-2 col-md-3 col-6">
+                    <label for="filter-source" class="form-label form-label-sm mb-1">Source</label>
+                    <select class="form-select form-select-sm" name="source" id="filter-source">
+                        <option value="">All sources</option>
+                        <option value="single" {% if source == 'single' %}selected{% endif %}>Single</option>
+                        <option value="workflow" {% if source == 'workflow' %}selected{% endif %}>Workflow</option>
+                    </select>
+                </div>
+                <div class="col-lg-2 col-md-3 col-6">
+                    <label for="filter-status" class="form-label form-label-sm mb-1">Status</label>
+                    <select class="form-select form-select-sm" name="status" id="filter-status">
+                        <option value="">All statuses</option>
+                        <option value="completed" {% if status == 'completed' %}selected{% endif %}>Completed</option>
+                        <option value="partial" {% if status == 'partial' %}selected{% endif %}>Partial</option>
+                        <option value="failed" {% if status == 'failed' %}selected{% endif %}>Failed</option>
+                        <option value="error" {% if status == 'error' %}selected{% endif %}>Error</option>
+                        <option value="running" {% if status == 'running' %}selected{% endif %}>Running</option>
+                        <option value="pending" {% if status == 'pending' %}selected{% endif %}>Pending</option>
+                    </select>
+                </div>
+                <div class="col-lg-1 col-md-2 col-6">
+                    <label for="filter-limit" class="form-label form-label-sm mb-1">Rows</label>
+                    <select class="form-select form-select-sm" name="limit" id="filter-limit">
+                        {% if limit not in (10, 25, 50, 100, 200) %}
+                        <option value="{{ limit }}" selected>{{ limit }}</option>
+                        {% endif %}
+                        <option value="10" {% if limit == 10 %}selected{% endif %}>10</option>
+                        <option value="25" {% if limit == 25 %}selected{% endif %}>25</option>
+                        <option value="50" {% if limit == 50 %}selected{% endif %}>50</option>
+                        <option value="100" {% if limit == 100 %}selected{% endif %}>100</option>
+                        <option value="200" {% if limit == 200 %}selected{% endif %}>200</option>
+                    </select>
+                </div>
+                <div class="col-lg-auto col-md-3 col-6 d-flex gap-2">
+                    <button type="submit" class="btn btn-primary btn-sm">
+                        <i class="fas fa-filter me-1"></i>Filter
+                    </button>
+                    {% if provincia or comune or foglio or particella or tipo_catasto or source or status %}
+                    <a href="/web/results" class="btn btn-outline-secondary btn-sm">
+                        <i class="fas fa-times me-1"></i>Clear
+                    </a>
+                    {% endif %}
+                </div>
+            </form>
+            {% if active_filters %}
+            <div class="d-flex flex-wrap align-items-center gap-2 mt-3">
+                <span class="small text-muted">Active filters</span>
+                {% for filter in active_filters %}
+                <span class="badge rounded-pill text-bg-light border filter-chip">
+                    <span>{{ filter.label }}: {{ filter.value }}</span>
+                    <a href="{{ filter.remove_url }}" class="btn-close" aria-label="Remove {{ filter.label }} filter"></a>
+                </span>
+                {% endfor %}
+                <a href="/web/results" class="small text-decoration-none">Clear all</a>
+            </div>
+            {% endif %}
         </div>
-        <div class="col-md-3">
-            <label for="filter-comune" class="form-label form-label-sm mb-1">Comune</label>
-            <input type="text" class="form-control form-control-sm" name="comune"
-                   id="filter-comune" placeholder="e.g. TRIESTE" value="{{ comune or '' }}">
-        </div>
-        <div class="col-md-2">
-            <label for="filter-foglio" class="form-label form-label-sm mb-1">Foglio</label>
-            <input type="text" class="form-control form-control-sm" name="foglio"
-                   id="filter-foglio" placeholder="e.g. 9" value="{{ foglio or '' }}">
-        </div>
-        <div class="col-md-2">
-            <label for="filter-particella" class="form-label form-label-sm mb-1">Particella</label>
-            <input type="text" class="form-control form-control-sm" name="particella"
-                   id="filter-particella" placeholder="e.g. 166" value="{{ particella or '' }}">
-        </div>
-        <div class="col-md-2">
-            <label for="filter-tipo-catasto" class="form-label form-label-sm mb-1">Catasto</label>
-            <select class="form-select form-select-sm" name="tipo_catasto" id="filter-tipo-catasto">
-                <option value="">All types</option>
-                <option value="T" {% if tipo_catasto == 'T' %}selected{% endif %}>Terreni (T)</option>
-                <option value="F" {% if tipo_catasto == 'F' %}selected{% endif %}>Fabbricati (F)</option>
-            </select>
-        </div>
-        <div class="col-md-2 d-flex align-items-end">
-            <button type="submit" class="btn btn-primary btn-sm w-100">
-                <i class="fas fa-filter me-1"></i>Filter
-            </button>
-        </div>
-        <div class="col-md-2 d-flex align-items-end">
-            <a href="/web/results" class="btn btn-outline-secondary btn-sm w-100">Clear</a>
-        </div>
-    </form>
+    </div>
 
     <!-- Results table -->
     {% if results %}
-    <div class="table-responsive">
-        <table class="table table-hover">
-            <thead class="table-light">
-                <tr>
-                    <th>#</th>
-                    <th>Request ID</th>
-                    <th>Type</th>
-                    <th>Cat.</th>
-                    <th>Provincia</th>
-                    <th>Comune</th>
-                    <th>F.</th>
-                    <th>P.</th>
-                    <th>Status</th>
-                    <th>Date</th>
-                </tr>
-            </thead>
-            <tbody>
-                {% for r in results %}
-                <tr>
-                    <td>{{ loop.index + offset }}</td>
-                    <td>
-                        <a href="/web/results/{{ r.request_id }}" class="text-decoration-none" title="{{ r.request_id }}">
-                            <code>{{ r.request_id[:20] }}{% if r.request_id|length > 20 %}...{% endif %}</code>
-                        </a>
-                    </td>
-                    <td><span class="badge bg-secondary">{{ r.request_type or '-' }}</span></td>
-                    <td>{{ r.tipo_catasto or '-' }}</td>
-                    <td>{{ r.provincia or '-' }}</td>
-                    <td>{{ r.comune or '-' }}</td>
-                    <td>{{ r.foglio or '-' }}</td>
-                    <td>{{ r.particella or '-' }}</td>
-                    <td>
-                        {% if r.status == 'completed' %}
-                        <span class="badge bg-success">Completed</span>
-                        {% elif r.status == 'failed' %}
-                        <span class="badge bg-danger">Failed</span>
-                        {% else %}
-                        <span class="badge bg-warning text-dark">Pending</span>
-                        {% endif %}
-                    </td>
-                    <td>
-                        <small class="d-block">{{ r.requested_at_display or '-' }}</small>
-                        {% if r.responded_at_display %}
-                        <small class="text-muted d-block">Resp. {{ r.responded_at_display }}</small>
-                        {% endif %}
-                    </td>
-                </tr>
-                {% endfor %}
-            </tbody>
-        </table>
+    <div class="card border-0 shadow-sm mb-4">
+        <div class="card-body p-0">
+            <div id="tabulator-results"></div>
+        </div>
     </div>
 
     <!-- Pagination -->
+    {% if prev_url or next_url %}
     <nav>
         <ul class="pagination justify-content-center">
-            {% if prev_url %}
-            <li class="page-item">
-                <a class="page-link" href="{{ prev_url }}">&laquo; Previous</a>
+            <li class="page-item{% if not prev_url %} disabled{% endif %}">
+                <a class="page-link" href="{{ prev_url or '#' }}">&laquo; Previous</a>
             </li>
-            {% endif %}
-            {% if next_url %}
-            <li class="page-item">
-                <a class="page-link" href="{{ next_url }}">Next &raquo;</a>
+            <li class="page-item disabled">
+                <span class="page-link">Page {{ (offset // limit) + 1 }}</span>
             </li>
-            {% endif %}
+            <li class="page-item{% if not next_url %} disabled{% endif %}">
+                <a class="page-link" href="{{ next_url or '#' }}">Next &raquo;</a>
+            </li>
         </ul>
     </nav>
+    {% endif %}
     {% else %}
     <div class="text-center py-5">
         <i class="fas fa-inbox fa-3x text-muted mb-3"></i>
@@ -135,4 +216,151 @@
     </div>
     {% endif %}
 </div>
+{% endblock %}
+
+{% block extra_js %}
+{{ super() }}
+<script src="https://unpkg.com/tabulator-tables@6.3.1/dist/js/tabulator.min.js"></script>
+<script>
+(function() {
+    'use strict';
+    var importForm = document.getElementById("import-outputs-form");
+    if (importForm) {
+        importForm.addEventListener("submit", function(event) {
+            if (!window.confirm("Import exported JSON files from outputs/ into the database?")) {
+                event.preventDefault();
+            }
+        });
+    }
+
+    var el = document.getElementById("tabulator-results");
+    if (!el) return;
+
+    function filterUrl(key, value) {
+        var params = new URLSearchParams(window.location.search);
+        params.set(key, value);
+        params.delete("offset");
+        var query = params.toString();
+        return "/web/results" + (query ? "?" + query : "");
+    }
+
+    var data = [
+        {% for r in results %}
+        {
+            "row_num": {{ loop.index + offset }},
+            "request_id": {{ r.request_id | tojson }},
+            "request_id_short": {{ r.request_id[:20] | tojson }},
+            "request_type": {{ (r.request_type or '-') | tojson }},
+            "source": {{ (r.source or 'single') | tojson }},
+            "tipo_catasto": {{ (r.tipo_catasto or '-') | tojson }},
+            "provincia": {{ (r.provincia or '-') | tojson }},
+            "comune": {{ (r.comune or '-') | tojson }},
+            "foglio": {{ (r.foglio or '-') | tojson }},
+            "particella": {{ (r.particella or '-') | tojson }},
+            "status": {{ r.status | tojson }},
+            "requested_at": {{ (r.requested_at_display or '-') | tojson }},
+            "responded_at": {{ (r.responded_at_display or '') | tojson }},
+        },
+        {% endfor %}
+    ];
+
+    new Tabulator(el, {
+        data: data,
+        layout: "fitDataFill",
+        movableColumns: true,
+        placeholder: "No data",
+        height: "auto",
+        maxHeight: "600px",
+        rowClick: function(e, row) {
+            var d = row.getData();
+            var base = d.source === "workflow" ? "/web/workflows/" : "/web/results/";
+            if (d.request_id) window.location.href = base + encodeURIComponent(d.request_id);
+        },
+        columns: [
+            {title: "#", field: "row_num", sorter: "number", width: 55, headerSort: true, hozAlign: "center"},
+            {title: "Request ID", field: "request_id_short", headerFilter: "input", headerFilterPlaceholder: "filter...",
+             formatter: function(cell) {
+                 var d = cell.getRow().getData();
+                 var base = d.source === "workflow" ? "/web/workflows/" : "/web/results/";
+                 var url = base + encodeURIComponent(d.request_id);
+                 var link = document.createElement("a");
+                 var code = document.createElement("code");
+                 link.href = url;
+                 link.title = d.request_id;
+                 code.textContent = d.request_id_short + "...";
+                 link.appendChild(code);
+                 return link;
+             }, cellClick: function(e) { e.stopPropagation(); }},
+            {title: "Source", field: "source", width: 95, hozAlign: "center", headerFilter: "list",
+             headerFilterParams: {values: {"": "All", "single": "Single", "workflow": "Workflow"}},
+             formatter: function(cell) {
+                 var v = cell.getValue();
+                 var link = document.createElement("a");
+                 var span = document.createElement("span");
+                 link.href = filterUrl("source", v || "single");
+                 link.title = "Filter by source";
+                 span.className = v === "workflow" ? "badge bg-primary" : "badge bg-secondary";
+                 span.textContent = v === "workflow" ? "Workflow" : "Single";
+                 link.appendChild(span);
+                 return link;
+             }, cellClick: function(e) { e.stopPropagation(); }},
+            {title: "Type", field: "request_type", headerFilter: "input", headerFilterPlaceholder: "filter...",
+             formatter: function(cell) {
+                 var d = cell.getRow().getData();
+                 var span = document.createElement("span");
+                 span.className = d.source === "workflow" ? "badge bg-primary-subtle text-primary-emphasis" : "badge bg-secondary";
+                 span.textContent = cell.getValue() || "-";
+                 return span;
+             }},
+            {title: "Cat.", field: "tipo_catasto", headerFilter: "input", headerFilterPlaceholder: "filter...", width: 70, hozAlign: "center"},
+            {title: "Provincia", field: "provincia", headerFilter: "input", headerFilterPlaceholder: "filter..."},
+            {title: "Comune", field: "comune", headerFilter: "input", headerFilterPlaceholder: "filter..."},
+            {title: "F.", field: "foglio", headerFilter: "input", headerFilterPlaceholder: "filter...", width: 65, hozAlign: "center"},
+            {title: "P.", field: "particella", headerFilter: "input", headerFilterPlaceholder: "filter...", width: 65, hozAlign: "center"},
+            {title: "Status", field: "status", headerFilter: "list", headerFilterParams: {values: {"": "All", "completed": "Completed", "partial": "Partial", "failed": "Failed", "error": "Error", "pending": "Pending", "running": "Running"}}, width: 115, hozAlign: "center",
+             formatter: function(cell) {
+                 var v = cell.getValue();
+                 var link = document.createElement("a");
+                 var span = document.createElement("span");
+                 link.href = filterUrl("status", v || "pending");
+                 link.title = "Filter by status";
+                 if (v === "completed") {
+                     span.className = "badge bg-success";
+                     span.textContent = "Completed";
+                 } else if (v === "failed" || v === "error") {
+                     span.className = "badge bg-danger";
+                     span.textContent = "Failed";
+                 } else if (v === "partial") {
+                     span.className = "badge bg-warning text-dark";
+                     span.textContent = "Partial";
+                 } else if (v === "running") {
+                     span.className = "badge bg-info text-dark";
+                     span.textContent = "Running";
+                 } else {
+                     span.className = "badge bg-secondary";
+                     span.textContent = "Pending";
+                 }
+                 link.appendChild(span);
+                 return link;
+             }, cellClick: function(e) { e.stopPropagation(); }},
+            {title: "Date", field: "requested_at", sorter: "string", headerFilter: "input", headerFilterPlaceholder: "filter...",
+             formatter: function(cell) {
+                 var d = cell.getRow().getData();
+                 var wrap = document.createElement("div");
+                 var requested = document.createElement("small");
+                 requested.textContent = d.requested_at || "-";
+                 wrap.appendChild(requested);
+                 if (d.responded_at) {
+                     wrap.appendChild(document.createElement("br"));
+                     var responded = document.createElement("small");
+                     responded.className = "text-muted";
+                     responded.textContent = "Resp. " + d.responded_at;
+                     wrap.appendChild(responded);
+                 }
+                 return wrap;
+             }},
+        ],
+    });
+})();
+</script>
 {% endblock %}

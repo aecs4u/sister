@@ -5,6 +5,16 @@
 <div class="container-fluid py-4">
     <h1 class="mb-4"><i class="fas fa-tachometer-alt text-primary me-2"></i>Dashboard</h1>
 
+    {% if auth_status and auth_status.state != 'ready' %}
+    <div class="alert alert-{% if auth_status.state == 'connecting' %}info{% else %}warning{% endif %} border-0 shadow-sm mb-4">
+        <i class="fas fa-{% if auth_status.state == 'connecting' %}spinner fa-spin{% else %}exclamation-triangle{% endif %} me-2"></i>
+        <strong>Browser {{ auth_status.state }}:</strong> {{ auth_status.message }}
+        {% if auth_status.state == 'unavailable' %}
+        <span class="text-muted ms-2">— Web UI is read-only. Live queries are not available.</span>
+        {% endif %}
+    </div>
+    {% endif %}
+
     <!-- Stats -->
     <div class="row g-4 mb-4">
         <div class="col-md-3 col-6">

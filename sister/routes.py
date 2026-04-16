@@ -211,7 +211,8 @@ async def health_check(service: VisuraService):
     db_stats = await count_responses()
     return JSONResponse(
         {
-            "status": "healthy",
+            "status": "healthy" if service.auth_ready else "degraded",
+            "auth": service.auth_status,
             "auth_ready": service.auth_ready,
             "authenticated": service.browser_manager.authenticated,
             "queue_size": service.request_queue.qsize(),

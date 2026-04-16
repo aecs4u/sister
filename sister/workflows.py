@@ -325,8 +325,9 @@ async def _finish_workflow_run(workflow_id: str, status: str, output_json: Optio
             "oj": json.dumps(output_json, default=str) if output_json else None,
             "now": datetime.now().isoformat()})
         await session.commit()
-        # Flush WAL to main database file
-        await session.execute(text("PRAGMA wal_checkpoint(TRUNCATE)"))
+        from .database import is_db_writable
+        if is_db_writable():
+            await session.execute(text("PRAGMA wal_checkpoint(TRUNCATE)"))
 
 
 

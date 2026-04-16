@@ -1,0 +1,77 @@
+{% extends "sister/base.html" %}
+{% block page_title %}Workflows{% endblock %}
+
+{% block content %}
+<div class="container-fluid py-4">
+    <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-4">
+        <h1 class="mb-0"><i class="fas fa-project-diagram text-primary me-2"></i>Workflows</h1>
+        <div class="d-flex align-items-center gap-2">
+            {% if status %}
+            <a href="/web/workflows" class="btn btn-outline-secondary btn-sm"><i class="fas fa-times me-1"></i>Clear filter</a>
+            {% endif %}
+        </div>
+    </div>
+
+    {% if auth_status and auth_status.state != 'ready' %}
+    <div class="alert alert-{% if auth_status.state == 'connecting' %}info{% else %}warning{% endif %} border-0 shadow-sm mb-4">
+        <i class="fas fa-{% if auth_status.state == 'connecting' %}spinner fa-spin{% else %}exclamation-triangle{% endif %} me-2"></i>
+        <strong>Browser {{ auth_status.state }}:</strong> {{ auth_status.message }}
+    </div>
+    {% endif %}
+
+    <!-- Status filter pills -->
+    <div class="mb-4">
+        <a href="/web/workflows" class="btn btn-sm {% if not status %}btn-primary{% else %}btn-outline-secondary{% endif %} me-1">All</a>
+        <a href="/web/workflows?status=completed" class="btn btn-sm {% if status == 'completed' %}btn-success{% else %}btn-outline-success{% endif %} me-1">Completed</a>
+        <a href="/web/workflows?status=partial" class="btn btn-sm {% if status == 'partial' %}btn-warning{% else %}btn-outline-warning{% endif %} me-1">Partial</a>
+        <a href="/web/workflows?status=running" class="btn btn-sm {% if status == 'running' %}btn-info{% else %}btn-outline-info{% endif %} me-1">Running</a>
+        <a href="/web/workflows?status=failed" class="btn btn-sm {% if status == 'failed' %}btn-danger{% else %}btn-outline-danger{% endif %} me-1">Failed</a>
+    </div>
+
+    {% if runs %}
+    <div class="row g-3">
+        {% for run in runs %}
+        <div class="col-lg-6 col-xl-4">
+            <a href="/web/workflows/{{ run.workflow_id }}" class="text-decoration-none">
+                <div class="card border-0 shadow-sm h-100">
+                    <div class="card-body">
+                        <div class="d-flex justify-content-between align-items-start mb-2">
+                            <span class="badge bg-secondary">{{ run.preset }}</span>
+                            <span class="badge bg-{% if run.status == 'completed' %}success{% elif run.status == 'partial' %}warning text-dark{% elif run.status == 'running' %}info{% elif run.status in ('failed', 'error') %}danger{% else %}secondary{% endif %}">
+                                {{ run.status|title }}
+                            </span>
+                        </div>
+                        <h6 class="card-title text-dark mb-2">
+                            {{ run.provincia or '-' }} / {{ run.comune or '-' }}
+                        </h6>
+                        <p class="card-text text-muted small mb-2">
+                            F.{{ run.foglio or '?' }} P.{{ run.particella or '?' }}
+                            {% if run.tipo_catasto %}<span class="badge bg-light text-dark ms-1">{{ run.tipo_catasto }}</span>{% endif %}
+                        </p>
+                        <div class="d-flex justify-content-between align-items-center">
+                            <div class="text-muted small">
+                                <i class="fas fa-tasks me-1"></i>{{ run.completed_steps }}/{{ run.total_steps }} steps
+                            </div>
+                            <div class="text-muted small">{{ run.created_at_display or '-' }}</div>
+                        </div>
+                        {% if run.total_steps > 0 %}
+                        <div class="progress mt-2" style="height: 4px;">
+                            <div class="progress-bar bg-{% if run.status == 'completed' %}success{% elif run.status == 'partial' %}warning{% else %}info{% endif %}"
+                                 style="width: {{ (run.completed_steps / run.total_steps * 100)|round }}%"></div>
+                        </div>
+                        {% endif %}
+                    </div>
+                </div>
+            </a>
+        </div>
+        {% endfor %}
+    </div>
+    {% else %}
+    <div class="text-center py-5">
+        <i class="fas fa-inbox fa-3x text-muted mb-3"></i>
+        <p class="text-muted">No workflow runs found.</p>
+        <a href="/web/forms" class="btn btn-primary">Start a Workflow</a>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

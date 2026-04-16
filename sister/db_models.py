@@ -11,8 +11,8 @@ SQLAlchemy's relationship resolution with SQLModel.
 from datetime import datetime
 from typing import Any, Optional
 
-from sqlalchemy import Column, Index, Text
 from sqlalchemy import JSON as SA_JSON
+from sqlalchemy import Column, Index, Text
 from sqlmodel import Field, Relationship, SQLModel
 
 
@@ -125,6 +125,7 @@ IMMOBILE_FIELD_MAP = {
     "Classe": "classe",
     "Consistenza": "consistenza",
     "Rendita": "rendita",
+    "Zona cens": "zona_censuaria",
     "Zona censuaria": "zona_censuaria",
     "Qualita": "qualita",
     "Qualità": "qualita",

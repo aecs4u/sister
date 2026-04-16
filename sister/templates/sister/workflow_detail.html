@@ -1,0 +1,327 @@
+{% extends "sister/base.html" %}
+{% block page_title %}Workflow {{ workflow_id[:20] }}{% endblock %}
+
+{% block extra_css %}
+{{ super() }}
+<link href="https://unpkg.com/tabulator-tables@6.3.1/dist/css/tabulator_bootstrap5.min.css" rel="stylesheet">
+<style>
+    .tabulator { font-size: 0.85rem; }
+    .tabulator .tabulator-header .tabulator-col { padding: 6px 8px; }
+    .tabulator .tabulator-cell { padding: 4px 8px; }
+    .tabulator-row.tabulator-row-even { background-color: #f8f9fa; }
+    .detail-label { font-weight: 600; color: #6c757d; font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.03em; }
+    .detail-value { font-size: 0.95rem; }
+    .nested-table { --bs-table-bg: transparent; margin-bottom: 0; }
+    .nested-table > :not(caption) > * > * { padding: 0.35rem 0.5rem; vertical-align: top; }
+    .nested-key { width: 16rem; min-width: 10rem; font-weight: 600; color: #495057; background: #f8f9fa; }
+    .nested-index { width: 4rem; color: #6c757d; text-align: right; background: #f8f9fa; }
+    .nested-value { min-width: 12rem; }
+    .nested-scroll { overflow-x: auto; }
+    .nested-empty { color: #6c757d; font-style: italic; }
+    .doc-meta th { width: 35%; font-weight: 500; }
+    .workflow-step-title { min-width: 0; }
+    .workflow-step-title code { white-space: normal; word-break: break-word; }
+    .workflow-step-meta th { width: 12rem; font-weight: 600; color: #495057; background: #f8f9fa; }
+    .workflow-step-section + .workflow-step-section { margin-top: 1rem; }
+</style>
+{% endblock %}
+
+{# Import render macros from result_detail #}
+{% macro render_nested(value, level=0) %}
+    {% if value is mapping %}
+        {% if value %}
+        <div class="nested-scroll">
+            <table class="table table-sm table-bordered nested-table nested-level-{{ level }}">
+                <tbody>
+                    {% for key, child in value.items() %}
+                    <tr>
+                        <th class="nested-key">{{ key }}</th>
+                        <td class="nested-value">{{ render_nested(child, level + 1) }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <span class="nested-empty">Empty</span>
+        {% endif %}
+    {% elif value is sequence and value is not string %}
+        {% if value %}
+            {% set ns = namespace(all_mappings=true, columns=[]) %}
+            {% for item in value %}
+                {% if item is not mapping %}{% set ns.all_mappings = false %}
+                {% else %}{% for col in item.keys() %}{% if col not in ns.columns %}{% set ns.columns = ns.columns + [col] %}{% endif %}{% endfor %}
+                {% endif %}
+            {% endfor %}
+            {% if ns.all_mappings and ns.columns %}
+            <div class="nested-scroll">
+                <table class="table table-sm table-bordered nested-table nested-level-{{ level }}">
+                    <thead class="table-light"><tr><th class="nested-index">#</th>{% for col in ns.columns %}<th>{{ col }}</th>{% endfor %}</tr></thead>
+                    <tbody>{% for item in value %}<tr><td class="nested-index">{{ loop.index }}</td>{% for col in ns.columns %}<td class="nested-value">{{ render_nested(item.get(col), level + 1) }}</td>{% endfor %}</tr>{% endfor %}</tbody>
+                </table>
+            </div>
+            {% else %}
+            <div class="nested-scroll">
+                <table class="table table-sm table-bordered nested-table nested-level-{{ level }}">
+                    <tbody>{% for item in value %}<tr><th class="nested-index">{{ loop.index }}</th><td class="nested-value">{{ render_nested(item, level + 1) }}</td></tr>{% endfor %}</tbody>
+                </table>
+            </div>
+            {% endif %}
+        {% else %}<span class="nested-empty">Empty</span>{% endif %}
+    {% else %}
+        {{ value if value not in (None, '') else '-' }}
+    {% endif %}
+{% endmacro %}
+
+{% macro workflow_status_badge(status) %}
+    {% set normalized = (status or '')|lower %}
+    <span class="badge bg-{% if normalized in ('completed', 'success') %}success{% elif normalized in ('failed', 'error') %}danger{% elif normalized == 'partial' %}warning text-dark{% elif normalized in ('running', 'pending') %}info text-dark{% else %}secondary{% endif %}">
+        {{ (status or '-')|replace('_', ' ')|title }}
+    </span>
+{% endmacro %}
+
+{% block content %}
+<div class="container-fluid py-4">
+    <nav class="mb-3" aria-label="breadcrumb">
+        <ol class="breadcrumb">
+            <li class="breadcrumb-item"><a href="/web/workflows">Workflows</a></li>
+            <li class="breadcrumb-item active" title="{{ workflow_id }}">{{ workflow_id[:30] }}{% if workflow_id|length > 30 %}&hellip;{% endif %}</li>
+        </ol>
+    </nav>
+
+    {% if result %}
+    <!-- Workflow metadata -->
+    <div class="card border-0 shadow-sm mb-4">
+        <div class="card-header d-flex justify-content-between align-items-center">
+            <h4 class="mb-0"><i class="fas fa-project-diagram text-primary me-2"></i>Workflow Details</h4>
+            {{ workflow_status_badge(result.status) }}
+        </div>
+        <div class="card-body">
+            <div class="row g-4">
+                <div class="col-lg-6">
+                    <div class="mb-2">
+                        <div class="detail-label">Workflow ID</div>
+                        <div class="detail-value"><code>{{ result.request_id }}</code></div>
+                    </div>
+                    <div class="row g-3">
+                        <div class="col-6">
+                            <div class="detail-label">Preset</div>
+                            <div class="detail-value"><span class="badge bg-secondary">{{ result.request_type }}</span></div>
+                        </div>
+                        <div class="col-6">
+                            <div class="detail-label">Catasto</div>
+                            <div class="detail-value">{{ result.tipo_catasto or '-' }}</div>
+                        </div>
+                        <div class="col-6">
+                            <div class="detail-label">Started</div>
+                            <div class="detail-value">{{ result.requested_at_display or '-' }}</div>
+                        </div>
+                        <div class="col-6">
+                            <div class="detail-label">Updated</div>
+                            <div class="detail-value">{{ result.responded_at_display or '-' }}</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-lg-6">
+                    <div class="row g-3">
+                        <div class="col-6">
+                            <div class="detail-label">Provincia</div>
+                            <div class="detail-value">{{ result.provincia or '-' }}</div>
+                        </div>
+                        <div class="col-6">
+                            <div class="detail-label">Comune</div>
+                            <div class="detail-value">{{ result.comune or '-' }}</div>
+                        </div>
+                        <div class="col-6">
+                            <div class="detail-label">Foglio / Particella</div>
+                            <div class="detail-value">{{ result.foglio or '-' }} / {{ result.particella or '-' }}</div>
+                        </div>
+                        <div class="col-6">
+                            <div class="detail-label">Sezione / Subalterno</div>
+                            <div class="detail-value">{{ result.sezione or '-' }} / {{ result.subalterno or '-' }}</div>
+                        </div>
+                    </div>
+                    {% if result.error %}
+                    <div class="alert alert-danger mt-3 mb-0">
+                        <i class="fas fa-exclamation-triangle me-2"></i>{{ result.error }}
+                    </div>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+
+    {% if result.data %}
+    {# --- Workflow sections --- #}
+    {% for section in result.sections %}
+        <div class="card border-0 shadow-sm mb-4">
+            <div class="card-header">
+                <h5 class="mb-0">
+                    <i class="fas {% if section.kind == 'workflow_steps' %}fa-project-diagram text-primary{% elif section.kind == 'downloaded_docs' %}fa-file-alt text-danger{% elif section.name == 'aggregate' %}fa-layer-group text-success{% elif section.name == 'summary' %}fa-clipboard-check text-warning{% else %}fa-table text-secondary{% endif %} me-2"></i>{{ section.title }}
+                    {% if section.count is defined %}<span class="text-muted">({{ section.count }})</span>{% endif %}
+                </h5>
+            </div>
+            {% if section.kind == 'workflow_steps' %}
+            <div class="card-body p-0">
+                {% if section.value %}
+                <div class="accordion accordion-flush" id="wf-steps-{{ section.dom_id }}">
+                    {% for step in section.value %}
+                    {% set step_name = step.get('step') or step.get('step_key') or step.get('name') or ('Step ' ~ loop.index) %}
+                    {% set step_status = step.get('status') or step.get('state') or '-' %}
+                    {% set collapse_id = 'wf-step-' ~ section.dom_id ~ '-' ~ loop.index %}
+                    <div class="accordion-item">
+                        <h2 class="accordion-header">
+                            <button class="accordion-button {% if not loop.first %}collapsed{% endif %} py-2" type="button"
+                                    data-bs-toggle="collapse" data-bs-target="#{{ collapse_id }}">
+                                <span class="badge bg-light text-dark me-2">{{ loop.index }}</span>
+                                <code class="me-2">{{ step_name }}</code>
+                                {{ workflow_status_badge(step_status) }}
+                                {% if step.get('started_at') and step.get('finished_at') %}
+                                <span class="text-muted small ms-auto">{{ step.started_at[:16] }} &rarr; {{ step.finished_at[:16] }}</span>
+                                {% endif %}
+                            </button>
+                        </h2>
+                        <div id="{{ collapse_id }}" class="accordion-collapse collapse {% if loop.first %}show{% endif %}"
+                             data-bs-parent="#wf-steps-{{ section.dom_id }}">
+                            <div class="accordion-body">
+                                {% if step.get('error') %}
+                                <div class="alert alert-danger mb-3">
+                                    <strong>Error:</strong> {{ step.error }}
+                                </div>
+                                {% endif %}
+                                {% for key in ['data', 'result', 'output'] %}
+                                    {% if step.get(key) is not none %}
+                                    <h6 class="text-uppercase text-muted small mb-2">{{ key }}</h6>
+                                    {{ render_nested(step.get(key)) }}
+                                    {% endif %}
+                                {% endfor %}
+                            </div>
+                        </div>
+                    </div>
+                    {% endfor %}
+                </div>
+                {% endif %}
+            </div>
+            {% elif section.kind == 'downloaded_docs' %}
+            <div class="card-body p-0">
+                <div class="accordion accordion-flush" id="wf-docs-{{ section.dom_id }}">
+                    {% for doc in section.docs %}
+                    <div class="accordion-item">
+                        <h2 class="accordion-header">
+                            <button class="accordion-button collapsed py-2" type="button"
+                                    data-bs-toggle="collapse" data-bs-target="#wf-doc-{{ section.dom_id }}-{{ loop.index }}">
+                                <span class="badge bg-{% if doc.file_format == 'P7M' %}warning text-dark{% else %}primary{% endif %} me-2">{{ doc.file_format }}</span>
+                                <strong class="me-2">{{ doc.oggetto or doc.filename }}</strong>
+                                {% if doc.intestati_rows %}<span class="badge bg-info">{{ doc.intestati_rows|length }} intestati</span>{% endif %}
+                            </button>
+                        </h2>
+                        <div id="wf-doc-{{ section.dom_id }}-{{ loop.index }}" class="accordion-collapse collapse"
+                             data-bs-parent="#wf-docs-{{ section.dom_id }}">
+                            <div class="accordion-body p-3">
+                                <table class="table table-sm mb-3 doc-meta">
+                                    <tbody>
+                                        {% for label, val in doc.meta %}
+                                        <tr><th class="bg-light">{{ label }}</th><td>{{ val }}</td></tr>
+                                        {% endfor %}
+                                    </tbody>
+                                </table>
+                                {% if doc.xml_parsed %}
+                                <h6 class="mt-3"><i class="fas fa-file-code text-secondary me-1"></i>Parsed XML</h6>
+                                {{ render_nested(doc.xml_parsed) }}
+                                {% endif %}
+                            </div>
+                        </div>
+                    </div>
+                    {% endfor %}
+                </div>
+            </div>
+            {% elif section.kind == 'flat_table' %}
+            <div class="card-body p-0">
+                <div id="tabulator-{{ section.dom_id }}" class="tabulator-table"></div>
+            </div>
+            {% elif section.kind == 'nested_table' %}
+            <div class="card-body p-0">{{ render_nested(section.value) }}</div>
+            {% elif section.kind == 'object' %}
+            <div class="card-body p-0">
+                <table class="table table-sm mb-0">
+                    <tbody>
+                        {% for key, val in section["items"] %}
+                        <tr><th class="w-25 bg-light">{{ key }}</th><td>{% if val is mapping or (val is sequence and val is not string) %}{{ render_nested(val) }}{% else %}{{ val if val not in (None, '') else '-' }}{% endif %}</td></tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% elif section.kind == 'value' %}
+            <div class="card-body">
+                <p class="mb-0">{{ section.value if section.value not in (None, '') else '-' }}</p>
+            </div>
+            {% endif %}
+        </div>
+    {% endfor %}
+
+    <!-- Raw JSON -->
+    <div class="card border-0 shadow-sm">
+        <div class="card-header d-flex justify-content-between align-items-center">
+            <h5 class="mb-0"><i class="fas fa-code text-muted me-2"></i>Raw JSON</h5>
+            <button class="btn btn-sm btn-outline-secondary" type="button" data-bs-toggle="collapse" data-bs-target="#raw-json">
+                <i class="fas fa-eye me-1"></i>Toggle
+            </button>
+        </div>
+        <div class="collapse" id="raw-json">
+            <div class="card-body">
+                <pre class="bg-dark text-light p-3 rounded mb-0" style="max-height: 500px; overflow-y: auto;">{{ result.data | tojson(indent=2) }}</pre>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+
+    {% else %}
+    <div class="alert alert-warning">
+        <i class="fas fa-exclamation-triangle me-2"></i>
+        Workflow not found: <code>{{ workflow_id }}</code>
+    </div>
+    <a href="/web/workflows" class="btn btn-primary">Back to Workflows</a>
+    {% endif %}
+</div>
+{% endblock %}
+
+{% block extra_js %}
+{{ super() }}
+<script src="https://unpkg.com/tabulator-tables@6.3.1/dist/js/tabulator.min.js"></script>
+<script>
+(function() {
+    'use strict';
+    var commonOpts = {
+        layout: "fitDataFill", pagination: true, paginationSize: 25,
+        movableColumns: true, placeholder: "No data", height: "auto", maxHeight: "500px",
+    };
+    function makeColumns(keys) {
+        return keys.map(function(key) {
+            return { title: key, field: key, headerFilter: "input", sorter: "string",
+                formatter: function(cell) {
+                    var v = cell.getValue();
+                    var span = document.createElement("span");
+                    if (v === null || v === undefined || v === "") span.textContent = "-";
+                    else if (typeof v === "object") span.textContent = JSON.stringify(v);
+                    else span.textContent = String(v);
+                    return span;
+                }};
+        });
+    }
+    {% if result and result.sections %}
+    {% for section in result.sections %}
+    {% if section.kind == 'flat_table' %}
+    (function() {
+        var el = document.getElementById("tabulator-{{ section.dom_id }}");
+        if (!el) return;
+        new Tabulator(el, Object.assign({}, commonOpts, {
+            data: {{ section.rows | tojson }},
+            columns: makeColumns({{ section.columns | tojson }}),
+        }));
+    })();
+    {% endif %}
+    {% endfor %}
+    {% endif %}
+})();
+</script>
+{% endblock %}

@@ -166,7 +166,8 @@ async def test_health_check_exposes_runtime_metrics(main_module):
     payload = json.loads(response.body)
 
     assert response.status_code == 200
-    assert payload["status"] == "healthy"
+    assert payload["status"] in ("healthy", "degraded")
+    assert "auth" in payload
     assert payload["pending_requests"] == 2
     assert payload["cached_responses"] == 1
     assert payload["response_ttl_seconds"] == 123

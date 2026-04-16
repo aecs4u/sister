@@ -983,17 +983,20 @@ async def _set_visura_form_defaults(page):
 
 
 async def _download_richieste_documents(page, page_logger) -> list[dict]:
-    """Navigate to the Richieste page and download all available documents.
+    """Navigate to the Richieste page, extract metadata, download and rename files.
 
-    Downloads PDF, XML, and P7M files from the "salva" column.
-    Parses XML files to extract structured data.
-    Persists documents to the visura_documents table.
+    1. Scrapes the Richieste table for metadata (Oggetto, timestamp, idRichiesta)
+    2. Downloads each document from the "salva" column
+    3. Extracts P7M → XML via openssl
+    4. Parses XML for structured data
+    5. Renames files using Oggetto metadata (e.g. "VISURA FG.101 ... SUB.62")
+    6. Persists to visura_documents table
 
     Returns a list of dicts with download info.
     """
     from .database import OUTPUTS_DIR
 
-    # Find the Richieste link on the current page (opens in popup, so we use goto)
+    # Navigate to Richieste page
     richieste_link = page.locator("a:has-text('Richieste')")
     if await richieste_link.count() == 0:
         await _navigate_to_scelta_servizio(page, page_logger)
@@ -1005,7 +1008,6 @@ async def _download_richieste_documents(page, page_logger) -> list[dict]:
 
     href = await richieste_link.get_attribute("href")
     if not href:
-        log.warning("Link Richieste senza href")
         return []
 
     if not href.startswith("http"):
@@ -1014,103 +1016,174 @@ async def _download_richieste_documents(page, page_logger) -> list[dict]:
     await page.wait_for_load_state("networkidle", timeout=30000)
     await page_logger.log(page, "richieste")
 
-    # Extract table rows from the Richieste page
-    rows = page.locator("table tr").filter(has=page.locator("td"))
-    row_count = await rows.count()
-    log.info("Righe Richieste trovate: %d", row_count)
+    # --- Step 1: Extract table metadata using BS4 ---
+    html_content = await page.content()
+    richieste_meta = _parse_richieste_table(html_content)
+    log.info("Richieste trovate: %d", len(richieste_meta))
+
+    if not richieste_meta:
+        return []
 
     docs_dir = os.path.join(OUTPUTS_DIR, "documents")
     os.makedirs(docs_dir, exist_ok=True)
 
+    # --- Step 2: Download each document ---
     downloaded = []
 
-    for i in range(row_count):
-        row = rows.nth(i)
-        cells = row.locator("td")
-        cell_count = await cells.count()
-        if cell_count < 4:
+    for meta in richieste_meta:
+        salva_href = meta.get("salva_href", "")
+        if not salva_href:
             continue
 
-        # Extract row metadata
-        richiesta_del = (await cells.nth(0).inner_text()).strip() if cell_count > 0 else ""
-        oggetto = (await cells.nth(1).inner_text()).strip() if cell_count > 1 else ""
-        formato = (await cells.nth(2).inner_text()).strip() if cell_count > 2 else ""
+        id_richiesta = meta.get("id_richiesta", "")
+        oggetto = meta.get("oggetto", "")
+        richiesta_del = meta.get("richiesta_del", "")
+        formato = meta.get("formato", "")
 
-        # Find download links in "salva" column (typically the second-to-last column)
-        save_links = row.locator("a[href*='salva'], a[href*='Documento'], a img[alt*='salva' i]")
-        if await save_links.count() == 0:
-            # Try any link in the last few cells
-            for ci in range(max(0, cell_count - 3), cell_count):
-                cell_links = cells.nth(ci).locator("a[href]")
-                if await cell_links.count() > 0:
-                    save_links = cell_links
-                    break
+        # Build a descriptive filename from Oggetto
+        safe_oggetto = re.sub(r"[^\w\-.]", "_", oggetto)[:80].strip("_")
+        desc_filename = f"{safe_oggetto}_{id_richiesta}" if safe_oggetto else f"DOC_{id_richiesta}"
 
-        link_count = await save_links.count()
-        for li in range(link_count):
-            link = save_links.nth(li)
-            link_href = await link.get_attribute("href") or ""
-            if not link_href or "javascript:void" in link_href.lower() or "elimina" in link_href.lower():
+        try:
+            # Find and click the salva link for this idRichiesta
+            link = page.locator(f"a[href*='idRichiesta={id_richiesta}'][href*='salva']")
+            if await link.count() == 0:
+                link = page.locator(f"a[href*='{id_richiesta}']")
+            if await link.count() == 0:
+                log.warning("Link salva non trovato per idRichiesta=%s", id_richiesta)
                 continue
 
-            try:
-                async with page.expect_download(timeout=60000) as download_info:
-                    await link.click()
-                download = await download_info.value
-                filename = download.suggested_filename or f"richiesta_{i + 1}_{li}.dat"
-                save_path = os.path.join(docs_dir, filename)
-                await download.save_as(save_path)
-                file_size = os.path.getsize(save_path)
+            async with page.expect_download(timeout=60000) as download_info:
+                await link.first.click()
+            download = await download_info.value
+            orig_filename = download.suggested_filename or f"DOC_{id_richiesta}.dat"
 
-                file_ext = os.path.splitext(filename)[1].lower()
-                file_format = file_ext.lstrip(".").upper() or formato.upper()
-                log.info("Documento scaricato: %s (%s, %d bytes)", filename, file_format, file_size)
+            # Determine extension from original filename or formato
+            file_ext = os.path.splitext(orig_filename)[1].lower() or f".{formato.lower()}" or ".dat"
+            file_format = file_ext.lstrip(".").upper()
 
-                doc_info = {
-                    "filename": filename,
-                    "path": save_path,
-                    "file_format": file_format,
-                    "file_size": file_size,
-                    "oggetto": oggetto,
-                    "richiesta_del": richiesta_del,
-                    "parsed_data": None,
-                }
+            # Save with descriptive name
+            final_filename = f"{desc_filename}{file_ext}"
+            save_path = os.path.join(docs_dir, final_filename)
+            # Avoid overwrites
+            if os.path.exists(save_path):
+                final_filename = f"{desc_filename}_{id_richiesta}{file_ext}"
+                save_path = os.path.join(docs_dir, final_filename)
+            await download.save_as(save_path)
+            file_size = os.path.getsize(save_path)
 
-                # Extract P7M and parse XML content
-                if file_format == "P7M":
-                    extracted_path = _extract_p7m(save_path)
-                    if extracted_path:
-                        doc_info["extracted_path"] = extracted_path
-                if file_format in ("XML", "P7M"):
-                    parsed = _parse_visura_xml(save_path)
-                    if parsed:
-                        doc_info["parsed_data"] = parsed
-                        log.info("XML parsed: %s — %d intestati, %s",
-                                 parsed.get("tipo", ""), len(parsed.get("intestati", [])),
-                                 f"F.{parsed.get('foglio')} P.{parsed.get('particella')}")
-                        # Rename extracted file to descriptive name
-                        desc_name = _descriptive_filename(parsed)
-                        if desc_name and doc_info.get("extracted_path"):
-                            ext = ".xml" if "xml" in (open(doc_info["extracted_path"], "rb").read(20).decode(errors="ignore").lower()) else ".dat"
-                            new_path = os.path.join(docs_dir, desc_name + ext)
-                            if new_path != doc_info["extracted_path"] and not os.path.exists(new_path):
-                                os.rename(doc_info["extracted_path"], new_path)
-                                doc_info["extracted_path"] = new_path
-                                log.info("File rinominato: %s", desc_name + ext)
+            log.info("[%d/%d] Scaricato: %s (%s, %d bytes) — %s",
+                     len(downloaded) + 1, len(richieste_meta),
+                     final_filename, file_format, file_size, oggetto[:50])
 
-                downloaded.append(doc_info)
+            doc_info = {
+                "filename": final_filename,
+                "original_filename": orig_filename,
+                "path": save_path,
+                "file_format": file_format,
+                "file_size": file_size,
+                "oggetto": oggetto,
+                "richiesta_del": richiesta_del,
+                "id_richiesta": id_richiesta,
+                "parsed_data": None,
+            }
 
-            except Exception as e:
-                log.warning("Errore download documento riga %d link %d: %s", i + 1, li + 1, e)
+            # Extract P7M and parse XML
+            if file_format == "P7M":
+                extracted_path = _extract_p7m(save_path)
+                if extracted_path:
+                    # Rename extracted file to descriptive name
+                    xml_path = os.path.join(docs_dir, f"{desc_filename}.xml")
+                    if not os.path.exists(xml_path):
+                        os.rename(extracted_path, xml_path)
+                        extracted_path = xml_path
+                    doc_info["extracted_path"] = extracted_path
 
-    # Persist to database
+            if file_format in ("XML", "P7M"):
+                parsed = _parse_visura_xml(save_path)
+                if parsed:
+                    doc_info["parsed_data"] = parsed
+                    log.info("  XML: %s F.%s P.%s Sub.%s — %d intestati",
+                             parsed.get("tipo", ""), parsed.get("foglio", ""),
+                             parsed.get("particella", ""), parsed.get("subalterno", ""),
+                             len(parsed.get("intestati", [])))
+
+            downloaded.append(doc_info)
+
+        except Exception as e:
+            log.warning("Errore download %s (id=%s): %s", oggetto[:40], id_richiesta, e)
+
+    # --- Step 3: Persist to database ---
     try:
         await _save_documents_to_db(downloaded)
     except Exception as e:
         log.warning("Errore salvataggio documenti in DB: %s", e)
 
-    log.info("[green]%d documenti scaricati[/green] da Richieste", len(downloaded))
+    log.info("[green]%d/%d documenti scaricati[/green] da Richieste", len(downloaded), len(richieste_meta))
     return downloaded
+
+
+def _parse_richieste_table(html_content: str) -> list[dict]:
+    """Parse the ConsultazioneRichieste table HTML into structured metadata.
+
+    Returns a list of dicts with keys:
+      richiesta_del, oggetto, formato, costo, salva_href, id_richiesta
+    """
+    soup = BeautifulSoup(html_content, "html.parser")
+
+    # Find the table with "Richiesta del" header
+    target_table = None
+    for table in soup.find_all("table"):
+        ths = table.find_all("th")
+        headers = [th.get_text(strip=True) for th in ths]
+        if "Richiesta del" in headers:
+            target_table = table
+            break
+
+    if not target_table:
+        return []
+
+    results = []
+    for tr in target_table.find_all("tr"):
+        tds = tr.find_all("td")
+        if len(tds) < 4:
+            continue
+
+        richiesta_del = tds[0].get_text(strip=True).replace("\xa0", " ")
+        oggetto = tds[1].get_text(strip=True)
+        formato = tds[2].get_text(strip=True)
+        costo = tds[3].get_text(strip=True) if len(tds) > 3 else ""
+
+        # Find "salva" link
+        salva_href = ""
+        id_richiesta = ""
+        for td in tds:
+            for a in td.find_all("a"):
+                href = a.get("href", "")
+                if "salva" in href:
+                    salva_href = href
+                    # Extract idRichiesta from URL
+                    import urllib.parse
+                    parsed_url = urllib.parse.urlparse(href)
+                    params = urllib.parse.parse_qs(parsed_url.query)
+                    id_richiesta = params.get("idRichiesta", [""])[0]
+                    break
+            if salva_href:
+                break
+
+        if not salva_href:
+            continue
+
+        results.append({
+            "richiesta_del": richiesta_del,
+            "oggetto": oggetto,
+            "formato": formato,
+            "costo": costo,
+            "salva_href": salva_href,
+            "id_richiesta": id_richiesta,
+        })
+
+    return results
 
 
 def _descriptive_filename(parsed: dict) -> str:

@@ -9,29 +9,192 @@
     .tabulator .tabulator-header .tabulator-col { padding: 6px 8px; }
     .tabulator .tabulator-cell { padding: 4px 8px; }
     .tabulator-row.tabulator-row-even { background-color: #f8f9fa; }
+    .copy-btn { cursor: pointer; opacity: 0.6; transition: opacity 0.15s; }
+    .copy-btn:hover { opacity: 1; }
+    .detail-label { font-weight: 600; color: #6c757d; font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.03em; }
+    .detail-value { font-size: 0.95rem; }
+    .doc-meta th { width: 35%; font-weight: 500; }
+    .nested-table { --bs-table-bg: transparent; margin-bottom: 0; }
+    .nested-table > :not(caption) > * > * { padding: 0.35rem 0.5rem; vertical-align: top; }
+    .nested-key { width: 16rem; min-width: 10rem; font-weight: 600; color: #495057; background: #f8f9fa; }
+    .nested-index { width: 4rem; color: #6c757d; text-align: right; background: #f8f9fa; }
+    .nested-value { min-width: 12rem; }
+    .nested-scroll { overflow-x: auto; }
+    .nested-empty { color: #6c757d; font-style: italic; }
+    .workflow-step-title { min-width: 0; }
+    .workflow-step-title code { white-space: normal; word-break: break-word; }
+    .workflow-step-meta th { width: 12rem; font-weight: 600; color: #495057; background: #f8f9fa; }
+    .workflow-step-section + .workflow-step-section { margin-top: 1rem; }
 </style>
 {% endblock %}
 
-{% macro render_object_section(section, icon='fa-list', color='secondary') %}
-<div class="card border-0 shadow-sm mb-4">
-    <div class="card-header">
-        <h5 class="mb-0">
-            <i class="fas {{ icon }} text-{{ color }} me-2"></i>{{ section.title }}
-        </h5>
+{# --- Recursive renderer for nested dicts/lists --- #}
+{% macro render_nested(value, level=0) %}
+    {% if value is mapping %}
+        {% if value %}
+        <div class="nested-scroll">
+            <table class="table table-sm table-bordered nested-table nested-level-{{ level }}">
+                <tbody>
+                    {% for key, child in value.items() %}
+                    <tr>
+                        <th class="nested-key">{{ key }}</th>
+                        <td class="nested-value">{{ render_nested(child, level + 1) }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <span class="nested-empty">Empty</span>
+        {% endif %}
+    {% elif value is sequence and value is not string %}
+        {% if value %}
+            {% set ns = namespace(all_mappings=true, columns=[]) %}
+            {% for item in value %}
+                {% if item is not mapping %}
+                    {% set ns.all_mappings = false %}
+                {% else %}
+                    {% for col in item.keys() %}
+                        {% if col not in ns.columns %}
+                            {% set ns.columns = ns.columns + [col] %}
+                        {% endif %}
+                    {% endfor %}
+                {% endif %}
+            {% endfor %}
+            {% if ns.all_mappings and ns.columns %}
+            <div class="nested-scroll">
+                <table class="table table-sm table-bordered nested-table nested-level-{{ level }}">
+                    <thead class="table-light">
+                        <tr>
+                            <th class="nested-index">#</th>
+                            {% for col in ns.columns %}
+                            <th>{{ col }}</th>
+                            {% endfor %}
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for item in value %}
+                        <tr>
+                            <td class="nested-index">{{ loop.index }}</td>
+                            {% for col in ns.columns %}
+                            <td class="nested-value">{{ render_nested(item.get(col), level + 1) }}</td>
+                            {% endfor %}
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% else %}
+            <div class="nested-scroll">
+                <table class="table table-sm table-bordered nested-table nested-level-{{ level }}">
+                    <tbody>
+                        {% for item in value %}
+                        <tr>
+                            <th class="nested-index">{{ loop.index }}</th>
+                            <td class="nested-value">{{ render_nested(item, level + 1) }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% endif %}
+        {% else %}
+        <span class="nested-empty">Empty</span>
+        {% endif %}
+    {% else %}
+        {{ value if value not in (None, '') else '-' }}
+    {% endif %}
+{% endmacro %}
+
+{# --- Workflow status badge --- #}
+{% macro workflow_status_badge(status) %}
+    {% set normalized = (status or '')|lower %}
+    <span class="badge bg-{% if normalized in ('completed', 'success', 'succeeded', 'ok') %}success{% elif normalized in ('failed', 'error') %}danger{% elif normalized == 'partial' %}warning text-dark{% elif normalized in ('running', 'pending') %}info text-dark{% else %}secondary{% endif %}">
+        {{ (status or '-')|replace('_', ' ')|title }}
+    </span>
+{% endmacro %}
+
+{# --- Workflow steps accordion --- #}
+{% macro render_workflow_steps(steps, section_id) %}
+    {% if steps %}
+    <div class="accordion accordion-flush" id="workflow-steps-{{ section_id }}">
+        {% for step in steps %}
+        {% set step_name = step.get('step') or step.get('step_key') or step.get('name') or ('Step ' ~ loop.index) %}
+        {% set step_status = step.get('status') or step.get('state') or '-' %}
+        {% set collapse_id = 'workflow-step-' ~ section_id ~ '-' ~ loop.index %}
+        <div class="accordion-item">
+            <h2 class="accordion-header">
+                <button class="accordion-button {% if not loop.first %}collapsed{% endif %} py-2" type="button"
+                        data-bs-toggle="collapse" data-bs-target="#{{ collapse_id }}"
+                        aria-expanded="{{ 'true' if loop.first else 'false' }}" aria-controls="{{ collapse_id }}">
+                    <span class="badge bg-light text-dark me-2">{{ loop.index }}</span>
+                    <span class="workflow-step-title me-2"><code>{{ step_name }}</code></span>
+                    {{ workflow_status_badge(step_status) }}
+                </button>
+            </h2>
+            <div id="{{ collapse_id }}" class="accordion-collapse collapse {% if loop.first %}show{% endif %}"
+                 data-bs-parent="#workflow-steps-{{ section_id }}">
+                <div class="accordion-body">
+                    {% set metadata_keys = ['step', 'step_key', 'name', 'status', 'state', 'started_at', 'finished_at', 'duration_seconds', 'duration_ms', 'request_id', 'success'] %}
+                    {% set primary_keys = ['data', 'result', 'output', 'aggregate', 'summary', 'error'] %}
+                    <div class="workflow-step-section">
+                        <table class="table table-sm table-bordered mb-0 workflow-step-meta">
+                            <tbody>
+                                {% for key in metadata_keys %}
+                                    {% if step.get(key) is not none %}
+                                    <tr>
+                                        <th>{{ key }}</th>
+                                        <td>
+                                            {% if key in ('status', 'state') %}
+                                                {{ workflow_status_badge(step.get(key)) }}
+                                            {% else %}
+                                                {{ render_nested(step.get(key), 1) }}
+                                            {% endif %}
+                                        </td>
+                                    </tr>
+                                    {% endif %}
+                                {% endfor %}
+                                {% for key, child in step.items() %}
+                                    {% if key not in metadata_keys and key not in primary_keys and not (child is mapping) and not (child is sequence and child is not string) %}
+                                    <tr>
+                                        <th>{{ key }}</th>
+                                        <td>{{ render_nested(child, 1) }}</td>
+                                    </tr>
+                                    {% endif %}
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                    {% if step.get('error') is not none %}
+                    <div class="alert alert-danger mt-3 mb-0">
+                        <strong>Error</strong>
+                        <div class="mt-2">{{ render_nested(step.get('error'), 1) }}</div>
+                    </div>
+                    {% endif %}
+                    {% for key in ['data', 'result', 'output', 'aggregate', 'summary'] %}
+                        {% if step.get(key) is not none %}
+                        <div class="workflow-step-section">
+                            <h6 class="text-uppercase text-muted small mb-2">{{ key|replace('_', ' ') }}</h6>
+                            {{ render_nested(step.get(key), 1) }}
+                        </div>
+                        {% endif %}
+                    {% endfor %}
+                    {% for key, child in step.items() %}
+                        {% if key not in metadata_keys and key not in primary_keys and (child is mapping or (child is sequence and child is not string)) %}
+                        <div class="workflow-step-section">
+                            <h6 class="text-uppercase text-muted small mb-2">{{ key|replace('_', ' ') }}</h6>
+                            {{ render_nested(child, 1) }}
+                        </div>
+                        {% endif %}
+                    {% endfor %}
+                </div>
+            </div>
+        </div>
+        {% endfor %}
     </div>
-    <div class="card-body p-0">
-        <table class="table table-sm mb-0">
-            <tbody>
-                {% for key, value in section["items"] %}
-                <tr>
-                    <th class="w-25 bg-light">{{ key }}</th>
-                    <td>{{ value if value not in (None, '') else '-' }}</td>
-                </tr>
-                {% endfor %}
-            </tbody>
-        </table>
-    </div>
-</div>
+    {% else %}
+    <span class="nested-empty">Empty</span>
+    {% endif %}
 {% endmacro %}
 
 {% block content %}
@@ -39,7 +202,7 @@
     <nav class="mb-3" aria-label="breadcrumb">
         <ol class="breadcrumb">
             <li class="breadcrumb-item"><a href="/web/results">Results</a></li>
-            <li class="breadcrumb-item active">{{ request_id[:30] }}</li>
+            <li class="breadcrumb-item active" title="{{ request_id }}">{{ request_id[:30] }}{% if request_id|length > 30 %}&hellip;{% endif %}</li>
         </ol>
     </nav>
 
@@ -48,26 +211,66 @@
     <div class="card border-0 shadow-sm mb-4">
         <div class="card-header d-flex justify-content-between align-items-center">
             <h4 class="mb-0"><i class="fas fa-info-circle text-primary me-2"></i>Request Details</h4>
-            <span class="badge bg-{% if result.status == 'completed' %}success{% elif result.status == 'failed' %}danger{% else %}warning text-dark{% endif %} fs-6">
-                {% if result.status == 'completed' %}Completed{% elif result.status == 'failed' %}Failed{% else %}Pending{% endif %}
+            <span class="badge bg-{% if result.status == 'completed' %}success{% elif result.status in ('failed', 'error') %}danger{% elif result.status == 'partial' %}warning text-dark{% elif result.status == 'running' %}info text-dark{% else %}secondary{% endif %} fs-6">
+                {% if result.status == 'completed' %}Completed{% elif result.status in ('failed', 'error') %}Failed{% elif result.status == 'partial' %}Partial{% elif result.status == 'running' %}Running{% elif result.status == 'pending' %}Pending{% else %}{{ result.status|title }}{% endif %}
             </span>
         </div>
         <div class="card-body">
-            <div class="row">
-                <div class="col-md-6">
-                    <p><strong>Request ID:</strong> <code>{{ result.request_id }}</code></p>
-                    <p><strong>Request Type:</strong> {{ result.request_type or '-' }}</p>
-                    <p><strong>Catasto:</strong> {{ result.tipo_catasto or '-' }}</p>
-                    <p><strong>Requested:</strong> {{ result.requested_at_display or '-' }}</p>
-                    <p><strong>Responded:</strong> {{ result.responded_at_display or '-' }}</p>
+            <div class="row g-4">
+                <div class="col-lg-6">
+                    <div class="mb-3">
+                        <div class="detail-label">Request ID</div>
+                        <div class="detail-value d-flex align-items-center gap-2">
+                            <code class="user-select-all" id="req-id-text">{{ result.request_id }}</code>
+                            <button class="btn btn-sm btn-outline-secondary copy-btn" type="button"
+                                    id="btn-copy-request-id"
+                                    title="Copy to clipboard">
+                                <i class="fas fa-copy"></i>
+                            </button>
+                        </div>
+                    </div>
+                    <div class="row g-3">
+                        <div class="col-6">
+                            <div class="detail-label">Request Type</div>
+                            <div class="detail-value">
+                                <span class="badge bg-secondary">{{ result.request_type or '-' }}</span>
+                            </div>
+                        </div>
+                        <div class="col-6">
+                            <div class="detail-label">Catasto</div>
+                            <div class="detail-value">{{ result.tipo_catasto or '-' }}</div>
+                        </div>
+                        <div class="col-6">
+                            <div class="detail-label">Requested</div>
+                            <div class="detail-value">{{ result.requested_at_display or '-' }}</div>
+                        </div>
+                        <div class="col-6">
+                            <div class="detail-label">Responded</div>
+                            <div class="detail-value">{{ result.responded_at_display or '-' }}</div>
+                        </div>
+                    </div>
                 </div>
-                <div class="col-md-6">
-                    <p><strong>Provincia:</strong> {{ result.provincia or '-' }}</p>
-                    <p><strong>Comune:</strong> {{ result.comune or '-' }}</p>
-                    <p><strong>Foglio / Particella:</strong> {{ result.foglio or '-' }} / {{ result.particella or '-' }}</p>
-                    <p><strong>Sezione / Subalterno:</strong> {{ result.sezione or '-' }} / {{ result.subalterno or '-' }}</p>
+                <div class="col-lg-6">
+                    <div class="row g-3">
+                        <div class="col-6">
+                            <div class="detail-label">Provincia</div>
+                            <div class="detail-value">{{ result.provincia or '-' }}</div>
+                        </div>
+                        <div class="col-6">
+                            <div class="detail-label">Comune</div>
+                            <div class="detail-value">{{ result.comune or '-' }}</div>
+                        </div>
+                        <div class="col-6">
+                            <div class="detail-label">Foglio / Particella</div>
+                            <div class="detail-value">{{ result.foglio or '-' }} / {{ result.particella or '-' }}</div>
+                        </div>
+                        <div class="col-6">
+                            <div class="detail-label">Sezione / Subalterno</div>
+                            <div class="detail-value">{{ result.sezione or '-' }} / {{ result.subalterno or '-' }}</div>
+                        </div>
+                    </div>
                     {% if result.error %}
-                    <div class="alert alert-danger">
+                    <div class="alert alert-danger mt-3 mb-0">
                         <i class="fas fa-exclamation-triangle me-2"></i>{{ result.error }}
                     </div>
                     {% endif %}
@@ -83,27 +286,84 @@
     </div>
     {% elif result.data %}
 
-    {# --- Data sections rendered as Tabulator tables --- #}
+    {# --- Data sections --- #}
     {% for section in result.sections %}
-        {% if section.kind == 'table' %}
         <div class="card border-0 shadow-sm mb-4">
             <div class="card-header">
                 <h5 class="mb-0">
-                    <i class="fas {% if section.name == 'immobili' %}fa-home text-success{% elif section.name == 'intestati' %}fa-users text-info{% else %}fa-table text-primary{% endif %} me-2"></i>{{ section.title }}
+                    <i class="fas {% if section.name == 'immobili' %}fa-home text-success{% elif section.name == 'intestati' %}fa-users text-info{% elif section.name in ('steps', 'persisted_steps') %}fa-project-diagram text-primary{% elif section.name == 'aggregate' %}fa-layer-group text-success{% elif section.name == 'summary' %}fa-clipboard-check text-warning{% elif section.name == 'downloaded_pdfs' %}fa-file-alt text-danger{% else %}fa-table text-secondary{% endif %} me-2"></i>{{ section.title }}
                     {% if section.count is defined %}<span class="text-muted">({{ section.count }})</span>{% endif %}
                 </h5>
             </div>
+            {% if section.kind == 'flat_table' %}
             <div class="card-body p-0">
-                <div id="tabulator-{{ section.name }}" class="tabulator-table"></div>
+                <div id="tabulator-{{ section.dom_id }}" class="tabulator-table"></div>
             </div>
-        </div>
-        {% elif section.kind == 'object' %}
-            {{ render_object_section(section, 'fa-list', 'secondary') }}
-        {% elif section.kind == 'list' %}
-        <div class="card border-0 shadow-sm mb-4">
-            <div class="card-header">
-                <h5 class="mb-0"><i class="fas fa-list text-secondary me-2"></i>{{ section.title }}</h5>
+            {% elif section.kind == 'workflow_steps' %}
+            <div class="card-body p-0">
+                {{ render_workflow_steps(section.value, section.dom_id) }}
             </div>
+            {% elif section.kind == 'downloaded_docs' %}
+            <div class="card-body p-0">
+                <div class="accordion accordion-flush" id="inline-docs-{{ section.dom_id }}">
+                    {% for doc in section.docs %}
+                    <div class="accordion-item">
+                        <h2 class="accordion-header">
+                            <button class="accordion-button collapsed py-2" type="button"
+                                    data-bs-toggle="collapse" data-bs-target="#inline-doc-{{ section.dom_id }}-{{ loop.index }}">
+                                <span class="badge bg-{% if doc.file_format == 'XML' %}success{% elif doc.file_format == 'P7M' %}warning text-dark{% else %}primary{% endif %} me-2">{{ doc.file_format }}</span>
+                                <strong class="me-2">{{ doc.oggetto or doc.filename }}</strong>
+                                {% if doc.intestati_rows %}<span class="badge bg-info me-2">{{ doc.intestati_rows|length }} intestati</span>{% endif %}
+                                {% if doc.file_size %}<span class="text-muted small">{{ (doc.file_size / 1024)|round(1) }}KB</span>{% endif %}
+                            </button>
+                        </h2>
+                        <div id="inline-doc-{{ section.dom_id }}-{{ loop.index }}" class="accordion-collapse collapse"
+                             data-bs-parent="#inline-docs-{{ section.dom_id }}">
+                            <div class="accordion-body p-3">
+                                <table class="table table-sm mb-3 doc-meta">
+                                    <tbody>
+                                        {% for label, val in doc.meta %}
+                                        <tr>
+                                            <th class="bg-light">{{ label }}</th>
+                                            <td>{% if label == 'Filename' %}<code>{{ val }}</code>{% else %}{{ val }}{% endif %}</td>
+                                        </tr>
+                                        {% endfor %}
+                                    </tbody>
+                                </table>
+
+                                {% if doc.intestati_rows %}
+                                <h6 class="mt-3"><i class="fas fa-users text-info me-1"></i>Intestati ({{ doc.intestati_rows|length }})</h6>
+                                <div id="tabulator-inline-intestati-{{ section.dom_id }}-{{ loop.index }}"></div>
+                                {% endif %}
+
+                                {% if doc.xml_parsed %}
+                                <h6 class="mt-3"><i class="fas fa-file-code text-secondary me-1"></i>XML Content</h6>
+                                {{ render_nested(doc.xml_parsed) }}
+                                {% endif %}
+                            </div>
+                        </div>
+                    </div>
+                    {% endfor %}
+                </div>
+            </div>
+            {% elif section.kind == 'nested_table' %}
+            <div class="card-body p-0">
+                {{ render_nested(section.value) }}
+            </div>
+            {% elif section.kind == 'object' %}
+            <div class="card-body p-0">
+                <table class="table table-sm mb-0">
+                    <tbody>
+                        {% for key, val in section["items"] %}
+                        <tr>
+                            <th class="w-25 bg-light">{{ key }}</th>
+                            <td>{% if val is mapping or (val is sequence and val is not string) %}{{ render_nested(val) }}{% else %}{{ val if val not in (None, '') else '-' }}{% endif %}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% elif section.kind == 'list' %}
             <div class="card-body">
                 <ul class="mb-0">
                     {% for item in section["items"] %}
@@ -111,27 +371,22 @@
                     {% endfor %}
                 </ul>
             </div>
-        </div>
-        {% elif section.kind == 'value' %}
-        <div class="card border-0 shadow-sm mb-4">
-            <div class="card-header">
-                <h5 class="mb-0"><i class="fas fa-tag text-secondary me-2"></i>{{ section.title }}</h5>
-            </div>
+            {% elif section.kind == 'value' %}
             <div class="card-body">
                 <p class="mb-0">{{ section.value if section.value not in (None, '') else '-' }}</p>
             </div>
+            {% endif %}
         </div>
-        {% endif %}
     {% endfor %}
 
-    {# --- Downloaded Documents from XML/P7M --- #}
+    {# --- Downloaded Documents --- #}
     {% if result.documents %}
     <div class="card border-0 shadow-sm mb-4">
         <div class="card-header">
             <h5 class="mb-0"><i class="fas fa-file-alt text-danger me-2"></i>Downloaded Documents ({{ result.documents|length }})</h5>
         </div>
         <div class="card-body p-0">
-            <div class="accordion" id="docs-accordion">
+            <div class="accordion accordion-flush" id="docs-accordion">
                 {% for doc in result.documents %}
                 <div class="accordion-item">
                     <h2 class="accordion-header">
@@ -148,33 +403,33 @@
                         </button>
                     </h2>
                     <div id="doc-{{ doc.id }}" class="accordion-collapse collapse" data-bs-parent="#docs-accordion">
-                        <div class="accordion-body p-2">
-                            <div class="row mb-3">
-                                <div class="col-md-6">
-                                    <table class="table table-sm mb-0">
-                                        <tr><th class="bg-light w-40">Filename</th><td><code>{{ doc.filename }}</code></td></tr>
-                                        <tr><th class="bg-light">Oggetto</th><td>{{ doc.oggetto or '-' }}</td></tr>
-                                        <tr><th class="bg-light">Richiesta del</th><td>{{ doc.richiesta_del or '-' }}</td></tr>
-                                        <tr><th class="bg-light">Tipo</th><td>{{ doc.document_type or '-' }}</td></tr>
-                                    </table>
-                                </div>
-                                <div class="col-md-6">
-                                    <table class="table table-sm mb-0">
-                                        <tr><th class="bg-light w-40">Provincia</th><td>{{ doc.provincia or '-' }}</td></tr>
-                                        <tr><th class="bg-light">Comune</th><td>{{ doc.comune or '-' }}</td></tr>
-                                        <tr><th class="bg-light">Foglio / Particella</th><td>{{ doc.foglio or '-' }} / {{ doc.particella or '-' }}</td></tr>
-                                        <tr><th class="bg-light">Subalterno / Sez.Urb</th><td>{{ doc.subalterno or '-' }} / {{ doc.sezione_urbana or '-' }}</td></tr>
-                                    </table>
-                                </div>
-                            </div>
+                        <div class="accordion-body p-3">
+                            <table class="table table-sm mb-3 doc-meta">
+                                <tbody>
+                                    {% for label, val in doc.meta %}
+                                    <tr>
+                                        <th class="bg-light">{{ label }}</th>
+                                        <td>{% if label == 'Filename' %}<code>{{ val }}</code>{% else %}{{ val }}{% endif %}</td>
+                                    </tr>
+                                    {% endfor %}
+                                </tbody>
+                            </table>
 
-                            {% if doc.intestati %}
-                            <h6 class="mt-3"><i class="fas fa-users text-info me-1"></i>Intestati ({{ doc.intestati|length }})</h6>
+                            {% if doc.file_path %}
+                            <p class="mb-3">
+                                <a href="/web/documents/{{ doc.id }}/download" class="btn btn-sm btn-outline-primary">
+                                    <i class="fas fa-download me-1"></i>Download {{ doc.file_format }}
+                                </a>
+                            </p>
+                            {% endif %}
+
+                            {% if doc.intestati_rows %}
+                            <h6 class="mt-3"><i class="fas fa-users text-info me-1"></i>Intestati ({{ doc.intestati_rows|length }})</h6>
                             <div id="tabulator-doc-intestati-{{ doc.id }}"></div>
                             {% endif %}
 
                             {% if doc.indirizzo %}
-                            <p class="mt-2"><i class="fas fa-map-marker-alt text-primary me-1"></i><strong>Indirizzo:</strong> {{ doc.indirizzo }}</p>
+                            <p class="mt-2 mb-0"><i class="fas fa-map-marker-alt text-primary me-1"></i><strong>Indirizzo:</strong> {{ doc.indirizzo }}</p>
                             {% endif %}
 
                             {% if doc.dati_immobile %}
@@ -193,9 +448,14 @@
                             </table>
                             {% endif %}
 
-                            {% if doc.classamento %}
-                            <h6 class="mt-3"><i class="fas fa-clipboard-list text-warning me-1"></i>Classamento ({{ doc.classamento|length }})</h6>
+                            {% if doc.classamento_rows %}
+                            <h6 class="mt-3"><i class="fas fa-clipboard-list text-warning me-1"></i>Classamento ({{ doc.classamento_rows|length }})</h6>
                             <div id="tabulator-doc-classamento-{{ doc.id }}"></div>
+                            {% endif %}
+
+                            {% if doc.xml_parsed %}
+                            <h6 class="mt-3"><i class="fas fa-file-code text-secondary me-1"></i>XML Content</h6>
+                            {{ render_nested(doc.xml_parsed) }}
                             {% endif %}
                         </div>
                     </div>
@@ -206,10 +466,11 @@
     </div>
     {% endif %}
 
-    {% if result.page_visits %}
+    {# --- Page Visits --- #}
+    {% if result.page_visit_rows %}
     <div class="card border-0 shadow-sm mb-4">
         <div class="card-header">
-            <h5 class="mb-0"><i class="fas fa-route text-warning me-2"></i>Page Visits ({{ result.page_visits|length }})</h5>
+            <h5 class="mb-0"><i class="fas fa-route text-warning me-2"></i>Page Visits ({{ result.page_visit_rows|length }})</h5>
         </div>
         <div class="card-body p-0">
             <div id="tabulator-page-visits"></div>
@@ -219,18 +480,23 @@
 
     <!-- Raw JSON -->
     <div class="card border-0 shadow-sm">
-        <div class="card-header">
+        <div class="card-header d-flex justify-content-between align-items-center">
             <h5 class="mb-0">
                 <i class="fas fa-code text-muted me-2"></i>Raw JSON
-                <button class="btn btn-sm btn-outline-secondary float-end" type="button"
-                        data-bs-toggle="collapse" data-bs-target="#raw-json">
-                    Toggle
-                </button>
             </h5>
+            <div class="d-flex gap-2">
+                <button class="btn btn-sm btn-outline-secondary" type="button" id="btn-copy-json" title="Copy JSON">
+                    <i class="fas fa-copy me-1"></i>Copy
+                </button>
+                <button class="btn btn-sm btn-outline-secondary" type="button"
+                        data-bs-toggle="collapse" data-bs-target="#raw-json">
+                    <i class="fas fa-eye me-1"></i>Toggle
+                </button>
+            </div>
         </div>
         <div class="collapse" id="raw-json">
             <div class="card-body">
-                <pre class="bg-dark text-light p-3 rounded" style="max-height: 500px; overflow-y: auto;">{{ result.data | tojson(indent=2) }}</pre>
+                <pre class="bg-dark text-light p-3 rounded mb-0" style="max-height: 500px; overflow-y: auto;" id="raw-json-content">{{ result.data | tojson(indent=2) }}</pre>
             </div>
         </div>
     </div>
@@ -252,6 +518,30 @@
 <script>
 (function() {
     'use strict';
+
+    // Copy JSON button
+    var copyBtn = document.getElementById("btn-copy-json");
+    var jsonPre = document.getElementById("raw-json-content");
+    if (copyBtn && jsonPre) {
+        copyBtn.addEventListener("click", function() {
+            navigator.clipboard.writeText(jsonPre.textContent).then(function() {
+                copyBtn.innerHTML = '<i class="fas fa-check me-1"></i>Copied';
+                setTimeout(function() { copyBtn.innerHTML = '<i class="fas fa-copy me-1"></i>Copy'; }, 1500);
+            });
+        });
+    }
+
+    // Copy request id button
+    var requestCopyBtn = document.getElementById("btn-copy-request-id");
+    var requestIdText = document.getElementById("req-id-text");
+    if (requestCopyBtn && requestIdText) {
+        requestCopyBtn.addEventListener("click", function() {
+            navigator.clipboard.writeText(requestIdText.textContent).then(function() {
+                requestCopyBtn.innerHTML = '<i class="fas fa-check"></i>';
+                setTimeout(function() { requestCopyBtn.innerHTML = '<i class="fas fa-copy"></i>'; }, 1200);
+            });
+        });
+    }
 
     // Common Tabulator config
     var commonOpts = {
@@ -275,77 +565,70 @@
                 sorter: "string",
                 formatter: function(cell) {
                     var v = cell.getValue();
-                    return (v === null || v === undefined || v === '') ? '-' : v;
+                    var span = document.createElement("span");
+                    if (v === null || v === undefined || v === "") {
+                        span.textContent = "-";
+                    } else if (typeof v === "object") {
+                        span.textContent = JSON.stringify(v);
+                    } else {
+                        span.textContent = String(v);
+                    }
+                    return span;
                 },
             };
         });
     }
 
-    // Data sections from Jinja
+    // Data section tables (flat_table kind)
     {% if result and result.sections %}
     {% for section in result.sections %}
-    {% if section.kind == 'table' %}
+    {% if section.kind == 'flat_table' %}
     (function() {
-        var el = document.getElementById("tabulator-{{ section.name }}");
+        var el = document.getElementById("tabulator-{{ section.dom_id }}");
         if (!el) return;
-        var data = {{ section.rows | tojson }};
-        var columns = makeColumns({{ section.columns | tojson }});
         new Tabulator(el, Object.assign({}, commonOpts, {
-            data: data,
-            columns: columns,
+            data: {{ section.rows | tojson }},
+            columns: makeColumns({{ section.columns | tojson }}),
+        }));
+    })();
+    {% elif section.kind == 'downloaded_docs' %}
+    {% for doc in section.docs %}
+    {% if doc.intestati_rows %}
+    (function() {
+        var el = document.getElementById("tabulator-inline-intestati-{{ section.dom_id }}-{{ loop.index }}");
+        if (!el) return;
+        new Tabulator(el, Object.assign({}, commonOpts, {
+            data: {{ doc.intestati_rows | tojson }},
+            columns: makeColumns(["Nominativo", "Codice Fiscale", "Quota", "Diritto"]),
+            pagination: false,
         }));
     })();
     {% endif %}
     {% endfor %}
     {% endif %}
+    {% endfor %}
+    {% endif %}
 
-    // Document intestati tables
+    // Document intestati & classamento tables (normalized server-side)
     {% if result and result.documents %}
     {% for doc in result.documents %}
-    {% if doc.intestati %}
+    {% if doc.intestati_rows %}
     (function() {
         var el = document.getElementById("tabulator-doc-intestati-{{ doc.id }}");
         if (!el) return;
-        var rawData = {{ doc.intestati | tojson }};
-        // Flatten nested DirittiReali
-        var data = rawData.map(function(row) {
-            var flat = {};
-            flat["Nominativo"] = row.Nominativo || row.nominativo || "-";
-            flat["Codice Fiscale"] = row.CF || row.CodiceFiscale || "-";
-            if (row.DirittiReali && typeof row.DirittiReali === "object") {
-                flat["Quota"] = row.DirittiReali.Quota || "";
-                flat["Diritto"] = row.DirittiReali.Descrizione || row.DirittiReali.CodiceDir || "";
-                flat["Periodo"] = row.DirittiReali.FineDiritto || "";
-            } else {
-                flat["Quota"] = "";
-                flat["Diritto"] = "";
-                flat["Periodo"] = "";
-            }
-            return flat;
-        });
         new Tabulator(el, Object.assign({}, commonOpts, {
-            data: data,
+            data: {{ doc.intestati_rows | tojson }},
             columns: makeColumns(["Nominativo", "Codice Fiscale", "Quota", "Diritto", "Periodo"]),
             pagination: false,
         }));
     })();
     {% endif %}
-    {% if doc.classamento %}
+    {% if doc.classamento_rows %}
     (function() {
         var el = document.getElementById("tabulator-doc-classamento-{{ doc.id }}");
         if (!el) return;
-        var data = {{ doc.classamento | tojson }};
-        // Normalize keys
-        var normalized = data.map(function(row) {
-            return {
-                "Zona Censuaria": row.ZonaCensuaria || row.zona_censuaria || "-",
-                "Categoria": row.Categoria || row.categoria || "-",
-                "Classe": row.Classe || row.classe || "-",
-                "Rendita (EUR)": row.RenditaEuro || row.rendita || "-",
-            };
-        });
         new Tabulator(el, Object.assign({}, commonOpts, {
-            data: normalized,
+            data: {{ doc.classamento_rows | tojson }},
             columns: makeColumns(["Zona Censuaria", "Categoria", "Classe", "Rendita (EUR)"]),
             pagination: false,
         }));
@@ -354,30 +637,28 @@
     {% endfor %}
     {% endif %}
 
-    // Page visits table
-    {% if result and result.page_visits %}
+    // Page visits table (normalized server-side)
+    {% if result and result.page_visit_rows %}
     (function() {
         var el = document.getElementById("tabulator-page-visits");
         if (!el) return;
-        var data = {{ result.page_visits | tojson }};
-        var rows = data.map(function(v) {
-            return {
-                "Step": v.step || "-",
-                "URL": v.url || "-",
-                "Timestamp": v.timestamp || "-",
-                "Errors": (v.errors && v.errors.length) ? v.errors.join(", ") : "-",
-            };
-        });
         new Tabulator(el, Object.assign({}, commonOpts, {
-            data: rows,
+            data: {{ result.page_visit_rows | tojson }},
             columns: [
                 {title: "Step", field: "Step", headerFilter: "input", sorter: "string", width: 150},
                 {title: "URL", field: "URL", headerFilter: "input", sorter: "string",
                  formatter: function(cell) {
                      var v = cell.getValue();
-                     if (v && v !== "-") return '<a href="' + v + '" target="_blank">' + v.replace(/https?:\/\/[^/]+/, '') + '</a>';
+                     if (v && v !== "-") {
+                         var link = document.createElement("a");
+                         link.href = v;
+                         link.target = "_blank";
+                         link.rel = "noopener";
+                         link.textContent = v.replace(/https?:\/\/[^/]+/, "");
+                         return link;
+                     }
                      return "-";
-                 }, formatterParams: {}, htmlOutput: true},
+                 }},
                 {title: "Timestamp", field: "Timestamp", headerFilter: "input", sorter: "string", width: 180},
                 {title: "Errors", field: "Errors", headerFilter: "input", sorter: "string"},
             ],
