@@ -7,6 +7,7 @@ Auth: landing page is public; /web/* routes require authentication.
 from __future__ import annotations
 
 import logging
+import os
 import re
 from datetime import datetime
 from typing import Any, Optional
@@ -20,12 +21,14 @@ from .database import (
     count_result_rows,
     count_total_result_rows,
     find_result_rows,
-    find_workflow_runs,
     get_documents_for_response,
     get_result_record,
-    get_workflow_result_record,
 )
 from .form_config import get_available_form_groups, get_single_step_groups, get_workflow_groups
+
+# Opendata API URL — workflow runs/steps are owned by opendata, not sister.
+# Sister's web UI proxies workflow list/detail requests to opendata.
+_OPENDATA_API_URL = os.getenv("OPENDATA_API_URL", "http://localhost:8024")
 
 logger = logging.getLogger("sister")
 
@@ -506,8 +509,16 @@ async def web_result_detail(request: Request, request_id: str, user=Depends(_req
     """Single result detail page."""
     theme = _get_theme(request)
     result = await get_result_record(request_id)
-    if result is None:
-        result = await get_workflow_result_record(request_id)
+    if result is None and request_id.startswith("wf_"):
+        # Workflow runs are stored in opendata — proxy the lookup
+        import httpx
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                resp = await client.get(f"{_OPENDATA_API_URL}/catasto/workflow/runs/{request_id}")
+                if resp.status_code == 200:
+                    result = resp.json()
+        except Exception as exc:
+            logger.warning("Could not fetch workflow %s from opendata: %s", request_id, exc)
     if result is None:
         response = theme.render(
             "sister/result_detail.html", request, user=user,
@@ -582,14 +593,32 @@ async def web_workflows(
     limit: int = 50,
     offset: int = 0,
 ):
-    """Workflow runs list — dedicated view for workflow operations."""
+    """Workflow runs list — proxied from opendata (which owns workflow storage)."""
+    import httpx
+
     theme = _get_theme(request)
     limit = max(1, min(limit, 200))
     offset = max(0, offset)
-    runs = await find_workflow_runs(status=status, limit=limit, offset=offset)
+
+    runs: list[dict] = []
+    try:
+        params: dict[str, Any] = {"limit": limit, "offset": offset}
+        if status:
+            params["status"] = status
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(
+                f"{_OPENDATA_API_URL}/catasto/workflow/runs",
+                params=params,
+            )
+            if resp.status_code == 200:
+                runs = resp.json().get("runs", [])
+    except Exception as exc:
+        logger.warning("Could not fetch workflow runs from opendata: %s", exc)
+
     for run in runs:
         run["created_at_display"] = _format_timestamp(run.get("created_at"))
         run["updated_at_display"] = _format_timestamp(run.get("updated_at"))
+
     return theme.render(
         "sister/workflows.html", request, user=user,
         runs=runs, status=status, limit=limit, offset=offset,
@@ -599,9 +628,22 @@ async def web_workflows(
 
 @router.get("/web/workflows/{workflow_id}", response_class=HTMLResponse)
 async def web_workflow_detail(request: Request, workflow_id: str, user=Depends(_require_auth)):
-    """Dedicated workflow detail page with step timing and structure."""
+    """Workflow detail page — proxied from opendata."""
+    import httpx
+
     theme = _get_theme(request)
-    result = await get_workflow_result_record(workflow_id)
+
+    result: Optional[dict] = None
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(
+                f"{_OPENDATA_API_URL}/catasto/workflow/runs/{workflow_id}",
+            )
+            if resp.status_code == 200:
+                result = resp.json()
+    except Exception as exc:
+        logger.warning("Could not fetch workflow %s from opendata: %s", workflow_id, exc)
+
     if result is None:
         response = theme.render(
             "sister/workflow_detail.html", request, user=user,
@@ -718,16 +760,15 @@ async def web_api_batch(request: Request, user=Depends(_require_auth)):
 
 @router.post("/web/api/workflow/stream")
 async def web_api_workflow_stream(request: Request, user=Depends(_require_auth)):
-    """SSE proxy for workflow streaming — passes through events incrementally."""
+    """SSE proxy for workflow streaming — forwards to opendata's workflow engine."""
     import httpx
 
     body = await request.json()
-    base = f"http://localhost:{request.url.port or 8025}"
 
     async def stream_events():
         async with httpx.AsyncClient(timeout=600) as client:
             async with client.stream(
-                "POST", f"{base}/visura/workflow/stream",
+                "POST", f"{_OPENDATA_API_URL}/catasto/workflow/stream",
                 json=body,
             ) as resp:
                 buffer = ""
