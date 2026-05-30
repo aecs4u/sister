@@ -1,0 +1,66 @@
+# =============================================================================
+# Lighthouse Deployment Configuration
+# =============================================================================
+
+gcp:
+  project_id: "apps-aecs4u"
+  region: "europe-west1"
+  service_name: "sister-service"
+
+cloudrun:
+  memory: "2Gi"
+  cpu: 2
+  min_instances: 0
+  max_instances: 1
+  concurrency: 10
+  execution_environment: "gen2"
+  platform: "managed"
+  port: 8080
+  timeout: 600
+  cpu_boost: true
+  no_cpu_throttling: true
+  allow_unauthenticated: true
+
+cloudbuild:
+  repository: "cloud-run-source-deploy"
+  timeout: "1800s"
+  gar_repository: "python-packages"
+
+app:
+  name: "SISTER"
+  module: "sister"
+  health_path: "health"
+  log_level: "INFO"
+
+env_vars:
+  ENVIRONMENT: "production"
+  DEBUG: "false"
+  LOG_LEVEL: "INFO"
+  SISTER_DB_PATH: "/app/data/sister.sqlite"
+  SISTER_OUTPUTS_DIR: "/app/outputs"
+  BROWSER_HEADLESS: "true"
+  REQUIRE_AUTHENTICATION: "true"
+  USE_CLERK_AUTH: "true"
+
+secrets:
+  - SISTER_SECRET_KEY
+  - SISTER_API_KEY
+  - SISTER_SHUTDOWN_API_KEY
+  - SISTER_ADE_USERNAME
+  - SISTER_ADE_PASSWORD
+  - SISTER_ADE_AUTH_METHOD
+  - SISTER_ADE_SPID_PROVIDER
+  - SISTER_GOOGLE_CLIENT_ID
+  - SISTER_GOOGLE_CLIENT_SECRET
+  - SISTER_NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY
+  - SISTER_CLERK_SECRET_KEY
+  - SISTER_CLERK_JWKS_URL
+  - SISTER_LOGFIRE_TOKEN
+
+docker:
+  base_image: "python:3.12-slim"
+
+labels:
+  app: "sister-service"
+  environment: "production"
+  managed-by: "lighthouse"
