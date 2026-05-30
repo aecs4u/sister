@@ -29,19 +29,19 @@ from .db_models import (
     VisuraDocumentDB,
     VisuraRequestDB,
     VisuraResponseDB,
-    WorkflowRunDB,
-    WorkflowStepDB,
 )
 
 # Collect only sister's tables — avoid creating tables from other packages
-# that share the global SQLModel.metadata
+# that share the global SQLModel.metadata.
+# workflow_runs / workflow_steps are intentionally excluded: they are owned and
+# created by the opendata project (see opendata/models/workflow.py and the
+# corresponding Alembic migration). Sister queries them via raw SQL but does
+# not define or create the schema.
 _SISTER_TABLES = [
     VisuraRequestDB.__table__,
     VisuraResponseDB.__table__,
     ImmobileDB.__table__,
     IntestatoDB.__table__,
-    WorkflowRunDB.__table__,
-    WorkflowStepDB.__table__,
     PageVisitDB.__table__,
     VisuraDocumentDB.__table__,
 ]
