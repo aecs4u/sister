@@ -3,10 +3,13 @@ import logging
 import os
 import secrets
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Optional
 
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, Header, HTTPException
+from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 from rich.logging import RichHandler
 
 # Re-export for tests using main_module.*
@@ -30,12 +33,9 @@ from .models import (  # noqa: F401
     VisuraRequest,
     VisuraResponse,
     VisuraSoggettoInput,
-    WorkflowInput,
 )
 from .routes import (
     download_documents,
-    execute_workflow,
-    execute_workflow_stream,
     extract_sezioni,
     graceful_shutdown_endpoint,
     health_check,
@@ -168,10 +168,6 @@ app = FastAPI(title="SISTER - Cadastral Data Service", lifespan=lifespan)
 # ---------------------------------------------------------------------------
 # Theme, static files, and web UI
 # ---------------------------------------------------------------------------
-
-from pathlib import Path
-from fastapi.staticfiles import StaticFiles
-
 try:
     from aecs4u_theme import ThemeConfig, setup_theme
 
@@ -198,7 +194,8 @@ try:
         )
         app.state.auth_setup = auth_setup
         app.state.auth_config = auth_config
-        logger.info("Autenticazione configurata (mode=%s)", auth_config.AUTH_MODE)
+        auth_mode = getattr(auth_config, "AUTH_MODE", getattr(auth_config, "auth_mode", "unknown"))
+        logger.info("Autenticazione configurata (mode=%s)", auth_mode)
     except ImportError:
         logger.warning("aecs4u-auth non disponibile: autenticazione disabilitata")
     except Exception as e:
@@ -290,24 +287,6 @@ async def _richiedi_elenco_immobili(
     _: None = Depends(require_api_key),
 ):
     return await richiedi_elenco_immobili(request, service, force=force)
-
-
-@app.post("/visura/workflow")
-async def _execute_workflow(
-    request: WorkflowInput,
-    service: VisuraService = Depends(get_visura_service),
-    _: None = Depends(require_api_key),
-):
-    return await execute_workflow(request, service)
-
-
-@app.post("/visura/workflow/stream")
-async def _execute_workflow_stream(
-    request: WorkflowInput,
-    service: VisuraService = Depends(get_visura_service),
-    _: None = Depends(require_api_key),
-):
-    return await execute_workflow_stream(request, service)
 
 
 @app.post("/visura/download-documents")
