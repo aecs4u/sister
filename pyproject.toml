@@ -61,8 +61,8 @@ Changelog = "https://github.com/aecs4u/sister/blob/main/CHANGELOG.md"
 sister = "sister.cli:run"
 
 [tool.uv.sources]
-aecs4u-auth = { git = "https://github.com/aecs4u/aecs4u-auth.git" }
-aecs4u-theme = { git = "https://github.com/aecs4u/aecs4u-theme.git" }
+aecs4u-auth = { git = "https://github.com/aecs4u/aecs4u-auth.git", branch = "main" }
+aecs4u-theme = { git = "https://github.com/aecs4u/aecs4u-theme.git", branch = "main" }
 
 [tool.setuptools]
 packages = ["sister"]
