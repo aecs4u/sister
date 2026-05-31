@@ -169,7 +169,7 @@ app = FastAPI(title="SISTER - Cadastral Data Service", lifespan=lifespan)
 # Theme, static files, and web UI
 # ---------------------------------------------------------------------------
 try:
-    from aecs4u_theme import ThemeConfig, setup_theme
+    from aecs4u_theme import ThemeConfig, setup_theme, setup_theme_from_env
 
     _sister_dir = Path(__file__).parent
     _templates_dir = _sister_dir / "templates"
@@ -201,22 +201,10 @@ try:
     except Exception as e:
         logger.warning("Errore configurazione auth: %s", e)
 
-    # --- Theme setup ---
-    theme_config = ThemeConfig(
-        site_id="sister",
-        site_name="SISTER",
-        site_tagline="Cadastral Data Extraction Service",
-        primary_color="#1e40af",
-        sidebar_enabled=True,
-        footer_enabled=True,
-        footer_copyright="AECS4U Srl",
-    )
-
-    theme_setup = setup_theme(
+    # --- Theme setup --- reads AECS4U_SITE_NAME, THEME_PRIMARY_COLOR etc. from env
+    theme_setup = setup_theme_from_env(
         app,
-        config=theme_config,
         templates_dir=str(_templates_dir),
-        mount_static=True,
     )
     app.state.theme_setup = theme_setup
 
