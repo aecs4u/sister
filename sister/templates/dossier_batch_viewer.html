@@ -1,0 +1,303 @@
+{% extends "_base.html" %}
+
+{% block page_title %}{{ name }}{% endblock %}
+
+{% block extra_css %}
+{{ super() }}
+<style>
+.hero-section { background: linear-gradient(135deg, #495057 0%, #1a1d20 100%); color: white; padding: 1.5rem 0; margin-bottom: 1.5rem; }
+
+/* Section headers */
+.tbl-section { margin-bottom: 1.5rem; }
+.tbl-section-head {
+    display: flex; align-items: center; gap: .6rem;
+    padding: .5rem .85rem; background: #f8f9fa;
+    border: 1px solid #dee2e6; border-left: 4px solid var(--sec-color, #6c757d);
+    border-radius: .4rem; margin-bottom: .5rem; font-size: .92rem; font-weight: 600;
+}
+
+/* Tables */
+.btbl { width: 100%; border-collapse: collapse; font-size: .82rem; }
+.btbl thead th {
+    background: #f1f3f5; position: sticky; top: 0; z-index: 2;
+    padding: .45rem .6rem; border-bottom: 2px solid #dee2e6;
+    white-space: nowrap; cursor: default;
+}
+.btbl tbody td { padding: .35rem .6rem; border-bottom: 1px solid #f0f0f0; vertical-align: top; }
+.btbl tbody tr { cursor: pointer; transition: background .1s; }
+.btbl tbody tr:hover { background: #f8f9fa; }
+.btbl tbody tr.selected { background: #fff3cd !important; }
+.btbl tbody tr.dimmed { opacity: .22; }
+
+/* Scrollable wrappers */
+.tbl-scroll { max-height: 340px; overflow-y: auto; border: 1px solid #dee2e6; border-radius: .3rem; }
+.tbl-scroll-sm { max-height: 240px; overflow-y: auto; border: 1px solid #dee2e6; border-radius: .3rem; }
+
+/* Filter inputs */
+.tbl-filter { width: 100%; font-size: .78rem; padding: .25rem .5rem;
+              border: 1px solid #dee2e6; border-radius: .25rem; margin-bottom: .4rem; }
+.tbl-filter:focus { outline: none; border-color: #86b7fe; box-shadow: 0 0 0 2px rgba(13,110,253,.15); }
+
+/* Status badges */
+.st-ok  { color: #198754; font-weight: 600; }
+.st-err { color: #dc3545; font-weight: 600; }
+
+/* Selection reset bar */
+#sel-bar {
+    display: none; position: sticky; top: 0; z-index: 10;
+    background: #fff3cd; border: 1px solid #ffc107; border-radius: .4rem;
+    padding: .4rem .85rem; margin-bottom: 1rem;
+    align-items: center; gap: .6rem; font-size: .88rem;
+}
+#sel-bar.visible { display: flex; }
+
+@media print {
+  .no-print { display: none !important; }
+  .hero-section { background: #f8f9fa !important; color: #333 !important; }
+  .tbl-scroll, .tbl-scroll-sm { max-height: none; overflow: visible; }
+  .btbl tbody tr.dimmed { display: none; }
+}
+</style>
+{% endblock %}
+
+{% block content %}
+{# ── Hero ───────────────────────────────────────────────────────────────────── #}
+<div class="hero-section no-print">
+    <div class="container-fluid">
+        <nav class="mb-2" aria-label="breadcrumb">
+            <ol class="breadcrumb mb-0">
+                <li class="breadcrumb-item"><a href="/web/" class="text-white-50">Dashboard</a></li>
+                <li class="breadcrumb-item"><a href="/web/dossiers" class="text-white-50">Dossier</a></li>
+                <li class="breadcrumb-item active text-white">{{ name }}</li>
+            </ol>
+        </nav>
+        <div class="d-flex flex-wrap justify-content-between align-items-end gap-3">
+            <div>
+                <h1 class="h4 fw-bold mb-1"><i class="fas fa-table-list me-2"></i>{{ name }}</h1>
+                <div class="d-flex flex-wrap gap-2 opacity-90">
+                    <span class="badge bg-light text-dark">{{ stats.total }} organizzazioni</span>
+                    <span class="badge bg-success">{{ stats.ok }} completate</span>
+                    {% if stats.error %}<span class="badge bg-danger">{{ stats.error }} errori</span>{% endif %}
+                    <span class="badge bg-info text-dark">{{ stats.with_immobili }} con immobili</span>
+                    <span class="badge bg-secondary">{{ stats.total_immobili }} immobili totali</span>
+                </div>
+            </div>
+            <div class="d-flex gap-2 no-print">
+                <a href="/web/dossiers/{{ name }}?download=1" class="btn btn-sm btn-outline-light">
+                    <i class="fas fa-download me-1"></i>JSON
+                </a>
+                <button onclick="window.print()" class="btn btn-sm btn-outline-light">
+                    <i class="fas fa-print me-1"></i>Stampa
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="container-fluid">
+
+{# ── Selection reset bar ────────────────────────────────────────────────────── #}
+<div id="sel-bar" class="no-print">
+    <i class="fas fa-filter text-warning"></i>
+    <span>Filtrato su: <strong id="sel-label">–</strong></span>
+    <button class="btn btn-sm btn-outline-secondary ms-auto" onclick="resetSelection()">
+        <i class="fas fa-xmark me-1"></i>Mostra tutti
+    </button>
+</div>
+
+{# ── TABLE 1: Organizations (non-data) ──────────────────────────────────────── #}
+<div class="tbl-section">
+    <div class="tbl-section-head" style="--sec-color: #0d6efd">
+        <i class="fas fa-building text-primary"></i>
+        <span>Organizzazioni</span>
+        <span class="badge bg-primary ms-1">{{ stats.total }}</span>
+        <span class="text-muted fw-normal small ms-auto">Clicca una riga per filtrare le tabelle successive</span>
+    </div>
+    <input class="tbl-filter no-print" id="filter-t1" placeholder="Cerca organizzazione, P.IVA, stato…" oninput="filterTable('t1', this.value)">
+    <div class="tbl-scroll">
+        <table class="btbl" id="t1">
+            <thead>
+                <tr>
+                    <th>#</th>
+                    <th>Organizzazione</th>
+                    <th>P.IVA</th>
+                    <th>Catasto</th>
+                    <th>Stato</th>
+                    <th>Immobili</th>
+                    <th>Timestamp</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for r in summary_rows %}
+                <tr data-idx="{{ r.idx }}" onclick="selectIdx({{ r.idx }}, '{{ r.organization_name | e }}')">
+                    <td class="text-muted">{{ r.idx + 1 }}</td>
+                    <td class="fw-semibold">{{ r.organization_name }}</td>
+                    <td class="font-monospace small">{{ r.vat_number }}</td>
+                    <td>{{ r.tipo_catasto }}</td>
+                    <td class="{{ 'st-ok' if r.status == 'completed' else 'st-err' }}">
+                        {{ '✓' if r.status == 'completed' else '✗' }} {{ r.status }}
+                    </td>
+                    <td>{{ r.n_immobili if r.n_immobili else '–' }}</td>
+                    <td class="text-muted">{{ r.timestamp }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+{# ── TABLE 2: Data (response-level fields) ──────────────────────────────────── #}
+<div class="tbl-section">
+    <div class="tbl-section-head" style="--sec-color: #198754">
+        <i class="fas fa-arrow-right-from-bracket text-success"></i>
+        <span>Dati risposta</span>
+        <span class="badge bg-success ms-1" id="t2-count">{{ data_rows | length }}</span>
+    </div>
+    <div class="tbl-scroll-sm">
+        <table class="btbl" id="t2">
+            <thead>
+                <tr>
+                    <th>Organizzazione</th>
+                    <th>Soggetto (CF / P.IVA)</th>
+                    <th>Risultati totali</th>
+                    <th>Errore</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for r in data_rows %}
+                <tr data-idx="{{ r.idx }}" onclick="selectIdx({{ r.idx }}, '{{ r.organization_name | e }}')">
+                    <td class="fw-semibold">{{ r.organization_name }}</td>
+                    <td class="font-monospace small">{{ r.soggetto }}</td>
+                    <td>{{ r.total_results if r.total_results else '–' }}</td>
+                    <td class="{{ 'st-err' if r.error else 'text-muted' }}">{{ r.error or '–' }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+{# ── TABLE 3: Immobili ───────────────────────────────────────────────────────── #}
+<div class="tbl-section">
+    <div class="tbl-section-head" style="--sec-color: #6f42c1">
+        <i class="fas fa-house text-purple" style="color:#6f42c1"></i>
+        <span>Immobili</span>
+        <span class="badge ms-1" style="background:#6f42c1" id="t3-count">{{ stats.total_immobili }}</span>
+    </div>
+    {% if immobili_rows %}
+    <input class="tbl-filter no-print" id="filter-t3" placeholder="Cerca denominazione, sede, CF…" oninput="filterTable('t3', this.value)">
+    <div class="tbl-scroll">
+        <table class="btbl" id="t3">
+            <thead>
+                <tr>
+                    <th>Organizzazione</th>
+                    {% for col in immobili_cols %}<th>{{ col }}</th>{% endfor %}
+                </tr>
+            </thead>
+            <tbody>
+                {% for r in immobili_rows %}
+                <tr data-idx="{{ r.idx }}" onclick="selectIdx({{ r.idx }}, '{{ r.organization_name | e }}')">
+                    <td class="fw-semibold">{{ r.organization_name }}</td>
+                    {% for col in immobili_cols %}<td>{{ r.get(col, '') }}</td>{% endfor %}
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <div class="text-muted small ps-2">Nessun immobile trovato nelle risposte.</div>
+    {% endif %}
+</div>
+
+</div>{# /container #}
+{% endblock %}
+
+{% block extra_js %}
+{{ super() }}
+<script>
+(function () {
+    let selectedIdx = null;
+
+    function allRows(tableId) {
+        return document.querySelectorAll('#' + tableId + ' tbody tr');
+    }
+
+    function applySelection() {
+        const bar = document.getElementById('sel-bar');
+        ['t1', 't2', 't3'].forEach(function (tid) {
+            allRows(tid).forEach(function (tr) {
+                const idx = parseInt(tr.dataset.idx, 10);
+                if (selectedIdx === null) {
+                    tr.classList.remove('selected', 'dimmed');
+                } else if (idx === selectedIdx) {
+                    tr.classList.add('selected');
+                    tr.classList.remove('dimmed');
+                } else {
+                    tr.classList.add('dimmed');
+                    tr.classList.remove('selected');
+                }
+            });
+        });
+
+        // Update counts for t2 and t3
+        ['t2', 't3'].forEach(function (tid) {
+            const visible = Array.from(allRows(tid)).filter(function (tr) {
+                return selectedIdx === null || parseInt(tr.dataset.idx, 10) === selectedIdx;
+            }).length;
+            const badge = document.getElementById(tid + '-count');
+            if (badge) badge.textContent = visible;
+        });
+
+        if (selectedIdx !== null) {
+            bar.classList.add('visible');
+            // Scroll selected rows into view in t2 and t3
+            ['t2', 't3'].forEach(function (tid) {
+                const first = document.querySelector('#' + tid + ' tbody tr[data-idx="' + selectedIdx + '"]');
+                if (first) first.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+            });
+        } else {
+            bar.classList.remove('visible');
+            // Restore counts
+            document.getElementById('t2-count').textContent = allRows('t2').length;
+            document.getElementById('t3-count').textContent = allRows('t3').length;
+        }
+    }
+
+    window.selectIdx = function (idx, label) {
+        if (selectedIdx === idx) {
+            // Clicking the same row again → deselect
+            selectedIdx = null;
+            document.getElementById('sel-label').textContent = '–';
+        } else {
+            selectedIdx = idx;
+            document.getElementById('sel-label').textContent = label;
+        }
+        applySelection();
+    };
+
+    window.resetSelection = function () {
+        selectedIdx = null;
+        document.getElementById('sel-label').textContent = '–';
+        // Clear text filters too
+        ['filter-t1', 'filter-t3'].forEach(function (id) {
+            const el = document.getElementById(id);
+            if (el) { el.value = ''; filterTable(id === 'filter-t1' ? 't1' : 't3', ''); }
+        });
+        applySelection();
+    };
+
+    window.filterTable = function (tableId, query) {
+        const q = query.toLowerCase();
+        allRows(tableId).forEach(function (tr) {
+            const text = tr.textContent.toLowerCase();
+            tr.style.display = text.includes(q) ? '' : 'none';
+        });
+    };
+
+    // Keyboard shortcut: Escape → reset
+    document.addEventListener('keydown', function (e) {
+        if (e.key === 'Escape') window.resetSelection();
+    });
+})();
+</script>
+{% endblock %}

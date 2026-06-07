@@ -465,6 +465,94 @@ _DOSSIER_SUBTYPE_META: dict[str, tuple[str, str]] = {
 }
 
 
+def _is_batch_dossier(data: Any) -> bool:
+    """True when data is a list of dicts each containing both org-context fields and a 'data' key."""
+    if not isinstance(data, list) or not data:
+        return False
+    first = data[0]
+    return isinstance(first, dict) and "data" in first and (
+        "organization_name" in first or "vat_number" in first or "request_id" in first
+    )
+
+
+def _parse_batch_dossier(data: list) -> dict:
+    """Split a batch list into three aligned tables for the batch viewer template."""
+    import ast
+
+    summary_rows: list[dict] = []
+    data_rows: list[dict] = []
+    immobili_rows: list[dict] = []
+    immobili_col_set: set[str] = set()
+
+    for idx, item in enumerate(data):
+        raw = item.get("data")
+        if isinstance(raw, str):
+            try:
+                raw = ast.literal_eval(raw)
+            except Exception:
+                raw = {}
+        if not isinstance(raw, dict):
+            raw = {}
+
+        org = item.get("organization_name") or item.get("vat_number") or str(idx)
+        status = item.get("status") or ""
+        ts = (item.get("timestamp") or "").replace("T", " ")[:16]
+        imm_list = raw.get("immobili") or []
+        n_imm = len(imm_list) if isinstance(imm_list, list) else 0
+
+        summary_rows.append({
+            "idx": idx,
+            "organization_name": org,
+            "vat_number": item.get("vat_number") or "",
+            "tipo_catasto": item.get("tipo_catasto") or "",
+            "status": status,
+            "n_immobili": n_imm,
+            "timestamp": ts,
+        })
+
+        data_rows.append({
+            "idx": idx,
+            "organization_name": org,
+            "soggetto": raw.get("soggetto") or "",
+            "total_results": raw.get("total_results") or 0,
+            "error": str(raw.get("error") or item.get("error") or "") if (raw.get("error") or item.get("error")) else "",
+        })
+
+        for imm in (imm_list if isinstance(imm_list, list) else []):
+            if not isinstance(imm, dict):
+                continue
+            row: dict = {"idx": idx, "organization_name": org}
+            for k, v in imm.items():
+                if k:  # skip empty-string keys
+                    row[k] = v
+                    immobili_col_set.add(k)
+            immobili_rows.append(row)
+
+    # Stable column order for immobili table
+    priority = ["Denominazione", "Sede", "Codice Fiscale", "Comune", "Provincia",
+                "Foglio", "Particella", "Sub", "Categoria", "Classe", "Rendita"]
+    immobili_cols = [c for c in priority if c in immobili_col_set]
+    immobili_cols += sorted(c for c in immobili_col_set if c not in priority)
+
+    total_immobili = len(immobili_rows)
+    n_ok = sum(1 for r in summary_rows if r["status"] == "completed")
+    n_err = sum(1 for r in summary_rows if r["status"] == "error")
+
+    return {
+        "summary_rows": summary_rows,
+        "data_rows": data_rows,
+        "immobili_rows": immobili_rows,
+        "immobili_cols": immobili_cols,
+        "stats": {
+            "total": len(data),
+            "ok": n_ok,
+            "error": n_err,
+            "with_immobili": sum(1 for r in summary_rows if r["n_immobili"]),
+            "total_immobili": total_immobili,
+        },
+    }
+
+
 def _dossier_to_result(name: str, data: Any) -> dict:
     """Transform a dossier JSON into the ``result`` shape consumed by result_detail.html.
 
@@ -1551,10 +1639,16 @@ async def web_dossier_view(request: Request, path: str, user=Depends(_require_au
     target = _safe_dossier_path(path.strip("/"))
     try:
         data = _json.loads(target.read_text(encoding="utf-8", errors="ignore"))
-    except Exception as exc:  # malformed JSON → surface as not-found-ish detail
+    except Exception as exc:
         return theme.render("result_detail.html", request, user=user,
                             result=None, request_id=target.name,
                             not_found=True, error=str(exc))
+
+    if _is_batch_dossier(data):
+        parsed = _parse_batch_dossier(data)
+        return theme.render("dossier_batch_viewer.html", request, user=user,
+                            name=target.name, **parsed)
+
     result = _dossier_to_result(target.name, data)
     return theme.render("result_detail.html", request, user=user,
                         result=result, request_id=target.name)
