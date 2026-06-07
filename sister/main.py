@@ -140,8 +140,12 @@ async def lifespan(app: FastAPI):
     else:
         try:
             visura_service = VisuraService()
-            await visura_service.initialize(background_auth=True)
-            logger.info("Servizio visure avviato (autenticazione in background)")
+            autostart = os.getenv("SISTER_BROWSER_AUTOSTART", "true").lower() not in ("false", "0", "no")
+            await visura_service.initialize(background_auth=True, defer_auth=not autostart)
+            if autostart:
+                logger.info("Servizio visure avviato (autenticazione in background)")
+            else:
+                logger.info("Servizio visure avviato — browser in attesa (SISTER_BROWSER_AUTOSTART=false)")
         except Exception as e:
             logger.warning("Browser service unavailable — web UI will run in read-only mode: %s", e)
             visura_service = None

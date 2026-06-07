@@ -77,10 +77,20 @@ class VisuraService:
     # Auth lifecycle
     # ------------------------------------------------------------------
 
-    async def initialize(self, background_auth: bool = True):
+    async def initialize(self, background_auth: bool = True, defer_auth: bool = False):
+        """Start the worker and cleanup tasks.
+
+        background_auth=True  → auth runs in a background task (default, non-blocking startup)
+        background_auth=False → auth blocks startup (used in tests / sync init)
+        defer_auth=True       → worker starts but no auth is attempted; call start_browser() later
+        """
         self.processing = True
         self._worker_task = asyncio.create_task(self._process_requests(), name="visura-request-worker")
         self._cleanup_task = asyncio.create_task(self._periodic_cleanup(), name="visura-cache-cleanup")
+
+        if defer_auth:
+            logger.info("Browser auth differita — usa /web/browser per avviare la sessione")
+            return
 
         if background_auth:
             self._auth_task = asyncio.create_task(self._background_auth(), name="visura-browser-auth")
@@ -166,6 +176,8 @@ class VisuraService:
         auth_task = getattr(self, "_auth_task", None)
         if auth_task is not None and not auth_task.done():
             return {"state": "connecting", "mode": mode, "message": "Authentication in progress..."}
+        if self.processing:
+            return {"state": "idle", "mode": mode, "message": "Browser not started — use the control panel to start"}
         return {"state": "unavailable", "mode": mode, "message": "Browser not initialized"}
 
     # ------------------------------------------------------------------

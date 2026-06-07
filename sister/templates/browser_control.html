@@ -10,6 +10,7 @@
 .state-indicator { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
 .state-ready    .state-indicator { background: #28a745; box-shadow: 0 0 6px #28a745; animation: pulse-green 2s infinite; }
 .state-connecting .state-indicator { background: #ffc107; box-shadow: 0 0 6px #ffc107; animation: pulse-amber 1s infinite; }
+.state-idle       .state-indicator { background: #6c757d; }
 .state-unavailable .state-indicator, .state-failed .state-indicator { background: #dc3545; }
 @keyframes pulse-green  { 0%,100%{opacity:1} 50%{opacity:.5} }
 @keyframes pulse-amber  { 0%,100%{opacity:1} 50%{opacity:.3} }
@@ -154,10 +155,11 @@
 <script>
 (function () {
     const STATE_COLORS = {
-        ready:       { bg: 'success', text: 'Pronto' },
-        connecting:  { bg: 'warning', text: 'Connessione…' },
-        unavailable: { bg: 'danger',  text: 'Non disponibile' },
-        failed:      { bg: 'danger',  text: 'Errore' },
+        ready:       { bg: 'success',   text: 'Pronto' },
+        connecting:  { bg: 'warning',   text: 'Connessione…' },
+        idle:        { bg: 'secondary', text: 'In attesa' },
+        unavailable: { bg: 'danger',    text: 'Non disponibile' },
+        failed:      { bg: 'danger',    text: 'Errore' },
     };
 
     function log(msg, cls) {
