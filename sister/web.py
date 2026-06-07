@@ -301,6 +301,9 @@ def _dossier_subtype(name: str, kind: str, data: Any) -> str:
     return "altro"
 
 
+_TC_LABEL = {"F": "Fabbricati", "T": "Terreni", "E": "Entrambi"}
+
+
 def _dossier_meta(name: str, data: Any, size_bytes: int, mtime: float) -> dict:
     """Summarize one dossier JSON for the index listing.
 
@@ -309,10 +312,14 @@ def _dossier_meta(name: str, data: Any, size_bytes: int, mtime: float) -> dict:
       • single-step response: {request_id, success, tipo_catasto, data, ...}
       • batch / list        : a JSON array of operations
     """
-    kind, title, subtitle, ident = "altro", name, "", ""
+    kind, title, ident = "altro", name, ""
     badges: list[str] = []
     n_steps = n_results = 0
     ok = None
+    # request_params: ordered list of {k, v} pairs shown in the "Richiesta" half of the card
+    request_params: list[dict] = []
+    # response_meta: {n_results, exported_at} shown in the "Risposta" half
+    response_meta: dict = {}
 
     if isinstance(data, dict) and "steps" in data and ("summary" in data or "aggregate" in data):
         kind = "workflow"
@@ -321,32 +328,51 @@ def _dossier_meta(name: str, data: Any, size_bytes: int, mtime: float) -> dict:
         summ = data.get("summary") or {}
         n_steps = summ.get("total_steps") or (len(data.get("steps")) if isinstance(data.get("steps"), list) else 0)
         completed = summ.get("completed")
-        subtitle = data.get("description") or ""
         if completed is not None:
             badges.append(f"{completed}/{n_steps} step")
         for k in ("properties", "owners", "addresses", "risk_flags"):
             if summ.get(k):
                 badges.append(f"{summ[k]} {k}")
+        if data.get("description"):
+            request_params.append({"k": "Descrizione", "v": data["description"]})
+        response_meta = {
+            "n_results": summ.get("properties") or summ.get("completed") or 0,
+            "exported_at": "",
+        }
+
     elif isinstance(data, dict) and ("request_id" in data or "data" in data):
         kind = "response"
         ident = data.get("request_id") or ""
         ok = data.get("success")
         tc = data.get("tipo_catasto") or ""
         d = data.get("data") or {}
+
+        # ── Request params (what was queried) ──────────────────────────
+        if tc:
+            request_params.append({"k": "Catasto", "v": _TC_LABEL.get(tc, tc)})
+        if isinstance(d, dict):
+            sogg = d.get("soggetto")
+            if sogg:
+                request_params.append({"k": "CF / P.IVA", "v": str(sogg)})
+            for field, label in (("provincia", "Provincia"), ("comune", "Comune"),
+                                  ("foglio", "Foglio"), ("particella", "Particella")):
+                if d.get(field):
+                    request_params.append({"k": label, "v": str(d[field])})
+
+        # ── Response meta (what came back) ─────────────────────────────
         if isinstance(d, dict):
             n_results = d.get("total_results") or 0
-            if d.get("soggetto"):
-                subtitle = "Soggetto"
-            elif d.get("comune") or d.get("provincia"):
-                subtitle = " ".join(str(x) for x in (d.get("comune"), d.get("provincia")) if x)
-        if tc:
-            badges.append({"F": "Fabbricati", "T": "Terreni", "E": "Entrambi"}.get(tc, tc))
+        response_meta = {
+            "n_results": n_results,
+            "exported_at": data.get("exported_at", "").replace("T", " ")[:16],
+        }
         if n_results:
             badges.append(f"{n_results} risultati")
+
     elif isinstance(data, list):
         kind = "batch"
         n_results = len(data)
-        subtitle = f"{len(data)} operazioni"
+        request_params.append({"k": "Operazioni", "v": str(len(data))})
 
     subtype = _dossier_subtype(name, kind, data)
 
@@ -355,12 +381,13 @@ def _dossier_meta(name: str, data: Any, size_bytes: int, mtime: float) -> dict:
         "kind": kind,
         "subtype": subtype,
         "title": title or name,
-        "subtitle": subtitle,
         "ident": ident,
         "ok": ok,
         "badges": badges,
         "n_steps": n_steps,
         "n_results": n_results,
+        "request_params": request_params,
+        "response_meta": response_meta,
         "size_human": _human_size(size_bytes),
         "mtime": datetime.fromtimestamp(mtime).strftime("%Y-%m-%d %H:%M"),
     }
