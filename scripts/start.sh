@@ -19,6 +19,7 @@ usage() {
     echo "  -p, --port PORT   Port to listen on  (default: $DEFAULT_PORT)"
     echo "  -H, --host HOST   Host to bind to    (default: $DEFAULT_HOST)"
     echo "  --no-reload       Disable auto-reload"
+    echo "  --no-query        Disable browser/Playwright query functionality (read-only mode)"
     echo "  --help            Show this help"
     exit 0
 }
@@ -26,12 +27,14 @@ usage() {
 RELOAD="--reload"
 HOST=""
 PORT=""
+NO_QUERY=""
 
 while [[ $# -gt 0 ]]; do
     case $1 in
         -p|--port)   PORT="$2"; shift 2 ;;
         -H|--host)   HOST="$2"; shift 2 ;;
         --no-reload) RELOAD=""; shift ;;
+        --no-query)  NO_QUERY="1"; shift ;;
         --help)      usage ;;
         *) echo -e "${RED}Unknown option: $1${NC}"; usage ;;
     esac
@@ -49,13 +52,15 @@ cd "$(dirname "$0")/.."
 
 export PYTHONPATH="$(pwd):${PYTHONPATH:-}"
 
+[ -n "$NO_QUERY" ] && export SISTER_NO_QUERY=1 && echo -e "${YELLOW}No-query mode: browser/Playwright disabled${NC}"
+
 echo -e "${BLUE}Starting ${APP_NAME} → http://${HOST}:${PORT}${NC}"
 
 if [ -n "$RELOAD" ]; then
     # Only reload on Python file changes — avoid restarting on template/CSS/JS edits
     # which would kill the authenticated browser session
-    exec uv run uvicorn "$MODULE" --host "$HOST" --port "$PORT" --workers 1 \
+    exec uv run --frozen uvicorn "$MODULE" --host "$HOST" --port "$PORT" --workers 1 \
         $RELOAD --reload-include "*.py" --reload-exclude "templates/*" --reload-exclude "static/*"
 else
-    exec uv run uvicorn "$MODULE" --host "$HOST" --port "$PORT" --workers 1
+    exec uv run --frozen uvicorn "$MODULE" --host "$HOST" --port "$PORT" --workers 1
 fi

@@ -1,0 +1,264 @@
+{% extends "_base.html" %}
+{% from "_timeline.html" import timeline_css, timeline_js, render_timeline %}
+{% set _v = doc.xml_parsed.VisuraFabbricatiStorica or doc.xml_parsed.VisuraFabbricati or {} %}
+{% set _t = _v.TitoloVisura or {} %}
+{% set _dr = _v.DatiRichiesta or {} %}
+{% set _saf = _v.SituazioneAttualeFabbricati or {} %}
+{% set _cls = _saf.DatiClassamentoF or {} %}
+{% set _cons = _cls.Consistenza or {} %}
+{% set _sup = _saf.SuperficieF or {} %}
+
+{% block page_title %}
+    Visura Fabbricati Storica — FG {{ doc.foglio }} PT {{ doc.particella }}{% if doc.subalterno %}/{{ doc.subalterno }}{% endif %}
+{% endblock %}
+
+{% block extra_css %}
+{{ super() }}
+{{ timeline_css() }}
+<style>
+.hero-section { background: linear-gradient(135deg, #28a745 0%, #20c997 100%); color: white; padding: 2rem 0; margin-bottom: 2rem; }
+.detail-label { font-size: .75rem; text-transform: uppercase; letter-spacing: .05em; color: #6c757d; }
+.income-box { background: linear-gradient(135deg, #28a745 0%, #20c997 100%); color: white; padding: 1rem; border-radius: .5rem; text-align: center; }
+.income-value { font-size: 1.75rem; font-weight: 700; }
+.cadastral-ref { font-family: monospace; background-color: #e9ecef; padding: .2rem .45rem; border-radius: .25rem; font-size: .9rem; }
+/* fallback owner-row for IntestazioneAttuale shown without history */
+.owner-row { border-left: 3px solid #28a745; background-color: #f8f9fa; padding: .75rem 1rem; border-radius: .25rem; margin-bottom: .5rem; }
+.share-badge { font-size: .85rem; font-weight: 600; }
+@media print { .no-print { display: none !important; } .hero-section { background: #f8f9fa !important; color: #333 !important; } }
+</style>
+{% endblock %}
+
+{% block content %}
+{# ── Hero ───────────────────────────────────────────────────────────────── #}
+<div class="hero-section no-print">
+    <div class="container-fluid">
+        <nav class="mb-3" aria-label="breadcrumb">
+            <ol class="breadcrumb mb-0">
+                <li class="breadcrumb-item">
+                    <a href="/web/documents" class="text-white-50">Documenti</a>
+                </li>
+                <li class="breadcrumb-item active text-white">Visura Fabbricati Storica</li>
+            </ol>
+        </nav>
+        <div class="d-flex flex-wrap justify-content-between align-items-center">
+            <div>
+                <h1 class="display-6 fw-bold mb-2">
+                    <i class="fas fa-building me-3"></i>Visura Storica Fabbricato
+                </h1>
+                <p class="lead mb-0 opacity-75">
+                    {{ doc.comune or _dr.Comune or '' }}
+                    — FG <strong>{{ doc.foglio or _dr.Foglio or '-' }}</strong>
+                    PT <strong>{{ doc.particella or _dr.ParticellaNum or '-' }}</strong>
+                    {% if doc.subalterno or _dr.Subalterno %}
+                    / Sub <strong>{{ doc.subalterno or _dr.Subalterno }}</strong>
+                    {% endif %}
+                </p>
+            </div>
+            <div class="d-flex gap-2 mt-3 mt-md-0">
+                <a href="/web/documents" class="btn btn-outline-light">
+                    <i class="fas fa-arrow-left me-2"></i>Documenti
+                </a>
+                <button onclick="window.print()" class="btn btn-outline-light">
+                    <i class="fas fa-print me-2"></i>Stampa
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="container-fluid">
+
+    {# ── Query info ──────────────────────────────────────────────────────── #}
+    <div class="row mb-4">
+        <div class="col-lg-8 mb-3 mb-lg-0">
+            <div class="card border-start border-success border-3 h-100">
+                <div class="card-body">
+                    <h5 class="card-title">
+                        <i class="fas fa-map-marker-alt text-success me-2"></i>{{ _t.Titolo or 'Visura Fabbricati Storica' }}
+                    </h5>
+                    <div class="row">
+                        <div class="col-md-4">
+                            <ul class="list-unstyled mb-0 small">
+                                <li class="mb-2"><strong>Provincia:</strong>
+                                    <span class="badge bg-success ms-1">{{ _dr.Provincia or doc.provincia or '-' }}</span>
+                                </li>
+                                <li class="mb-2"><strong>Comune:</strong> {{ _dr.Comune or doc.comune or '-' }}</li>
+                            </ul>
+                        </div>
+                        <div class="col-md-4">
+                            <ul class="list-unstyled mb-0 small">
+                                <li class="mb-2"><strong>Foglio:</strong> <span class="cadastral-ref">{{ _dr.Foglio or doc.foglio or '-' }}</span></li>
+                                <li class="mb-2"><strong>Particella:</strong> <span class="cadastral-ref">{{ _dr.ParticellaNum or doc.particella or '-' }}</span></li>
+                                {% if _dr.Subalterno or doc.subalterno %}
+                                <li class="mb-2"><strong>Subalterno:</strong> <span class="cadastral-ref">{{ _dr.Subalterno or doc.subalterno }}</span></li>
+                                {% endif %}
+                            </ul>
+                        </div>
+                        <div class="col-md-4">
+                            <ul class="list-unstyled mb-0 small">
+                                {% if _dr.SezUrbana or doc.sezione_urbana %}
+                                <li class="mb-2"><strong>Sezione Urbana:</strong> <span class="cadastral-ref">{{ _dr.SezUrbana or doc.sezione_urbana }}</span></li>
+                                {% endif %}
+                                <li class="mb-2"><strong>Provenienza:</strong> {{ _t.Provenienza or '-' }}</li>
+                            </ul>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="col-lg-4">
+            <div class="card border-start border-success border-3 h-100">
+                <div class="card-body">
+                    <h5 class="card-title"><i class="fas fa-info-circle text-success me-2"></i>Documento</h5>
+                    <ul class="list-unstyled mb-0 small">
+                        <li class="mb-2"><strong>Situazione al:</strong>
+                            {% if _t.SituazioneAl and _t.SituazioneAl|length == 8 %}
+                            <strong>{{ _t.SituazioneAl[:4] }}/{{ _t.SituazioneAl[4:6] }}/{{ _t.SituazioneAl[6:] }}</strong>
+                            {% else %}
+                            {{ _t.SituazioneAl or '-' }}
+                            {% endif %}
+                        </li>
+                        <li class="mb-2"><strong>Protocollo:</strong> {{ _dr.Protocollo or '-' }} / {{ _dr.Anno or '-' }}</li>
+                        {% if doc.id %}
+                        <li><strong>ID Doc:</strong> <code>{{ doc.id }}</code></li>
+                        {% endif %}
+                    </ul>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    {# ── Situazione attuale (property data, no owners here) ──────────────── #}
+    {% if _saf %}
+    <h2 class="h5 border-bottom pb-2 mb-3">Situazione Attuale</h2>
+    <div class="card border-0 shadow-sm mb-4">
+        <div class="card-body">
+            <div class="row g-4">
+                <div class="col-md-7">
+                    {% if _saf.IndirizzoImm %}
+                    <p class="mb-2">
+                        <span class="detail-label">Indirizzo</span><br>
+                        <strong>{{ _saf.IndirizzoImm if _saf.IndirizzoImm is string else (_saf.IndirizzoImm._text or '') }}</strong>
+                    </p>
+                    {% endif %}
+                    <div class="row g-2 mt-1">
+                        <div class="col-sm-6">
+                            <span class="detail-label">Categoria / Classe</span><br>
+                            <span class="badge bg-info text-dark me-1">{{ _cls.Categoria or '-' }}</span>
+                            {% if _cls.Classe %}Cl. {{ _cls.Classe }}{% endif %}
+                            {% if _cls.ZonaCensuaria %} — Zona {{ _cls.ZonaCensuaria }}{% endif %}
+                        </div>
+                        <div class="col-sm-6">
+                            <span class="detail-label">Consistenza</span><br>
+                            <strong>{{ _cons.Valore or '-' }}</strong> {{ _cons.Unita or '' }}
+                            {% if _sup.Totale %}
+                            <br><small class="text-muted">{{ _sup.Totale }} MQ{% if _sup.TotaleE %} / {{ _sup.TotaleE }} escluse{% endif %}</small>
+                            {% endif %}
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-5">
+                    {% if _cls.RenditaEuro %}
+                    <div class="income-box">
+                        <div class="small mb-1">Rendita Catastale</div>
+                        <div class="income-value">€ {{ _cls.RenditaEuro }}</div>
+                    </div>
+                    {% else %}
+                    <div class="text-muted fst-italic text-center py-3">Rendita non disponibile</div>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+
+    {# ── Titolarità e storia intestazione — timeline ─────────────────────── #}
+    {#
+       Prefer StoriaIntestazione (complete history) for the timeline.
+       If absent, fall back to IntestazioneAttuale (current owners only).
+    #}
+    {% set _si = _v.StoriaIntestazione or {} %}
+    {% set _mutazioni = _si.MutazioneSoggettiva if _si else none %}
+    {% set _mutazioni_list = _mutazioni if _mutazioni is sequence and _mutazioni is not string and _mutazioni is not mapping else ([_mutazioni] if _mutazioni else []) %}
+
+    {% if _mutazioni_list %}
+    <h2 class="h5 border-bottom pb-2 mb-3">
+        <i class="fas fa-history text-success me-2"></i>Titolarità
+        <span class="badge bg-secondary ms-2">{{ _mutazioni_list|length }} mutazioni</span>
+    </h2>
+    <div class="card border-0 shadow-sm mb-4">
+        <div class="card-body py-3 px-3">
+            {{ render_timeline(_mutazioni_list, situazione_al=_t.SituazioneAl or '',
+                               color='#28a745', badge_class='bg-success') }}
+        </div>
+    </div>
+
+    {% else %}
+    {# Fallback: no history — show IntestazioneAttuale directly #}
+    {% set _int = _saf.IntestazioneAttuale or {} %}
+    {% if _int %}
+    {% set _intestati = _int.Intestato if _int.Intestato is sequence and _int.Intestato is not string and _int.Intestato is not mapping else ([_int.Intestato] if _int.Intestato else []) %}
+    <h2 class="h5 border-bottom pb-2 mb-3">
+        Intestazione Attuale
+        <span class="badge bg-success ms-2">{{ _intestati|length }}</span>
+    </h2>
+    <div class="card border-0 shadow-sm mb-4">
+        <div class="card-body">
+            {% for row in _intestati %}
+            {% set _dr_row = row.DirittiReali if row.DirittiReali is mapping else {} %}
+            <div class="owner-row">
+                <div class="row align-items-center">
+                    <div class="col-md-5">
+                        <h6 class="mb-1">
+                            <i class="fas fa-user me-2"></i>
+                            {{ row.Nominativo if row.Nominativo is string else (row.Nominativo._text or '-') }}
+                        </h6>
+                        <small class="text-muted font-monospace">
+                            {{ row.CF if row.CF is string else (row.CF._text or '-') }}
+                        </small>
+                    </div>
+                    <div class="col-md-4">
+                        {% if _dr_row.Descrizione %}<span class="badge bg-secondary me-1">{{ _dr_row.Descrizione }}</span>{% endif %}
+                        {% if _dr_row.FineDiritto %}<small class="text-muted d-block">Fino al: {{ _dr_row.FineDiritto }}</small>{% endif %}
+                    </div>
+                    <div class="col-md-3 text-end">
+                        {% if _dr_row.Quota %}
+                        <span class="badge bg-success share-badge">
+                            <i class="fas fa-chart-pie me-1"></i>{{ _dr_row.Quota }}
+                        </span>
+                        {% endif %}
+                    </div>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+    {% endif %}
+    {% endif %}
+
+    {# ── Dati liquidazione ───────────────────────────────────────────────── #}
+    {% set _liq = _v.DatiLiquidazione or {} %}
+    {% if _liq %}
+    <div class="card border-0 shadow-sm mb-4">
+        <div class="card-body">
+            <span class="detail-label">Liquidazione</span>
+            <span class="ms-3">Prot. {{ _liq.Protocollo or '-' }} / {{ _liq.Anno or '-' }}
+            — {{ _liq.UnitaImmobiliari or '0' }} unità immobiliari</span>
+        </div>
+    </div>
+    {% endif %}
+
+    {# ── Actions ─────────────────────────────────────────────────────────── #}
+    <div class="d-flex gap-2 justify-content-center mt-4 mb-4 no-print">
+        <a href="/web/documents" class="btn btn-outline-secondary">
+            <i class="fas fa-arrow-left me-2"></i>Documenti
+        </a>
+    </div>
+
+</div>
+{% endblock %}
+
+{% block extra_js %}
+{{ super() }}
+{{ timeline_js() }}
+{% endblock %}

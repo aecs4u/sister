@@ -455,6 +455,60 @@ async def get_documents_for_response(request_id: str, foglio: str = None, partic
     return docs
 
 
+async def get_document_by_id(doc_id: int) -> dict | None:
+    """Fetch a single visura_document by primary key."""
+    session_factory = _get_session_factory()
+    async with session_factory() as session:
+        row = await session.get(VisuraDocumentDB, doc_id)
+    if row is None:
+        return None
+    _dati = json.loads(row.dati_immobile_json) if row.dati_immobile_json else {}
+    return {
+        "id": row.id,
+        "document_type": row.document_type,
+        "file_format": row.file_format,
+        "filename": row.filename,
+        "file_path": row.file_path,
+        "file_size": row.file_size,
+        "oggetto": row.oggetto,
+        "richiesta_del": row.richiesta_del,
+        "provincia": row.provincia,
+        "comune": row.comune,
+        "foglio": row.foglio,
+        "particella": row.particella,
+        "subalterno": row.subalterno,
+        "sezione_urbana": row.sezione_urbana,
+        "tipo_catasto": row.tipo_catasto,
+        "intestati": json.loads(row.intestati_json) if row.intestati_json else [],
+        "dati_immobile": _dati.get("immobile", {}),
+        "classamento": _dati.get("classamento", []),
+        "indirizzo": _dati.get("indirizzo", ""),
+        "xml_content": row.xml_content or "",
+        "created_at": row.created_at.isoformat() if row.created_at else None,
+    }
+
+
+async def get_indexed_file_paths() -> dict[str, int]:
+    """Return a mapping of file_path → document id for all indexed documents."""
+    session_factory = _get_session_factory()
+    async with session_factory() as session:
+        result = await session.execute(
+            select(VisuraDocumentDB.file_path, VisuraDocumentDB.id).where(VisuraDocumentDB.file_path.isnot(None))
+        )
+        return {row.file_path: row.id for row in result}
+
+
+async def get_indexed_file_metadata() -> dict[str, dict]:
+    """Return {file_path: {"id": doc_id, "oggetto": new_name}} for all indexed documents."""
+    session_factory = _get_session_factory()
+    async with session_factory() as session:
+        result = await session.execute(
+            select(VisuraDocumentDB.file_path, VisuraDocumentDB.id, VisuraDocumentDB.oggetto)
+            .where(VisuraDocumentDB.file_path.isnot(None))
+        )
+        return {row.file_path: {"id": row.id, "oggetto": row.oggetto or ""} for row in result}
+
+
 async def get_all_documents(limit: int = 100, offset: int = 0) -> list[dict]:
     """Fetch all visura_documents (for browse page)."""
     session_factory = _get_session_factory()

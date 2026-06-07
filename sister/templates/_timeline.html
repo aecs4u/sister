@@ -1,0 +1,262 @@
+{# ─────────────────────────────────────────────────────────────────────────────
+   _timeline.html  —  Jinja2 macros for cadastral ownership history timelines.
+
+   Usage in any visura template:
+     {% from "_timeline.html" import timeline_css, timeline_js, render_timeline %}
+
+     In {% block extra_css %} block:
+       {{ timeline_css() }}
+
+     In page content:
+       {{ render_timeline(mutazioni_list, situazione_al='20241018', color='#28a745',
+                          badge_class='bg-success') }}
+
+     In {% block extra_js %} block  (call ONCE even if render_timeline called multiple times):
+       {{ timeline_js() }}
+
+   Parameters for render_timeline:
+     mutazioni_list  — list of MutazioneSoggettiva dicts, ascending IndiceMutazione
+                       (oldest = index 0, most recent = last element)
+     situazione_al   — YYYYMMDD "as-of" date string; used to label the current node
+     color           — CSS color for the active/current dot and left accent border
+     badge_class     — Bootstrap badge class for quota chips (e.g. 'bg-success',
+                       'bg-warning text-dark', 'bg-info')
+
+   Behaviour:
+     • The list is rendered REVERSED so newest event appears at top.
+     • The top node (most recent mutation) is expanded by default and labelled
+       "Attuale" with the situazione_al date.
+     • Older nodes are collapsed; clicking the header toggles them.
+     • Owner rows with a non-empty FineDiritto are visually dimmed as "Cessato".
+     • A JS date-extraction regex pulls dates from DatiDerivantiDaMutazSogg text
+       and displays them next to the mutation description header.
+   ─────────────────────────────────────────────────────────────────────────── #}
+
+{% macro timeline_css() %}
+<style>
+/* ── Ownership timeline ─────────────────────────────────────────────────── */
+.ownership-timeline {
+    position: relative;
+    padding-left: 2.5rem;
+}
+.ownership-timeline::before {
+    content: '';
+    position: absolute;
+    left: .875rem;
+    top: .75rem;
+    bottom: .75rem;
+    width: 2px;
+    background: linear-gradient(to bottom, var(--tl-color, #28a745) 0%, #dee2e6 100%);
+}
+.tl-node {
+    position: relative;
+    margin-bottom: 1rem;
+}
+.tl-dot {
+    position: absolute;
+    left: -1.875rem;
+    top: .4rem;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: #adb5bd;
+    border: 2px solid #fff;
+    box-shadow: 0 0 0 2px #adb5bd;
+    z-index: 1;
+}
+.tl-dot.dot-current {
+    background: var(--tl-color, #28a745);
+    box-shadow: 0 0 0 3px var(--tl-color, #28a745);
+    width: 14px;
+    height: 14px;
+    left: -2.05rem;
+    top: .225rem;
+}
+.tl-card {
+    border: 1px solid #dee2e6;
+    border-radius: .45rem;
+    overflow: hidden;
+}
+.tl-card-current {
+    border-color: var(--tl-color, #28a745);
+    box-shadow: 0 0 0 1px var(--tl-color, #28a745), 0 2px 6px rgba(0,0,0,.07);
+}
+.tl-header {
+    padding: .45rem .75rem;
+    background: #f8f9fa;
+    display: flex;
+    align-items: center;
+    gap: .45rem;
+    cursor: pointer;
+    user-select: none;
+    border-bottom: 1px solid transparent;
+}
+.tl-header:hover { background: #f0f0f0; }
+.tl-header-current { background: #f4fef6; }
+.tl-header-current:hover { background: #eafaf0; }
+.tl-body {
+    padding: .75rem 1rem;
+    border-top: 1px solid #dee2e6;
+}
+.tl-desc {
+    font-size: .82rem;
+    color: #495057;
+    flex: 1;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    min-width: 0;
+}
+.tl-date-tag {
+    font-size: .72rem;
+    color: #6c757d;
+    font-style: italic;
+    white-space: nowrap;
+    padding: 0 .25rem;
+}
+.tl-chevron {
+    font-size: .7rem;
+    color: #6c757d;
+    transition: transform .2s;
+    flex-shrink: 0;
+}
+.tl-chevron.open { transform: rotate(180deg); }
+
+/* ── Owner rows inside timeline ─────────────────────────────────────────── */
+.tl-owner-row {
+    border-left: 3px solid #ced4da;
+    background: #f8f9fa;
+    padding: .45rem .75rem;
+    border-radius: .25rem;
+    margin-bottom: .35rem;
+}
+.tl-owner-row.tl-owner-active {
+    border-left-color: var(--tl-color, #28a745);
+    background: #fff;
+}
+.tl-owner-row.tl-owner-ended {
+    border-left-color: #adb5bd;
+    opacity: .65;
+}
+.tl-owner-name { font-weight: 600; font-size: .9rem; }
+.tl-owner-cf { font-family: monospace; color: #6c757d; font-size: .8rem; }
+.tl-owner-share { font-size: .8rem; font-weight: 600; }
+
+@media print {
+    .ownership-timeline::before { background: #adb5bd; }
+    .tl-body.d-none { display: block !important; }
+    .tl-chevron { display: none; }
+}
+</style>
+{% endmacro %}
+
+
+{% macro timeline_js() %}
+<script>
+(function () {
+    /* Extract embedded date from DatiDerivantiDaMutazSogg free text.
+       Matches DD/MM/YYYY first, then bare 4-digit years. */
+    var DATE_RE = /(\d{2}\/\d{2}\/\d{4})/;
+    var YEAR_RE = /\b(\d{4})\b/;
+    document.querySelectorAll('.tl-node[data-ddm]').forEach(function (node) {
+        var text = node.getAttribute('data-ddm') || '';
+        var m = DATE_RE.exec(text) || YEAR_RE.exec(text);
+        var tag = node.querySelector('.tl-date-tag');
+        if (m && tag && m[1]) tag.textContent = m[1];
+    });
+
+    /* Click handler: toggle body + chevron rotation */
+    document.querySelectorAll('.tl-header').forEach(function (h) {
+        h.addEventListener('click', function () {
+            var body = this.nextElementSibling;
+            var chev = this.querySelector('.tl-chevron');
+            if (!body) return;
+            var hidden = body.classList.toggle('d-none');
+            if (chev) chev.classList.toggle('open', !hidden);
+        });
+    });
+})();
+</script>
+{% endmacro %}
+
+
+{% macro render_timeline(mutazioni_list, situazione_al='', color='#28a745', badge_class='bg-success') %}
+{#
+  Renders a vertical ownership-change timeline.
+  mutazioni_list is processed in REVERSE so index 0 (most recent) appears at top.
+#}
+{% set _rev = mutazioni_list | reverse | list %}
+{% if not _rev %}
+<p class="text-muted small fst-italic py-2">Nessuna mutazione soggettiva disponibile.</p>
+{% else %}
+<div class="ownership-timeline" style="--tl-color: {{ color }}">
+    {% for m in _rev %}
+    {% set is_cur = loop.first %}
+    {% set _int = m.Intestazione or {} %}
+    {% set _rows_raw = _int.Intestato if _int else none %}
+    {% set _rows = _rows_raw if (_rows_raw is sequence and _rows_raw is not string and _rows_raw is not mapping) else ([_rows_raw] if _rows_raw else []) %}
+    {% set _desc = m.DatiDerivantiDaMutazSogg if m.DatiDerivantiDaMutazSogg is string else (m.DatiDerivantiDaMutazSogg._text if m.DatiDerivantiDaMutazSogg is mapping else '') %}
+    <div class="tl-node" {% if _desc %}data-ddm="{{ _desc | e }}"{% endif %}>
+        <div class="tl-dot {% if is_cur %}dot-current{% endif %}"></div>
+        <div class="tl-card {% if is_cur %}tl-card-current{% endif %}">
+            {# ─ Header ─ #}
+            <div class="tl-header {% if is_cur %}tl-header-current{% endif %}">
+                {% if is_cur %}
+                    <span class="badge" style="background:{{ color }};font-size:.7rem">
+                        <i class="fas fa-check-circle me-1"></i>Attuale
+                    </span>
+                    {% if situazione_al and situazione_al|length == 8 %}
+                    <span class="badge bg-light text-dark border" style="font-size:.68rem">
+                        al {{ situazione_al[:4] }}/{{ situazione_al[4:6] }}/{{ situazione_al[6:] }}
+                    </span>
+                    {% endif %}
+                {% else %}
+                    <span class="badge bg-light text-dark border" style="font-size:.68rem">#{{ m.IndiceMutazione or (_rev | length - loop.index0) }}</span>
+                {% endif %}
+                <span class="tl-desc" title="{{ _desc }}">{{ _desc or '—' }}</span>
+                <span class="tl-date-tag"></span>
+                <i class="fas fa-chevron-down tl-chevron {% if is_cur %}open{% endif %}"></i>
+            </div>
+            {# ─ Body (expanded for current, collapsed for historical) ─ #}
+            <div class="tl-body {% if not is_cur %}d-none{% endif %}">
+                {% if _rows %}
+                {% for r in _rows %}
+                {% set _dr2 = r.DirittiReali if r.DirittiReali is mapping else {} %}
+                {% set _name = r.Nominativo if r.Nominativo is string else (r.Nominativo._text if r.Nominativo is mapping else '-') %}
+                {% set _cf   = r.CF if r.CF is string else (r.CF._text if r.CF is mapping else '') %}
+                {% set _ended = _dr2.FineDiritto and (_dr2.FineDiritto | trim) %}
+                <div class="tl-owner-row {% if _ended %}tl-owner-ended{% else %}tl-owner-active{% endif %}">
+                    <div class="row align-items-center g-1">
+                        <div class="col-md-5">
+                            <span class="tl-owner-name">{{ _name }}</span>
+                            {% if _ended %}<span class="badge bg-secondary ms-1" style="font-size:.63rem">Cessato</span>{% endif %}
+                            {% if _cf %}<div class="tl-owner-cf">{{ _cf }}</div>{% endif %}
+                        </div>
+                        <div class="col-md-4">
+                            {% if _dr2.Descrizione %}
+                            <span class="badge bg-secondary me-1">{{ _dr2.Descrizione }}</span>
+                            {% endif %}
+                            {% if _ended %}
+                            <small class="text-muted d-block">Fino al: {{ _dr2.FineDiritto }}</small>
+                            {% endif %}
+                        </div>
+                        <div class="col-md-3 text-end">
+                            {% if _dr2.Quota %}
+                            <span class="badge {{ badge_class }} tl-owner-share">
+                                <i class="fas fa-chart-pie me-1"></i>{{ _dr2.Quota }}
+                            </span>
+                            {% endif %}
+                        </div>
+                    </div>
+                </div>
+                {% endfor %}
+                {% else %}
+                <p class="text-muted small mb-0 fst-italic">Nessun dato intestazione per questa mutazione.</p>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+    {% endfor %}
+</div>
+{% endif %}
+{% endmacro %}

@@ -135,13 +135,16 @@ async def lifespan(app: FastAPI):
     global visura_service
     await init_db()
     PageLogger.reset_session()
-    try:
-        visura_service = VisuraService()
-        await visura_service.initialize(background_auth=True)
-        logger.info("Servizio visure avviato (autenticazione in background)")
-    except Exception as e:
-        logger.warning("Browser service unavailable — web UI will run in read-only mode: %s", e)
-        visura_service = None
+    if os.getenv("SISTER_NO_QUERY"):
+        logger.info("No-query mode (SISTER_NO_QUERY set) — browser service skipped")
+    else:
+        try:
+            visura_service = VisuraService()
+            await visura_service.initialize(background_auth=True)
+            logger.info("Servizio visure avviato (autenticazione in background)")
+        except Exception as e:
+            logger.warning("Browser service unavailable — web UI will run in read-only mode: %s", e)
+            visura_service = None
 
     try:
         yield
@@ -185,13 +188,31 @@ try:
             CLERK_AFTER_SIGN_IN_URL="/web/",
             CLERK_AFTER_SIGN_UP_URL="/web/",
         )
+        require_auth = os.getenv("REQUIRE_AUTHENTICATION", "true").lower() not in ("false", "0", "no")
         auth_setup = setup_auth(
             app,
             config=auth_config,
             include_routes=True,
             mount_static=True,
-            setup_exception_handlers=True,
+            setup_exception_handlers=False,
         )
+        from urllib.parse import quote as _urlquote
+
+        from aecs4u_auth.dependencies import RedirectToLogin
+        from aecs4u_auth.routers.auth import router as auth_router
+        from fastapi.responses import RedirectResponse
+
+        app.include_router(auth_router)
+
+        if require_auth:
+
+            @app.exception_handler(RedirectToLogin)
+            async def _redirect_to_login(request: Request, exc: RedirectToLogin):
+                url = "/auth/login"
+                if exc.return_url:
+                    url = f"{url}?next_url={_urlquote(exc.return_url, safe='')}"
+                return RedirectResponse(url=url, status_code=302)
+
         app.state.auth_setup = auth_setup
         app.state.auth_config = auth_config
         auth_mode = getattr(auth_config, "AUTH_MODE", getattr(auth_config, "auth_mode", "unknown"))

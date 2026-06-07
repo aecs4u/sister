@@ -1,0 +1,168 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <!--
+    VisuraTerreniAttuale.xsd  v2.0
+    Schema for the "Visura Terreni Attuale" document returned by the
+    Italian SISTER cadastral portal (Catasto Terreni).
+
+    Changes from v1:
+    - xs:include cadastral-base.xsd
+    - VisuraTerreniAttualeType.ImmobileTerreni: maxOccurs 1 → unbounded
+      (a document may describe multiple parcels from the same request)
+    - ImmobileTerreniType.MutazioneSoggettiva: maxOccurs 1 → unbounded
+      (CRITICAL BUG FIX: a parcel can have multiple ownership mutations)
+    - DatiClassamentoTType.ClassamentoT: maxOccurs 1 → unbounded
+      (a single parcel can have multiple land quality classifications)
+    - ClassamentoTType.SuperficieMQ: xs:string → AreaMQType
+    - ClassamentoTType.RedditoDominicaleEuro: xs:string → MonetaEuroType
+    - ClassamentoTType.RedditoAgrarioEuro: xs:string → MonetaEuroType
+    - DatiLiquidazione.UnitaImmobiliari: xs:string → xs:integer
+    - MutazioneSoggettivaType.DataMutazione: new optional attribute (via base)
+  -->
+
+  <xs:include schemaLocation="cadastral-base.xsd"/>
+
+  <xs:element name="VisuraTerreniAttuale" type="VisuraTerreniAttualeType"/>
+
+  <!-- ── Partita catastale ───────────────────────────────────────────────── -->
+  <!--
+    Partita: the "partita catastale" (cadastral account number) that groups
+    all parcels under the same ownership record in the Catasto Terreni.
+    This is a Terreni-only concept (Fabbricati uses Subalterno instead).
+    Common special values: "1"=strade pubbliche, "2"=acque demaniali,
+    "3"=proprietà comuni, "4"=beni propri del comune.
+  -->
+  <xs:complexType name="PartitaType">
+    <xs:simpleContent><xs:extension base="xs:string"/></xs:simpleContent>
+  </xs:complexType>
+
+  <!-- ── Property identifier (Catasto Terreni version) ─────────────────── -->
+  <!--
+    SezCensuaria (not SezUrbana): the census section code used in Terreni
+    (differs from Fabbricati which uses SezUrbana — a known naming inconsistency
+    in the original SISTER XML vocabulary).
+    ProgrId: progressive sub-identifier for parcels split across census sections.
+    Partita: first-class child element (Terreni-specific).
+  -->
+  <xs:complexType name="IdentificativoDefinitivoType">
+    <xs:sequence>
+      <xs:element name="Partita" type="PartitaType" minOccurs="0" maxOccurs="1"/>
+    </xs:sequence>
+    <xs:attribute name="Provincia"     type="ProvinciaType"/>
+    <xs:attribute name="CodiceComune"  type="xs:string"/>
+    <xs:attribute name="Comune"        type="xs:string"/>
+    <xs:attribute name="SezCensuaria"  type="xs:string">
+      <xs:annotation><xs:documentation>
+        Census section code (Catasto Terreni).
+        Cf. SezUrbana in Fabbricati schemas — different vocabulary,
+        same conceptual role.
+      </xs:documentation></xs:annotation>
+    </xs:attribute>
+    <xs:attribute name="Foglio"        type="xs:string"/>
+    <xs:attribute name="ParticellaNum" type="xs:string"/>
+    <xs:attribute name="ProgrId"       type="xs:string"/>
+  </xs:complexType>
+
+  <xs:complexType name="ImmobileIndividuatoType">
+    <xs:sequence>
+      <xs:element name="IdentificativoDefinitivo" type="IdentificativoDefinitivoType"
+                  minOccurs="0" maxOccurs="1"/>
+    </xs:sequence>
+  </xs:complexType>
+
+  <!-- ── Request parameters ───────────────────────────────────────────────── -->
+  <xs:complexType name="DatiRichiestaType">
+    <xs:sequence>
+      <xs:element name="ImmobileIndividuato" type="ImmobileIndividuatoType"
+                  minOccurs="0" maxOccurs="1"/>
+    </xs:sequence>
+    <xs:attribute name="Provincia"     type="ProvinciaType"/>
+    <xs:attribute name="CodiceComune"  type="xs:string"/>
+    <xs:attribute name="Comune"        type="xs:string"/>
+    <xs:attribute name="SezCensuaria"  type="xs:string"/>
+    <xs:attribute name="Foglio"        type="xs:string"/>
+    <xs:attribute name="ParticellaNum" type="xs:string"/>
+    <xs:attribute name="Protocollo"    type="xs:string"/>
+    <xs:attribute name="Anno"          type="AnnoType"/>
+  </xs:complexType>
+
+  <xs:complexType name="DatiIdentificativiType">
+    <xs:sequence>
+      <xs:element name="IdentificativoDefinitivo" type="IdentificativoDefinitivoType"
+                  minOccurs="0" maxOccurs="1"/>
+    </xs:sequence>
+  </xs:complexType>
+
+  <!-- ── Land quality classification (one row per quality class) ────────── -->
+  <!--
+    A single parcel may carry multiple ClassamentoT entries — e.g. one row for
+    "Seminativo" and another for "Bosco" if the parcel has mixed land use.
+
+    SimboloDeduzione: deduzione symbol indicating the portion excluded from
+    income calculation (e.g. "B"=bosco/forest deduction, "D"=drainage ditch).
+
+    Legacy Lire fields are retained for archival compatibility; EUR fields
+    are the current canonical values.
+  -->
+  <xs:complexType name="ClassamentoTType">
+    <xs:attribute name="Qualita"               type="xs:string">
+      <xs:annotation><xs:documentation>
+        Land quality / use category.  Common values: Seminativo, Prato,
+        Bosco, Oliveto, Vigna, Orto, Pascolo, Incolto.
+        See QualitaTerreniType in cadastral-base.xsd for the full enumeration.
+      </xs:documentation></xs:annotation>
+    </xs:attribute>
+    <xs:attribute name="Classe"                type="xs:string"/>
+    <xs:attribute name="SuperficieMQ"          type="AreaMQType"/>
+    <xs:attribute name="SimboloDeduzione"      type="xs:string"/>
+    <xs:attribute name="RedditoDominicaleLire" type="xs:string">
+      <xs:annotation><xs:documentation>Legacy: value in Italian Lire (pre-2002). Retained for archival use only.</xs:documentation></xs:annotation>
+    </xs:attribute>
+    <xs:attribute name="RedditoDominicaleEuro" type="MonetaEuroType"/>
+    <xs:attribute name="RedditoAgrarioLire"    type="xs:string">
+      <xs:annotation><xs:documentation>Legacy: value in Italian Lire (pre-2002). Retained for archival use only.</xs:documentation></xs:annotation>
+    </xs:attribute>
+    <xs:attribute name="RedditoAgrarioEuro"    type="MonetaEuroType"/>
+  </xs:complexType>
+
+  <!--
+    DatiClassamentoTType wraps one or more ClassamentoT rows.
+    maxOccurs was 1 in v1 — corrected to unbounded to support mixed-use parcels.
+  -->
+  <xs:complexType name="DatiClassamentoTType">
+    <xs:sequence>
+      <xs:element name="ClassamentoT" type="ClassamentoTType"
+                  minOccurs="0" maxOccurs="unbounded"/>
+    </xs:sequence>
+  </xs:complexType>
+
+  <!-- ── One land parcel ─────────────────────────────────────────────────── -->
+  <!--
+    MutazioneSoggettiva: ownership-change history for this parcel.
+    maxOccurs was 1 in v1 — corrected to unbounded (multiple past owners).
+  -->
+  <xs:complexType name="ImmobileTerreniType">
+    <xs:sequence>
+      <xs:element name="DatiIdentificativi"  type="DatiIdentificativiType"   minOccurs="0" maxOccurs="1"/>
+      <xs:element name="DatiClassamentoT"    type="DatiClassamentoTType"     minOccurs="0" maxOccurs="1"/>
+      <xs:element name="MutazioneSoggettiva" type="MutazioneSoggettivaType"  minOccurs="0" maxOccurs="unbounded"/>
+    </xs:sequence>
+  </xs:complexType>
+
+  <!-- ── Root document type ──────────────────────────────────────────────── -->
+  <!--
+    ImmobileTerreni: a single document may cover multiple parcels
+    (e.g. when the request matched a sheet/foglio with several entries).
+    maxOccurs was 1 in v1 — corrected to unbounded.
+  -->
+  <xs:complexType name="VisuraTerreniAttualeType">
+    <xs:sequence>
+      <xs:element name="TitoloVisura"     type="TitoloVisuraType"    minOccurs="0" maxOccurs="1"/>
+      <xs:element name="DatiRichiesta"    type="DatiRichiestaType"   minOccurs="0" maxOccurs="1"/>
+      <xs:element name="ImmobileTerreni"  type="ImmobileTerreniType" minOccurs="0" maxOccurs="unbounded"/>
+      <xs:element name="DatiLiquidazione" type="DatiLiquidazioneType" minOccurs="0" maxOccurs="1"/>
+      <xs:element name="Richiedente"      type="RichiedenteType"     minOccurs="0" maxOccurs="1"/>
+    </xs:sequence>
+  </xs:complexType>
+
+</xs:schema>

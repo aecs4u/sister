@@ -1,0 +1,172 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <!--
+    VisuraFabbricatiStorica.xsd  v2.0
+    Schema for the "Visura Storica Fabbricati" document returned by the
+    Italian SISTER cadastral portal (Catasto Fabbricati).
+
+    Shared base types (enumerations, DataCatastaleType, DirittiRealiType,
+    IntestatoType, MutazioneSoggettivaType, DatiLiquidazioneType, etc.)
+    are defined in cadastral-base.xsd.
+
+    Changes from v1:
+    - xs:include cadastral-base.xsd — removes all duplicated xs:string types
+    - IntestazioneType.Intestato: fixed maxOccurs 1 → unbounded
+    - MappaliCorrelati.IdentificativoCorrelato: fixed maxOccurs 1 → unbounded
+    - DatiLiquidazione.UnitaImmobiliari: xs:string → xs:integer
+    - DatiRichiesta.Anno: xs:string → AnnoType
+    - DatiClassamentoF.RenditaEuro: xs:string → MonetaEuroType
+    - ConsistenzaType.Valore: xs:string → xs:decimal (via base)
+    - MutazioneSoggettivaType.DataMutazione: new optional attribute (via base)
+  -->
+
+  <xs:include schemaLocation="cadastral-base.xsd"/>
+
+  <xs:element name="VisuraFabbricatiStorica" type="VisuraFabbricatiStoricaType"/>
+
+  <!-- ── Property identifier (Catasto Fabbricati version) ───────────────── -->
+  <!--
+    SezUrbana: sezione urbana code (alphanumeric; may be absent for rural parcels).
+    Subalterno: sub-unit identifier within a building (e.g. apartment number).
+    Both are Fabbricati-specific; the Terreni identifier uses SezCensuaria instead.
+  -->
+  <xs:complexType name="IdentificativoDefinitivoType">
+    <xs:attribute name="Provincia"    type="ProvinciaType"/>
+    <xs:attribute name="Comune"       type="xs:string"/>
+    <xs:attribute name="Foglio"       type="xs:string"/>
+    <xs:attribute name="ParticellaNum" type="xs:string"/>
+    <xs:attribute name="Subalterno"   type="xs:string"/>
+    <xs:attribute name="SezUrbana"    type="xs:string"/>
+  </xs:complexType>
+
+  <xs:complexType name="ImmobileIndividuatoType">
+    <xs:sequence>
+      <xs:element name="IdentificativoDefinitivo" type="IdentificativoDefinitivoType"
+                  minOccurs="0" maxOccurs="1"/>
+    </xs:sequence>
+  </xs:complexType>
+
+  <!-- ── Request parameters ───────────────────────────────────────────────── -->
+  <xs:complexType name="DatiRichiestaType">
+    <xs:sequence>
+      <xs:element name="ImmobileIndividuato" type="ImmobileIndividuatoType"
+                  minOccurs="0" maxOccurs="1"/>
+    </xs:sequence>
+    <xs:attribute name="Provincia"    type="ProvinciaType"/>
+    <xs:attribute name="CodiceComune" type="xs:string"/>
+    <xs:attribute name="Comune"       type="xs:string"/>
+    <xs:attribute name="SezUrbana"    type="xs:string"/>
+    <xs:attribute name="Foglio"       type="xs:string"/>
+    <xs:attribute name="ParticellaNum" type="xs:string"/>
+    <xs:attribute name="Subalterno"   type="xs:string"/>
+    <xs:attribute name="Protocollo"   type="xs:string"/>
+    <xs:attribute name="Anno"         type="AnnoType"/>
+  </xs:complexType>
+
+  <xs:complexType name="DatiIdentificativiType">
+    <xs:sequence>
+      <xs:element name="IdentificativoDefinitivo" type="IdentificativoDefinitivoType"
+                  minOccurs="0" maxOccurs="1"/>
+    </xs:sequence>
+  </xs:complexType>
+
+  <!-- ── Classification (Fabbricati) ────────────────────────────────────── -->
+  <xs:complexType name="DatiClassamentoFType">
+    <xs:sequence>
+      <xs:element name="Consistenza" type="ConsistenzaType" minOccurs="0" maxOccurs="1"/>
+    </xs:sequence>
+    <xs:attribute name="ZonaCensuaria" type="xs:string"/>
+    <xs:attribute name="Categoria"     type="CategoriaFabbricatiType"/>
+    <xs:attribute name="Classe"        type="xs:string"/>
+    <xs:attribute name="RenditaEuro"   type="MonetaEuroType">
+      <xs:annotation><xs:documentation>
+        Rendita catastale in EUR. Multiply by 1.05 × coefficient
+        (160 for A/A10 → 80 for C1 → 55 for D) to get the
+        cadastral value used for property-tax calculations.
+      </xs:documentation></xs:annotation>
+    </xs:attribute>
+  </xs:complexType>
+
+  <xs:complexType name="SuperficieFType">
+    <xs:attribute name="Totale"  type="AreaMQType"/>
+    <xs:attribute name="TotaleE" type="AreaMQType">
+      <xs:annotation><xs:documentation>
+        Surface area of excluded/common portions (superfici escluse).
+      </xs:documentation></xs:annotation>
+    </xs:attribute>
+  </xs:complexType>
+
+  <!-- ── Address history record ───────────────────────────────────────────── -->
+  <xs:complexType name="SituazioneType">
+    <xs:simpleContent><xs:extension base="xs:string"/></xs:simpleContent>
+  </xs:complexType>
+
+  <xs:complexType name="DatiIndirizzoType">
+    <xs:sequence>
+      <xs:element name="IdentificativoDefinitivoRiferimento"
+                  type="IdentificativoDefinitivoRiferimentoType"
+                  minOccurs="0" maxOccurs="1"/>
+      <xs:element name="DatiDerivantiDa"  type="DatiDerivantiDaType"  minOccurs="0" maxOccurs="1"/>
+      <xs:element name="Situazione"       type="SituazioneType"        minOccurs="0" maxOccurs="1"/>
+      <xs:element name="IndirizzoImm"     type="IndirizzoImmType"      minOccurs="0" maxOccurs="1"/>
+    </xs:sequence>
+  </xs:complexType>
+
+  <!-- ── Current state snapshot ──────────────────────────────────────────── -->
+  <xs:complexType name="SituazioneAttualeFabbricatiType">
+    <xs:sequence>
+      <xs:element name="DatiIdentificativi" type="DatiIdentificativiType" minOccurs="0" maxOccurs="1"/>
+      <xs:element name="DatiClassamentoF"   type="DatiClassamentoFType"   minOccurs="0" maxOccurs="1"/>
+      <xs:element name="IndirizzoImm"       type="IndirizzoImmType"       minOccurs="0" maxOccurs="1"/>
+      <xs:element name="SuperficieF"        type="SuperficieFType"        minOccurs="0" maxOccurs="1"/>
+      <xs:element name="MappaliCorrelati"   type="MappaliCorrelatiType"   minOccurs="0" maxOccurs="1"/>
+      <!--
+        IntestazioneAttuale: explicit snapshot of current owners.
+        Mirrors the ownership in the last MutazioneSoggettiva in StoriaIntestazione.
+      -->
+      <xs:element name="IntestazioneAttuale" type="IntestazioneAttualeType" minOccurs="0" maxOccurs="1"/>
+    </xs:sequence>
+  </xs:complexType>
+
+  <!-- ── Historical classification and address records ──────────────────── -->
+  <!--
+    Each element is unbounded because the property may have changed classification,
+    address, or been split/merged multiple times over its cadastral history.
+  -->
+  <xs:complexType name="StoriaImmobileFabbricatiType">
+    <xs:sequence>
+      <xs:element name="DatiIdentificativi" type="DatiIdentificativiType" minOccurs="0" maxOccurs="unbounded"/>
+      <xs:element name="DatiIndirizzo"      type="DatiIndirizzoType"      minOccurs="0" maxOccurs="unbounded"/>
+      <xs:element name="DatiClassamentoF"   type="DatiClassamentoFType"   minOccurs="0" maxOccurs="unbounded"/>
+      <xs:element name="SuperficieF"        type="SuperficieFType"        minOccurs="0" maxOccurs="1"/>
+    </xs:sequence>
+  </xs:complexType>
+
+  <!-- ── Ownership history (complete mutation list) ──────────────────────── -->
+  <!--
+    StoriaIntestazione: complete chronological sequence of ownership mutations.
+    MutazioneSoggettiva elements are ordered by ascending IndiceMutazione
+    (1 = oldest, N = most recent / current state).
+    The most recent MutazioneSoggettiva.Intestazione mirrors IntestazioneAttuale.
+  -->
+  <xs:complexType name="StoriaIntestazioneType">
+    <xs:sequence>
+      <xs:element name="MutazioneSoggettiva" type="MutazioneSoggettivaType"
+                  minOccurs="0" maxOccurs="unbounded"/>
+    </xs:sequence>
+  </xs:complexType>
+
+  <!-- ── Root document type ──────────────────────────────────────────────── -->
+  <xs:complexType name="VisuraFabbricatiStoricaType">
+    <xs:sequence>
+      <xs:element name="TitoloVisura"                type="TitoloVisuraType"                  minOccurs="0" maxOccurs="1"/>
+      <xs:element name="DatiRichiesta"               type="DatiRichiestaType"                  minOccurs="0" maxOccurs="1"/>
+      <xs:element name="SituazioneAttualeFabbricati"  type="SituazioneAttualeFabbricatiType"    minOccurs="0" maxOccurs="1"/>
+      <xs:element name="StoriaImmobileFabbricati"    type="StoriaImmobileFabbricatiType"       minOccurs="0" maxOccurs="1"/>
+      <xs:element name="StoriaIntestazione"          type="StoriaIntestazioneType"             minOccurs="0" maxOccurs="1"/>
+      <xs:element name="DatiLiquidazione"            type="DatiLiquidazioneType"               minOccurs="0" maxOccurs="1"/>
+      <xs:element name="Richiedente"                 type="RichiedenteType"                    minOccurs="0" maxOccurs="1"/>
+    </xs:sequence>
+  </xs:complexType>
+
+</xs:schema>

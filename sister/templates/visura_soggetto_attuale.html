@@ -1,0 +1,287 @@
+{% extends "_base.html" %}
+{% from "_timeline.html" import timeline_css, timeline_js, render_timeline %}
+{% set _v = doc.xml_parsed.VisuraSoggettoAttuale or doc.xml_parsed.VisuraSoggettoStorica or {} %}
+{% set _t = _v.TitoloVisura or {} %}
+{% set _dr = _v.DatiRichiesta or {} %}
+{% set _sogg = (_dr.SoggettoIndividuato or {}).SoggettoPF or {} %}
+
+{% block page_title %}
+    Visura Soggetto — {{ _sogg.Cognome or doc.oggetto or 'Soggetto' }} {{ _sogg.Nome or '' }}
+{% endblock %}
+
+{% block extra_css %}
+{{ super() }}
+{{ timeline_css() }}
+<style>
+.hero-section { background: linear-gradient(135deg, #17a2b8 0%, #138496 100%); color: white; padding: 2rem 0; margin-bottom: 2rem; }
+.detail-label { font-size: .75rem; text-transform: uppercase; letter-spacing: .05em; color: #6c757d; }
+.persona-header { border-left: 4px solid #17a2b8; }
+.cadastral-ref { font-family: monospace; background-color: #e9ecef; padding: .2rem .45rem; border-radius: .25rem; font-size: .9rem; }
+.income-highlight { font-size: 1.1rem; font-weight: 600; color: #fd7e14; }
+@media print { .no-print { display: none !important; } .hero-section { background: #f8f9fa !important; color: #333 !important; } }
+</style>
+{% endblock %}
+
+{% from "components/card.html" import stat_card %}
+
+{% block content %}
+{# ── Hero ───────────────────────────────────────────────────────────────── #}
+<div class="hero-section no-print">
+    <div class="container-fluid">
+        <nav class="mb-3" aria-label="breadcrumb">
+            <ol class="breadcrumb mb-0">
+                <li class="breadcrumb-item">
+                    <a href="/web/documents" class="text-white-50">Documenti</a>
+                </li>
+                <li class="breadcrumb-item active text-white">Visura Soggetto</li>
+            </ol>
+        </nav>
+        <div class="d-flex flex-wrap justify-content-between align-items-center">
+            <div>
+                <h1 class="display-6 fw-bold mb-2">
+                    <i class="fas fa-user me-3"></i>
+                    {% if _sogg.Cognome %}{{ _sogg.Cognome }} {{ _sogg.Nome or '' }}{% else %}{{ doc.oggetto or 'Visura Soggetto Attuale' }}{% endif %}
+                </h1>
+                <p class="lead mb-0 opacity-75">
+                    Visura soggetto
+                    {% if _t.TipoCatasto or _dr.TipoCatasto %} — {{ _t.TipoCatasto or _dr.TipoCatasto }}{% endif %}
+                    {% if _dr.Provincia or doc.provincia %} — {{ _dr.Provincia or doc.provincia }}{% endif %}
+                </p>
+            </div>
+            <div class="d-flex gap-2 mt-3 mt-md-0">
+                <a href="/web/documents" class="btn btn-outline-light">
+                    <i class="fas fa-arrow-left me-2"></i>Documenti
+                </a>
+                <button onclick="window.print()" class="btn btn-outline-light">
+                    <i class="fas fa-print me-2"></i>Stampa
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="container-fluid">
+
+    {# ── Soggetto + doc info ─────────────────────────────────────────────── #}
+    <div class="row mb-4">
+        <div class="col-lg-8 mb-3 mb-lg-0">
+            <div class="card persona-header h-100">
+                <div class="card-body">
+                    <h5 class="card-title">
+                        <i class="fas fa-user text-info me-2"></i>Soggetto Individuato
+                    </h5>
+                    <div class="row g-3">
+                        <div class="col-md-5">
+                            <span class="detail-label">Nominativo</span>
+                            <div class="fs-5 fw-bold">{{ _sogg.Cognome or '-' }} {{ _sogg.Nome or '' }}</div>
+                            <div class="font-monospace text-muted small">{{ _sogg.CodiceFiscale or '-' }}</div>
+                        </div>
+                        <div class="col-md-4">
+                            <span class="detail-label">Nascita</span>
+                            <div>{{ _sogg.DataNascita or '-' }}</div>
+                            <div class="text-muted small">{{ _sogg.ComuneNascita or '' }}{% if _sogg.Provincia %} ({{ _sogg.Provincia }}){% endif %}</div>
+                        </div>
+                        <div class="col-md-3">
+                            <span class="detail-label">Sesso</span>
+                            <div>{{ _sogg.Sesso or '-' }}</div>
+                            <span class="detail-label mt-2 d-block">Protocollo</span>
+                            <div class="small">{{ _dr.Protocollo or '-' }} / {{ _dr.Anno or '-' }}</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="col-lg-4">
+            <div class="card persona-header h-100">
+                <div class="card-body">
+                    <h5 class="card-title"><i class="fas fa-info-circle text-info me-2"></i>Documento</h5>
+                    <ul class="list-unstyled mb-0 small">
+                        <li class="mb-2"><strong>Tipo Catasto:</strong>
+                            {% set _tc = _t.TipoCatasto or _dr.TipoCatasto or '' %}
+                            {% if _tc == 'F' %}<span class="badge bg-success">Fabbricati</span>
+                            {% elif _tc == 'T' %}<span class="badge bg-warning text-dark">Terreni</span>
+                            {% elif _tc == 'E' %}<span class="badge bg-info">Entrambi</span>
+                            {% else %}<span class="badge bg-secondary">{{ _tc or '-' }}</span>{% endif %}
+                        </li>
+                        <li class="mb-2"><strong>Provincia:</strong> {{ _dr.Provincia or doc.provincia or '-' }}</li>
+                        <li class="mb-2"><strong>Situazione al:</strong>
+                            {% if _t.SituazioneAl and _t.SituazioneAl|length == 8 %}
+                            <strong>{{ _t.SituazioneAl[:4] }}/{{ _t.SituazioneAl[4:6] }}/{{ _t.SituazioneAl[6:] }}</strong>
+                            {% else %}{{ _t.SituazioneAl or '-' }}{% endif %}
+                        </li>
+                        {% if doc.id %}<li><strong>ID Doc:</strong> <code>{{ doc.id }}</code></li>{% endif %}
+                    </ul>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    {# ── Stat summary ────────────────────────────────────────────────────── #}
+    {% set _gruppi = _v.GruppoUnitaImmobiliari %}
+    {% if _gruppi %}
+    {% set _gruppi_list = _gruppi if _gruppi is sequence and _gruppi is not string and _gruppi is not mapping else [_gruppi] %}
+    {% set ns = namespace(total_imm=0, n_comuni=_gruppi_list|length) %}
+    {% for g in _gruppi_list %}
+        {% set _imm = g.ImmobileFabbricatiS %}
+        {% if _imm %}
+            {% set _imm_list = _imm if _imm is sequence and _imm is not string and _imm is not mapping else [_imm] %}
+            {% set ns.total_imm = ns.total_imm + _imm_list|length %}
+        {% endif %}
+    {% endfor %}
+    <div class="row g-4 mb-4">
+        <div class="col-md-4 col-6">{{ stat_card("Gruppi Comuni", ns.n_comuni, icon="fa-city", color="info") }}</div>
+        <div class="col-md-4 col-6">{{ stat_card("Immobili Totali", ns.total_imm, icon="fa-building", color="warning") }}</div>
+        <div class="col-md-4 col-12">{{ stat_card("Tipo Catasto", _dr.TipoCatasto or '-', icon="fa-database", color="primary") }}</div>
+    </div>
+    {% endif %}
+
+    {# ── Immobili + titolarità per gruppo ────────────────────────────────── #}
+    {% if _gruppi %}
+    {% for g in _gruppi_list %}
+    {% set _imm = g.ImmobileFabbricatiS %}
+    {% set _imm_list = _imm if _imm is sequence and _imm is not string and _imm is not mapping else ([_imm] if _imm else []) %}
+
+    {# Compute whether this group has IntestazioneGruppo mutations #}
+    {% set _ig = g.IntestazioneGruppo or {} %}
+    {% set _ig_mutazioni_raw = _ig.MutazioneSoggettiva if _ig else none %}
+    {% set _ig_mutazioni = _ig_mutazioni_raw if _ig_mutazioni_raw is sequence and _ig_mutazioni_raw is not string and _ig_mutazioni_raw is not mapping else ([_ig_mutazioni_raw] if _ig_mutazioni_raw else []) %}
+
+    <h2 class="h5 border-bottom pb-2 mb-3">
+        <i class="fas fa-map-marker-alt me-1 text-info"></i>
+        {{ g.Descrizione or g.CodiceComune or ('Gruppo ' ~ loop.index) }}
+        <span class="badge bg-secondary ms-2">{{ g.TipoCatasto or '' }}</span>
+        <span class="badge bg-light text-dark border ms-1">{{ _imm_list|length }} immobili</span>
+    </h2>
+
+    {# ── Immobili table ────────────────────────────────────────────────── #}
+    {% if _imm_list %}
+    <div class="card border-0 shadow-sm mb-3">
+        <div class="card-body p-0">
+            <div class="table-responsive">
+                <table class="table table-hover table-sm mb-0" id="imm-table-{{ loop.index }}">
+                    <thead class="table-light">
+                        <tr>
+                            <th>#</th>
+                            <th>Ubicazione</th>
+                            <th>Dati Catastali</th>
+                            <th>Categoria / Classe</th>
+                            <th>Consistenza</th>
+                            <th class="text-end">Rendita €</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for imm in _imm_list %}
+                        {% set _id_def = (imm.DatiIdentificativi or {}).IdentificativoDefinitivo or {} %}
+                        {% set _ind = imm.DatiIndirizzo or {} %}
+                        {% set _cls = imm.DatiClassamentoF or {} %}
+                        {% set _cons = _cls.Consistenza if _cls.Consistenza is mapping else {} %}
+                        {% set _sup = imm.SuperficieF or {} %}
+                        <tr>
+                            <td class="text-muted small">{{ imm.IndiceImmobile or loop.index }}</td>
+                            <td>
+                                {% set _addr = _ind.IndirizzoImm %}
+                                {{ _addr if _addr is string else (_addr._text if _addr is mapping else '-') }}
+                            </td>
+                            <td>
+                                FG <span class="cadastral-ref">{{ _id_def.Foglio or '-' }}</span>
+                                PT <span class="cadastral-ref">{{ _id_def.ParticellaNum or '-' }}</span>
+                                {% if _id_def.Subalterno %}
+                                <br><small>Sub <span class="cadastral-ref">{{ _id_def.Subalterno }}</span></small>
+                                {% endif %}
+                            </td>
+                            <td>
+                                <span class="badge bg-info text-dark">{{ _cls.Categoria or '-' }}</span>
+                                {% if _cls.Classe %}<small class="text-muted d-block">Cl. {{ _cls.Classe }}{% if _cls.ZonaCensuaria %} — Zona {{ _cls.ZonaCensuaria }}{% endif %}</small>{% endif %}
+                            </td>
+                            <td>
+                                {{ _cons.Valore or (_sup.Totale ~ ' MQ' if _sup.Totale else '-') }}
+                                {% if _cons.Unita %} {{ _cons.Unita }}{% endif %}
+                            </td>
+                            <td class="text-end">
+                                <span class="income-highlight">{{ _cls.RenditaEuro or '-' }}</span>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+
+    {# ── IntestazioneGruppo — ownership timeline ───────────────────────── #}
+    {% if _ig_mutazioni %}
+    <div class="card border-0 shadow-sm mb-4">
+        <div class="card-header bg-transparent border-bottom py-2 px-3">
+            <h3 class="h6 mb-0 text-muted">
+                <i class="fas fa-history me-2"></i>Titolarità
+                <span class="badge bg-info ms-2" style="font-size:.65rem">{{ _ig_mutazioni|length }} mutazioni</span>
+            </h3>
+        </div>
+        <div class="card-body py-3 px-3">
+            {{ render_timeline(_ig_mutazioni, situazione_al=_t.SituazioneAl or '',
+                               color='#17a2b8', badge_class='bg-info') }}
+        </div>
+    </div>
+    {% elif _ig and not _ig_mutazioni %}
+    {#
+       IntestazioneGruppo exists but has no MutazioneSoggettiva (schema v1 maxOccurs=1 bug
+       may have caused a single item to be stored as a dict rather than a list).
+       Nothing to show — silently skip.
+    #}
+    {% endif %}
+
+    {% endfor %}
+    {% endif %}
+
+    {# ── No data ─────────────────────────────────────────────────────────── #}
+    {% if not _gruppi %}
+    <div class="card border-0">
+        <div class="card-body text-center py-5">
+            <i class="fas fa-building fa-3x text-muted mb-3 d-block"></i>
+            <h5 class="text-muted">Nessun immobile trovato</h5>
+            <p class="text-muted small">Il documento non contiene dati di gruppi unità immobiliari.</p>
+        </div>
+    </div>
+    {% endif %}
+
+    <div class="d-flex gap-2 justify-content-center mt-4 mb-4 no-print">
+        <a href="/web/documents" class="btn btn-outline-secondary">
+            <i class="fas fa-arrow-left me-2"></i>Documenti
+        </a>
+    </div>
+
+</div>
+{% endblock %}
+
+{% block extra_js %}
+{{ super() }}
+{{ timeline_js() }}
+<script>
+(function () {
+    function addFilter(tableId) {
+        var tbl = document.getElementById(tableId);
+        if (!tbl) return;
+        var bar = document.createElement('div');
+        bar.className = 'd-flex gap-2 mb-2 no-print';
+        var inp = document.createElement('input');
+        inp.type = 'search'; inp.className = 'form-control form-control-sm'; inp.placeholder = 'Filtra…'; inp.style.maxWidth = '260px';
+        inp.addEventListener('input', function () {
+            var q = this.value.toLowerCase();
+            tbl.querySelectorAll('tbody tr').forEach(function (r) { r.style.display = !q || r.textContent.toLowerCase().includes(q) ? '' : 'none'; });
+        });
+        var btn = document.createElement('button');
+        btn.type = 'button'; btn.className = 'btn btn-sm btn-outline-secondary no-print';
+        btn.innerHTML = '<i class="fas fa-download me-1"></i>CSV';
+        btn.addEventListener('click', function () {
+            var rows = Array.from(tbl.querySelectorAll('tr')).filter(function (r) { return r.style.display !== 'none'; });
+            var csv = rows.map(function (r) { return Array.from(r.querySelectorAll('th,td')).map(function (c) { return '"' + c.textContent.trim().replace(/"/g, '""') + '"'; }).join(','); }).join('\n');
+            var a = document.createElement('a'); a.href = 'data:text/csv;charset=utf-8,' + encodeURIComponent(csv); a.download = tableId + '.csv'; a.click();
+        });
+        bar.appendChild(inp); bar.appendChild(btn);
+        tbl.closest('.table-responsive').before(bar);
+    }
+    document.querySelectorAll('[id^="imm-table-"]').forEach(function (t) { addFilter(t.id); });
+})();
+</script>
+{% endblock %}
