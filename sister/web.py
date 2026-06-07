@@ -257,6 +257,30 @@ def _dossiers_base() -> "Path":
     return Path(os.getenv("SISTER_DOSSIERS_BASE", str(data_root / "dossiers"))).resolve()
 
 
+def _dossier_group_key(name: str, kind: str, data: Any) -> str:
+    """Return a grouping key; dossiers that share the same key are collapsed into one paired card.
+
+    Two cases produce a non-unique key:
+      • wf_<step>_<base>_<8hexchars>_<timestamp> files sharing the same <base>
+        (e.g. wf_search_Agrigento_32_12_* and wf_intestati_Agrigento_32_12_*)
+      • dict-of-responses files (immobili.json, results.json) — single file, unique on their own
+    All other dossiers get a unique key equal to their stem.
+    """
+    import re
+    stem = name.rsplit(".", 1)[0]
+
+    if kind == "response" and stem.startswith("wf_"):
+        # strip step-type prefix (wf_search_, wf_intestati_, wf_visura_, …)
+        after_step = re.sub(r"^wf_[a-z]+_", "", stem)
+        # strip trailing 8-char hex id + timestamp (_aa27e89f_20260412_075235)
+        base = re.sub(r"_[0-9a-f]{8}_\d{8}_\d{6}$", "", after_step)
+        if base and base != after_step:
+            return f"wf_pair:{base}"
+
+    # every other dossier is unique
+    return f"solo:{stem}"
+
+
 def _dossier_subtype(name: str, kind: str, data: Any) -> str:
     """Determine the query subtype for a dossier (used for second-level grouping)."""
     if kind == "workflow":
@@ -297,6 +321,9 @@ def _dossier_subtype(name: str, kind: str, data: Any) -> str:
                 if isinstance(d, dict) and d.get("soggetto"):
                     return "soggetto"
         return "altro"
+
+    if kind == "multi_response":
+        return "visura"
 
     return "altro"
 
@@ -374,12 +401,34 @@ def _dossier_meta(name: str, data: Any, size_bytes: int, mtime: float) -> dict:
         n_results = len(data)
         request_params.append({"k": "Operazioni", "v": str(len(data))})
 
+    elif isinstance(data, dict) and data and all(
+        isinstance(v, dict) and "request_id" in v for v in data.values()
+    ):
+        # dict-of-responses files (e.g. immobili.json, results.json)
+        # Each value is a response keyed by request_id.
+        kind = "multi_response"
+        entries_list = list(data.values())
+        ok = all(str(e.get("success", "True")).lower() not in ("false", "0") for e in entries_list)
+        for e in entries_list:
+            tc = e.get("tipo_catasto") or ""
+            d = e.get("data") or {}
+            nr = (d.get("total_results") or 0) if isinstance(d, dict) else 0
+            label = _TC_LABEL.get(tc, tc) if tc else "?"
+            request_params.append({"k": label, "v": f"{nr} risultati" if nr else "–"})
+        n_results = sum(
+            (e.get("data") or {}).get("total_results") or 0
+            for e in entries_list if isinstance(e.get("data"), dict)
+        )
+        response_meta = {"n_results": n_results, "exported_at": ""}
+
     subtype = _dossier_subtype(name, kind, data)
+    group_key = _dossier_group_key(name, kind, data)
 
     return {
         "name": name,
         "kind": kind,
         "subtype": subtype,
+        "group_key": group_key,
         "title": title or name,
         "ident": ident,
         "ok": ok,
@@ -394,10 +443,11 @@ def _dossier_meta(name: str, data: Any, size_bytes: int, mtime: float) -> dict:
 
 
 _DOSSIER_KIND_META = {
-    "workflow": ("Multi-step (workflow)", "fa-diagram-project", "primary"),
-    "response": ("Risposta (single-step)", "fa-file-circle-check", "success"),
-    "batch":    ("Batch", "fa-layer-group", "warning"),
-    "altro":    ("Altro", "fa-file", "secondary"),
+    "workflow":       ("Multi-step (workflow)",    "fa-diagram-project",    "primary"),
+    "response":       ("Risposta (single-step)",   "fa-file-circle-check",  "success"),
+    "multi_response": ("Risposta F+T (coppia)",    "fa-copy",               "success"),
+    "batch":          ("Batch",                    "fa-layer-group",        "warning"),
+    "altro":          ("Altro",                    "fa-file",               "secondary"),
 }
 
 _DOSSIER_SUBTYPE_META: dict[str, tuple[str, str]] = {
@@ -1555,15 +1605,42 @@ async def web_dossiers(request: Request, path: str = "", download: str = "",
         buckets[d["kind"]].append(d)
 
     groups = []
-    for key in ("workflow", "response", "batch", "altro"):
+    for key in ("workflow", "multi_response", "response", "batch", "altro"):
         entries = buckets.get(key)
         if not entries:
             continue
         label, icon, color = _DOSSIER_KIND_META[key]
 
+        # Collapse wf_pair entries (same group_key) into a single paired card
+        collapsed: list[dict] = []
+        pair_groups: dict[str, list[dict]] = defaultdict(list)
+        for d in entries:
+            gk = d.get("group_key", f"solo:{d['name']}")
+            pair_groups[gk].append(d)
+        for gk, peers in pair_groups.items():
+            if gk.startswith("wf_pair:") and len(peers) > 1:
+                # Merge into one representative card with a `peers` list
+                base = gk[len("wf_pair:"):]
+                primary = sorted(peers, key=lambda p: p["mtime"])[0]
+                total_results = sum(p.get("n_results", 0) for p in peers)
+                ok_all = all(p.get("ok") is not False for p in peers)
+                merged = dict(primary)
+                merged.update({
+                    "title": base.replace("_", " "),
+                    "paired": True,
+                    "peers": sorted(peers, key=lambda p: p["mtime"]),
+                    "ok": ok_all,
+                    "n_results": total_results,
+                    "badges": [f"{total_results} risultati"] if total_results else [],
+                    "response_meta": {"n_results": total_results, "exported_at": primary.get("response_meta", {}).get("exported_at", "")},
+                })
+                collapsed.append(merged)
+            else:
+                collapsed.extend(peers)
+
         # Build subgroups within this kind
         sub_buckets: dict[str, list[dict]] = defaultdict(list)
-        for d in entries:
+        for d in collapsed:
             sub_buckets[d["subtype"]].append(d)
 
         subgroups = []
@@ -1572,7 +1649,6 @@ async def web_dossiers(request: Request, path: str = "", download: str = "",
             if smeta:
                 slabel, sicon = smeta
             else:
-                # workflow presets use the preset name as subtype key — humanize it
                 slabel = skey.replace("-", " ").replace("_", " ").title()
                 sicon = "fa-diagram-project"
             subgroups.append({
@@ -1583,12 +1659,11 @@ async def web_dossiers(request: Request, path: str = "", download: str = "",
                 "count": len(sentries),
                 "entries": sentries,
             })
-        # Sort subgroups: put "altro" last, rest alphabetically by label
         subgroups.sort(key=lambda g: (g["label"] == "Altro", g["label"]))
 
         groups.append({
             "key": key, "label": label, "icon": icon, "color": color,
-            "count": len(entries),
+            "count": len(collapsed),
             "subgroups": subgroups,
         })
 
