@@ -187,7 +187,8 @@
                 {% for r in summary_rows %}
                 <tr data-idx="{{ r.idx }}"
                     class="{{ 'row-error' if r.status == 'error' else '' }}"
-                    onclick="selectIdx({{ r.idx }}, {{ r.organization_name | tojson }})">
+                    data-label="{{ r.organization_name | e }}"
+                    onclick="selectIdx(+this.dataset.idx, this.dataset.label)">
                     <td class="text-muted">{{ r.idx + 1 }}</td>
                     <td class="fw-semibold">{{ r.organization_name }}</td>
                     <td class="font-monospace small">{{ r.vat_number }}</td>
@@ -247,7 +248,8 @@
             </thead>
             <tbody id="t2-tbody">
                 {% for r in immobili_rows %}
-                <tr data-idx="{{ r.idx }}" onclick="selectIdx({{ r.idx }}, {{ r.organization_name | tojson }})">
+                <tr data-idx="{{ r.idx }}" data-label="{{ r.organization_name | e }}"
+                    onclick="selectIdx(+this.dataset.idx, this.dataset.label)">
                     <td class="fw-semibold">{{ r.organization_name }}</td>
                     {% for col in immobili_cols %}<td>{{ r.get(col, '') or '–' }}</td>{% endfor %}
                 </tr>
