@@ -597,3 +597,40 @@ class VisuraService:
         await self._stop_worker()
         await self.browser_manager.graceful_shutdown()
         logger.info("Graceful shutdown del servizio completato")
+
+    # ------------------------------------------------------------------
+    # Browser session control (manual start/stop/restart)
+    # ------------------------------------------------------------------
+
+    async def start_browser(self) -> dict:
+        """Start browser authentication if not already running or ready."""
+        if self.auth_ready:
+            return self.auth_status
+        auth_task = getattr(self, "_auth_task", None)
+        if auth_task and not auth_task.done():
+            return self.auth_status  # already authenticating
+        # Clear any previous failure so auth_status shows "connecting"
+        if hasattr(self, "_auth_failed_message"):
+            del self._auth_failed_message
+        self._auth_task = asyncio.create_task(self._background_auth(), name="visura-browser-auth")
+        logger.info("Browser auth avviato manualmente")
+        return self.auth_status
+
+    async def stop_browser(self, force: bool = False) -> dict:
+        """Close the browser session. If force=False, waits for the queue to drain first."""
+        if not force and not self.request_queue.empty():
+            await self.request_queue.join()
+        auth_task = getattr(self, "_auth_task", None)
+        if auth_task and not auth_task.done():
+            auth_task.cancel()
+            with suppress(asyncio.CancelledError, Exception):
+                await auth_task
+        await self.browser_manager.close()
+        self._auth_ready = False
+        logger.info("Browser session fermata (force=%s)", force)
+        return self.auth_status
+
+    async def restart_browser(self) -> dict:
+        """Stop then immediately restart the browser session."""
+        await self.stop_browser(force=True)
+        return await self.start_browser()

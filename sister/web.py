@@ -257,6 +257,50 @@ def _dossiers_base() -> "Path":
     return Path(os.getenv("SISTER_DOSSIERS_BASE", str(data_root / "dossiers"))).resolve()
 
 
+def _dossier_subtype(name: str, kind: str, data: Any) -> str:
+    """Determine the query subtype for a dossier (used for second-level grouping)."""
+    if kind == "workflow":
+        if isinstance(data, dict):
+            return data.get("preset") or "altro"
+        return "altro"
+
+    if kind == "response":
+        stem = name.lower().split(".")[0]
+        if stem.startswith("pnf_"):
+            return "persona_giuridica"
+        if stem.startswith("soggetto_"):
+            return "soggetto_pf"
+        if stem.startswith("eimm_"):
+            return "elenco_immobili"
+        if stem.startswith("intestati_") or stem.startswith("wf_intestati_"):
+            return "intestati"
+        if stem.startswith("richieste_"):
+            return "richieste"
+        if stem.startswith("req_") or stem.startswith("wf_search_") or stem.startswith("wf_"):
+            return "visura"
+        # fallback: infer from data payload keys
+        d = (data.get("data") or {}) if isinstance(data, dict) else {}
+        if isinstance(d, dict):
+            if d.get("soggetto"):
+                return "soggetto_pf"
+            if d.get("intestati"):
+                return "intestati"
+            if d.get("immobili"):
+                return "visura"
+        return "altro"
+
+    if kind == "batch":
+        if isinstance(data, list) and data:
+            first = data[0]
+            if isinstance(first, dict):
+                d = first.get("data") or {}
+                if isinstance(d, dict) and d.get("soggetto"):
+                    return "soggetto"
+        return "altro"
+
+    return "altro"
+
+
 def _dossier_meta(name: str, data: Any, size_bytes: int, mtime: float) -> dict:
     """Summarize one dossier JSON for the index listing.
 
@@ -304,9 +348,12 @@ def _dossier_meta(name: str, data: Any, size_bytes: int, mtime: float) -> dict:
         n_results = len(data)
         subtitle = f"{len(data)} operazioni"
 
+    subtype = _dossier_subtype(name, kind, data)
+
     return {
         "name": name,
         "kind": kind,
+        "subtype": subtype,
         "title": title or name,
         "subtitle": subtitle,
         "ident": ident,
@@ -324,6 +371,20 @@ _DOSSIER_KIND_META = {
     "response": ("Risposta (single-step)", "fa-file-circle-check", "success"),
     "batch":    ("Batch", "fa-layer-group", "warning"),
     "altro":    ("Altro", "fa-file", "secondary"),
+}
+
+_DOSSIER_SUBTYPE_META: dict[str, tuple[str, str]] = {
+    # response subtypes  (label, icon)
+    "visura":            ("Visura Catastale",          "fa-file-contract"),
+    "soggetto_pf":       ("Soggetto — Persona Fisica", "fa-user"),
+    "persona_giuridica": ("Persona Giuridica",         "fa-building"),
+    "intestati":         ("Intestati",                 "fa-users"),
+    "elenco_immobili":   ("Elenco Immobili",           "fa-list"),
+    "richieste":         ("Consultazione Richieste",   "fa-clock-rotate-left"),
+    # batch subtypes
+    "soggetto":          ("Soggetto",                  "fa-user"),
+    # fallback
+    "altro":             ("Altro",                     "fa-file"),
 }
 
 
@@ -1460,23 +1521,126 @@ async def web_dossiers(request: Request, path: str = "", download: str = "",
                 continue
             dossiers.append(_dossier_meta(child.name, data, stat.st_size, stat.st_mtime))
 
-    # Group by kind for the index (workflow first, then responses, batch, altro)
+    # Group by kind, then by subtype within each kind
     from collections import defaultdict
     buckets: dict[str, list[dict]] = defaultdict(list)
     for d in dossiers:
         buckets[d["kind"]].append(d)
+
     groups = []
     for key in ("workflow", "response", "batch", "altro"):
-        if buckets.get(key):
-            label, icon, color = _DOSSIER_KIND_META[key]
-            groups.append({"key": key, "label": label, "icon": icon, "color": color,
-                           "count": len(buckets[key]), "entries": buckets[key]})
+        entries = buckets.get(key)
+        if not entries:
+            continue
+        label, icon, color = _DOSSIER_KIND_META[key]
+
+        # Build subgroups within this kind
+        sub_buckets: dict[str, list[dict]] = defaultdict(list)
+        for d in entries:
+            sub_buckets[d["subtype"]].append(d)
+
+        subgroups = []
+        for skey, sentries in sub_buckets.items():
+            smeta = _DOSSIER_SUBTYPE_META.get(skey)
+            if smeta:
+                slabel, sicon = smeta
+            else:
+                # workflow presets use the preset name as subtype key — humanize it
+                slabel = skey.replace("-", " ").replace("_", " ").title()
+                sicon = "fa-diagram-project"
+            subgroups.append({
+                "key": f"{key}_{skey}",
+                "label": slabel,
+                "icon": sicon,
+                "color": color,
+                "count": len(sentries),
+                "entries": sentries,
+            })
+        # Sort subgroups: put "altro" last, rest alphabetically by label
+        subgroups.sort(key=lambda g: (g["label"] == "Altro", g["label"]))
+
+        groups.append({
+            "key": key, "label": label, "icon": icon, "color": color,
+            "count": len(entries),
+            "subgroups": subgroups,
+        })
 
     return theme.render(
         "dossiers_index.html", request, user=user,
         groups=groups,
         total=len(dossiers),
     )
+
+
+# ---------------------------------------------------------------------------
+# Browser session control
+# ---------------------------------------------------------------------------
+
+
+@router.get("/web/browser", response_class=HTMLResponse)
+async def web_browser(request: Request, user=Depends(_require_auth)):
+    """Browser session control panel."""
+    from .main import visura_service
+    theme = _get_theme(request)
+    svc = visura_service
+    status = svc.auth_status if svc else {"state": "unavailable", "message": "Service not initialized"}
+    extra = {}
+    if svc:
+        extra = {
+            "queue_size": svc.request_queue.qsize(),
+            "pending_requests": len(svc.pending_request_ids),
+            "last_login": svc.browser_manager.last_login_time.strftime("%Y-%m-%d %H:%M:%S")
+            if svc.browser_manager.last_login_time else None,
+            "mode": status.get("mode", "local"),
+            "authenticated": svc.browser_manager.authenticated,
+        }
+    return theme.render("browser_control.html", request, user=user, status=status, **extra)
+
+
+@router.get("/web/browser/status", response_class=JSONResponse)
+async def web_browser_status(request: Request, user=Depends(_require_auth)):
+    """JSON status for live polling from the control panel."""
+    from .main import visura_service
+    svc = visura_service
+    if svc is None:
+        return JSONResponse({"state": "unavailable", "message": "Service not initialized",
+                             "queue_size": 0, "pending_requests": 0, "last_login": None})
+    st = svc.auth_status
+    return JSONResponse({
+        **st,
+        "queue_size": svc.request_queue.qsize(),
+        "pending_requests": len(svc.pending_request_ids),
+        "last_login": svc.browser_manager.last_login_time.strftime("%Y-%m-%d %H:%M:%S")
+        if svc.browser_manager.last_login_time else None,
+        "authenticated": svc.browser_manager.authenticated,
+    })
+
+
+@router.post("/web/browser/start", response_class=JSONResponse)
+async def web_browser_start(request: Request, user=Depends(_require_auth)):
+    from .main import visura_service
+    if visura_service is None:
+        return JSONResponse({"error": "Service not initialized"}, status_code=503)
+    result = await visura_service.start_browser()
+    return JSONResponse(result)
+
+
+@router.post("/web/browser/stop", response_class=JSONResponse)
+async def web_browser_stop(request: Request, force: bool = False, user=Depends(_require_auth)):
+    from .main import visura_service
+    if visura_service is None:
+        return JSONResponse({"error": "Service not initialized"}, status_code=503)
+    result = await visura_service.stop_browser(force=force)
+    return JSONResponse(result)
+
+
+@router.post("/web/browser/restart", response_class=JSONResponse)
+async def web_browser_restart(request: Request, user=Depends(_require_auth)):
+    from .main import visura_service
+    if visura_service is None:
+        return JSONResponse({"error": "Service not initialized"}, status_code=503)
+    result = await visura_service.restart_browser()
+    return JSONResponse(result)
 
 
 # ---------------------------------------------------------------------------

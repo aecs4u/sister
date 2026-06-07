@@ -1,0 +1,233 @@
+{% extends "_base.html" %}
+
+{% block page_title %}Browser Control{% endblock %}
+
+{% block extra_css %}
+{{ super() }}
+<style>
+.hero-section { background: linear-gradient(135deg, #343a40 0%, #1a1d20 100%); color: white; padding: 2rem 0; margin-bottom: 2rem; }
+.state-badge { font-size: 1rem; padding: .45rem .9rem; border-radius: 2rem; display: inline-flex; align-items: center; gap: .4rem; }
+.state-indicator { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+.state-ready    .state-indicator { background: #28a745; box-shadow: 0 0 6px #28a745; animation: pulse-green 2s infinite; }
+.state-connecting .state-indicator { background: #ffc107; box-shadow: 0 0 6px #ffc107; animation: pulse-amber 1s infinite; }
+.state-unavailable .state-indicator, .state-failed .state-indicator { background: #dc3545; }
+@keyframes pulse-green  { 0%,100%{opacity:1} 50%{opacity:.5} }
+@keyframes pulse-amber  { 0%,100%{opacity:1} 50%{opacity:.3} }
+
+.stat-card { border: none; border-radius: .6rem; box-shadow: 0 1px 4px rgba(0,0,0,.08); }
+.stat-label { font-size: .78rem; text-transform: uppercase; letter-spacing: .04em; color: #6c757d; }
+.stat-value { font-size: 1.6rem; font-weight: 700; line-height: 1; }
+.log-box { background: #0d1117; color: #c9d1d9; font-family: monospace; font-size: .82rem;
+           border-radius: .4rem; padding: .75rem 1rem; min-height: 4rem; max-height: 14rem; overflow-y: auto; }
+.log-box .log-ts { color: #8b949e; margin-right: .5rem; }
+.log-box .log-ok { color: #3fb950; }
+.log-box .log-warn { color: #d29922; }
+.log-box .log-err { color: #f85149; }
+</style>
+{% endblock %}
+
+{% block content %}
+{# ── Hero ────────────────────────────────────────────────────────────────── #}
+<div class="hero-section no-print">
+    <div class="container-fluid">
+        <nav class="mb-3" aria-label="breadcrumb">
+            <ol class="breadcrumb mb-0">
+                <li class="breadcrumb-item"><a href="/web/" class="text-white-50">Dashboard</a></li>
+                <li class="breadcrumb-item active text-white">Browser Control</li>
+            </ol>
+        </nav>
+        <div class="d-flex flex-wrap justify-content-between align-items-center">
+            <div>
+                <h1 class="display-6 fw-bold mb-2"><i class="fas fa-browser me-3"></i>Browser Control</h1>
+                <p class="lead mb-0 opacity-75">Gestisci la sessione Playwright / autenticazione SISTER</p>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="container-fluid">
+<div class="row g-4">
+
+    {# ── Status card ─────────────────────────────────────────────────────── #}
+    <div class="col-lg-6">
+        <div class="card stat-card h-100">
+            <div class="card-header d-flex align-items-center gap-2">
+                <i class="fas fa-signal text-secondary"></i>
+                <strong>Stato sessione</strong>
+                <span class="ms-auto badge bg-light text-muted border" id="last-update">–</span>
+            </div>
+            <div class="card-body">
+                {# State badge — updated live by JS #}
+                <div id="state-wrap" class="mb-3 state-{{ status.state }}">
+                    <span class="state-badge bg-light border" id="state-badge">
+                        <span class="state-indicator"></span>
+                        <span id="state-label">{{ status.state | title }}</span>
+                    </span>
+                </div>
+                <p id="state-msg" class="text-muted small mb-3">{{ status.message or '' }}</p>
+
+                <div class="row g-2 mb-3">
+                    <div class="col-4">
+                        <div class="p-3 bg-light rounded text-center">
+                            <div class="stat-label">Modalità</div>
+                            <div class="stat-value h5 mb-0" id="stat-mode">{{ mode or '–' }}</div>
+                        </div>
+                    </div>
+                    <div class="col-4">
+                        <div class="p-3 bg-light rounded text-center">
+                            <div class="stat-label">Coda</div>
+                            <div class="stat-value" id="stat-queue">{{ queue_size or 0 }}</div>
+                        </div>
+                    </div>
+                    <div class="col-4">
+                        <div class="p-3 bg-light rounded text-center">
+                            <div class="stat-label">In corso</div>
+                            <div class="stat-value" id="stat-pending">{{ pending_requests or 0 }}</div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="small text-muted">
+                    Ultimo login: <span id="stat-login" class="fw-semibold">{{ last_login or 'mai' }}</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    {# ── Controls ────────────────────────────────────────────────────────── #}
+    <div class="col-lg-6">
+        <div class="card stat-card h-100">
+            <div class="card-header d-flex align-items-center gap-2">
+                <i class="fas fa-sliders text-secondary"></i>
+                <strong>Controlli</strong>
+            </div>
+            <div class="card-body d-flex flex-column gap-3">
+                <div>
+                    <button id="btn-start" class="btn btn-success w-100" onclick="browserAction('start')">
+                        <i class="fas fa-play me-2"></i>Avvia sessione
+                    </button>
+                    <small class="text-muted">Avvia autenticazione browser in background (idempotente).</small>
+                </div>
+                <div>
+                    <button id="btn-restart" class="btn btn-warning w-100" onclick="browserAction('restart')">
+                        <i class="fas fa-rotate-right me-2"></i>Riavvia sessione
+                    </button>
+                    <small class="text-muted">Chiude la sessione attuale e la riavvia. Utile dopo timeout MFA o scadenza sessione SISTER.</small>
+                </div>
+                <div>
+                    <div class="input-group">
+                        <button id="btn-stop" class="btn btn-outline-danger flex-fill" onclick="browserAction('stop', false)">
+                            <i class="fas fa-stop me-2"></i>Ferma (drain coda)
+                        </button>
+                        <button id="btn-stop-force" class="btn btn-danger" onclick="browserAction('stop', true)" title="Forza chiusura immediata">
+                            <i class="fas fa-bolt"></i> Force
+                        </button>
+                    </div>
+                    <small class="text-muted">Chiude il browser. <em>Drain</em> aspetta la coda; <em>Force</em> chiude subito.</small>
+                </div>
+
+                <div id="action-result" class="alert d-none mt-auto mb-0"></div>
+            </div>
+        </div>
+    </div>
+
+    {# ── Activity log ────────────────────────────────────────────────────── #}
+    <div class="col-12">
+        <div class="card stat-card">
+            <div class="card-header d-flex align-items-center gap-2">
+                <i class="fas fa-terminal text-secondary"></i>
+                <strong>Log attività</strong>
+                <button class="btn btn-sm btn-outline-secondary ms-auto" onclick="document.getElementById('log-box').innerHTML=''">Svuota</button>
+            </div>
+            <div class="card-body p-0">
+                <div class="log-box" id="log-box"></div>
+            </div>
+        </div>
+    </div>
+
+</div>{# /row #}
+</div>{# /container #}
+{% endblock %}
+
+{% block extra_js %}
+{{ super() }}
+<script>
+(function () {
+    const STATE_COLORS = {
+        ready:       { bg: 'success', text: 'Pronto' },
+        connecting:  { bg: 'warning', text: 'Connessione…' },
+        unavailable: { bg: 'danger',  text: 'Non disponibile' },
+        failed:      { bg: 'danger',  text: 'Errore' },
+    };
+
+    function log(msg, cls) {
+        const box = document.getElementById('log-box');
+        const ts = new Date().toLocaleTimeString('it-IT');
+        box.innerHTML += `<div><span class="log-ts">[${ts}]</span><span class="log-${cls||'ok'}">${msg}</span></div>`;
+        box.scrollTop = box.scrollHeight;
+    }
+
+    function applyStatus(data) {
+        const state = data.state || 'unavailable';
+        const meta = STATE_COLORS[state] || STATE_COLORS.unavailable;
+
+        const wrap = document.getElementById('state-wrap');
+        wrap.className = `mb-3 state-${state}`;
+        const badge = document.getElementById('state-badge');
+        badge.className = `state-badge bg-${meta.bg} bg-opacity-10 border border-${meta.bg}`;
+
+        document.getElementById('state-label').textContent = meta.text;
+        document.getElementById('state-msg').textContent = data.message || '';
+        document.getElementById('stat-mode').textContent = data.mode || '–';
+        document.getElementById('stat-queue').textContent = data.queue_size ?? '–';
+        document.getElementById('stat-pending').textContent = data.pending_requests ?? '–';
+        document.getElementById('stat-login').textContent = data.last_login || 'mai';
+        document.getElementById('last-update').textContent = new Date().toLocaleTimeString('it-IT');
+    }
+
+    async function poll() {
+        try {
+            const r = await fetch('/web/browser/status');
+            if (r.ok) applyStatus(await r.json());
+        } catch (_) {}
+    }
+
+    window.browserAction = async function (action, force) {
+        const btns = ['btn-start','btn-restart','btn-stop','btn-stop-force'];
+        btns.forEach(id => document.getElementById(id).disabled = true);
+        const res = document.getElementById('action-result');
+        res.className = 'alert alert-info d-block';
+        res.textContent = `Esecuzione: ${action}…`;
+        log(`→ ${action}${force === true ? ' (force)' : force === false ? ' (drain)' : ''}`, 'warn');
+
+        try {
+            let url = `/web/browser/${action}`;
+            if (force !== undefined) url += `?force=${force}`;
+            const r = await fetch(url, { method: 'POST' });
+            const data = await r.json();
+            applyStatus(data);
+            if (data.error) {
+                res.className = 'alert alert-danger d-block';
+                res.textContent = data.error;
+                log(`✗ ${data.error}`, 'err');
+            } else {
+                res.className = 'alert alert-success d-block';
+                res.textContent = `${action}: ${data.state || 'ok'}`;
+                log(`✓ ${action} → ${data.state} — ${data.message || ''}`, 'ok');
+            }
+        } catch (e) {
+            res.className = 'alert alert-danger d-block';
+            res.textContent = String(e);
+            log(`✗ ${e}`, 'err');
+        } finally {
+            btns.forEach(id => document.getElementById(id).disabled = false);
+        }
+    };
+
+    // Poll every 4 s
+    poll();
+    setInterval(poll, 4000);
+    log('Pannello browser aperto — polling ogni 4 s', 'ok');
+})();
+</script>
+{% endblock %}
