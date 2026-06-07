@@ -21,6 +21,7 @@ from .database import (
     count_result_rows,
     count_total_result_rows,
     find_result_rows,
+    get_all_documents,
     get_document_by_id,
     get_documents_for_response,
     get_indexed_file_metadata,
@@ -43,6 +44,65 @@ def _files_base() -> "Path":
 logger = logging.getLogger("sister")
 
 router = APIRouter(tags=["Web UI"])
+
+
+# Document-type presentation metadata: type key → (label, FontAwesome icon, Bootstrap color).
+# Drives the per-type tables on the /web/documents index. Ordered: visure first,
+# then planimetrie/elaborati, then misc.
+_DOC_TYPE_META: dict[str, tuple[str, str, str]] = {
+    "visura_fabbricati":      ("Visure Fabbricati",          "fa-building",             "success"),
+    "visura_storica":         ("Visure Storiche Fabbricati", "fa-clock-rotate-left",    "success"),
+    "visura_terreni":         ("Visure Terreni",             "fa-seedling",             "warning"),
+    "visura_soggetto":        ("Visure Soggetto",            "fa-user",                 "info"),
+    "elenco_immobili":        ("Elenchi Immobili",           "fa-list",                 "primary"),
+    "planimetria":            ("Planimetrie",                "fa-ruler-combined",       "secondary"),
+    "elaborato_planimetrico": ("Elaborati Planimetrici",     "fa-drafting-compass",     "secondary"),
+    "epa":                    ("EPA - Elaborati Planim.",    "fa-file-lines",           "secondary"),
+    "visura":                 ("Visure (generiche)",         "fa-file-lines",           "secondary"),
+}
+# Document types that render in a dedicated visura template (so "Apri" is meaningful);
+# others only offer the exhaustive view + download.
+_VIEWABLE_DOC_TYPES = {"visura_fabbricati", "visura_storica", "visura_terreni", "visura_soggetto"}
+
+
+def _group_documents_by_type(docs: list[dict]) -> list[dict]:
+    """Group documents into ordered per-type buckets for the index tables.
+
+    Known types keep the order of _DOC_TYPE_META; unknown types are appended
+    alphabetically with a title-cased fallback label.
+    """
+    from collections import defaultdict
+
+    buckets: dict[str, list[dict]] = defaultdict(list)
+    for d in docs:
+        buckets[d.get("document_type") or "(altro)"].append(d)
+
+    ordered_keys = [k for k in _DOC_TYPE_META if k in buckets]
+    ordered_keys += sorted(k for k in buckets if k not in _DOC_TYPE_META)
+
+    groups = []
+    for key in ordered_keys:
+        label, icon, color = _DOC_TYPE_META.get(
+            key, (key.replace("_", " ").title(), "fa-file", "secondary")
+        )
+        rows = sorted(
+            buckets[key],
+            key=lambda d: (d.get("created_at") or "", d.get("id") or 0),
+            reverse=True,
+        )
+        for d in rows:
+            d["size_human"] = _human_size(d["file_size"]) if d.get("file_size") else ""
+            d["created_display"] = (d.get("created_at") or "")[:16].replace("T", " ")
+            d["viewable"] = key in _VIEWABLE_DOC_TYPES
+        groups.append({
+            "key": key,
+            "label": label,
+            "icon": icon,
+            "color": color,
+            "count": len(rows),
+            "docs": rows,
+        })
+    return groups
 
 
 # ---------------------------------------------------------------------------
@@ -921,16 +981,37 @@ async def web_files_redirect(request: Request, path: str = ""):
     return RedirectResponse(url=target, status_code=301)
 
 
+@router.get("/web/documents/{doc_id}/download")
+async def web_document_download(request: Request, doc_id: int, user=Depends(_require_auth)):
+    """Download the original file backing a DB-indexed document."""
+    from pathlib import Path
+    from fastapi import HTTPException
+
+    doc = await get_document_by_id(doc_id)
+    if doc is None or not doc.get("file_path"):
+        raise HTTPException(status_code=404, detail="Document file not found")
+    p = Path(doc["file_path"])
+    if not p.exists() or not p.is_file():
+        raise HTTPException(status_code=404, detail="Document file not found")
+    return FileResponse(str(p), filename=doc.get("filename") or p.name)
+
+
 @router.get("/web/documents", response_class=HTMLResponse)
 @router.get("/web/documents/{path:path}", response_class=HTMLResponse)
 async def web_documents(request: Request, path: str = "", template: str = "",
-                        user=Depends(_require_auth)):
-    """Document browser for the SISTER reports directory.
+                        view: str = "", user=Depends(_require_auth)):
+    """Documents hub.
+
+    Root (``/web/documents``) shows an index with one table per document type,
+    built from the indexed ``visura_documents`` rows. Pass ``?view=files`` to
+    browse the raw reports filesystem instead.
 
     Pure-integer paths (e.g. /web/documents/42) are dispatched to the DB document viewer.
     All other paths serve the filesystem browser or file downloads.
 
     Query params:
+        view: ``files`` to show the raw filesystem browser at the root instead
+            of the per-type index.
         template: force a specific template for the DB viewer. Use
             ``?template=result_detail`` to render the generic, exhaustive
             field-by-field view instead of the auto-selected visura template.
@@ -949,6 +1030,17 @@ async def web_documents(request: Request, path: str = "", template: str = "",
             return theme.render("result_detail.html", request, user=user,
                                 result=None, request_id=path, not_found=True)
         return _render_doc_from_db(doc, request, theme, user, force_template=template or None)
+
+    # Root with no explicit path → per-type document index (unless browsing files)
+    if not path and view != "files":
+        docs = await get_all_documents(limit=10000)
+        groups = _group_documents_by_type(docs)
+        return theme.render(
+            "documents_index.html", request, user=user,
+            groups=groups,
+            total=len(docs),
+            n_types=len(groups),
+        )
 
     base = _files_base()
     target = (base / path).resolve() if path else base

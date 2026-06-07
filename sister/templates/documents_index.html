@@ -1,0 +1,191 @@
+{% extends "_base.html" %}
+
+{% block page_title %}Documenti{% endblock %}
+
+{% block extra_css %}
+{{ super() }}
+<style>
+.hero-section { background: linear-gradient(135deg, #495057 0%, #212529 100%); color: white; padding: 2rem 0; margin-bottom: 2rem; }
+.detail-label { font-size: .75rem; text-transform: uppercase; letter-spacing: .05em; color: #6c757d; }
+.cadastral-ref { font-family: monospace; background-color: #e9ecef; padding: .15rem .4rem; border-radius: .25rem; font-size: .85rem; }
+.type-card .card-header { border-left: 4px solid var(--type-color, #6c757d); }
+.doc-actions .btn { --bs-btn-padding-y: .15rem; --bs-btn-padding-x: .4rem; --bs-btn-font-size: .75rem; }
+@media print { .no-print { display: none !important; } .hero-section { background: #f8f9fa !important; color: #333 !important; } }
+</style>
+{% endblock %}
+
+{% block content %}
+{# ── Hero ───────────────────────────────────────────────────────────────── #}
+<div class="hero-section no-print">
+    <div class="container-fluid">
+        <nav class="mb-3" aria-label="breadcrumb">
+            <ol class="breadcrumb mb-0">
+                <li class="breadcrumb-item"><a href="/web/" class="text-white-50">Dashboard</a></li>
+                <li class="breadcrumb-item active text-white">Documenti</li>
+            </ol>
+        </nav>
+        <div class="d-flex flex-wrap justify-content-between align-items-center">
+            <div>
+                <h1 class="display-6 fw-bold mb-2"><i class="fas fa-folder-open me-3"></i>Documenti</h1>
+                <p class="lead mb-0 opacity-75">
+                    <strong>{{ total }}</strong> documenti indicizzati in <strong>{{ n_types }}</strong> categorie
+                </p>
+            </div>
+            <div class="d-flex gap-2 mt-3 mt-md-0">
+                <a href="/web/documents?view=files" class="btn btn-outline-light">
+                    <i class="fas fa-hard-drive me-2"></i>Sfoglia file
+                </a>
+                <button onclick="window.print()" class="btn btn-outline-light">
+                    <i class="fas fa-print me-2"></i>Stampa
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="container-fluid">
+
+    {% if not groups %}
+    <div class="alert alert-info">
+        <i class="fas fa-circle-info me-2"></i>Nessun documento indicizzato.
+        Usa <a href="/web/documents?view=files">Sfoglia file</a> per esplorare la cartella dei report.
+    </div>
+    {% else %}
+
+    {# ── Type summary chips ──────────────────────────────────────────────── #}
+    <div class="d-flex flex-wrap gap-2 mb-4 no-print">
+        {% for g in groups %}
+        <a href="#type-{{ g.key }}" class="btn btn-sm btn-outline-{{ g.color }}">
+            <i class="fas {{ g.icon }} me-1"></i>{{ g.label }}
+            <span class="badge bg-{{ g.color }} ms-1">{{ g.count }}</span>
+        </a>
+        {% endfor %}
+    </div>
+
+    {# ── One table per document type ─────────────────────────────────────── #}
+    {% for g in groups %}
+    <div class="card border-0 shadow-sm mb-4 type-card" id="type-{{ g.key }}" style="--type-color: var(--bs-{{ g.color }})">
+        <div class="card-header bg-transparent d-flex align-items-center">
+            <h2 class="h5 mb-0">
+                <i class="fas {{ g.icon }} text-{{ g.color }} me-2"></i>{{ g.label }}
+            </h2>
+            <span class="badge bg-{{ g.color }} ms-2">{{ g.count }}</span>
+            <code class="ms-auto small text-muted">{{ g.key }}</code>
+        </div>
+        <div class="card-body p-0">
+            <div class="table-responsive">
+                <table class="table table-hover table-sm mb-0 doc-table" id="doc-table-{{ g.key }}">
+                    <thead class="table-light">
+                        <tr>
+                            <th>Oggetto</th>
+                            <th>Ubicazione</th>
+                            <th>Dati Catastali</th>
+                            <th>Catasto</th>
+                            <th class="text-end">Intestati</th>
+                            <th>Formato</th>
+                            <th class="text-end">Dim.</th>
+                            <th>Data</th>
+                            <th class="text-end no-print">Azioni</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for d in g.docs %}
+                        <tr>
+                            <td>
+                                {% if d.viewable %}
+                                <a href="/web/documents/{{ d.id }}" class="fw-semibold text-decoration-none">{{ d.oggetto or d.filename or ('Doc ' ~ d.id) }}</a>
+                                {% else %}
+                                <span class="fw-semibold">{{ d.oggetto or d.filename or ('Doc ' ~ d.id) }}</span>
+                                {% endif %}
+                                {% if d.oggetto and d.filename and d.oggetto != d.filename %}
+                                <br><small class="text-muted font-monospace">{{ d.filename }}</small>
+                                {% endif %}
+                            </td>
+                            <td>
+                                {% if d.comune or d.provincia %}
+                                {{ d.comune or '-' }}{% if d.provincia %} <span class="text-muted">({{ d.provincia }})</span>{% endif %}
+                                {% else %}<span class="text-muted">-</span>{% endif %}
+                            </td>
+                            <td>
+                                {% if d.foglio or d.particella %}
+                                FG <span class="cadastral-ref">{{ d.foglio or '-' }}</span>
+                                PT <span class="cadastral-ref">{{ d.particella or '-' }}</span>
+                                {% if d.subalterno %}Sub <span class="cadastral-ref">{{ d.subalterno }}</span>{% endif %}
+                                {% else %}<span class="text-muted">-</span>{% endif %}
+                            </td>
+                            <td>
+                                {% if d.tipo_catasto == 'F' %}<span class="badge bg-success">F</span>
+                                {% elif d.tipo_catasto == 'T' %}<span class="badge bg-warning text-dark">T</span>
+                                {% elif d.tipo_catasto == 'E' %}<span class="badge bg-info">E</span>
+                                {% else %}<span class="text-muted">-</span>{% endif %}
+                            </td>
+                            <td class="text-end">
+                                {% if d.intestati_count %}<span class="badge bg-light text-dark border">{{ d.intestati_count }}</span>{% else %}<span class="text-muted">-</span>{% endif %}
+                            </td>
+                            <td><span class="badge bg-secondary">{{ d.file_format or '-' }}</span></td>
+                            <td class="text-end text-muted small">{{ d.size_human or '-' }}</td>
+                            <td class="text-muted small">{{ d.created_display or '-' }}</td>
+                            <td class="text-end no-print">
+                                <div class="btn-group doc-actions" role="group">
+                                    {% if d.viewable %}
+                                    <a href="/web/documents/{{ d.id }}" class="btn btn-outline-{{ g.color }}" title="Apri visura">
+                                        <i class="fas fa-eye"></i>
+                                    </a>
+                                    {% endif %}
+                                    <a href="/web/documents/{{ d.id }}?template=result_detail" class="btn btn-outline-secondary" title="Dati completi">
+                                        <i class="fas fa-table-list"></i>
+                                    </a>
+                                    <a href="/web/documents/{{ d.id }}/download" class="btn btn-outline-secondary" title="Scarica originale">
+                                        <i class="fas fa-download"></i>
+                                    </a>
+                                </div>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+    {% endfor %}
+
+    {% endif %}
+
+</div>
+{% endblock %}
+
+{% block extra_js %}
+{{ super() }}
+<script>
+(function () {
+    // Per-table filter + CSV export
+    function addFilter(tbl) {
+        var bar = document.createElement('div');
+        bar.className = 'd-flex gap-2 p-2 no-print';
+        var inp = document.createElement('input');
+        inp.type = 'search'; inp.className = 'form-control form-control-sm'; inp.placeholder = 'Filtra…'; inp.style.maxWidth = '280px';
+        inp.addEventListener('input', function () {
+            var q = this.value.toLowerCase();
+            tbl.querySelectorAll('tbody tr').forEach(function (r) {
+                r.style.display = !q || r.textContent.toLowerCase().includes(q) ? '' : 'none';
+            });
+        });
+        var btn = document.createElement('button');
+        btn.type = 'button'; btn.className = 'btn btn-sm btn-outline-secondary';
+        btn.innerHTML = '<i class="fas fa-download me-1"></i>CSV';
+        btn.addEventListener('click', function () {
+            var rows = Array.from(tbl.querySelectorAll('tr')).filter(function (r) { return r.style.display !== 'none'; });
+            var csv = rows.map(function (r) {
+                return Array.from(r.querySelectorAll('th,td')).filter(function (c) { return !c.classList.contains('no-print'); })
+                    .map(function (c) { return '"' + c.textContent.trim().replace(/\s+/g, ' ').replace(/"/g, '""') + '"'; }).join(',');
+            }).join('\n');
+            var a = document.createElement('a'); a.href = 'data:text/csv;charset=utf-8,' + encodeURIComponent(csv);
+            a.download = tbl.id + '.csv'; a.click();
+        });
+        bar.appendChild(inp); bar.appendChild(btn);
+        tbl.closest('.table-responsive').before(bar);
+    }
+    document.querySelectorAll('.doc-table').forEach(addFilter);
+})();
+</script>
+{% endblock %}
