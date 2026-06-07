@@ -7,83 +7,8 @@
 <link rel="stylesheet" href="{{ static_url_path|default('/static/aecs4u-theme') }}/css/data-table.css">
 {% endblock %}
 
-{# --- Recursive renderer for nested dicts/lists --- #}
-{% macro render_nested(value, level=0) %}
-    {% if value is mapping %}
-        {% if value %}
-        <div class="nested-scroll">
-            <table class="table table-sm table-bordered nested-table nested-level-{{ level }}">
-                <tbody>
-                    {% for key, child in value.items() %}
-                    <tr>
-                        <th class="nested-key">{{ key }}</th>
-                        <td class="nested-value">{{ render_nested(child, level + 1) }}</td>
-                    </tr>
-                    {% endfor %}
-                </tbody>
-            </table>
-        </div>
-        {% else %}
-        <span class="nested-empty">Empty</span>
-        {% endif %}
-    {% elif value is sequence and value is not string %}
-        {% if value %}
-            {% set ns = namespace(all_mappings=true, columns=[]) %}
-            {% for item in value %}
-                {% if item is not mapping %}
-                    {% set ns.all_mappings = false %}
-                {% else %}
-                    {% for col in item.keys() %}
-                        {% if col not in ns.columns %}
-                            {% set ns.columns = ns.columns + [col] %}
-                        {% endif %}
-                    {% endfor %}
-                {% endif %}
-            {% endfor %}
-            {% if ns.all_mappings and ns.columns %}
-            <div class="nested-scroll">
-                <table class="table table-sm table-bordered nested-table nested-level-{{ level }}">
-                    <thead class="table-light">
-                        <tr>
-                            <th class="nested-index">#</th>
-                            {% for col in ns.columns %}
-                            <th>{{ col }}</th>
-                            {% endfor %}
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {% for item in value %}
-                        <tr>
-                            <td class="nested-index">{{ loop.index }}</td>
-                            {% for col in ns.columns %}
-                            <td class="nested-value">{{ render_nested(item.get(col), level + 1) }}</td>
-                            {% endfor %}
-                        </tr>
-                        {% endfor %}
-                    </tbody>
-                </table>
-            </div>
-            {% else %}
-            <div class="nested-scroll">
-                <table class="table table-sm table-bordered nested-table nested-level-{{ level }}">
-                    <tbody>
-                        {% for item in value %}
-                        <tr>
-                            <th class="nested-index">{{ loop.index }}</th>
-                            <td class="nested-value">{{ render_nested(item, level + 1) }}</td>
-                        </tr>
-                        {% endfor %}
-                    </tbody>
-                </table>
-            </div>
-            {% endif %}
-        {% else %}
-        <span class="nested-empty">Empty</span>
-        {% endif %}
-    {% else %}
-        {{ value if value not in (None, '') else '-' }}
-    {% endif %}
-{% endmacro %}
+{# --- Recursive renderer for nested dicts/lists (shared partial) --- #}
+{% from "_nested.html" import render_nested %}
 
 {# --- Workflow status badge --- #}
 {% macro workflow_status_badge(status) %}

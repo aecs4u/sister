@@ -1,0 +1,123 @@
+{# ─────────────────────────────────────────────────────────────────────────────
+   _nested.html  —  Recursive renderer for arbitrary nested dict/list structures.
+
+   Renders any parsed-XML / JSON dictionary exhaustively as nested Bootstrap
+   tables.  Lists whose items are all mappings render as a single columnar
+   table; everything else falls back to key/value or index/value rows.
+
+   Relies on .nested-* CSS classes defined in sister.css (loaded globally via
+   _base.html), so no extra stylesheet is required.
+
+   Usage:
+     {% from "_nested.html" import render_nested, complete_data_section %}
+
+     Inline:  {{ render_nested(doc.xml_parsed) }}
+
+     Collapsible "Dati completi" card (self-contained, with toggle button):
+       {{ complete_data_section(doc.xml_parsed, accent='#28a745') }}
+   ─────────────────────────────────────────────────────────────────────────── #}
+
+{% macro render_nested(value, level=0) %}
+    {% if value is mapping %}
+        {% if value %}
+        <div class="nested-scroll">
+            <table class="table table-sm table-bordered nested-table nested-level-{{ level }}">
+                <tbody>
+                    {% for key, child in value.items() %}
+                    <tr>
+                        <th class="nested-key">{{ key }}</th>
+                        <td class="nested-value">{{ render_nested(child, level + 1) }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <span class="nested-empty">Empty</span>
+        {% endif %}
+    {% elif value is sequence and value is not string %}
+        {% if value %}
+            {% set ns = namespace(all_mappings=true, columns=[]) %}
+            {% for item in value %}
+                {% if item is not mapping %}
+                    {% set ns.all_mappings = false %}
+                {% else %}
+                    {% for col in item.keys() %}
+                        {% if col not in ns.columns %}
+                            {% set ns.columns = ns.columns + [col] %}
+                        {% endif %}
+                    {% endfor %}
+                {% endif %}
+            {% endfor %}
+            {% if ns.all_mappings and ns.columns %}
+            <div class="nested-scroll">
+                <table class="table table-sm table-bordered nested-table nested-level-{{ level }}">
+                    <thead class="table-light">
+                        <tr>
+                            <th class="nested-index">#</th>
+                            {% for col in ns.columns %}
+                            <th>{{ col }}</th>
+                            {% endfor %}
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for item in value %}
+                        <tr>
+                            <td class="nested-index">{{ loop.index }}</td>
+                            {% for col in ns.columns %}
+                            <td class="nested-value">{{ render_nested(item.get(col), level + 1) }}</td>
+                            {% endfor %}
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% else %}
+            <div class="nested-scroll">
+                <table class="table table-sm table-bordered nested-table nested-level-{{ level }}">
+                    <tbody>
+                        {% for item in value %}
+                        <tr>
+                            <th class="nested-index">{{ loop.index }}</th>
+                            <td class="nested-value">{{ render_nested(item, level + 1) }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% endif %}
+        {% else %}
+        <span class="nested-empty">Empty</span>
+        {% endif %}
+    {% else %}
+        {{ value if value not in (None, '') else '-' }}
+    {% endif %}
+{% endmacro %}
+
+
+{# Collapsible card wrapping the exhaustive dump of `data`. Hidden in print.
+   `accent` colours the toggle button border to match the document's hero. #}
+{% macro complete_data_section(data, accent='#6c757d') %}
+{% if data %}
+<div class="mt-4 mb-4 no-print">
+    <button class="btn btn-sm btn-outline-secondary" type="button"
+            data-bs-toggle="collapse" data-bs-target="#complete-data"
+            aria-expanded="false" style="border-color: {{ accent }}; color: {{ accent }}">
+        <i class="fas fa-table-list me-2"></i>Dati completi (tutti i campi)
+        <i class="fas fa-chevron-down ms-2 small"></i>
+    </button>
+    <div class="collapse mt-3" id="complete-data">
+        <div class="card border-0 shadow-sm">
+            <div class="card-body">
+                <p class="text-muted small mb-3">
+                    <i class="fas fa-circle-info me-1"></i>
+                    Rappresentazione esaustiva del documento XML — include tutti i campi,
+                    anche quelli non mostrati nelle sezioni riepilogative qui sopra.
+                </p>
+                {{ render_nested(data) }}
+            </div>
+        </div>
+    </div>
+</div>
+{% endif %}
+{% endmacro %}

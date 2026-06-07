@@ -1,9 +1,14 @@
 {% extends "_base.html" %}
 {% from "_timeline.html" import timeline_css, timeline_js, render_timeline %}
+{% from "_nested.html" import complete_data_section %}
 {% set _v = doc.xml_parsed.VisuraTerreniAttuale or doc.xml_parsed.VisuraTerrenoStorica or doc.xml_parsed.VisuraTerreno or {} %}
 {% set _t = _v.TitoloVisura or {} %}
 {% set _dr = _v.DatiRichiesta or {} %}
-{% set _it = _v.ImmobileTerreni or {} %}
+{# ImmobileTerreni is unbounded (schema v2) — normalize to a list of parcels #}
+{% set _it_raw = _v.ImmobileTerreni %}
+{% set _immobili = _it_raw if _it_raw is sequence and _it_raw is not string and _it_raw is not mapping else ([_it_raw] if _it_raw else []) %}
+{# First parcel drives the hero/header (location is query-level, shared) #}
+{% set _it = _immobili[0] if _immobili else {} %}
 {% set _id_def = (_it.DatiIdentificativi or {}).IdentificativoDefinitivo or {} %}
 {% set _partita = _id_def.Partita if _id_def.Partita is string else (_id_def.Partita._text if _id_def.Partita is mapping else '') %}
 
@@ -121,7 +126,22 @@
         </div>
     </div>
 
-    {# ── Classamento terreni ─────────────────────────────────────────────── #}
+    {# ── Per-parcel: Classamento + Titolarità ────────────────────────────── #}
+    {% for _it in _immobili %}
+    {% set _it_iddef = (_it.DatiIdentificativi or {}).IdentificativoDefinitivo or {} %}
+
+    {% if _immobili|length > 1 %}
+    <div class="d-flex align-items-center mt-4 mb-2">
+        <span class="badge bg-warning text-dark me-2">Particella {{ loop.index }}/{{ _immobili|length }}</span>
+        <span class="text-muted small">
+            FG {{ _it_iddef.Foglio or '-' }} · PT {{ _it_iddef.ParticellaNum or '-' }}
+            {% set _p = _it_iddef.Partita if _it_iddef.Partita is string else (_it_iddef.Partita._text if _it_iddef.Partita is mapping else '') %}
+            {% if _p %}· Partita {{ _p }}{% endif %}
+        </span>
+    </div>
+    {% endif %}
+
+    {# Classamento terreni #}
     {% set _cls_t = _it.DatiClassamentoT or {} %}
     {% if _cls_t %}
     {% set _rows = _cls_t.ClassamentoT %}
@@ -175,7 +195,7 @@
     <div class="card border-0 shadow-sm mb-4">
         <div class="card-body p-0">
             <div class="table-responsive">
-                <table class="table table-hover table-sm mb-0" id="classamento-table">
+                <table class="table table-hover table-sm mb-0" id="classamento-table-{{ loop.index }}">
                     <thead class="table-light">
                         <tr>
                             <th>Qualità</th>
@@ -205,7 +225,7 @@
     {% endif %}
     {% endif %}
 
-    {# ── Titolarità — ownership history timeline ──────────────────────────── #}
+    {# Titolarità — ownership history timeline #}
     {% set _mutazioni = _it.MutazioneSoggettiva %}
     {% if _mutazioni %}
     {% set _mutazioni_list = _mutazioni if _mutazioni is sequence and _mutazioni is not string and _mutazioni is not mapping else [_mutazioni] %}
@@ -221,6 +241,8 @@
     </div>
     {% endif %}
 
+    {% endfor %}
+
     {# ── Liquidazione ────────────────────────────────────────────────────── #}
     {% set _liq = _v.DatiLiquidazione or {} %}
     {% if _liq %}
@@ -232,6 +254,9 @@
         </div>
     </div>
     {% endif %}
+
+    {# ── Dati completi (exhaustive dump) ─────────────────────────────────── #}
+    {{ complete_data_section(doc.xml_parsed, accent='#fd7e14') }}
 
     <div class="d-flex gap-2 justify-content-center mt-4 mb-4 no-print">
         <a href="/web/documents" class="btn btn-outline-secondary">
@@ -269,7 +294,7 @@
         bar.appendChild(inp); bar.appendChild(btn);
         tbl.closest('.table-responsive').before(bar);
     }
-    addFilter('classamento-table');
+    document.querySelectorAll('[id^="classamento-table-"]').forEach(function (t) { addFilter(t.id); });
 })();
 </script>
 {% endblock %}

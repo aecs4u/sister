@@ -1,5 +1,6 @@
 {% extends "_base.html" %}
 {% from "_timeline.html" import timeline_css, timeline_js, render_timeline %}
+{% from "_nested.html" import complete_data_section %}
 {% set _v = doc.xml_parsed.VisuraFabbricatiStorica or doc.xml_parsed.VisuraFabbricati or {} %}
 {% set _t = _v.TitoloVisura or {} %}
 {% set _dr = _v.DatiRichiesta or {} %}
@@ -247,6 +248,9 @@
         </div>
     </div>
     {% endif %}
+
+    {# ── Dati completi (exhaustive dump) ─────────────────────────────────── #}
+    {{ complete_data_section(doc.xml_parsed, accent='#28a745') }}
 
     {# ── Actions ─────────────────────────────────────────────────────────── #}
     <div class="d-flex gap-2 justify-content-center mt-4 mb-4 no-print">

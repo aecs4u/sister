@@ -729,8 +729,14 @@ def _file_icon(ext: str, is_dir: bool) -> tuple[str, str]:
     }.get(ext, ("fa-file", "text-muted"))
 
 
-def _render_doc_from_db(doc: dict, request, theme, user):
-    """Finalize a doc dict fetched from the DB and render the matching visura template."""
+def _render_doc_from_db(doc: dict, request, theme, user, force_template: str | None = None):
+    """Finalize a doc dict fetched from the DB and render the matching visura template.
+
+    By default the template is chosen from the XML root element. Pass
+    ``force_template`` (e.g. "result_detail" or "result_detail.html") to override
+    the auto-selection — used by ``?template=`` on the document route to render the
+    generic, exhaustive view of any document.
+    """
     doc["xml_parsed"] = _parse_xml_to_dict(doc.get("xml_content", ""))
     doc.pop("xml_content", None)
     doc["intestati_rows"] = [
@@ -763,6 +769,15 @@ def _render_doc_from_db(doc: dict, request, theme, user):
         ("Subalterno / Sez.Urb", f"{doc.get('subalterno') or '-'} / {doc.get('sezione_urbana') or '-'}"),
     ]
     xml_p = doc.get("xml_parsed") or {}
+
+    # Explicit override → generic exhaustive view via result_detail.html
+    if force_template and force_template.replace(".html", "") == "result_detail":
+        result = _doc_as_result(doc)
+        return theme.render(
+            "result_detail.html", request, user=user,
+            result=result, request_id=str(doc.get("id") or doc.get("filename") or ""),
+        )
+
     if "VisuraFabbricatiStorica" in xml_p or "VisuraFabbricati" in xml_p:
         template = "visura_fabbricati_storica.html"
     elif "VisuraSoggettoAttuale" in xml_p or "VisuraSoggettoStorica" in xml_p:
@@ -772,6 +787,37 @@ def _render_doc_from_db(doc: dict, request, theme, user):
     else:
         template = "result_detail.html"
     return theme.render(template, request, user=user, doc=doc)
+
+
+def _doc_as_result(doc: dict) -> dict:
+    """Wrap a single DB document into a synthetic ``result`` object so that
+    result_detail.html (which is built around a request ``result`` with a list
+    of ``documents``) can render the document exhaustively.
+
+    The document is exposed as the sole entry in ``result.documents``; the
+    template's per-document block renders ``doc.xml_parsed`` via render_nested,
+    giving a complete field-by-field dump.
+    """
+    return {
+        "status": "completed",
+        "request_id": str(doc.get("id") or ""),
+        "request_type": doc.get("document_type") or "document",
+        "tipo_catasto": doc.get("tipo_catasto") or "-",
+        "requested_at_display": doc.get("richiesta_del") or "-",
+        "responded_at_display": "-",
+        "provincia": doc.get("provincia") or "-",
+        "comune": doc.get("comune") or "-",
+        "foglio": doc.get("foglio") or "-",
+        "particella": doc.get("particella") or "-",
+        "sezione": doc.get("sezione_urbana") or "-",
+        "subalterno": doc.get("subalterno") or "-",
+        "error": None,
+        # Truthy data → template renders the documents block (not the "pending" notice)
+        "data": {"document": True},
+        "sections": [],
+        "documents": [doc],
+        "page_visit_rows": [],
+    }
 
 
 @router.get("/web/documents/view/{path:path}", response_class=HTMLResponse)
@@ -877,11 +923,17 @@ async def web_files_redirect(request: Request, path: str = ""):
 
 @router.get("/web/documents", response_class=HTMLResponse)
 @router.get("/web/documents/{path:path}", response_class=HTMLResponse)
-async def web_documents(request: Request, path: str = "", user=Depends(_require_auth)):
+async def web_documents(request: Request, path: str = "", template: str = "",
+                        user=Depends(_require_auth)):
     """Document browser for the SISTER reports directory.
 
     Pure-integer paths (e.g. /web/documents/42) are dispatched to the DB document viewer.
     All other paths serve the filesystem browser or file downloads.
+
+    Query params:
+        template: force a specific template for the DB viewer. Use
+            ``?template=result_detail`` to render the generic, exhaustive
+            field-by-field view instead of the auto-selected visura template.
     """
     from pathlib import Path
 
@@ -893,7 +945,7 @@ async def web_documents(request: Request, path: str = "", user=Depends(_require_
         if doc is None:
             return theme.render("result_detail.html", request, user=user,
                                 result=None, request_id=path, not_found=True)
-        return _render_doc_from_db(doc, request, theme, user)
+        return _render_doc_from_db(doc, request, theme, user, force_template=template or None)
 
     base = _files_base()
     target = (base / path).resolve() if path else base
