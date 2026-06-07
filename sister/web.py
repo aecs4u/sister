@@ -39,7 +39,7 @@ def _files_base() -> "Path":
     from pathlib import Path
     from .database import DB_PATH
     data_root = Path(DB_PATH).parent.parent
-    return Path(os.getenv("SISTER_FILES_BASE", str(data_root / "reports"))).resolve()
+    return Path(os.getenv("SISTER_FILES_BASE", str(data_root / "documents"))).resolve()
 
 logger = logging.getLogger("sister")
 
@@ -247,6 +247,127 @@ def _build_document_tree(docs: list[dict]) -> list[dict]:
         tree.append(node("soggetto", "Soggetto", "fa-user-group", "info", children, count=len(soggetti)))
 
     return tree
+
+
+def _dossiers_base() -> "Path":
+    """Filesystem root holding dossier JSON files (multi/single-step query responses)."""
+    from pathlib import Path
+    from .database import DB_PATH
+    data_root = Path(DB_PATH).parent.parent
+    return Path(os.getenv("SISTER_DOSSIERS_BASE", str(data_root / "dossiers"))).resolve()
+
+
+def _dossier_meta(name: str, data: Any, size_bytes: int, mtime: float) -> dict:
+    """Summarize one dossier JSON for the index listing.
+
+    Recognizes three shapes:
+      • multi-step workflow : {workflow_id, preset, steps[], aggregate, summary}
+      • single-step response: {request_id, success, tipo_catasto, data, ...}
+      • batch / list        : a JSON array of operations
+    """
+    kind, title, subtitle, ident = "altro", name, "", ""
+    badges: list[str] = []
+    n_steps = n_results = 0
+    ok = None
+
+    if isinstance(data, dict) and "steps" in data and ("summary" in data or "aggregate" in data):
+        kind = "workflow"
+        ident = data.get("workflow_id") or ""
+        title = data.get("preset") or data.get("description") or name
+        summ = data.get("summary") or {}
+        n_steps = summ.get("total_steps") or (len(data.get("steps")) if isinstance(data.get("steps"), list) else 0)
+        completed = summ.get("completed")
+        subtitle = data.get("description") or ""
+        if completed is not None:
+            badges.append(f"{completed}/{n_steps} step")
+        for k in ("properties", "owners", "addresses", "risk_flags"):
+            if summ.get(k):
+                badges.append(f"{summ[k]} {k}")
+    elif isinstance(data, dict) and ("request_id" in data or "data" in data):
+        kind = "response"
+        ident = data.get("request_id") or ""
+        ok = data.get("success")
+        tc = data.get("tipo_catasto") or ""
+        d = data.get("data") or {}
+        if isinstance(d, dict):
+            n_results = d.get("total_results") or 0
+            if d.get("soggetto"):
+                subtitle = "Soggetto"
+            elif d.get("comune") or d.get("provincia"):
+                subtitle = " ".join(str(x) for x in (d.get("comune"), d.get("provincia")) if x)
+        if tc:
+            badges.append({"F": "Fabbricati", "T": "Terreni", "E": "Entrambi"}.get(tc, tc))
+        if n_results:
+            badges.append(f"{n_results} risultati")
+    elif isinstance(data, list):
+        kind = "batch"
+        n_results = len(data)
+        subtitle = f"{len(data)} operazioni"
+
+    return {
+        "name": name,
+        "kind": kind,
+        "title": title or name,
+        "subtitle": subtitle,
+        "ident": ident,
+        "ok": ok,
+        "badges": badges,
+        "n_steps": n_steps,
+        "n_results": n_results,
+        "size_human": _human_size(size_bytes),
+        "mtime": datetime.fromtimestamp(mtime).strftime("%Y-%m-%d %H:%M"),
+    }
+
+
+_DOSSIER_KIND_META = {
+    "workflow": ("Multi-step (workflow)", "fa-diagram-project", "primary"),
+    "response": ("Risposta (single-step)", "fa-file-circle-check", "success"),
+    "batch":    ("Batch", "fa-layer-group", "warning"),
+    "altro":    ("Altro", "fa-file", "secondary"),
+}
+
+
+def _dossier_to_result(name: str, data: Any) -> dict:
+    """Transform a dossier JSON into the ``result`` shape consumed by result_detail.html.
+
+    Workflow dossiers expose steps/aggregate/summary as sections; single-step
+    responses expose their ``data`` payload; anything else is shown via the
+    exhaustive nested dump. The raw JSON panel always reflects the full file.
+    """
+    base = {
+        "status": "completed", "request_type": "dossier", "tipo_catasto": "-",
+        "requested_at_display": "-", "responded_at_display": "-",
+        "provincia": "-", "comune": "-", "foglio": "-", "particella": "-",
+        "sezione": "-", "subalterno": "-", "error": None,
+        "documents": [], "page_visit_rows": [],
+    }
+
+    if isinstance(data, dict) and "steps" in data:
+        base.update({
+            "request_id": data.get("workflow_id") or name,
+            "request_type": data.get("preset") or "workflow",
+            "data": data,
+            "sections": _build_result_sections(data),
+        })
+    elif isinstance(data, dict) and ("data" in data or "request_id" in data):
+        payload = data.get("data") if isinstance(data.get("data"), dict) else data
+        base.update({
+            "request_id": data.get("request_id") or name,
+            "tipo_catasto": data.get("tipo_catasto") or "-",
+            "responded_at_display": data.get("exported_at") or "-",
+            "error": data.get("error"),
+            "status": "completed" if data.get("success", True) else "failed",
+            "data": payload or {"_": True},
+            "sections": _build_result_sections(payload),
+        })
+    else:
+        wrapped = {"contenuto": data}
+        base.update({
+            "request_id": name,
+            "data": wrapped,
+            "sections": _build_result_sections(wrapped),
+        })
+    return base
 
 
 # ---------------------------------------------------------------------------
@@ -1144,21 +1265,16 @@ async def web_document_download(request: Request, doc_id: int, user=Depends(_req
 @router.get("/web/documents/{path:path}", response_class=HTMLResponse)
 async def web_documents(request: Request, path: str = "", template: str = "",
                         view: str = "", user=Depends(_require_auth)):
-    """Documents hub.
+    """Documents hub — single-step query responses.
 
-    Root (``/web/documents``) shows an index with one table per document type,
-    built from the indexed ``visura_documents`` rows. Pass ``?view=files`` to
-    browse the raw reports filesystem instead.
-
-    Pure-integer paths (e.g. /web/documents/42) are dispatched to the DB document viewer.
-    All other paths serve the filesystem browser or file downloads.
+    Root (``/web/documents``) shows the hierarchical per-type index built from the
+    indexed ``visura_documents`` rows. ``?view=files`` browses the raw documents
+    filesystem instead. Pure-integer paths dispatch to the single-document viewer.
 
     Query params:
-        view: ``files`` to show the raw filesystem browser at the root instead
-            of the per-type index.
-        template: force a specific template for the DB viewer. Use
-            ``?template=result_detail`` to render the generic, exhaustive
-            field-by-field view instead of the auto-selected visura template.
+        view: ``files`` to show the raw filesystem browser at the root.
+        template: force a viewer template, e.g. ``?template=result_detail`` for
+            the exhaustive field-by-field view.
     """
     from pathlib import Path
 
@@ -1167,7 +1283,7 @@ async def web_documents(request: Request, path: str = "", template: str = "",
     # Normalize trailing slash (e.g. /web/documents/21/ → "21")
     path = path.strip("/")
 
-    # Integer path → DB-backed structured document viewer
+    # Integer path → DB-backed structured single-document viewer
     if path and path.isdigit():
         doc = await get_document_by_id(int(path))
         if doc is None:
@@ -1266,6 +1382,100 @@ async def web_documents(request: Request, path: str = "", template: str = "",
         n_dirs=n_dirs,
         n_files=n_files,
         total_size=_human_size(total_size) if total_size else None,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Dossiers — multi/single-step query responses stored as JSON files
+# ---------------------------------------------------------------------------
+
+
+def _safe_dossier_path(path: str) -> "Path":
+    """Resolve a dossier-relative path, guarding against traversal. Raises 403/404."""
+    from pathlib import Path
+    from fastapi import HTTPException
+
+    base = _dossiers_base()
+    target = (base / path).resolve()
+    if not str(target).startswith(str(base)):
+        raise HTTPException(status_code=403, detail="Access denied")
+    if not target.exists() or not target.is_file():
+        raise HTTPException(status_code=404, detail="Dossier not found")
+    return target
+
+
+@router.get("/web/dossiers/view/{path:path}", response_class=HTMLResponse)
+async def web_dossier_view(request: Request, path: str, user=Depends(_require_auth)):
+    """Render a single dossier JSON via the result_detail template."""
+    import json as _json
+
+    theme = _get_theme(request)
+    target = _safe_dossier_path(path.strip("/"))
+    try:
+        data = _json.loads(target.read_text(encoding="utf-8", errors="ignore"))
+    except Exception as exc:  # malformed JSON → surface as not-found-ish detail
+        return theme.render("result_detail.html", request, user=user,
+                            result=None, request_id=target.name,
+                            not_found=True, error=str(exc))
+    result = _dossier_to_result(target.name, data)
+    return theme.render("result_detail.html", request, user=user,
+                        result=result, request_id=target.name)
+
+
+@router.get("/web/dossiers", response_class=HTMLResponse)
+@router.get("/web/dossiers/{path:path}", response_class=HTMLResponse)
+async def web_dossiers(request: Request, path: str = "", download: str = "",
+                       user=Depends(_require_auth)):
+    """Dossiers hub — multi-step (workflow) and single-step query responses.
+
+    Root lists the dossier JSON files; a file path serves the raw JSON
+    (``?download=1`` forces an attachment). Use /web/dossiers/view/<file> for the
+    rendered view.
+    """
+    import json as _json
+
+    theme = _get_theme(request)
+    path = path.strip("/")
+    base = _dossiers_base()
+
+    # A specific file → serve raw JSON (inline, or as attachment with ?download=1)
+    if path:
+        target = _safe_dossier_path(path)
+        return FileResponse(
+            str(target),
+            media_type="application/json",
+            filename=target.name if download else None,
+        )
+
+    # Root → list dossier files with extracted metadata
+    dossiers: list[dict] = []
+    if base.exists():
+        for child in sorted(base.iterdir(), key=lambda p: p.stat().st_mtime if p.is_file() else 0, reverse=True):
+            if not child.is_file() or child.suffix.lower() != ".json":
+                continue
+            try:
+                stat = child.stat()
+                data = _json.loads(child.read_text(encoding="utf-8", errors="ignore"))
+            except Exception:
+                continue
+            dossiers.append(_dossier_meta(child.name, data, stat.st_size, stat.st_mtime))
+
+    # Group by kind for the index (workflow first, then responses, batch, altro)
+    from collections import defaultdict
+    buckets: dict[str, list[dict]] = defaultdict(list)
+    for d in dossiers:
+        buckets[d["kind"]].append(d)
+    groups = []
+    for key in ("workflow", "response", "batch", "altro"):
+        if buckets.get(key):
+            label, icon, color = _DOSSIER_KIND_META[key]
+            groups.append({"key": key, "label": label, "icon": icon, "color": color,
+                           "count": len(buckets[key]), "entries": buckets[key]})
+
+    return theme.render(
+        "dossiers_index.html", request, user=user,
+        groups=groups,
+        total=len(dossiers),
     )
 
 

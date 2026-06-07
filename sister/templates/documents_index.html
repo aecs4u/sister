@@ -1,12 +1,13 @@
 {% extends "_base.html" %}
+{% from "_doc_macros.html" import doc_table, doc_macros_css, doc_macros_js %}
 
 {% block page_title %}Documenti{% endblock %}
 
 {% block extra_css %}
 {{ super() }}
+{{ doc_macros_css() }}
 <style>
 .hero-section { background: linear-gradient(135deg, #495057 0%, #212529 100%); color: white; padding: 2rem 0; margin-bottom: 2rem; }
-.cadastral-ref { font-family: monospace; background-color: #e9ecef; padding: .15rem .4rem; border-radius: .25rem; font-size: .85rem; }
 
 /* Tree nodes */
 .doc-node { margin-bottom: .5rem; }
@@ -23,101 +24,12 @@
 .doc-node-body { padding: .5rem 0 .25rem 1.25rem; border-left: 2px dashed #e9ecef; margin-left: 1.1rem; }
 .doc-node-l0 > .collapse > .doc-node-body,
 .doc-node-l0 > .collapsing > .doc-node-body { border-left: none; margin-left: 0; padding-left: .25rem; }
-
 .facet-note { font-size: .75rem; color: #6c757d; font-style: italic; margin: .15rem 0 .5rem .25rem; }
 
-/* Attachment chips */
-.attach { display: inline-flex; align-items: center; gap: .25rem; font-size: .72rem;
-          padding: .1rem .4rem; border-radius: .25rem; text-decoration: none; border: 1px solid; }
-.attach-p7m { color: #198754; border-color: #198754; }
-.attach-xml { color: #0d6efd; border-color: #0d6efd; }
-.attach-pdf { color: #dc3545; border-color: #dc3545; }
-.attach:hover { filter: brightness(.9); }
-
-.doc-actions .btn { --bs-btn-padding-y: .15rem; --bs-btn-padding-x: .4rem; --bs-btn-font-size: .75rem; }
 @media print { .no-print { display: none !important; } .hero-section { background: #f8f9fa !important; color: #333 !important; }
     .collapse { display: block !important; height: auto !important; } }
 </style>
 {% endblock %}
-
-{# ── Attachment chips: every file of a logical document (P7M/XML primary + PDFs) ── #}
-{% macro file_chips(d) %}
-<div class="d-flex flex-wrap gap-1">
-    {% for f in d.files %}
-    {% set cls = 'attach-pdf' if f.file_format == 'PDF' else ('attach-p7m' if f.file_format == 'P7M' else 'attach-xml') %}
-    {% set ic = 'fa-file-pdf' if f.file_format == 'PDF' else 'fa-file-code' %}
-    <a class="attach {{ cls }}" href="/web/documents/{{ f.id }}/download" title="{{ f.filename }}">
-        <i class="fas {{ ic }}"></i>{{ f.file_format }}{% if f.size_human %} · {{ f.size_human }}{% endif %}
-    </a>
-    {% endfor %}
-</div>
-{% endmacro %}
-
-{# ── Documents table for a leaf node ───────────────────────────────────────── #}
-{% macro doc_table(node) %}
-<div class="table-responsive">
-    <table class="table table-hover table-sm mb-0 doc-table" id="doc-table-{{ node.key }}">
-        <thead class="table-light">
-            <tr>
-                <th>Oggetto</th>
-                <th>Ubicazione</th>
-                <th>Dati Catastali</th>
-                <th>Catasto</th>
-                <th class="text-end">Intestati</th>
-                <th>Allegati</th>
-                <th>Data</th>
-                <th class="text-end no-print">Azioni</th>
-            </tr>
-        </thead>
-        <tbody>
-            {% for d in node.docs %}
-            <tr>
-                <td>
-                    {% if d.viewable %}
-                    <a href="/web/documents/{{ d.id }}" class="fw-semibold text-decoration-none">{{ d.oggetto or d.filename or ('Doc ' ~ d.id) }}</a>
-                    {% else %}
-                    <span class="fw-semibold">{{ d.oggetto or d.filename or ('Doc ' ~ d.id) }}</span>
-                    {% endif %}
-                    {% if d.oggetto and d.filename and d.oggetto != d.filename %}
-                    <br><small class="text-muted font-monospace">{{ d.filename }}</small>
-                    {% endif %}
-                </td>
-                <td>
-                    {% if d.comune or d.provincia %}{{ d.comune or '-' }}{% if d.provincia %} <span class="text-muted">({{ d.provincia }})</span>{% endif %}
-                    {% else %}<span class="text-muted">-</span>{% endif %}
-                </td>
-                <td>
-                    {% if d.foglio or d.particella %}
-                    FG <span class="cadastral-ref">{{ d.foglio or '-' }}</span>
-                    PT <span class="cadastral-ref">{{ d.particella or '-' }}</span>
-                    {% if d.subalterno %}Sub <span class="cadastral-ref">{{ d.subalterno }}</span>{% endif %}
-                    {% else %}<span class="text-muted">-</span>{% endif %}
-                </td>
-                <td>
-                    {% if d.tipo_catasto == 'F' %}<span class="badge bg-success">F</span>
-                    {% elif d.tipo_catasto == 'T' %}<span class="badge bg-warning text-dark">T</span>
-                    {% elif d.tipo_catasto == 'E' %}<span class="badge bg-info">E</span>
-                    {% else %}<span class="text-muted">-</span>{% endif %}
-                </td>
-                <td class="text-end">
-                    {% if d.intestati_count %}<span class="badge bg-light text-dark border">{{ d.intestati_count }}</span>{% else %}<span class="text-muted">-</span>{% endif %}
-                </td>
-                <td>{{ file_chips(d) }}</td>
-                <td class="text-muted small">{{ d.created_display or '-' }}</td>
-                <td class="text-end no-print">
-                    <div class="btn-group doc-actions" role="group">
-                        {% if d.viewable %}
-                        <a href="/web/documents/{{ d.id }}" class="btn btn-outline-{{ node.color }}" title="Apri visura"><i class="fas fa-eye"></i></a>
-                        {% endif %}
-                        <a href="/web/documents/{{ d.id }}?template=result_detail" class="btn btn-outline-secondary" title="Dati completi"><i class="fas fa-table-list"></i></a>
-                    </div>
-                </td>
-            </tr>
-            {% endfor %}
-        </tbody>
-    </table>
-</div>
-{% endmacro %}
 
 {# ── Recursive tree node ───────────────────────────────────────────────────── #}
 {% macro render_node(node, level) %}
@@ -134,7 +46,7 @@
             {% if node.key == 'visure' %}
             <p class="facet-note"><i class="fas fa-circle-info me-1"></i>Le stesse visure sono classificate per <strong>Tipo</strong> e per <strong>Fabbricati/Terreni</strong>.</p>
             {% endif %}
-            {% if node.docs %}{{ doc_table(node) }}{% endif %}
+            {% if node.docs %}{{ doc_table(node.key, node.docs, node.color, '/web/documents') }}{% endif %}
             {% for child in node.children %}{{ render_node(child, level + 1) }}{% endfor %}
         </div>
     </div>
@@ -160,6 +72,7 @@
                 </p>
             </div>
             <div class="d-flex gap-2 mt-3 mt-md-0">
+                <a href="/web/dossiers" class="btn btn-outline-light"><i class="fas fa-folder-open me-2"></i>Dossier</a>
                 <a href="/web/documents?view=files" class="btn btn-outline-light"><i class="fas fa-hard-drive me-2"></i>Sfoglia file</a>
                 <button onclick="window.print()" class="btn btn-outline-light"><i class="fas fa-print me-2"></i>Stampa</button>
             </div>
@@ -194,35 +107,5 @@
 
 {% block extra_js %}
 {{ super() }}
-<script>
-(function () {
-    function addFilter(tbl) {
-        var bar = document.createElement('div');
-        bar.className = 'd-flex gap-2 p-2 no-print';
-        var inp = document.createElement('input');
-        inp.type = 'search'; inp.className = 'form-control form-control-sm'; inp.placeholder = 'Filtra…'; inp.style.maxWidth = '280px';
-        inp.addEventListener('input', function () {
-            var q = this.value.toLowerCase();
-            tbl.querySelectorAll('tbody tr').forEach(function (r) {
-                r.style.display = !q || r.textContent.toLowerCase().includes(q) ? '' : 'none';
-            });
-        });
-        var btn = document.createElement('button');
-        btn.type = 'button'; btn.className = 'btn btn-sm btn-outline-secondary';
-        btn.innerHTML = '<i class="fas fa-download me-1"></i>CSV';
-        btn.addEventListener('click', function () {
-            var rows = Array.from(tbl.querySelectorAll('tr')).filter(function (r) { return r.style.display !== 'none'; });
-            var csv = rows.map(function (r) {
-                return Array.from(r.querySelectorAll('th,td')).filter(function (c) { return !c.classList.contains('no-print'); })
-                    .map(function (c) { return '"' + c.textContent.trim().replace(/\s+/g, ' ').replace(/"/g, '""') + '"'; }).join(',');
-            }).join('\n');
-            var a = document.createElement('a'); a.href = 'data:text/csv;charset=utf-8,' + encodeURIComponent(csv);
-            a.download = tbl.id + '.csv'; a.click();
-        });
-        bar.appendChild(inp); bar.appendChild(btn);
-        tbl.closest('.table-responsive').before(bar);
-    }
-    document.querySelectorAll('.doc-table').forEach(addFilter);
-})();
-</script>
+{{ doc_macros_js() }}
 {% endblock %}
