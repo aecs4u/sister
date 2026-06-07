@@ -46,63 +46,207 @@ logger = logging.getLogger("sister")
 router = APIRouter(tags=["Web UI"])
 
 
-# Document-type presentation metadata: type key → (label, FontAwesome icon, Bootstrap color).
-# Drives the per-type tables on the /web/documents index. Ordered: visure first,
-# then planimetrie/elaborati, then misc.
-_DOC_TYPE_META: dict[str, tuple[str, str, str]] = {
-    "visura_fabbricati":      ("Visure Fabbricati",          "fa-building",             "success"),
-    "visura_storica":         ("Visure Storiche Fabbricati", "fa-clock-rotate-left",    "success"),
-    "visura_terreni":         ("Visure Terreni",             "fa-seedling",             "warning"),
-    "visura_soggetto":        ("Visure Soggetto",            "fa-user",                 "info"),
-    "elenco_immobili":        ("Elenchi Immobili",           "fa-list",                 "primary"),
-    "planimetria":            ("Planimetrie",                "fa-ruler-combined",       "secondary"),
-    "elaborato_planimetrico": ("Elaborati Planimetrici",     "fa-drafting-compass",     "secondary"),
-    "epa":                    ("EPA - Elaborati Planim.",    "fa-file-lines",           "secondary"),
-    "visura":                 ("Visure (generiche)",         "fa-file-lines",           "secondary"),
-}
 # Document types that render in a dedicated visura template (so "Apri" is meaningful);
 # others only offer the exhaustive view + download.
 _VIEWABLE_DOC_TYPES = {"visura_fabbricati", "visura_storica", "visura_terreni", "visura_soggetto"}
 
+# document_types that are "visure" (excludes visura_soggetto, which lives under Soggetto).
+_VISURA_TYPES = {"visura", "visura_fabbricati", "visura_terreni", "visura_storica"}
 
-def _group_documents_by_type(docs: list[dict]) -> list[dict]:
-    """Group documents into ordered per-type buckets for the index tables.
 
-    Known types keep the order of _DOC_TYPE_META; unknown types are appended
-    alphabetically with a title-cased fallback label.
+def _doc_tipo_visura(d: dict) -> Optional[str]:
+    """Classify a visura along the *Tipo* facet: storica / analitica / sintetica.
+
+    Driven by document_type with an oggetto-text fallback. Returns None when the
+    document does not fit any tipo (kept out of the Tipo facet).
+    """
+    dt = d.get("document_type") or ""
+    title = (d.get("oggetto") or "").lower()
+    if dt == "visura_storica" or "storic" in title:
+        return "storica"
+    if "sintetic" in title:
+        return "sintetica"
+    if dt in ("visura_fabbricati", "visura_terreni") or "analitic" in title:
+        return "analitica"
+    if dt == "visura":
+        return "sintetica"
+    return None
+
+
+def _doc_catasto_ft(d: dict) -> Optional[str]:
+    """Classify a visura along the *Fabbricati e Terreni* facet."""
+    dt = d.get("document_type") or ""
+    tc = (d.get("tipo_catasto") or "").upper()
+    if dt == "visura_terreni" or tc == "T":
+        return "terreni"
+    if dt in ("visura_fabbricati", "visura_storica") or tc == "F":
+        return "fabbricati"
+    return None
+
+
+def _soggetto_kind(d: dict) -> str:
+    """Persona Fisica vs Persona Giuridica.
+
+    Heuristic on oggetto/filename (no dedicated DB flag exists). Documents tagged
+    pnf / 'giuridic' are treated as Persona Giuridica; everything else as Persona Fisica.
+    """
+    blob = ((d.get("oggetto") or "") + " " + (d.get("filename") or "")).lower()
+    if "giuridic" in blob or "pnf" in blob or "_pg_" in blob or "persona_giuridica" in blob:
+        return "pg"
+    return "pf"
+
+
+def _collapse_to_logical_docs(docs: list[dict]) -> list[dict]:
+    """Collapse raw file rows into logical documents, with PDFs as attachments.
+
+    A SISTER request can yield several files for the same record: the structured
+    P7M/XML (the data) plus PDF rendering(s). Here, files sharing the same logical
+    identity are merged into one document whose ``files`` list carries every
+    associated file; the structured file (P7M/XML) is the primary, the PDFs are
+    its attachments.
+
+    Logical identity (in priority order):
+      1. response_id + document_type + cadastral coords  (when available)
+      2. document_type + cadastral coords                (foglio/particella present)
+      3. document_type + oggetto/filename                (e.g. soggetto PDFs w/o coords)
+
+    response_id is honoured first so that, once live/backfilled data links files to
+    their Richiesta, attachments group correctly without code changes.
     """
     from collections import defaultdict
 
-    buckets: dict[str, list[dict]] = defaultdict(list)
+    def _logical_key(d: dict):
+        rid = d.get("response_id")
+        dt = d.get("document_type") or ""
+        if d.get("foglio") or d.get("particella"):
+            return (rid, dt, d.get("provincia"), d.get("comune"),
+                    d.get("foglio"), d.get("particella"), d.get("subalterno"), d.get("sezione_urbana"))
+        return (rid, dt, (d.get("oggetto") or d.get("filename") or str(d.get("id"))))
+
+    def _fmt_rank(d: dict) -> int:  # structured files first
+        return {"P7M": 0, "XML": 1}.get((d.get("file_format") or "").upper(), 2)
+
+    groups: dict[object, list[dict]] = defaultdict(list)
     for d in docs:
-        buckets[d.get("document_type") or "(altro)"].append(d)
+        groups[_logical_key(d)].append(d)
 
-    ordered_keys = [k for k in _DOC_TYPE_META if k in buckets]
-    ordered_keys += sorted(k for k in buckets if k not in _DOC_TYPE_META)
+    logical: list[dict] = []
+    for items in groups.values():
+        ordered = sorted(items, key=lambda x: (_fmt_rank(x), x.get("id") or 0))
+        primary = dict(ordered[0])  # copy — primary carries the document metadata
+        primary["files"] = [
+            {
+                "id": it.get("id"),
+                "file_format": (it.get("file_format") or "").upper(),
+                "filename": it.get("filename") or "",
+                "size_human": _human_size(it["file_size"]) if it.get("file_size") else "",
+            }
+            for it in ordered
+        ]
+        primary["n_files"] = len(ordered)
+        primary["n_pdf"] = sum(1 for f in primary["files"] if f["file_format"] == "PDF")
+        primary_structured = (primary.get("file_format") or "").upper() in ("P7M", "XML")
+        primary["viewable"] = primary_structured and (primary.get("document_type") or "") in _VIEWABLE_DOC_TYPES
+        logical.append(primary)
+    return logical
 
-    groups = []
-    for key in ordered_keys:
-        label, icon, color = _DOC_TYPE_META.get(
-            key, (key.replace("_", " ").title(), "fa-file", "secondary")
-        )
-        rows = sorted(
-            buckets[key],
-            key=lambda d: (d.get("created_at") or "", d.get("id") or 0),
-            reverse=True,
-        )
+
+def _build_document_tree(docs: list[dict]) -> list[dict]:
+    """Build the hierarchical documents taxonomy from *logical* documents.
+
+        Elenchi Immobili
+        Planimetrie
+        Elaborati Planimetrici → EPA
+        Visure → Tipo (Storica/Analitica/Sintetica)
+               → Fabbricati e Terreni (Fabbricati/Terreni)   [faceted: same docs re-sliced]
+        Soggetto → Persona Fisica / Persona Giuridica
+
+    Input should already be collapsed via _collapse_to_logical_docs().
+    Returns a list of node dicts: {key, label, icon, color, count, docs, children}.
+    Internal nodes carry children (and possibly their own direct docs); leaf nodes
+    carry docs. ``count`` on a faceted/internal node is the distinct document count.
+    """
+    from collections import defaultdict
+
+    def _decorate(items: list[dict]) -> list[dict]:
+        rows = sorted(items, key=lambda d: (d.get("created_at") or "", d.get("id") or 0), reverse=True)
         for d in rows:
-            d["size_human"] = _human_size(d["file_size"]) if d.get("file_size") else ""
+            d.setdefault("size_human", _human_size(d["file_size"]) if d.get("file_size") else "")
             d["created_display"] = (d.get("created_at") or "")[:16].replace("T", " ")
-            d["viewable"] = key in _VIEWABLE_DOC_TYPES
-        groups.append({
-            "key": key,
-            "label": label,
-            "icon": icon,
-            "color": color,
-            "count": len(rows),
-            "docs": rows,
-        })
-    return groups
+            d.setdefault("viewable", (d.get("document_type") or "") in _VIEWABLE_DOC_TYPES)
+        return rows
+
+    def leaf(key, label, icon, color, items):
+        return {"key": key, "label": label, "icon": icon, "color": color,
+                "count": len(items), "docs": _decorate(items), "children": []}
+
+    def node(key, label, icon, color, children, count, docs=None):
+        return {"key": key, "label": label, "icon": icon, "color": color,
+                "count": count, "docs": _decorate(docs or []), "children": children}
+
+    by_type: dict[str, list[dict]] = defaultdict(list)
+    for d in docs:
+        by_type[d.get("document_type") or "(altro)"].append(d)
+
+    tree: list[dict] = []
+
+    if by_type.get("elenco_immobili"):
+        tree.append(leaf("elenco_immobili", "Elenchi Immobili", "fa-list", "primary", by_type["elenco_immobili"]))
+
+    if by_type.get("planimetria"):
+        tree.append(leaf("planimetria", "Planimetrie", "fa-ruler-combined", "secondary", by_type["planimetria"]))
+
+    elab = by_type.get("elaborato_planimetrico", [])
+    epa = by_type.get("epa", [])
+    if elab or epa:
+        children = [leaf("epa", "EPA", "fa-file-lines", "secondary", epa)] if epa else []
+        tree.append(node("elaborato_planimetrico", "Elaborati Planimetrici", "fa-drafting-compass",
+                         "secondary", children, count=len(elab) + len(epa), docs=elab))
+
+    visure = [d for d in docs if (d.get("document_type") or "") in _VISURA_TYPES]
+    if visure:
+        tipo_meta = {
+            "storica":   ("Storica",   "fa-clock-rotate-left"),
+            "analitica": ("Analitica", "fa-magnifying-glass-chart"),
+            "sintetica": ("Sintetica", "fa-compress"),
+        }
+        tipo_children = []
+        for k, (lbl, ic) in tipo_meta.items():
+            items = [d for d in visure if _doc_tipo_visura(d) == k]
+            if items:
+                tipo_children.append(leaf(f"visura_tipo_{k}", lbl, ic, "success", items))
+
+        ft_meta = {
+            "fabbricati": ("Fabbricati", "fa-building", "success"),
+            "terreni":    ("Terreni",    "fa-seedling", "warning"),
+        }
+        ft_children = []
+        for k, (lbl, ic, col) in ft_meta.items():
+            items = [d for d in visure if _doc_catasto_ft(d) == k]
+            if items:
+                ft_children.append(leaf(f"visura_ft_{k}", lbl, ic, col, items))
+
+        facets = []
+        if tipo_children:
+            facets.append(node("visura_tipo", "Tipo", "fa-layer-group", "success",
+                              tipo_children, count=sum(c["count"] for c in tipo_children)))
+        if ft_children:
+            facets.append(node("visura_ft", "Fabbricati e Terreni", "fa-table-cells-large", "success",
+                              ft_children, count=sum(c["count"] for c in ft_children)))
+        tree.append(node("visure", "Visure", "fa-file-contract", "success", facets, count=len(visure)))
+
+    soggetti = by_type.get("visura_soggetto", [])
+    if soggetti:
+        pf = [d for d in soggetti if _soggetto_kind(d) == "pf"]
+        pg = [d for d in soggetti if _soggetto_kind(d) == "pg"]
+        children = []
+        if pf:
+            children.append(leaf("soggetto_pf", "Persona Fisica", "fa-user", "info", pf))
+        if pg:
+            children.append(leaf("soggetto_pg", "Persona Giuridica", "fa-building-user", "info", pg))
+        tree.append(node("soggetto", "Soggetto", "fa-user-group", "info", children, count=len(soggetti)))
+
+    return tree
 
 
 # ---------------------------------------------------------------------------
@@ -1031,15 +1175,16 @@ async def web_documents(request: Request, path: str = "", template: str = "",
                                 result=None, request_id=path, not_found=True)
         return _render_doc_from_db(doc, request, theme, user, force_template=template or None)
 
-    # Root with no explicit path → per-type document index (unless browsing files)
+    # Root with no explicit path → hierarchical document index (unless browsing files)
     if not path and view != "files":
-        docs = await get_all_documents(limit=10000)
-        groups = _group_documents_by_type(docs)
+        files = await get_all_documents(limit=10000)
+        logical = _collapse_to_logical_docs(files)
+        tree = _build_document_tree(logical)
         return theme.render(
             "documents_index.html", request, user=user,
-            groups=groups,
-            total=len(docs),
-            n_types=len(groups),
+            tree=tree,
+            total=len(logical),
+            n_files=len(files),
         )
 
     base = _files_base()

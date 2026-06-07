@@ -6,13 +6,140 @@
 {{ super() }}
 <style>
 .hero-section { background: linear-gradient(135deg, #495057 0%, #212529 100%); color: white; padding: 2rem 0; margin-bottom: 2rem; }
-.detail-label { font-size: .75rem; text-transform: uppercase; letter-spacing: .05em; color: #6c757d; }
 .cadastral-ref { font-family: monospace; background-color: #e9ecef; padding: .15rem .4rem; border-radius: .25rem; font-size: .85rem; }
-.type-card .card-header { border-left: 4px solid var(--type-color, #6c757d); }
+
+/* Tree nodes */
+.doc-node { margin-bottom: .5rem; }
+.doc-node-l0 > .doc-node-header { font-size: 1.05rem; }
+.doc-node-header {
+    display: flex; align-items: center; gap: .5rem;
+    padding: .55rem .85rem; cursor: pointer; user-select: none;
+    background: #f8f9fa; border: 1px solid #dee2e6; border-radius: .4rem;
+    border-left: 4px solid var(--node-color, #6c757d);
+}
+.doc-node-header:hover { background: #f1f3f5; }
+.doc-node-chevron { transition: transform .2s; font-size: .7rem; }
+.doc-node-header[aria-expanded="false"] .doc-node-chevron { transform: rotate(-90deg); }
+.doc-node-body { padding: .5rem 0 .25rem 1.25rem; border-left: 2px dashed #e9ecef; margin-left: 1.1rem; }
+.doc-node-l0 > .collapse > .doc-node-body,
+.doc-node-l0 > .collapsing > .doc-node-body { border-left: none; margin-left: 0; padding-left: .25rem; }
+
+.facet-note { font-size: .75rem; color: #6c757d; font-style: italic; margin: .15rem 0 .5rem .25rem; }
+
+/* Attachment chips */
+.attach { display: inline-flex; align-items: center; gap: .25rem; font-size: .72rem;
+          padding: .1rem .4rem; border-radius: .25rem; text-decoration: none; border: 1px solid; }
+.attach-p7m { color: #198754; border-color: #198754; }
+.attach-xml { color: #0d6efd; border-color: #0d6efd; }
+.attach-pdf { color: #dc3545; border-color: #dc3545; }
+.attach:hover { filter: brightness(.9); }
+
 .doc-actions .btn { --bs-btn-padding-y: .15rem; --bs-btn-padding-x: .4rem; --bs-btn-font-size: .75rem; }
-@media print { .no-print { display: none !important; } .hero-section { background: #f8f9fa !important; color: #333 !important; } }
+@media print { .no-print { display: none !important; } .hero-section { background: #f8f9fa !important; color: #333 !important; }
+    .collapse { display: block !important; height: auto !important; } }
 </style>
 {% endblock %}
+
+{# ── Attachment chips: every file of a logical document (P7M/XML primary + PDFs) ── #}
+{% macro file_chips(d) %}
+<div class="d-flex flex-wrap gap-1">
+    {% for f in d.files %}
+    {% set cls = 'attach-pdf' if f.file_format == 'PDF' else ('attach-p7m' if f.file_format == 'P7M' else 'attach-xml') %}
+    {% set ic = 'fa-file-pdf' if f.file_format == 'PDF' else 'fa-file-code' %}
+    <a class="attach {{ cls }}" href="/web/documents/{{ f.id }}/download" title="{{ f.filename }}">
+        <i class="fas {{ ic }}"></i>{{ f.file_format }}{% if f.size_human %} · {{ f.size_human }}{% endif %}
+    </a>
+    {% endfor %}
+</div>
+{% endmacro %}
+
+{# ── Documents table for a leaf node ───────────────────────────────────────── #}
+{% macro doc_table(node) %}
+<div class="table-responsive">
+    <table class="table table-hover table-sm mb-0 doc-table" id="doc-table-{{ node.key }}">
+        <thead class="table-light">
+            <tr>
+                <th>Oggetto</th>
+                <th>Ubicazione</th>
+                <th>Dati Catastali</th>
+                <th>Catasto</th>
+                <th class="text-end">Intestati</th>
+                <th>Allegati</th>
+                <th>Data</th>
+                <th class="text-end no-print">Azioni</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for d in node.docs %}
+            <tr>
+                <td>
+                    {% if d.viewable %}
+                    <a href="/web/documents/{{ d.id }}" class="fw-semibold text-decoration-none">{{ d.oggetto or d.filename or ('Doc ' ~ d.id) }}</a>
+                    {% else %}
+                    <span class="fw-semibold">{{ d.oggetto or d.filename or ('Doc ' ~ d.id) }}</span>
+                    {% endif %}
+                    {% if d.oggetto and d.filename and d.oggetto != d.filename %}
+                    <br><small class="text-muted font-monospace">{{ d.filename }}</small>
+                    {% endif %}
+                </td>
+                <td>
+                    {% if d.comune or d.provincia %}{{ d.comune or '-' }}{% if d.provincia %} <span class="text-muted">({{ d.provincia }})</span>{% endif %}
+                    {% else %}<span class="text-muted">-</span>{% endif %}
+                </td>
+                <td>
+                    {% if d.foglio or d.particella %}
+                    FG <span class="cadastral-ref">{{ d.foglio or '-' }}</span>
+                    PT <span class="cadastral-ref">{{ d.particella or '-' }}</span>
+                    {% if d.subalterno %}Sub <span class="cadastral-ref">{{ d.subalterno }}</span>{% endif %}
+                    {% else %}<span class="text-muted">-</span>{% endif %}
+                </td>
+                <td>
+                    {% if d.tipo_catasto == 'F' %}<span class="badge bg-success">F</span>
+                    {% elif d.tipo_catasto == 'T' %}<span class="badge bg-warning text-dark">T</span>
+                    {% elif d.tipo_catasto == 'E' %}<span class="badge bg-info">E</span>
+                    {% else %}<span class="text-muted">-</span>{% endif %}
+                </td>
+                <td class="text-end">
+                    {% if d.intestati_count %}<span class="badge bg-light text-dark border">{{ d.intestati_count }}</span>{% else %}<span class="text-muted">-</span>{% endif %}
+                </td>
+                <td>{{ file_chips(d) }}</td>
+                <td class="text-muted small">{{ d.created_display or '-' }}</td>
+                <td class="text-end no-print">
+                    <div class="btn-group doc-actions" role="group">
+                        {% if d.viewable %}
+                        <a href="/web/documents/{{ d.id }}" class="btn btn-outline-{{ node.color }}" title="Apri visura"><i class="fas fa-eye"></i></a>
+                        {% endif %}
+                        <a href="/web/documents/{{ d.id }}?template=result_detail" class="btn btn-outline-secondary" title="Dati completi"><i class="fas fa-table-list"></i></a>
+                    </div>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endmacro %}
+
+{# ── Recursive tree node ───────────────────────────────────────────────────── #}
+{% macro render_node(node, level) %}
+<div class="doc-node doc-node-l{{ level }}" style="--node-color: var(--bs-{{ node.color }})">
+    <div class="doc-node-header" role="button" data-bs-toggle="collapse"
+         data-bs-target="#node-{{ node.key }}" aria-expanded="true" aria-controls="node-{{ node.key }}">
+        <i class="fas {{ node.icon }} text-{{ node.color }}"></i>
+        <span class="fw-semibold">{{ node.label }}</span>
+        <span class="badge bg-{{ node.color }}">{{ node.count }}</span>
+        <i class="fas fa-chevron-down doc-node-chevron ms-auto text-muted"></i>
+    </div>
+    <div class="collapse show" id="node-{{ node.key }}">
+        <div class="doc-node-body">
+            {% if node.key == 'visure' %}
+            <p class="facet-note"><i class="fas fa-circle-info me-1"></i>Le stesse visure sono classificate per <strong>Tipo</strong> e per <strong>Fabbricati/Terreni</strong>.</p>
+            {% endif %}
+            {% if node.docs %}{{ doc_table(node) }}{% endif %}
+            {% for child in node.children %}{{ render_node(child, level + 1) }}{% endfor %}
+        </div>
+    </div>
+</div>
+{% endmacro %}
 
 {% block content %}
 {# ── Hero ───────────────────────────────────────────────────────────────── #}
@@ -26,131 +153,42 @@
         </nav>
         <div class="d-flex flex-wrap justify-content-between align-items-center">
             <div>
-                <h1 class="display-6 fw-bold mb-2"><i class="fas fa-folder-open me-3"></i>Documenti</h1>
+                <h1 class="display-6 fw-bold mb-2"><i class="fas fa-folder-tree me-3"></i>Documenti</h1>
                 <p class="lead mb-0 opacity-75">
-                    <strong>{{ total }}</strong> documenti indicizzati in <strong>{{ n_types }}</strong> categorie
+                    <strong>{{ total }}</strong> documenti
+                    {% if n_files and n_files != total %}<span class="opacity-75">· {{ n_files }} file (PDF allegati inclusi)</span>{% endif %}
                 </p>
             </div>
             <div class="d-flex gap-2 mt-3 mt-md-0">
-                <a href="/web/documents?view=files" class="btn btn-outline-light">
-                    <i class="fas fa-hard-drive me-2"></i>Sfoglia file
-                </a>
-                <button onclick="window.print()" class="btn btn-outline-light">
-                    <i class="fas fa-print me-2"></i>Stampa
-                </button>
+                <a href="/web/documents?view=files" class="btn btn-outline-light"><i class="fas fa-hard-drive me-2"></i>Sfoglia file</a>
+                <button onclick="window.print()" class="btn btn-outline-light"><i class="fas fa-print me-2"></i>Stampa</button>
             </div>
         </div>
     </div>
 </div>
 
 <div class="container-fluid">
-
-    {% if not groups %}
+    {% if not tree %}
     <div class="alert alert-info">
         <i class="fas fa-circle-info me-2"></i>Nessun documento indicizzato.
         Usa <a href="/web/documents?view=files">Sfoglia file</a> per esplorare la cartella dei report.
     </div>
     {% else %}
 
-    {# ── Type summary chips ──────────────────────────────────────────────── #}
+    {# Quick jump chips #}
     <div class="d-flex flex-wrap gap-2 mb-4 no-print">
-        {% for g in groups %}
-        <a href="#type-{{ g.key }}" class="btn btn-sm btn-outline-{{ g.color }}">
-            <i class="fas {{ g.icon }} me-1"></i>{{ g.label }}
-            <span class="badge bg-{{ g.color }} ms-1">{{ g.count }}</span>
+        {% for g in tree %}
+        <a href="#node-{{ g.key }}" class="btn btn-sm btn-outline-{{ g.color }}">
+            <i class="fas {{ g.icon }} me-1"></i>{{ g.label }}<span class="badge bg-{{ g.color }} ms-1">{{ g.count }}</span>
         </a>
         {% endfor %}
     </div>
 
-    {# ── One table per document type ─────────────────────────────────────── #}
-    {% for g in groups %}
-    <div class="card border-0 shadow-sm mb-4 type-card" id="type-{{ g.key }}" style="--type-color: var(--bs-{{ g.color }})">
-        <div class="card-header bg-transparent d-flex align-items-center">
-            <h2 class="h5 mb-0">
-                <i class="fas {{ g.icon }} text-{{ g.color }} me-2"></i>{{ g.label }}
-            </h2>
-            <span class="badge bg-{{ g.color }} ms-2">{{ g.count }}</span>
-            <code class="ms-auto small text-muted">{{ g.key }}</code>
-        </div>
-        <div class="card-body p-0">
-            <div class="table-responsive">
-                <table class="table table-hover table-sm mb-0 doc-table" id="doc-table-{{ g.key }}">
-                    <thead class="table-light">
-                        <tr>
-                            <th>Oggetto</th>
-                            <th>Ubicazione</th>
-                            <th>Dati Catastali</th>
-                            <th>Catasto</th>
-                            <th class="text-end">Intestati</th>
-                            <th>Formato</th>
-                            <th class="text-end">Dim.</th>
-                            <th>Data</th>
-                            <th class="text-end no-print">Azioni</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {% for d in g.docs %}
-                        <tr>
-                            <td>
-                                {% if d.viewable %}
-                                <a href="/web/documents/{{ d.id }}" class="fw-semibold text-decoration-none">{{ d.oggetto or d.filename or ('Doc ' ~ d.id) }}</a>
-                                {% else %}
-                                <span class="fw-semibold">{{ d.oggetto or d.filename or ('Doc ' ~ d.id) }}</span>
-                                {% endif %}
-                                {% if d.oggetto and d.filename and d.oggetto != d.filename %}
-                                <br><small class="text-muted font-monospace">{{ d.filename }}</small>
-                                {% endif %}
-                            </td>
-                            <td>
-                                {% if d.comune or d.provincia %}
-                                {{ d.comune or '-' }}{% if d.provincia %} <span class="text-muted">({{ d.provincia }})</span>{% endif %}
-                                {% else %}<span class="text-muted">-</span>{% endif %}
-                            </td>
-                            <td>
-                                {% if d.foglio or d.particella %}
-                                FG <span class="cadastral-ref">{{ d.foglio or '-' }}</span>
-                                PT <span class="cadastral-ref">{{ d.particella or '-' }}</span>
-                                {% if d.subalterno %}Sub <span class="cadastral-ref">{{ d.subalterno }}</span>{% endif %}
-                                {% else %}<span class="text-muted">-</span>{% endif %}
-                            </td>
-                            <td>
-                                {% if d.tipo_catasto == 'F' %}<span class="badge bg-success">F</span>
-                                {% elif d.tipo_catasto == 'T' %}<span class="badge bg-warning text-dark">T</span>
-                                {% elif d.tipo_catasto == 'E' %}<span class="badge bg-info">E</span>
-                                {% else %}<span class="text-muted">-</span>{% endif %}
-                            </td>
-                            <td class="text-end">
-                                {% if d.intestati_count %}<span class="badge bg-light text-dark border">{{ d.intestati_count }}</span>{% else %}<span class="text-muted">-</span>{% endif %}
-                            </td>
-                            <td><span class="badge bg-secondary">{{ d.file_format or '-' }}</span></td>
-                            <td class="text-end text-muted small">{{ d.size_human or '-' }}</td>
-                            <td class="text-muted small">{{ d.created_display or '-' }}</td>
-                            <td class="text-end no-print">
-                                <div class="btn-group doc-actions" role="group">
-                                    {% if d.viewable %}
-                                    <a href="/web/documents/{{ d.id }}" class="btn btn-outline-{{ g.color }}" title="Apri visura">
-                                        <i class="fas fa-eye"></i>
-                                    </a>
-                                    {% endif %}
-                                    <a href="/web/documents/{{ d.id }}?template=result_detail" class="btn btn-outline-secondary" title="Dati completi">
-                                        <i class="fas fa-table-list"></i>
-                                    </a>
-                                    <a href="/web/documents/{{ d.id }}/download" class="btn btn-outline-secondary" title="Scarica originale">
-                                        <i class="fas fa-download"></i>
-                                    </a>
-                                </div>
-                            </td>
-                        </tr>
-                        {% endfor %}
-                    </tbody>
-                </table>
-            </div>
-        </div>
-    </div>
+    {% for node in tree %}
+    {{ render_node(node, 0) }}
     {% endfor %}
 
     {% endif %}
-
 </div>
 {% endblock %}
 
@@ -158,7 +196,6 @@
 {{ super() }}
 <script>
 (function () {
-    // Per-table filter + CSV export
     function addFilter(tbl) {
         var bar = document.createElement('div');
         bar.className = 'd-flex gap-2 p-2 no-print';

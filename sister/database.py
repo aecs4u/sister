@@ -524,10 +524,12 @@ async def get_all_documents(limit: int = 100, offset: int = 0) -> list[dict]:
     for row in rows:
         docs.append({
             "id": row.id,
+            "response_id": row.response_id,
             "document_type": row.document_type,
             "file_format": row.file_format,
             "filename": row.filename,
             "file_size": row.file_size,
+            "sezione_urbana": row.sezione_urbana,
             "oggetto": row.oggetto,
             "richiesta_del": row.richiesta_del,
             "provincia": row.provincia,
