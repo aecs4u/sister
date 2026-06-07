@@ -1,0 +1,175 @@
+{% extends "_base.html" %}
+{% block page_title %}Documents — {{ breadcrumbs[-1].name }}{% endblock %}
+
+{% from "components/page_header.html" import page_header %}
+
+{% block content %}
+<div class="container-fluid py-4">
+
+    {{ page_header("Documents", base_name) }}
+
+    {# ── Breadcrumb ──────────────────────────────────────────────────────── #}
+    <nav aria-label="breadcrumb" class="mb-3">
+        <ol class="breadcrumb">
+            {% for crumb in breadcrumbs %}
+            {% if loop.last %}
+            <li class="breadcrumb-item active">{{ crumb.name }}</li>
+            {% else %}
+            <li class="breadcrumb-item">
+                <a href="/web/documents{% if crumb.path %}/{{ crumb.path }}{% endif %}">{{ crumb.name }}</a>
+            </li>
+            {% endif %}
+            {% endfor %}
+        </ol>
+    </nav>
+
+    {# ── Stats row ───────────────────────────────────────────────────────── #}
+    <div class="d-flex gap-3 mb-4 flex-wrap">
+        {% if n_dirs %}
+        <span class="badge text-bg-secondary py-2 px-3">
+            <i class="fas fa-folder me-1"></i>{{ n_dirs }} folder{{ 's' if n_dirs != 1 }}
+        </span>
+        {% endif %}
+        {% if n_files %}
+        <span class="badge text-bg-secondary py-2 px-3">
+            <i class="fas fa-file me-1"></i>{{ n_files }} file{{ 's' if n_files != 1 }}
+        </span>
+        {% endif %}
+        {% if total_size %}
+        <span class="badge text-bg-light border py-2 px-3 text-muted">
+            <i class="fas fa-weight-hanging me-1"></i>{{ total_size }} total
+        </span>
+        {% endif %}
+    </div>
+
+    {# ── File listing ────────────────────────────────────────────────────── #}
+    <div class="card border-0 shadow-sm">
+        {% if entries %}
+        <div class="table-responsive">
+            <table class="table table-hover align-middle mb-0" id="files-table">
+                <thead class="table-light">
+                    <tr>
+                        <th style="width:2rem"></th>
+                        <th>Original name</th>
+                        <th>Document name</th>
+                        <th style="width:9rem" class="text-end">Size</th>
+                        <th style="width:11rem">Modified</th>
+                        <th style="width:8rem"></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% if breadcrumbs|length > 1 %}
+                    {# parent dir link #}
+                    {% set parent_path = breadcrumbs[-2].path %}
+                    <tr>
+                        <td><i class="fas fa-level-up-alt text-muted"></i></td>
+                        <td colspan="5">
+                            <a href="/web/documents{% if parent_path %}/{{ parent_path }}{% endif %}" class="text-muted fst-italic">
+                                .. (parent folder)
+                            </a>
+                        </td>
+                    </tr>
+                    {% endif %}
+
+                    {% for e in entries %}
+                    <tr>
+                        <td class="text-center">
+                            <i class="fas {{ e.icon }} {{ e.icon_color }}"></i>
+                        </td>
+                        <td>
+                            {% if e.is_dir %}
+                            <a href="/web/documents/{{ e.path }}" class="fw-semibold text-decoration-none">
+                                {{ e.name }}
+                            </a>
+                            {% elif e.doc_id %}
+                            <a href="/web/documents/{{ e.doc_id }}" class="text-decoration-none">{{ e.name }}</a>
+                            <a href="/web/documents/{{ e.path }}" class="ms-1 text-muted" title="Download" download>
+                                <i class="fas fa-download fa-xs"></i>
+                            </a>
+                            {% elif e.ext in ('.p7m', '.xml') %}
+                            <a href="/web/documents/view/{{ e.path }}" class="text-decoration-none">{{ e.name }}</a>
+                            <a href="/web/documents/{{ e.path }}" class="ms-1 text-muted" title="Download" download>
+                                <i class="fas fa-download fa-xs"></i>
+                            </a>
+                            {% else %}
+                            <a href="/web/documents/{{ e.path }}" class="text-decoration-none"
+                               {% if e.ext in ('.pdf', '.png', '.jpg', '.jpeg') %}target="_blank"{% else %}download{% endif %}>
+                                {{ e.name }}
+                            </a>
+                            {% endif %}
+                        </td>
+                        <td class="text-muted small">
+                            {% if e.new_name and e.new_name != e.name %}
+                            {{ e.new_name }}
+                            {% endif %}
+                        </td>
+                        <td class="text-end text-muted small">{{ e.size_human }}</td>
+                        <td class="text-muted small">{{ e.mtime }}</td>
+                        <td class="text-end">
+                            {% if e.is_dir %}
+                            <a href="/web/documents/{{ e.path }}" class="btn btn-sm btn-outline-secondary">
+                                <i class="fas fa-folder-open me-1"></i>Open
+                            </a>
+                            {% elif e.doc_id %}
+                            <a href="/web/documents/{{ e.doc_id }}" class="btn btn-sm btn-outline-primary">
+                                <i class="fas fa-eye me-1"></i>View
+                            </a>
+                            {% elif e.ext in ('.p7m', '.xml') %}
+                            <a href="/web/documents/view/{{ e.path }}" class="btn btn-sm btn-outline-warning">
+                                <i class="fas fa-file-shield me-1"></i>View
+                            </a>
+                            {% elif e.ext == '.pdf' %}
+                            <a href="/web/documents/{{ e.path }}" class="btn btn-sm btn-outline-danger" target="_blank">
+                                <i class="fas fa-file-pdf me-1"></i>PDF
+                            </a>
+                            {% elif e.ext in ('.json', '.csv', '.txt', '.log') %}
+                            <a href="/web/documents/{{ e.path }}" class="btn btn-sm btn-outline-secondary" download>
+                                <i class="fas fa-download me-1"></i>Get
+                            </a>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <div class="card-body text-center text-muted py-5">
+            <i class="fas fa-folder-open fa-2x mb-3 d-block"></i>
+            This folder is empty.
+        </div>
+        {% endif %}
+    </div>
+
+</div>
+{% endblock %}
+
+{% block extra_js %}
+{{ super() }}
+<script>
+(function () {
+    'use strict';
+    var input = document.createElement('input');
+    input.type = 'search';
+    input.className = 'form-control form-control-sm mb-3';
+    input.placeholder = 'Filter by name…';
+    input.setAttribute('aria-label', 'Filter documents');
+
+    var table = document.getElementById('files-table');
+    if (!table) return;
+    table.parentNode.insertBefore(input, table);
+
+    input.addEventListener('input', function () {
+        var q = this.value.toLowerCase();
+        var rows = table.querySelectorAll('tbody tr');
+        rows.forEach(function (row) {
+            var nameCell = row.querySelector('td:nth-child(2)');
+            var newNameCell = row.querySelector('td:nth-child(3)');
+            if (!nameCell) return;
+            var text = (nameCell.textContent + ' ' + (newNameCell ? newNameCell.textContent : '')).toLowerCase();
+            row.style.display = !q || text.includes(q) ? '' : 'none';
+        });
+    });
+})();
+</script>
+{% endblock %}

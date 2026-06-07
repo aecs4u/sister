@@ -7,6 +7,7 @@ Auth: landing page is public; /web/* routes require authentication.
 from __future__ import annotations
 
 import logging
+import os
 import re
 from datetime import datetime
 from typing import Any, Optional
@@ -20,12 +21,24 @@ from .database import (
     count_result_rows,
     count_total_result_rows,
     find_result_rows,
-    find_workflow_runs,
+    get_document_by_id,
     get_documents_for_response,
+    get_indexed_file_metadata,
     get_result_record,
-    get_workflow_result_record,
 )
 from .form_config import get_available_form_groups, get_single_step_groups, get_workflow_groups
+
+# Opendata API URL — workflow runs/steps are owned by opendata, not sister.
+# Sister's web UI proxies workflow list/detail requests to opendata.
+_OPENDATA_API_URL = os.getenv("OPENDATA_API_URL", "http://localhost:8024")
+
+# Base directory for the document browser (/web/documents).
+# Defaults to the parent of the DB data folder (the project data root).
+def _files_base() -> "Path":
+    from pathlib import Path
+    from .database import DB_PATH
+    data_root = Path(DB_PATH).parent.parent
+    return Path(os.getenv("SISTER_FILES_BASE", str(data_root / "reports"))).resolve()
 
 logger = logging.getLogger("sister")
 
@@ -312,7 +325,7 @@ async def landing(request: Request):
     """Public landing page."""
     theme = _get_theme(request)
     user = _get_user(request)
-    return theme.render("sister/landing.html", request, user=user)
+    return theme.render("landing.html", request, user=user)
 
 
 # ---------------------------------------------------------------------------
@@ -335,7 +348,7 @@ async def web_index(request: Request, user=Depends(_require_auth)):
     stats = await count_result_rows()
     recent = await find_result_rows(limit=5)
     return theme.render(
-        "sister/index.html", request, user=user,
+        "index.html", request, user=user,
         stats=stats, recent=recent,
         auth_status=_get_auth_status(),
     )
@@ -346,7 +359,7 @@ async def web_forms(request: Request, user=Depends(_require_auth)):
     """Query submission forms."""
     theme = _get_theme(request)
     return theme.render(
-        "sister/forms.html", request, user=user,
+        "forms.html", request, user=user,
         form_groups=get_available_form_groups(),
         single_step_groups=get_single_step_groups(),
         workflow_groups=get_workflow_groups(),
@@ -488,7 +501,7 @@ async def web_results(
         next_url = _build_url("/web/results", offset=offset + limit, **current_filters)
 
     return theme.render(
-        "sister/results.html", request, user=user,
+        "results.html", request, user=user,
         results=results, stats=stats,
         provincia=provincia, comune=comune, foglio=foglio, particella=particella,
         tipo_catasto=tipo_catasto, source=source, status=status,
@@ -506,11 +519,19 @@ async def web_result_detail(request: Request, request_id: str, user=Depends(_req
     """Single result detail page."""
     theme = _get_theme(request)
     result = await get_result_record(request_id)
-    if result is None:
-        result = await get_workflow_result_record(request_id)
+    if result is None and request_id.startswith("wf_"):
+        # Workflow runs are stored in opendata — proxy the lookup
+        import httpx
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                resp = await client.get(f"{_OPENDATA_API_URL}/catasto/workflow/runs/{request_id}")
+                if resp.status_code == 200:
+                    result = resp.json()
+        except Exception as exc:
+            logger.warning("Could not fetch workflow %s from opendata: %s", request_id, exc)
     if result is None:
         response = theme.render(
-            "sister/result_detail.html", request, user=user,
+            "result_detail.html", request, user=user,
             result=None, request_id=request_id, not_found=True,
         )
         if hasattr(response, "status_code"):
@@ -569,7 +590,7 @@ async def web_result_detail(request: Request, request_id: str, user=Depends(_req
         for v in (result.get("page_visits") or [])
     ]
     return theme.render(
-        "sister/result_detail.html", request, user=user,
+        "result_detail.html", request, user=user,
         result=result, request_id=request_id, not_found=False,
     )
 
@@ -582,16 +603,34 @@ async def web_workflows(
     limit: int = 50,
     offset: int = 0,
 ):
-    """Workflow runs list — dedicated view for workflow operations."""
+    """Workflow runs list — proxied from opendata (which owns workflow storage)."""
+    import httpx
+
     theme = _get_theme(request)
     limit = max(1, min(limit, 200))
     offset = max(0, offset)
-    runs = await find_workflow_runs(status=status, limit=limit, offset=offset)
+
+    runs: list[dict] = []
+    try:
+        params: dict[str, Any] = {"limit": limit, "offset": offset}
+        if status:
+            params["status"] = status
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(
+                f"{_OPENDATA_API_URL}/catasto/workflow/runs",
+                params=params,
+            )
+            if resp.status_code == 200:
+                runs = resp.json().get("runs", [])
+    except Exception as exc:
+        logger.warning("Could not fetch workflow runs from opendata: %s", exc)
+
     for run in runs:
         run["created_at_display"] = _format_timestamp(run.get("created_at"))
         run["updated_at_display"] = _format_timestamp(run.get("updated_at"))
+
     return theme.render(
-        "sister/workflows.html", request, user=user,
+        "workflows.html", request, user=user,
         runs=runs, status=status, limit=limit, offset=offset,
         auth_status=_get_auth_status(),
     )
@@ -599,12 +638,25 @@ async def web_workflows(
 
 @router.get("/web/workflows/{workflow_id}", response_class=HTMLResponse)
 async def web_workflow_detail(request: Request, workflow_id: str, user=Depends(_require_auth)):
-    """Dedicated workflow detail page with step timing and structure."""
+    """Workflow detail page — proxied from opendata."""
+    import httpx
+
     theme = _get_theme(request)
-    result = await get_workflow_result_record(workflow_id)
+
+    result: Optional[dict] = None
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(
+                f"{_OPENDATA_API_URL}/catasto/workflow/runs/{workflow_id}",
+            )
+            if resp.status_code == 200:
+                result = resp.json()
+    except Exception as exc:
+        logger.warning("Could not fetch workflow %s from opendata: %s", workflow_id, exc)
+
     if result is None:
         response = theme.render(
-            "sister/workflow_detail.html", request, user=user,
+            "workflow_detail.html", request, user=user,
             result=None, workflow_id=workflow_id,
         )
         if hasattr(response, "status_code"):
@@ -622,7 +674,7 @@ async def web_workflow_detail(request: Request, workflow_id: str, user=Depends(_
         doc.pop("xml_content", None)
     result["page_visit_rows"] = []
     return theme.render(
-        "sister/workflow_detail.html", request, user=user,
+        "workflow_detail.html", request, user=user,
         result=result, workflow_id=workflow_id,
     )
 
@@ -632,7 +684,7 @@ async def web_about(request: Request):
     """About page (public)."""
     theme = _get_theme(request)
     user = _get_user(request)
-    return theme.render("sister/about.html", request, user=user)
+    return theme.render("about.html", request, user=user)
 
 
 @router.get("/web/privacy", response_class=HTMLResponse)
@@ -640,7 +692,282 @@ async def web_privacy(request: Request):
     """Privacy policy (public)."""
     theme = _get_theme(request)
     user = _get_user(request)
-    return theme.render("sister/privacy_policy.html", request, user=user)
+    return theme.render("privacy_policy.html", request, user=user)
+
+
+# ---------------------------------------------------------------------------
+# Document browser + structured viewers  (/web/documents/*)
+# ---------------------------------------------------------------------------
+
+def _human_size(n: int) -> str:
+    for unit in ("B", "KB", "MB", "GB"):
+        if n < 1024:
+            return f"{n:.0f} {unit}" if unit == "B" else f"{n:.1f} {unit}"
+        n /= 1024
+    return f"{n:.1f} TB"
+
+
+def _file_icon(ext: str, is_dir: bool) -> tuple[str, str]:
+    """Return (fa-icon-class, text-color-class) for a file extension."""
+    if is_dir:
+        return "fa-folder", "text-warning"
+    return {
+        ".pdf":    ("fa-file-pdf",   "text-danger"),
+        ".p7m":    ("fa-file-shield","text-warning"),
+        ".json":   ("fa-file-code",  "text-info"),
+        ".xml":    ("fa-file-code",  "text-secondary"),
+        ".csv":    ("fa-file-csv",   "text-success"),
+        ".xlsx":   ("fa-file-excel", "text-success"),
+        ".xls":    ("fa-file-excel", "text-success"),
+        ".png":    ("fa-file-image", "text-secondary"),
+        ".jpg":    ("fa-file-image", "text-secondary"),
+        ".jpeg":   ("fa-file-image", "text-secondary"),
+        ".sqlite": ("fa-database",   "text-primary"),
+        ".log":    ("fa-scroll",     "text-muted"),
+        ".txt":    ("fa-file-lines", "text-muted"),
+        ".zip":    ("fa-file-zipper","text-secondary"),
+    }.get(ext, ("fa-file", "text-muted"))
+
+
+def _render_doc_from_db(doc: dict, request, theme, user):
+    """Finalize a doc dict fetched from the DB and render the matching visura template."""
+    doc["xml_parsed"] = _parse_xml_to_dict(doc.get("xml_content", ""))
+    doc.pop("xml_content", None)
+    doc["intestati_rows"] = [
+        {
+            "Nominativo": r.get("Nominativo") or r.get("nominativo") or "-",
+            "Codice Fiscale": r.get("CF") or r.get("CodiceFiscale") or "-",
+            "Quota": (r.get("DirittiReali") or {}).get("Quota", "") if isinstance(r.get("DirittiReali"), dict) else "",
+            "Diritto": (r.get("DirittiReali") or {}).get("Descrizione", "") if isinstance(r.get("DirittiReali"), dict) else "",
+            "Periodo": (r.get("DirittiReali") or {}).get("FineDiritto", "") if isinstance(r.get("DirittiReali"), dict) else "",
+        }
+        for r in (doc.get("intestati") or [])
+    ]
+    doc["classamento_rows"] = [
+        {
+            "Zona Censuaria": r.get("ZonaCensuaria") or "-",
+            "Categoria": r.get("Categoria") or "-",
+            "Classe": r.get("Classe") or "-",
+            "Rendita (EUR)": r.get("RenditaEuro") or "-",
+        }
+        for r in (doc.get("classamento") or [])
+    ]
+    doc["meta"] = [
+        ("Filename", doc.get("filename") or "-"),
+        ("Oggetto", doc.get("oggetto") or "-"),
+        ("Richiesta del", doc.get("richiesta_del") or "-"),
+        ("Tipo", doc.get("document_type") or "-"),
+        ("Provincia", doc.get("provincia") or "-"),
+        ("Comune", doc.get("comune") or "-"),
+        ("Foglio / Particella", f"{doc.get('foglio') or '-'} / {doc.get('particella') or '-'}"),
+        ("Subalterno / Sez.Urb", f"{doc.get('subalterno') or '-'} / {doc.get('sezione_urbana') or '-'}"),
+    ]
+    xml_p = doc.get("xml_parsed") or {}
+    if "VisuraFabbricatiStorica" in xml_p or "VisuraFabbricati" in xml_p:
+        template = "visura_fabbricati_storica.html"
+    elif "VisuraSoggettoAttuale" in xml_p or "VisuraSoggettoStorica" in xml_p:
+        template = "visura_soggetto_attuale.html"
+    elif "VisuraTerreniAttuale" in xml_p or "VisuraTerrenoStorica" in xml_p or "VisuraTerreno" in xml_p:
+        template = "visura_terreni_attuale.html"
+    else:
+        template = "result_detail.html"
+    return theme.render(template, request, user=user, doc=doc)
+
+
+@router.get("/web/documents/view/{path:path}", response_class=HTMLResponse)
+async def web_document_view(request: Request, path: str, user=Depends(_require_auth)):
+    """Parse a p7m/xml file from the data directory and render it in the matching visura template."""
+    from pathlib import Path
+
+    theme = _get_theme(request)
+    base = _files_base()
+    target = (base / path).resolve()
+
+    if not str(target).startswith(str(base)):
+        from fastapi import HTTPException
+        raise HTTPException(status_code=403, detail="Access denied")
+    if not target.exists() or not target.is_file():
+        from fastapi import HTTPException
+        raise HTTPException(status_code=404, detail="Not found")
+
+    # Parse the file (handles .p7m extraction + XML parsing)
+    xml_content = ""
+    ext = target.suffix.lower()
+    if ext == ".p7m":
+        from .utils import _extract_p7m
+        extracted = _extract_p7m(str(target))
+        if extracted and Path(extracted).exists():
+            xml_content = Path(extracted).read_text(encoding="utf-8", errors="ignore")
+    elif ext in (".xml",):
+        xml_content = target.read_text(encoding="utf-8", errors="ignore")
+    else:
+        # Not a structured document — fall back to download
+        return FileResponse(str(target), filename=target.name)
+
+    xml_parsed = _parse_xml_to_dict(xml_content)
+
+    # Build a doc dict that matches what the visura templates expect
+    doc: dict[str, Any] = {
+        "id": None,
+        "filename": target.name,
+        "file_path": str(target),
+        "oggetto": target.stem,
+        "document_type": "",
+        "provincia": "", "comune": "", "foglio": "", "particella": "",
+        "subalterno": "", "sezione_urbana": "", "tipo_catasto": "",
+        "intestati": [], "classamento": [], "indirizzo": "",
+        "xml_parsed": xml_parsed,
+    }
+
+    # Populate structured fields from xml_parsed if possible
+    if xml_parsed:
+        from .utils import _parse_visura_xml
+        parsed = _parse_visura_xml(str(target))
+        if parsed:
+            doc.update({k: v for k, v in parsed.items() if k != "xml_content"})
+            doc["document_type"] = parsed.get("tipo", "")
+
+    doc["intestati_rows"] = [
+        {
+            "Nominativo": r.get("Nominativo") or r.get("nominativo") or "-",
+            "Codice Fiscale": r.get("CF") or r.get("CodiceFiscale") or "-",
+            "Quota": (r.get("DirittiReali") or {}).get("Quota", "") if isinstance(r.get("DirittiReali"), dict) else "",
+            "Diritto": (r.get("DirittiReali") or {}).get("Descrizione", "") if isinstance(r.get("DirittiReali"), dict) else "",
+            "Periodo": (r.get("DirittiReali") or {}).get("FineDiritto", "") if isinstance(r.get("DirittiReali"), dict) else "",
+        }
+        for r in (doc.get("intestati") or [])
+    ]
+    doc["classamento_rows"] = [
+        {
+            "Zona Censuaria": r.get("ZonaCensuaria") or "-",
+            "Categoria": r.get("Categoria") or "-",
+            "Classe": r.get("Classe") or "-",
+            "Rendita (EUR)": r.get("RenditaEuro") or "-",
+        }
+        for r in (doc.get("classamento") or [])
+    ]
+    doc["meta"] = [
+        ("Filename", target.name),
+        ("Path", str(target.relative_to(base))),
+        ("Tipo", doc.get("document_type") or "-"),
+        ("Provincia", doc.get("provincia") or "-"),
+        ("Foglio / Particella", f"{doc.get('foglio') or '-'} / {doc.get('particella') or '-'}"),
+        ("Subalterno", doc.get("subalterno") or "-"),
+    ]
+
+    # Select template by XML root element
+    if "VisuraFabbricatiStorica" in xml_parsed or "VisuraFabbricati" in xml_parsed:
+        template = "visura_fabbricati_storica.html"
+    elif "VisuraSoggettoAttuale" in xml_parsed or "VisuraSoggettoStorica" in xml_parsed:
+        template = "visura_soggetto_attuale.html"
+    elif "VisuraTerreniAttuale" in xml_parsed or "VisuraTerrenoStorica" in xml_parsed or "VisuraTerreno" in xml_parsed:
+        template = "visura_terreni_attuale.html"
+    else:
+        template = "result_detail.html"
+
+    return theme.render(template, request, user=user, doc=doc)
+
+
+@router.get("/web/documents", response_class=HTMLResponse)
+@router.get("/web/documents/{path:path}", response_class=HTMLResponse)
+async def web_documents(request: Request, path: str = "", user=Depends(_require_auth)):
+    """Document browser for the SISTER reports directory.
+
+    Pure-integer paths (e.g. /web/documents/42) are dispatched to the DB document viewer.
+    All other paths serve the filesystem browser or file downloads.
+    """
+    from pathlib import Path
+
+    theme = _get_theme(request)
+
+    # Integer path → DB-backed structured document viewer
+    if path and path.isdigit():
+        doc = await get_document_by_id(int(path))
+        if doc is None:
+            return theme.render("result_detail.html", request, user=user,
+                                result=None, request_id=path, not_found=True)
+        return _render_doc_from_db(doc, request, theme, user)
+
+    base = _files_base()
+    target = (base / path).resolve() if path else base
+
+    # Prevent path traversal
+    if not str(target).startswith(str(base)):
+        from fastapi import HTTPException
+        raise HTTPException(status_code=403, detail="Access denied")
+    if not target.exists():
+        from fastapi import HTTPException
+        raise HTTPException(status_code=404, detail="Not found")
+
+    # Serve files directly
+    if target.is_file():
+        return FileResponse(str(target), filename=target.name)
+
+    # Build indexed-file map (file_path → {id, oggetto}) for linking files to DB rows
+    try:
+        indexed = await get_indexed_file_metadata()
+    except Exception:
+        indexed = {}
+
+    entries = []
+    total_size = 0
+    for child in sorted(target.iterdir(), key=lambda p: (not p.is_dir(), p.name.lower())):
+        try:
+            stat = child.stat()
+        except OSError:
+            continue
+        rel_path = str(child.relative_to(base))
+        is_dir = child.is_dir()
+        ext = child.suffix.lower() if not is_dir else ""
+        size_bytes = stat.st_size if not is_dir else 0
+        total_size += size_bytes
+
+        # Sub-directory: count direct children
+        child_count: Optional[int] = None
+        if is_dir:
+            try:
+                child_count = sum(1 for _ in child.iterdir())
+            except OSError:
+                pass
+
+        icon, icon_color = _file_icon(ext, is_dir)
+        meta = indexed.get(str(child)) if not is_dir else None
+        doc_id = meta["id"] if meta else None
+        new_name = meta["oggetto"] if meta else None
+
+        entries.append({
+            "name": child.name,
+            "new_name": new_name or "",
+            "path": rel_path,
+            "is_dir": is_dir,
+            "ext": ext,
+            "size_bytes": size_bytes,
+            "size_human": _human_size(size_bytes) if not is_dir else (f"{child_count} items" if child_count is not None else ""),
+            "mtime": datetime.fromtimestamp(stat.st_mtime).strftime("%Y-%m-%d %H:%M"),
+            "icon": icon,
+            "icon_color": icon_color,
+            "doc_id": doc_id,
+        })
+
+    # Breadcrumbs
+    parts = [p for p in path.split("/") if p] if path else []
+    breadcrumbs = [{"name": base.name, "path": ""}]
+    for i, part in enumerate(parts):
+        breadcrumbs.append({"name": part, "path": "/".join(parts[: i + 1])})
+
+    n_dirs = sum(1 for e in entries if e["is_dir"])
+    n_files = len(entries) - n_dirs
+
+    return theme.render(
+        "files_browser.html", request, user=user,
+        entries=entries,
+        current_path=path,
+        breadcrumbs=breadcrumbs,
+        base_name=base.name,
+        n_dirs=n_dirs,
+        n_files=n_files,
+        total_size=_human_size(total_size) if total_size else None,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -718,16 +1045,15 @@ async def web_api_batch(request: Request, user=Depends(_require_auth)):
 
 @router.post("/web/api/workflow/stream")
 async def web_api_workflow_stream(request: Request, user=Depends(_require_auth)):
-    """SSE proxy for workflow streaming — passes through events incrementally."""
+    """SSE proxy for workflow streaming — forwards to opendata's workflow engine."""
     import httpx
 
     body = await request.json()
-    base = f"http://localhost:{request.url.port or 8025}"
 
     async def stream_events():
         async with httpx.AsyncClient(timeout=600) as client:
             async with client.stream(
-                "POST", f"{base}/visura/workflow/stream",
+                "POST", f"{_OPENDATA_API_URL}/catasto/workflow/stream",
                 json=body,
             ) as resp:
                 buffer = ""

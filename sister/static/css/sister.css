@@ -40,15 +40,54 @@
 /* CSV drop zone */
 .border-dashed {
     border-style: dashed !important;
-    border-color: #dee2e6;
+    border-color: var(--bs-border-color);
 }
 .border-dashed:hover {
-    border-color: #3b82f6 !important;
-    background-color: #f8fafc;
+    border-color: var(--bs-primary) !important;
+    background-color: var(--bs-tertiary-bg);
 }
 .border-dashed.border-primary {
-    border-color: #3b82f6 !important;
+    border-color: var(--bs-primary) !important;
 }
+
+/* ── Nested data renderer ─────────────────────────────── */
+.nested-table { --bs-table-bg: transparent; margin-bottom: 0; }
+.nested-table > :not(caption) > * > * { padding: 0.35rem 0.5rem; vertical-align: top; }
+.nested-key { width: 16rem; min-width: 10rem; font-weight: 600; color: var(--bs-body-color); background: var(--bs-tertiary-bg); }
+.nested-index { width: 4rem; color: var(--bs-secondary-color); text-align: right; background: var(--bs-tertiary-bg); }
+.nested-value { min-width: 12rem; }
+.nested-scroll { overflow-x: auto; }
+.nested-empty { color: var(--bs-secondary-color); font-style: italic; }
+
+/* ── Detail metadata labels ───────────────────────────── */
+.detail-label { font-weight: 600; color: var(--bs-secondary-color); font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.03em; }
+.detail-value { font-size: 0.95rem; }
+
+/* ── Document / workflow meta tables ─────────────────── */
+.doc-meta th { width: 35%; font-weight: 500; }
+.workflow-step-title { min-width: 0; }
+.workflow-step-title code { white-space: normal; word-break: break-word; }
+.workflow-step-meta th { width: 12rem; font-weight: 600; color: var(--bs-body-color); background: var(--bs-tertiary-bg); }
+.workflow-step-section + .workflow-step-section { margin-top: 1rem; }
+
+/* ── Tabulator density ────────────────────────────────── */
+.tabulator { font-size: 0.85rem; }
+.tabulator .tabulator-header .tabulator-col { padding: 6px 8px; }
+.tabulator .tabulator-cell { padding: 4px 8px; }
+.tabulator-row.tabulator-row-even { background-color: var(--bs-tertiary-bg); }
+
+/* ── Results stats card links ─────────────────────────── */
+.stats-card-link { color: inherit; display: block; text-decoration: none; }
+.stats-card-link .card { transition: transform 0.15s ease, box-shadow 0.15s ease; }
+.stats-card-link:hover .card { transform: translateY(-1px); box-shadow: 0 0.5rem 1rem rgba(0,0,0,.12) !important; }
+
+/* ── Active filter chips ──────────────────────────────── */
+.filter-chip { display: inline-flex; align-items: center; gap: 0.35rem; }
+.filter-chip .btn-close { width: 0.55rem; height: 0.55rem; padding: 0; }
+
+/* ── Copy button ──────────────────────────────────────── */
+.copy-btn { cursor: pointer; opacity: 0.6; transition: opacity 0.15s; }
+.copy-btn:hover { opacity: 1; }
 
 /* CSV preview table */
 #csv-preview-batch .table {

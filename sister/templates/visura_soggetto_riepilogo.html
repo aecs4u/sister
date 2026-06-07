@@ -1,0 +1,244 @@
+{% extends "_base.html" %}
+{% block page_title %}
+    {{- data.risultato.soggetti[0].denominazione if data.risultato.soggetti else 'Visura Soggetto' }} - Riepilogo
+{%- endblock %}
+
+{% block extra_css %}
+{{ super() }}
+<style>
+.hero-section { background: linear-gradient(135deg, #dc3545 0%, #c0392b 100%); color: white; padding: 2rem 0; margin-bottom: 2rem; }
+.detail-label { font-size: .75rem; text-transform: uppercase; letter-spacing: .05em; color: #6c757d; }
+.municipality-item { border-left: 3px solid #dc3545; background-color: #f8f9fa; padding: .5rem .75rem; border-radius: .25rem; margin-bottom: .35rem; }
+@media print { .no-print { display: none !important; } .hero-section { background: #f8f9fa !important; color: #333 !important; } }
+</style>
+{% endblock %}
+
+{% from "components/card.html" import stat_card %}
+
+{% block content %}
+{% if not data.risultato.soggetti %}
+<div class="container-fluid py-4">
+    <div class="alert alert-warning"><i class="fas fa-exclamation-triangle me-2"></i>Nessun soggetto trovato.</div>
+</div>
+{% else %}
+{% set soggetto = data.risultato.soggetti[0] %}
+
+{# Compute totals #}
+{% set ns = namespace(total_fab=0, total_ter=0, total_comuni=0) %}
+{% for c in soggetto.catasti %}
+    {% set ns.total_fab = ns.total_fab + c.fabbricati %}
+    {% set ns.total_ter = ns.total_ter + c.terreni %}
+    {% set ns.total_comuni = ns.total_comuni + c.comuni|length %}
+{% endfor %}
+
+{# ── Hero ───────────────────────────────────────────────────────────────── #}
+<div class="hero-section no-print">
+    <div class="container-fluid">
+        <nav class="mb-3" aria-label="breadcrumb">
+            <ol class="breadcrumb mb-0">
+                <li class="breadcrumb-item">
+                    <a href="/web/results" class="text-white-50">Risultati</a>
+                </li>
+                <li class="breadcrumb-item active text-white">Riepilogo Nazionale</li>
+            </ol>
+        </nav>
+        <div class="d-flex flex-wrap justify-content-between align-items-center">
+            <div>
+                <h1 class="display-6 fw-bold mb-2">
+                    <i class="fas fa-globe-europe me-3"></i>{{ soggetto.denominazione }}
+                </h1>
+                <p class="lead mb-0 opacity-75">
+                    Riepilogo catasto nazionale —
+                    <strong>{{ soggetto.catasti|length }}</strong> province,
+                    <strong>{{ ns.total_comuni }}</strong> comuni
+                </p>
+            </div>
+            <div class="d-flex gap-2 mt-3 mt-md-0">
+                <a href="/web/results" class="btn btn-outline-light">
+                    <i class="fas fa-arrow-left me-2"></i>Risultati
+                </a>
+                <button onclick="window.print()" class="btn btn-outline-light">
+                    <i class="fas fa-print me-2"></i>Stampa
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="container-fluid">
+
+    {# ── Soggetto overview ───────────────────────────────────────────────── #}
+    <div class="card border-start border-danger border-3 mb-4">
+        <div class="card-body">
+            <h5 class="card-title">
+                <i class="fas fa-user text-danger me-2"></i>Soggetto
+                <span class="badge bg-success ms-2">{{ data.stato }}</span>
+            </h5>
+            <div class="row g-3">
+                <div class="col-md-5">
+                    <span class="detail-label">Codice Fiscale</span>
+                    <div class="font-monospace">{{ soggetto.cf }}</div>
+                    <span class="detail-label mt-2 d-block">Sede Legale</span>
+                    <div>{{ soggetto.sede }}</div>
+                    {% if soggetto.id_soggetto %}
+                    <span class="detail-label mt-2 d-block">ID Soggetto</span>
+                    <code>{{ soggetto.id_soggetto }}</code>
+                    {% endif %}
+                </div>
+                <div class="col-md-5">
+                    <span class="detail-label">CF Ricerca</span>
+                    <div class="font-monospace">{{ data.parametri.cf_piva }}</div>
+                    <span class="detail-label mt-2 d-block">Tipo Catasto</span>
+                    <div>{{ data.parametri.tipo_catasto }} ({{ data.parametri.provincia }})</div>
+                </div>
+                <div class="col-md-2">
+                    <span class="detail-label">Endpoint</span>
+                    <div><code class="small">{{ data.endpoint }}</code></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    {# ── Stat cards ──────────────────────────────────────────────────────── #}
+    <div class="row g-4 mb-4">
+        <div class="col-md-3 col-6">{{ stat_card("Province", soggetto.catasti|length, icon="fa-map-marker-alt", color="danger") }}</div>
+        <div class="col-md-3 col-6">{{ stat_card("Comuni", ns.total_comuni, icon="fa-city", color="info") }}</div>
+        <div class="col-md-3 col-6">{{ stat_card("Fabbricati", ns.total_fab, icon="fa-building", color="primary") }}</div>
+        <div class="col-md-3 col-6">{{ stat_card("Terreni", ns.total_ter, icon="fa-leaf", color="success") }}</div>
+    </div>
+
+    {# ── Distribution chart ──────────────────────────────────────────────── #}
+    <h2 class="h5 border-bottom pb-2 mb-3">Distribuzione per Provincia</h2>
+    <div class="card border-0 shadow-sm mb-4">
+        <div class="card-body" style="height:300px">
+            <canvas id="provinceChart"></canvas>
+        </div>
+    </div>
+
+    {# ── Province summary ────────────────────────────────────────────────── #}
+    <h2 class="h5 border-bottom pb-2 mb-3">Riepilogo Province</h2>
+    <div class="card border-0 shadow-sm mb-4">
+        <div class="card-body p-0">
+            <div class="table-responsive">
+                <table class="table table-hover table-sm mb-0" id="province-table">
+                    <thead class="table-light">
+                        <tr>
+                            <th>Provincia</th>
+                            <th>Città Principale</th>
+                            <th class="text-end">Fabbricati</th>
+                            <th class="text-end">Terreni</th>
+                            <th class="text-end">Totale</th>
+                            <th class="text-end">Comuni</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for c in soggetto.catasti %}
+                        <tr>
+                            <td><strong>{{ c.provincia }}</strong></td>
+                            <td>{{ c.citta }}</td>
+                            <td class="text-end">{{ c.fabbricati }}</td>
+                            <td class="text-end">{{ c.terreni }}</td>
+                            <td class="text-end fw-semibold">{{ c.fabbricati + c.terreni }}</td>
+                            <td class="text-end text-muted">{{ c.comuni|length }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    {# ── Comuni detail ───────────────────────────────────────────────────── #}
+    <h2 class="h5 border-bottom pb-2 mb-3">Dettaglio Comuni</h2>
+    <div class="card border-0 shadow-sm mb-4">
+        <div class="card-body p-0">
+            <div class="table-responsive">
+                <table class="table table-hover table-sm mb-0" id="comuni-table">
+                    <thead class="table-light">
+                        <tr>
+                            <th>Comune</th>
+                            <th>Provincia</th>
+                            <th class="text-end">Fabbricati</th>
+                            <th class="text-end">Terreni</th>
+                            <th class="text-end">Totale</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for c in soggetto.catasti %}
+                        {% for comune in c.comuni %}
+                        <tr>
+                            <td><strong>{{ comune.comune }}</strong></td>
+                            <td>{{ c.provincia }}</td>
+                            <td class="text-end">{{ comune.fabbricati }}</td>
+                            <td class="text-end">{{ comune.terreni }}</td>
+                            <td class="text-end fw-semibold">{{ comune.fabbricati + comune.terreni }}</td>
+                        </tr>
+                        {% endfor %}
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <div class="d-flex gap-2 justify-content-center mt-4 mb-4 no-print">
+        <a href="/web/results" class="btn btn-outline-secondary">
+            <i class="fas fa-arrow-left me-2"></i>Risultati
+        </a>
+    </div>
+
+</div>
+{% endif %}
+{% endblock %}
+
+{% block extra_js %}
+{{ super() }}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script>
+(function () {
+    {% if data.risultato.soggetti %}
+    var catasti = {{ (data.risultato.soggetti[0].catasti) | tojson }};
+    var labels = catasti.map(function (c) { return c.provincia; });
+    var fab = catasti.map(function (c) { return c.fabbricati; });
+    var ter = catasti.map(function (c) { return c.terreni; });
+    function cssVar(n) { return getComputedStyle(document.documentElement).getPropertyValue(n).trim(); }
+    new Chart(document.getElementById('provinceChart'), {
+        type: 'bar',
+        data: {
+            labels: labels,
+            datasets: [
+                { label: 'Fabbricati', data: fab, backgroundColor: cssVar('--bs-primary') },
+                { label: 'Terreni', data: ter, backgroundColor: cssVar('--bs-success') }
+            ]
+        },
+        options: { responsive: true, maintainAspectRatio: false, scales: { y: { beginAtZero: true, stacked: true }, x: { stacked: true } }, plugins: { legend: { position: 'bottom' } } }
+    });
+    {% endif %}
+
+    function addFilter(tableId) {
+        var tbl = document.getElementById(tableId);
+        if (!tbl) return;
+        var bar = document.createElement('div');
+        bar.className = 'd-flex gap-2 mb-2 no-print';
+        var inp = document.createElement('input');
+        inp.type = 'search'; inp.className = 'form-control form-control-sm'; inp.placeholder = 'Filtra…'; inp.style.maxWidth = '260px';
+        inp.addEventListener('input', function () {
+            var q = this.value.toLowerCase();
+            tbl.querySelectorAll('tbody tr').forEach(function (r) { r.style.display = !q || r.textContent.toLowerCase().includes(q) ? '' : 'none'; });
+        });
+        var btn = document.createElement('button');
+        btn.type = 'button'; btn.className = 'btn btn-sm btn-outline-secondary no-print';
+        btn.innerHTML = '<i class="fas fa-download me-1"></i>CSV';
+        btn.addEventListener('click', function () {
+            var rows = Array.from(tbl.querySelectorAll('tr')).filter(function (r) { return r.style.display !== 'none'; });
+            var csv = rows.map(function (r) { return Array.from(r.querySelectorAll('th,td')).map(function (c) { return '"' + c.textContent.trim().replace(/"/g, '""') + '"'; }).join(','); }).join('\n');
+            var a = document.createElement('a'); a.href = 'data:text/csv;charset=utf-8,' + encodeURIComponent(csv); a.download = tableId + '.csv'; a.click();
+        });
+        bar.appendChild(inp); bar.appendChild(btn);
+        tbl.closest('.table-responsive').before(bar);
+    }
+    addFilter('province-table');
+    addFilter('comuni-table');
+})();
+</script>
+{% endblock %}

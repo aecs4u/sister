@@ -259,7 +259,8 @@ class BrowserManager:
                 page = await self._get_authenticated_page()
                 result = await run_visura_persona_giuridica(
                     page, request.identificativo,
-                    tipo_ricerca=request.tipo_ricerca,
+                    tipo_catasto=request.tipo_catasto,
+                    provincia=request.provincia,
                 )
             return VisuraResponse(
                 request_id=request.request_id, success=True,

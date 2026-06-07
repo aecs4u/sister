@@ -10,7 +10,6 @@ from uuid import uuid4
 
 from fastapi import HTTPException
 from fastapi.responses import JSONResponse
-from starlette.responses import StreamingResponse
 
 from .database import count_responses, find_responses
 from .models import (
@@ -22,6 +21,7 @@ from .models import (
     IspezioneIpotecariaRequest,
     QueueFullError,
     SezioniExtractionRequest,
+    SubmitResult,
     VisuraInput,
     VisuraIntestatiInput,
     VisuraIntestatiRequest,
@@ -30,9 +30,7 @@ from .models import (
     VisuraRequest,
     VisuraSoggettoInput,
     VisuraSoggettoRequest,
-    WorkflowInput,
 )
-from .models import SubmitResult
 from .services import VisuraService
 
 logger = logging.getLogger("sister")
@@ -409,38 +407,6 @@ async def richiedi_elenco_immobili(request: ElencoImmobiliInput, service: Visura
     except Exception as e:
         logger.error("Errore nella richiesta elenco immobili: %s", e)
         raise HTTPException(status_code=500, detail="Errore interno del server")
-
-
-async def execute_workflow(request: WorkflowInput, service: VisuraService):
-    """Execute a multi-step workflow preset server-side."""
-    from .workflows import run_workflow
-
-    try:
-        result = await run_workflow(service, request)
-        if result.get("error"):
-            raise HTTPException(status_code=400, detail=result["error"])
-        return JSONResponse(result)
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error("Errore nel workflow '%s': %s", request.preset, e)
-        raise HTTPException(status_code=500, detail="Errore interno del server")
-
-
-async def execute_workflow_stream(request: WorkflowInput, service: VisuraService):
-    """Execute a workflow with Server-Sent Events for incremental progress."""
-    from .workflows import run_workflow_stream
-
-    async def event_generator():
-        try:
-            async for chunk in run_workflow_stream(service, request):
-                yield f"data: {chunk}\n\n"
-        except Exception as e:
-            import json
-            logger.error("Errore nel workflow stream '%s': %s", request.preset, e)
-            yield f"data: {json.dumps({'event': 'error', 'error': str(e)})}\n\n"
-
-    return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 
 async def download_documents(service: VisuraService):

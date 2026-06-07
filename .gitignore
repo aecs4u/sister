@@ -41,6 +41,16 @@ backup_original/
 data/*.sqlite
 data/*.sqlite-wal
 data/*.sqlite-shm
+data/*.csv
+data/*.json
+data/*.xlsx
+
+# Runtime outputs
+outputs/
+
+# Misc
+original_file.pdf
+.codex
 
 # Docker
 docker-compose.override.yaml

@@ -1,9 +1,12 @@
-{% extends "sister/base.html" %}
+{% extends "_base.html" %}
 {% block page_title %}Dashboard{% endblock %}
+
+{% from "components/card.html" import stat_card %}
+{% from "components/page_header.html" import page_header %}
 
 {% block content %}
 <div class="container-fluid py-4">
-    <h1 class="mb-4"><i class="fas fa-tachometer-alt text-primary me-2"></i>Dashboard</h1>
+    {{ page_header("Dashboard") }}
 
     {% if auth_status and auth_status.state != 'ready' %}
     <div class="alert alert-{% if auth_status.state == 'connecting' %}info{% else %}warning{% endif %} border-0 shadow-sm mb-4">
@@ -18,49 +21,27 @@
     <!-- Stats -->
     <div class="row g-4 mb-4">
         <div class="col-md-3 col-6">
-            <div class="card border-0 shadow-sm h-100">
-                <div class="card-body text-center">
-                    <i class="fas fa-paper-plane fa-2x text-primary mb-2"></i>
-                    <h3 class="mb-0">{{ stats.total_requests }}</h3>
-                    <small class="text-muted">Total Requests</small>
-                </div>
-            </div>
+            {{ stat_card("Total Requests", stats.total_requests, icon="fa-paper-plane", color="primary") }}
         </div>
         <div class="col-md-3 col-6">
-            <div class="card border-0 shadow-sm h-100">
-                <div class="card-body text-center">
-                    <i class="fas fa-check-circle fa-2x text-success mb-2"></i>
-                    <h3 class="mb-0">{{ stats.successful }}</h3>
-                    <small class="text-muted">Successful</small>
-                </div>
-            </div>
+            {{ stat_card("Successful", stats.successful, icon="fa-check-circle", color="success") }}
         </div>
         <div class="col-md-3 col-6">
-            <div class="card border-0 shadow-sm h-100">
-                <div class="card-body text-center">
-                    <i class="fas fa-times-circle fa-2x text-danger mb-2"></i>
-                    <h3 class="mb-0">{{ stats.failed }}</h3>
-                    <small class="text-muted">Failed</small>
-                </div>
-            </div>
+            {{ stat_card("Failed", stats.failed, icon="fa-times-circle", color="danger") }}
         </div>
         <div class="col-md-3 col-6">
-            <div class="card border-0 shadow-sm h-100">
-                <div class="card-body text-center">
-                    <i class="fas fa-database fa-2x text-info mb-2"></i>
-                    <h3 class="mb-0">{{ stats.total_responses }}</h3>
-                    <small class="text-muted">Responses</small>
-                </div>
-            </div>
+            {{ stat_card("Responses", stats.total_responses, icon="fa-database", color="info") }}
         </div>
     </div>
 
-    <!-- Quick Actions -->
+    <!-- Quick Actions + Recent Activity -->
     <div class="row g-4 mb-4">
         <div class="col-md-6">
             <div class="card border-0 shadow-sm">
+                <div class="card-header">
+                    <h5 class="card-title mb-0"><i class="fas fa-bolt text-warning me-2"></i>Quick Actions</h5>
+                </div>
                 <div class="card-body">
-                    <h5 class="card-title"><i class="fas fa-bolt text-warning me-2"></i>Quick Actions</h5>
                     <div class="d-grid gap-2">
                         <a href="/web/forms" class="btn btn-primary">
                             <i class="fas fa-clipboard-list me-2"></i>Submit a Query
@@ -77,12 +58,14 @@
         </div>
         <div class="col-md-6">
             <div class="card border-0 shadow-sm">
-                <div class="card-body">
-                    <h5 class="card-title"><i class="fas fa-clock me-2"></i>Recent Activity</h5>
+                <div class="card-header">
+                    <h5 class="card-title mb-0"><i class="fas fa-clock me-2"></i>Recent Activity</h5>
+                </div>
+                <div class="card-body p-0">
                     {% if recent %}
                     <div class="list-group list-group-flush">
                         {% for r in recent %}
-                        <a href="/web/results/{{ r.request_id }}" class="list-group-item list-group-item-action px-0">
+                        <a href="/web/results/{{ r.request_id }}" class="list-group-item list-group-item-action px-3">
                             <div class="d-flex justify-content-between align-items-center">
                                 <div>
                                     <span class="badge bg-{{ 'success' if r.success else 'danger' if r.success is not none else 'warning' }} me-2">
@@ -97,7 +80,9 @@
                         {% endfor %}
                     </div>
                     {% else %}
-                    <p class="text-muted mb-0">No recent requests.</p>
+                    <div class="p-3">
+                        <p class="text-muted mb-0">No recent requests.</p>
+                    </div>
                     {% endif %}
                 </div>
             </div>

@@ -1,29 +1,10 @@
-{% extends "sister/base.html" %}
+{% extends "_base.html" %}
 {% block page_title %}Workflow {{ workflow_id[:20] }}{% endblock %}
 
 {% block extra_css %}
 {{ super() }}
-<link href="https://unpkg.com/tabulator-tables@6.3.1/dist/css/tabulator_bootstrap5.min.css" rel="stylesheet">
-<style>
-    .tabulator { font-size: 0.85rem; }
-    .tabulator .tabulator-header .tabulator-col { padding: 6px 8px; }
-    .tabulator .tabulator-cell { padding: 4px 8px; }
-    .tabulator-row.tabulator-row-even { background-color: #f8f9fa; }
-    .detail-label { font-weight: 600; color: #6c757d; font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.03em; }
-    .detail-value { font-size: 0.95rem; }
-    .nested-table { --bs-table-bg: transparent; margin-bottom: 0; }
-    .nested-table > :not(caption) > * > * { padding: 0.35rem 0.5rem; vertical-align: top; }
-    .nested-key { width: 16rem; min-width: 10rem; font-weight: 600; color: #495057; background: #f8f9fa; }
-    .nested-index { width: 4rem; color: #6c757d; text-align: right; background: #f8f9fa; }
-    .nested-value { min-width: 12rem; }
-    .nested-scroll { overflow-x: auto; }
-    .nested-empty { color: #6c757d; font-style: italic; }
-    .doc-meta th { width: 35%; font-weight: 500; }
-    .workflow-step-title { min-width: 0; }
-    .workflow-step-title code { white-space: normal; word-break: break-word; }
-    .workflow-step-meta th { width: 12rem; font-weight: 600; color: #495057; background: #f8f9fa; }
-    .workflow-step-section + .workflow-step-section { margin-top: 1rem; }
-</style>
+<link href="https://cdn.jsdelivr.net/npm/tabulator-tables@6.3.1/dist/css/tabulator_bootstrap5.min.css" rel="stylesheet">
+<link rel="stylesheet" href="{{ static_url_path|default('/static/aecs4u-theme') }}/css/data-table.css">
 {% endblock %}
 
 {# Import render macros from result_detail #}
@@ -287,7 +268,7 @@
 
 {% block extra_js %}
 {{ super() }}
-<script src="https://unpkg.com/tabulator-tables@6.3.1/dist/js/tabulator.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/tabulator-tables@6.3.1/dist/js/tabulator.min.js"></script>
 <script>
 (function() {
     'use strict';

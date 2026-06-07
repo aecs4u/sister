@@ -1,0 +1,481 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <!--
+    cadastral-base.xsd — Shared types for Italian SISTER cadastral documents.
+    Version 2.0 — replaces repeated xs:string-everywhere definitions in each
+    visura schema with typed, constrained, documented entities.
+
+    Included by: VisuraFabbricatiStorica.xsd, VisuraSoggettoAttuale.xsd,
+                 VisuraTerreniAttuale.xsd
+  -->
+
+
+  <!-- ═══════════════════════════════════════════════════════════════════════
+       1. PRIMITIVE PATTERNS & SIMPLE TYPES
+  ═══════════════════════════════════════════════════════════════════════════ -->
+
+  <!-- YYYYMMDD — native SISTER date format (e.g. "20241018" = 18 Oct 2024) -->
+  <xs:simpleType name="DataCatastaleType">
+    <xs:restriction base="xs:string">
+      <xs:pattern value="\d{8}"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <!-- Italian codice fiscale: 16-character alphanumeric tax ID -->
+  <xs:simpleType name="CodiceFiscaleType">
+    <xs:restriction base="xs:string">
+      <xs:pattern value="[A-Z0-9]{16}"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <!-- Partita IVA: 11-digit VAT number -->
+  <xs:simpleType name="PartitaIVAType">
+    <xs:restriction base="xs:string">
+      <xs:pattern value="\d{11}"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <!-- Ownership quota as Italian fraction notation: 1/2, 3/4, 500/1000 -->
+  <xs:simpleType name="QuotaType">
+    <xs:restriction base="xs:string">
+      <xs:pattern value="\d+/\d+"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <!-- Foglio (cadastral sheet): integer 1–9999 -->
+  <xs:simpleType name="FoglioType">
+    <xs:restriction base="xs:integer">
+      <xs:minInclusive value="1"/>
+      <xs:maxInclusive value="9999"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <!-- Particella (land parcel number): integer 1–999999 -->
+  <xs:simpleType name="ParticellaType">
+    <xs:restriction base="xs:integer">
+      <xs:minInclusive value="1"/>
+      <xs:maxInclusive value="999999"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <!-- Anno: 4-digit year -->
+  <xs:simpleType name="AnnoType">
+    <xs:restriction base="xs:string">
+      <xs:pattern value="\d{4}"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <!-- Currency amount in EUR (non-negative decimal) -->
+  <xs:simpleType name="MonetaEuroType">
+    <xs:restriction base="xs:decimal">
+      <xs:minInclusive value="0"/>
+      <xs:fractionDigits value="2"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <!-- Surface area in square metres (non-negative decimal) -->
+  <xs:simpleType name="AreaMQType">
+    <xs:restriction base="xs:decimal">
+      <xs:minInclusive value="0"/>
+      <xs:fractionDigits value="2"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <!-- Province code: 2-letter ISTAT abbreviation (e.g. "RA", "MI", "PA") -->
+  <xs:simpleType name="ProvinciaType">
+    <xs:restriction base="xs:string">
+      <xs:pattern value="[A-Z]{2}"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+
+  <!-- ═══════════════════════════════════════════════════════════════════════
+       2. CONTROLLED VOCABULARIES (ENUMERATIONS)
+  ═══════════════════════════════════════════════════════════════════════════ -->
+
+  <!-- Catasto type: F = Fabbricati (buildings), T = Terreni (land) -->
+  <xs:simpleType name="TipoCatastoType">
+    <xs:restriction base="xs:string">
+      <xs:enumeration value="F"/>  <!-- Catasto Fabbricati -->
+      <xs:enumeration value="T"/>  <!-- Catasto Terreni -->
+    </xs:restriction>
+  </xs:simpleType>
+
+  <!-- Gender: M = Male, F = Female -->
+  <xs:simpleType name="SessoType">
+    <xs:restriction base="xs:string">
+      <xs:enumeration value="M"/>
+      <xs:enumeration value="F"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <!-- Visura type -->
+  <xs:simpleType name="TipoVisuraType">
+    <xs:restriction base="xs:string">
+      <xs:enumeration value="STORICA"/>
+      <xs:enumeration value="ATTUALE"/>
+      <xs:enumeration value="SINTETICA"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <!--
+    Codici diritto reale (ownership/real property rights).
+    Source: D.P.R. 650/1972 and Circolare n. 2/1984 Agenzia delle Entrate.
+  -->
+  <xs:simpleType name="CodiceDirittoType">
+    <xs:restriction base="xs:string">
+      <xs:enumeration value="1"/>   <!-- Proprietà -->
+      <xs:enumeration value="1s"/>  <!-- Proprietà superficiaria -->
+      <xs:enumeration value="2"/>   <!-- Enfiteusi -->
+      <xs:enumeration value="3"/>   <!-- Superficie -->
+      <xs:enumeration value="4"/>   <!-- Usufrutto -->
+      <xs:enumeration value="4a"/>  <!-- Usufrutto parziale -->
+      <xs:enumeration value="5"/>   <!-- Uso -->
+      <xs:enumeration value="6"/>   <!-- Abitazione -->
+      <xs:enumeration value="7"/>   <!-- Servitù attiva -->
+      <xs:enumeration value="8"/>   <!-- Oneri reali -->
+      <xs:enumeration value="9"/>   <!-- Ipoteca (domanda) -->
+      <xs:enumeration value="10"/>  <!-- Peso ipotecario -->
+      <xs:enumeration value="11"/>  <!-- Usufrutto legale -->
+      <xs:enumeration value="12"/>  <!-- Prelazione legale -->
+      <xs:enumeration value="16"/>  <!-- Nuda proprietà -->
+      <xs:enumeration value="17"/>  <!-- Diritto dell'enfiteuta -->
+      <xs:enumeration value="18"/>  <!-- Concessione su beni del demanio -->
+    </xs:restriction>
+  </xs:simpleType>
+
+  <!--
+    Categorie catastali fabbricati.
+    Gruppo A: abitazioni; B: uso collettivo; C: commercio/depositi;
+    D: speciale; E: particolare; F: inagibile/senza rendita.
+  -->
+  <xs:simpleType name="CategoriaFabbricatiType">
+    <xs:restriction base="xs:string">
+      <!-- Gruppo A: Abitazioni -->
+      <xs:enumeration value="A1"/>  <!-- Abitazioni signorili -->
+      <xs:enumeration value="A2"/>  <!-- Abitazioni civili -->
+      <xs:enumeration value="A3"/>  <!-- Abitazioni economiche -->
+      <xs:enumeration value="A4"/>  <!-- Abitazioni popolari -->
+      <xs:enumeration value="A5"/>  <!-- Abitazioni ultrapopolari -->
+      <xs:enumeration value="A6"/>  <!-- Abitazioni rurali -->
+      <xs:enumeration value="A7"/>  <!-- Villini -->
+      <xs:enumeration value="A8"/>  <!-- Ville -->
+      <xs:enumeration value="A9"/>  <!-- Castelli e palazzi di pregio -->
+      <xs:enumeration value="A10"/> <!-- Uffici e studi privati -->
+      <xs:enumeration value="A11"/> <!-- Abitazioni ed alloggi tipici dei luoghi -->
+      <!-- Gruppo B: Uso collettivo -->
+      <xs:enumeration value="B1"/>  <!-- Collegi, convitti, educandati -->
+      <xs:enumeration value="B2"/>  <!-- Case di cura -->
+      <xs:enumeration value="B3"/>  <!-- Prigioni e riformatori -->
+      <xs:enumeration value="B4"/>  <!-- Uffici pubblici -->
+      <xs:enumeration value="B5"/>  <!-- Scuole e laboratori scientifici -->
+      <xs:enumeration value="B6"/>  <!-- Biblioteche, pinacoteche, musei -->
+      <xs:enumeration value="B7"/>  <!-- Cappelle ed oratori privati -->
+      <xs:enumeration value="B8"/>  <!-- Magazzini sotterranei per depositi -->
+      <!-- Gruppo C: Commercio / depositi -->
+      <xs:enumeration value="C1"/>  <!-- Negozi e botteghe -->
+      <xs:enumeration value="C2"/>  <!-- Magazzini e locali di deposito -->
+      <xs:enumeration value="C3"/>  <!-- Laboratori per arti e mestieri -->
+      <xs:enumeration value="C4"/>  <!-- Fabbricati e locali per esercizi sportivi -->
+      <xs:enumeration value="C5"/>  <!-- Stabilimenti balneari e di acque curative -->
+      <xs:enumeration value="C6"/>  <!-- Stalle, scuderie, rimesse, autorimesse -->
+      <xs:enumeration value="C7"/>  <!-- Tettoie chiuse o aperte -->
+      <!-- Gruppo D: Speciale -->
+      <xs:enumeration value="D1"/>  <!-- Opifici -->
+      <xs:enumeration value="D2"/>  <!-- Alberghi e pensioni -->
+      <xs:enumeration value="D3"/>  <!-- Teatri, cinematografi, sale concerti -->
+      <xs:enumeration value="D4"/>  <!-- Case di cura e ospedali -->
+      <xs:enumeration value="D5"/>  <!-- Istituti di credito, cambio e assicurazione -->
+      <xs:enumeration value="D6"/>  <!-- Fabbricati e locali per esercizi sportivi -->
+      <xs:enumeration value="D7"/>  <!-- Fabbricati costruiti o adattati per esigenze speciali -->
+      <xs:enumeration value="D8"/>  <!-- Fabbricati costruiti o adattati per speciali esigenze di industria e commercio -->
+      <xs:enumeration value="D9"/>  <!-- Edifici galleggianti o assicurati stabilmente a puntoni di ormeggio -->
+      <xs:enumeration value="D10"/> <!-- Fabbricati per funzioni produttive connesse alle attività agricole -->
+      <!-- Gruppo E: Particolare -->
+      <xs:enumeration value="E1"/>  <!-- Stazioni ferroviarie e metropolitane -->
+      <xs:enumeration value="E2"/>  <!-- Ponti comunali e provinciali a pedaggio -->
+      <xs:enumeration value="E3"/>  <!-- Costruzioni e fabbricati per speciali esigenze pubbliche -->
+      <xs:enumeration value="E4"/>  <!-- Recinti chiusi per speciali esigenze pubbliche e private -->
+      <xs:enumeration value="E5"/>  <!-- Fabbricati costituenti pertinenza di edilizia speciale -->
+      <xs:enumeration value="E6"/>  <!-- Fabbricati destinati all'esercizio pubblico dei culti -->
+      <xs:enumeration value="E7"/>  <!-- Fabbricati e costruzioni nei cimiteri -->
+      <xs:enumeration value="E8"/>  <!-- Costruzioni nelle acque -->
+      <xs:enumeration value="E9"/>  <!-- Edifici a destinazione particolare -->
+      <!-- Gruppo F: Senza rendita (non censibili) -->
+      <xs:enumeration value="F1"/>  <!-- Aree urbane -->
+      <xs:enumeration value="F2"/>  <!-- Unità collabenti (dirute / inabitabili) -->
+      <xs:enumeration value="F3"/>  <!-- Unità in corso di costruzione -->
+      <xs:enumeration value="F4"/>  <!-- Unità in corso di definizione -->
+      <xs:enumeration value="F5"/>  <!-- Lastrici solari -->
+      <xs:enumeration value="F6"/>  <!-- Fabbricati in corso di costruzione su terreni agricoli -->
+      <xs:enumeration value="F7"/>  <!-- Infrastrutture di reti pubbliche di comunicazione -->
+    </xs:restriction>
+  </xs:simpleType>
+
+  <!--
+    Qualità delle particelle fondiarie (land quality).
+    Source: Istruzioni per la formazione del NCT.
+  -->
+  <xs:simpleType name="QualitaTerreniType">
+    <xs:restriction base="xs:string">
+      <xs:enumeration value="Seminativo"/>
+      <xs:enumeration value="SeminatIrriguo"/>    <!-- Seminativo irriguo -->
+      <xs:enumeration value="Prato"/>
+      <xs:enumeration value="PratoIrriguo"/>
+      <xs:enumeration value="PratoPascolo"/>
+      <xs:enumeration value="Pascolo"/>
+      <xs:enumeration value="PascoloArborato"/>
+      <xs:enumeration value="Bosco"/>
+      <xs:enumeration value="BoscoMisto"/>
+      <xs:enumeration value="BoscoCeduo"/>
+      <xs:enumeration value="Castagneto"/>
+      <xs:enumeration value="Orto"/>
+      <xs:enumeration value="OrtoIrriguo"/>
+      <xs:enumeration value="Vigna"/>
+      <xs:enumeration value="VignaUlivoArb"/>     <!-- Vigneto con uliveto e altri arboreti -->
+      <xs:enumeration value="Oliveto"/>
+      <xs:enumeration value="FruttEArb"/>          <!-- Frutteto e arboreto -->
+      <xs:enumeration value="Mandorleto"/>
+      <xs:enumeration value="Noccioleto"/>
+      <xs:enumeration value="Canneto"/>
+      <xs:enumeration value="Pioppeto"/>
+      <xs:enumeration value="Incolto"/>
+      <xs:enumeration value="IncoltoProduttivo"/>
+      <xs:enumeration value="Lago"/>
+      <xs:enumeration value="Stagno"/>
+      <xs:enumeration value="Acqua"/>
+      <xs:enumeration value="AlveoCourse"/>         <!-- Alveo di corso d'acqua -->
+      <xs:enumeration value="AreeEdificabili"/>
+      <xs:enumeration value="SerreEd"/>             <!-- Serre ed edifici produttivi -->
+      <xs:enumeration value="Funghicoltura"/>
+      <xs:enumeration value="TerrenVari"/>          <!-- Terreni vari / altri usi -->
+    </xs:restriction>
+  </xs:simpleType>
+
+
+  <!-- ═══════════════════════════════════════════════════════════════════════
+       3. SHARED COMPLEX TYPES
+  ═══════════════════════════════════════════════════════════════════════════ -->
+
+  <!--
+    TitoloVisura — document metadata header, shared across all visura types.
+    SituazioneAl: the "as-of" date for the entire document (YYYYMMDD).
+    Data + Ora: timestamp of document generation.
+  -->
+  <xs:complexType name="TitoloVisuraType">
+    <xs:attribute name="Titolo"       type="xs:string"/>
+    <xs:attribute name="SituazioneAl" type="DataCatastaleType">
+      <xs:annotation><xs:documentation>
+        Date the cadastral state is captured "as of", in YYYYMMDD format.
+        All ownership and classification data reflect this snapshot date.
+      </xs:documentation></xs:annotation>
+    </xs:attribute>
+    <xs:attribute name="Provenienza"  type="xs:string"/>
+    <xs:attribute name="TipoServizio" type="xs:string"/>
+    <xs:attribute name="TipoVisura"   type="TipoVisuraType"/>
+    <xs:attribute name="Data"         type="DataCatastaleType"/>
+    <xs:attribute name="Ora"          type="xs:string"/>
+  </xs:complexType>
+
+  <!--
+    DirittiReali — a single ownership right (diritto reale) held by one subject.
+    Temporal span: InizioTitolo (start, optional) → FineDiritto (end, optional).
+    If FineDiritto is absent, the right is currently active.
+  -->
+  <xs:complexType name="DirittiRealiType">
+    <xs:attribute name="CodiceDiritto" type="CodiceDirittoType"/>
+    <xs:attribute name="Descrizione"   type="xs:string"/>
+    <xs:attribute name="Quota"         type="QuotaType">
+      <xs:annotation><xs:documentation>
+        Ownership fraction in n/m notation (e.g. "1/2", "1000/1000").
+        All quotas in a single Intestazione should sum to 1000/1000.
+      </xs:documentation></xs:annotation>
+    </xs:attribute>
+    <xs:attribute name="InizioTitolo"  type="DataCatastaleType">
+      <xs:annotation><xs:documentation>
+        Date the right came into effect (YYYYMMDD). Corresponds to the
+        MutazioneSoggettiva that created this ownership record.
+      </xs:documentation></xs:annotation>
+    </xs:attribute>
+    <xs:attribute name="FineDiritto"   type="DataCatastaleType">
+      <xs:annotation><xs:documentation>
+        Date the right expired (YYYYMMDD). Absent if right is still active.
+        A populated FineDiritto marks the owner as historical (not current).
+      </xs:documentation></xs:annotation>
+    </xs:attribute>
+  </xs:complexType>
+
+  <!--
+    NominativoType / CFType — simple text wrappers retained for XML
+    compatibility (element content may carry text or have a _text child).
+  -->
+  <xs:complexType name="NominativoType">
+    <xs:simpleContent><xs:extension base="xs:string"/></xs:simpleContent>
+  </xs:complexType>
+
+  <xs:complexType name="CFType">
+    <xs:simpleContent><xs:extension base="xs:string"/></xs:simpleContent>
+  </xs:complexType>
+
+  <!--
+    IntestatoType — one owner/intestatario with their real-property right.
+    IndiceIntestato: 1-based ordering within the Intestazione.
+  -->
+  <xs:complexType name="IntestatoType">
+    <xs:sequence>
+      <xs:element name="Nominativo"   type="NominativoType"  minOccurs="0" maxOccurs="1"/>
+      <xs:element name="CF"           type="CFType"          minOccurs="0" maxOccurs="1"/>
+      <xs:element name="DirittiReali" type="DirittiRealiType" minOccurs="0" maxOccurs="1"/>
+    </xs:sequence>
+    <xs:attribute name="IndiceIntestato" type="xs:string"/>
+  </xs:complexType>
+
+  <!--
+    IntestazioneType — a complete set of owners for a given property at a
+    given moment in time.  maxOccurs="unbounded" because multiple owners
+    co-own a single property.
+  -->
+  <xs:complexType name="IntestazioneType">
+    <xs:sequence>
+      <xs:element name="Intestato" type="IntestatoType" minOccurs="0" maxOccurs="unbounded"/>
+    </xs:sequence>
+  </xs:complexType>
+
+  <!--
+    IntestazioneAttualeType — alias of IntestazioneType, used explicitly for
+    the current-state snapshot to distinguish from historical intestazioni.
+  -->
+  <xs:complexType name="IntestazioneAttualeType">
+    <xs:sequence>
+      <xs:element name="Intestato" type="IntestatoType" minOccurs="0" maxOccurs="unbounded"/>
+    </xs:sequence>
+  </xs:complexType>
+
+  <!--
+    DatiDerivantiDaMutazSoggType — free-text description of the legal source
+    event that triggered the ownership mutation.
+    Examples: "VOLTURA PER COMPRAVENDITA DEL 15/03/2005 PROT. 12345"
+              "SUCCESSIONE N. 678/2010"
+              "MUTAZIONE OGGETTIVA PER FRAZIONAMENTO"
+    A date in DD/MM/YYYY or YYYY format is often embedded in this string.
+  -->
+  <xs:complexType name="DatiDerivantiDaMutazSoggType">
+    <xs:simpleContent><xs:extension base="xs:string"/></xs:simpleContent>
+  </xs:complexType>
+
+  <!--
+    MutazioneSoggettivaType — one ownership-change event in the property history.
+    IndiceMutazione: 1-based sequential index; higher = more recent event.
+    DataMutazione: explicit event date when available (YYYYMMDD); otherwise
+    the date must be parsed from DatiDerivantiDaMutazSogg text content.
+  -->
+  <xs:complexType name="MutazioneSoggettivaType">
+    <xs:sequence>
+      <!-- Optional property reference (for cross-schema mutations) -->
+      <xs:element name="IdentificativoDefinitivoRiferimento"
+                  type="IdentificativoDefinitivoRiferimentoType"
+                  minOccurs="0" maxOccurs="1"/>
+      <xs:element name="DatiDerivantiDaMutazSogg"
+                  type="DatiDerivantiDaMutazSoggType"
+                  minOccurs="0" maxOccurs="1"/>
+      <!-- Ownership snapshot at the moment of this mutation -->
+      <xs:element name="Intestazione" type="IntestazioneType" minOccurs="0" maxOccurs="1"/>
+    </xs:sequence>
+    <xs:attribute name="IndiceMutazione" type="xs:string">
+      <xs:annotation><xs:documentation>
+        Sequential index, 1 = oldest mutation. The mutation with the highest
+        IndiceMutazione is the most recent and reflects the current state.
+      </xs:documentation></xs:annotation>
+    </xs:attribute>
+    <xs:attribute name="DataMutazione" type="DataCatastaleType">
+      <xs:annotation><xs:documentation>
+        Date of the mutation event (YYYYMMDD). Not always present — when
+        absent, extract from DatiDerivantiDaMutazSogg text content.
+      </xs:documentation></xs:annotation>
+    </xs:attribute>
+  </xs:complexType>
+
+  <!--
+    IdentificativoDefinitivoRiferimentoType — reference to a related immobile
+    used within mutation records to indicate the source or target of a change.
+    StatoImmobile: "A" = active, "S" = suppressed.
+  -->
+  <xs:complexType name="IdentificativoDefinitivoRiferimentoType">
+    <xs:attribute name="Provincia"    type="ProvinciaType"/>
+    <xs:attribute name="CodiceComune" type="xs:string"/>
+    <xs:attribute name="Comune"       type="xs:string"/>
+    <xs:attribute name="Foglio"       type="xs:string"/>
+    <xs:attribute name="ParticellaNum" type="xs:string"/>
+    <xs:attribute name="SezUrbana"    type="xs:string"/>
+    <xs:attribute name="StatoImmobile" type="xs:string"/>
+  </xs:complexType>
+
+  <!--
+    DatiLiquidazioneType — tax liquidation record associated with the document.
+    UnitaImmobiliari: number of cadastral units covered by this liquidation.
+  -->
+  <xs:complexType name="DatiLiquidazioneType">
+    <xs:attribute name="Protocollo"      type="xs:string"/>
+    <xs:attribute name="Anno"            type="AnnoType"/>
+    <xs:attribute name="UnitaImmobiliari" type="xs:integer"/>
+  </xs:complexType>
+
+  <!--
+    RichiedenteType — identity of the requesting party.
+  -->
+  <xs:complexType name="RichiedenteType">
+    <xs:attribute name="Descrizione" type="xs:string"/>
+  </xs:complexType>
+
+  <!--
+    DatiDerivantiDaType — provenance tag attached to classification or
+    surface data, indicating which mutation generated that value.
+  -->
+  <xs:complexType name="DatiDerivantiDaType">
+    <xs:attribute name="Descrizione" type="xs:string">
+      <xs:annotation><xs:documentation>
+        Free-text description of the source mutation.
+        Example: "CLASSAMENTO DA VOLTURA N. 12345/2010"
+      </xs:documentation></xs:annotation>
+    </xs:attribute>
+  </xs:complexType>
+
+  <!--
+    ConsistenzaType — cadastral consistency measure for buildings.
+    Valore: numeric value; Unita: unit of measure.
+    Units depend on category group:
+      A: vani (rooms);  B, C, D, E: mq or mc (area or volume);
+      F (no rendita): — (not applicable)
+  -->
+  <xs:complexType name="ConsistenzaType">
+    <xs:attribute name="Valore" type="xs:decimal"/>
+    <xs:attribute name="Unita"  type="xs:string"/>
+  </xs:complexType>
+
+  <!--
+    IndirizzoImmType — physical address of the unit (free text from SISTER).
+    Structured decomposition (via, civico, CAP) is not available in SISTER XML.
+  -->
+  <xs:complexType name="IndirizzoImmType">
+    <xs:simpleContent><xs:extension base="xs:string"/></xs:simpleContent>
+  </xs:complexType>
+
+  <!--
+    IdentificativoCorrelatoType — a related cadastral parcel (mappale correlato).
+    ProgrId: progressive sub-identifier within the related set.
+  -->
+  <xs:complexType name="IdentificativoCorrelatoType">
+    <xs:attribute name="SezCensuaria" type="xs:string"/>
+    <xs:attribute name="Foglio"       type="xs:string"/>
+    <xs:attribute name="ParticellaNum" type="xs:string"/>
+    <xs:attribute name="ProgrId"      type="xs:string"/>
+  </xs:complexType>
+
+  <xs:complexType name="MappaliCorrelatiType">
+    <xs:sequence>
+      <xs:element name="IdentificativoCorrelato" type="IdentificativoCorrelatoType"
+                  minOccurs="0" maxOccurs="unbounded"/>
+    </xs:sequence>
+  </xs:complexType>
+
+</xs:schema>

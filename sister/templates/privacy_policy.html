@@ -1,5 +1,10 @@
-{% extends "sister/base.html" %}
+{% extends "_base.html" %}
 {% block page_title %}Privacy Policy{% endblock %}
+
+{% block extra_css %}
+{{ super() }}
+<link rel="stylesheet" href="{{ static_url_path|default('/static/aecs4u-theme') }}/css/legal.css">
+{% endblock %}
 
 {% block content %}
 <div class="container py-5">

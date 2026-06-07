@@ -1,0 +1,16 @@
+.git
+.venv
+.pytest_cache
+.ruff_cache
+.mypy_cache
+__pycache__
+*.pyc
+.env
+.env.*
+data
+logs
+outputs
+original_file.pdf
+docs/*.pdf
+tests
+sister.egg-info

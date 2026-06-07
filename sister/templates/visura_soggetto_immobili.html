@@ -1,0 +1,212 @@
+{% extends "_base.html" %}
+{% block page_title %}
+    {{- data.risultato.soggetti[0].denominazione if data.risultato.soggetti else 'Visura Soggetto' }} - Immobili
+{%- endblock %}
+
+{% block extra_css %}
+{{ super() }}
+<style>
+.hero-section { background: linear-gradient(135deg, #6f42c1 0%, #5a32a3 100%); color: white; padding: 2rem 0; margin-bottom: 2rem; }
+.detail-label { font-size: .75rem; text-transform: uppercase; letter-spacing: .05em; color: #6c757d; }
+.cadastral-ref { font-family: monospace; background-color: #e9ecef; padding: .2rem .45rem; border-radius: .25rem; font-size: .9rem; }
+.income-highlight { font-size: 1.1rem; font-weight: 600; color: #fd7e14; }
+.property-type-badge { font-size: .7rem; text-transform: uppercase; }
+@media print { .no-print { display: none !important; } .hero-section { background: #f8f9fa !important; color: #333 !important; } }
+</style>
+{% endblock %}
+
+{% block content %}
+{% if not data.risultato.soggetti %}
+<div class="container-fluid py-4">
+    <div class="alert alert-warning"><i class="fas fa-exclamation-triangle me-2"></i>Nessun soggetto trovato.</div>
+</div>
+{% else %}
+{% set soggetto = data.risultato.soggetti[0] %}
+
+{# ── Hero ───────────────────────────────────────────────────────────────── #}
+<div class="hero-section no-print">
+    <div class="container-fluid">
+        <nav class="mb-3" aria-label="breadcrumb">
+            <ol class="breadcrumb mb-0">
+                <li class="breadcrumb-item">
+                    <a href="/web/results" class="text-white-50">Risultati</a>
+                </li>
+                <li class="breadcrumb-item active text-white">Dettaglio Immobili</li>
+            </ol>
+        </nav>
+        <div class="d-flex flex-wrap justify-content-between align-items-center">
+            <div>
+                <h1 class="display-6 fw-bold mb-2">
+                    <i class="fas fa-building me-3"></i>{{ soggetto.denominazione }}
+                </h1>
+                <p class="lead mb-0 opacity-75">
+                    Dettaglio proprietà — <strong>{{ soggetto.immobili|length }}</strong> immobili
+                </p>
+            </div>
+            <div class="d-flex gap-2 mt-3 mt-md-0">
+                <a href="/web/results" class="btn btn-outline-light">
+                    <i class="fas fa-arrow-left me-2"></i>Risultati
+                </a>
+                <button onclick="window.print()" class="btn btn-outline-light">
+                    <i class="fas fa-print me-2"></i>Stampa
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="container-fluid">
+
+    {# ── Soggetto overview + status ──────────────────────────────────────── #}
+    <div class="row mb-4">
+        <div class="col-lg-8 mb-3 mb-lg-0">
+            <div class="card border-start border-4 h-100" style="border-color: #6f42c1 !important">
+                <div class="card-body">
+                    <h5 class="card-title">
+                        <i class="fas fa-user me-2" style="color:#6f42c1"></i>Soggetto
+                        <span class="badge bg-success ms-2">{{ data.stato }}</span>
+                    </h5>
+                    <div class="row g-3">
+                        <div class="col-md-6">
+                            <span class="detail-label">Codice Fiscale</span>
+                            <div class="font-monospace">{{ soggetto.cf }}</div>
+                            <span class="detail-label mt-2 d-block">Sede Legale</span>
+                            <div>{{ soggetto.sede }}</div>
+                        </div>
+                        <div class="col-md-6">
+                            <span class="detail-label">CF Ricerca</span>
+                            <div class="font-monospace">{{ data.parametri.cf_piva }}</div>
+                            <span class="detail-label mt-2 d-block">Provincia</span>
+                            <div>{{ data.parametri.provincia or '-' }}</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="col-lg-4">
+            <div class="card border-start border-4 h-100" style="border-color: #6f42c1 !important">
+                <div class="card-body">
+                    <h5 class="card-title"><i class="fas fa-chart-pie me-2" style="color:#6f42c1"></i>Distribuzione</h5>
+                    <canvas id="categoryChart" style="max-height:160px"></canvas>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    {# ── Immobili table ──────────────────────────────────────────────────── #}
+    <h2 class="h5 border-bottom pb-2 mb-3">
+        Elenco Immobili
+        <span class="badge bg-secondary ms-2">{{ soggetto.immobili|length }}</span>
+    </h2>
+    <div class="card border-0 shadow-sm">
+        <div class="card-body p-0">
+            <div class="table-responsive">
+                <table class="table table-hover table-sm mb-0" id="immobili-table">
+                    <thead class="table-light">
+                        <tr>
+                            <th>Ubicazione</th>
+                            <th>Tipo</th>
+                            <th>Dati Catastali</th>
+                            <th>Classamento</th>
+                            <th>Consistenza / Rendita</th>
+                            <th>Titolarità</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for imm in soggetto.immobili %}
+                        <tr>
+                            <td>
+                                <strong>{{ imm.comune }} ({{ imm.provincia }})</strong><br>
+                                <small class="text-muted">{{ imm.ubicazione }}</small><br>
+                                <code class="small text-muted">{{ imm.codice_catastale }}</code>
+                            </td>
+                            <td>
+                                {% if imm.catasto == 'F' %}
+                                <span class="badge bg-success property-type-badge">Fabbricati</span>
+                                {% elif imm.catasto == 'T' %}
+                                <span class="badge bg-warning text-dark property-type-badge">Terreni</span>
+                                {% else %}
+                                <span class="badge bg-secondary property-type-badge">{{ imm.catasto or '-' }}</span>
+                                {% endif %}
+                            </td>
+                            <td>
+                                FG <span class="cadastral-ref">{{ imm.foglio }}</span>
+                                PT <span class="cadastral-ref">{{ imm.particella }}</span>
+                                {% if imm.subalterno %}
+                                <br><small>Sub <span class="cadastral-ref">{{ imm.subalterno }}</span></small>
+                                {% endif %}
+                            </td>
+                            <td>
+                                {% if imm.classamento %}<span class="badge bg-info text-dark">{{ imm.classamento }}</span>{% endif %}
+                                {% if imm.classe %}<small class="text-muted d-block">Cl. {{ imm.classe }}</small>{% endif %}
+                            </td>
+                            <td>
+                                <div>{{ imm.consistenza }}</div>
+                                <span class="income-highlight">{{ imm.rendita }}</span>
+                            </td>
+                            <td><small class="text-muted">{{ imm.titolarita }}</small></td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <div class="d-flex gap-2 justify-content-center mt-4 mb-4 no-print">
+        <a href="/web/results" class="btn btn-outline-secondary">
+            <i class="fas fa-arrow-left me-2"></i>Risultati
+        </a>
+    </div>
+
+</div>
+{% endif %}
+{% endblock %}
+
+{% block extra_js %}
+{{ super() }}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script>
+(function () {
+    {% if data.risultato.soggetti %}
+    var immobili = {{ (data.risultato.soggetti[0].immobili) | tojson }};
+    var counts = {};
+    immobili.forEach(function (imm) { var cat = imm.catasto || 'N/A'; counts[cat] = (counts[cat] || 0) + 1; });
+    function cssVar(n) { return getComputedStyle(document.documentElement).getPropertyValue(n).trim(); }
+    new Chart(document.getElementById('categoryChart'), {
+        type: 'doughnut',
+        data: {
+            labels: Object.keys(counts),
+            datasets: [{ data: Object.values(counts), backgroundColor: ['--bs-success','--bs-warning','--bs-info','--bs-danger'].map(cssVar), borderWidth: 1 }]
+        },
+        options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'bottom' } } }
+    });
+    {% endif %}
+
+    // Table filter + CSV
+    function addFilter(tableId) {
+        var tbl = document.getElementById(tableId);
+        if (!tbl) return;
+        var bar = document.createElement('div');
+        bar.className = 'd-flex gap-2 mb-2 no-print';
+        var inp = document.createElement('input');
+        inp.type = 'search'; inp.className = 'form-control form-control-sm'; inp.placeholder = 'Filtra…'; inp.style.maxWidth = '300px';
+        inp.addEventListener('input', function () {
+            var q = this.value.toLowerCase();
+            tbl.querySelectorAll('tbody tr').forEach(function (r) { r.style.display = !q || r.textContent.toLowerCase().includes(q) ? '' : 'none'; });
+        });
+        var btn = document.createElement('button');
+        btn.type = 'button'; btn.className = 'btn btn-sm btn-outline-secondary no-print';
+        btn.innerHTML = '<i class="fas fa-download me-1"></i>CSV';
+        btn.addEventListener('click', function () {
+            var rows = Array.from(tbl.querySelectorAll('tr')).filter(function (r) { return r.style.display !== 'none'; });
+            var csv = rows.map(function (r) { return Array.from(r.querySelectorAll('th,td')).map(function (c) { return '"' + c.textContent.trim().replace(/"/g, '""') + '"'; }).join(','); }).join('\n');
+            var a = document.createElement('a'); a.href = 'data:text/csv;charset=utf-8,' + encodeURIComponent(csv); a.download = tableId + '.csv'; a.click();
+        });
+        bar.appendChild(inp); bar.appendChild(btn);
+        tbl.closest('.table-responsive').before(bar);
+    }
+    addFilter('immobili-table');
+})();
+</script>
+{% endblock %}

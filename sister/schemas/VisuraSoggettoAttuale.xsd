@@ -1,0 +1,178 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <!--
+    VisuraSoggettoAttuale.xsd  v2.0
+    Schema for the "Visura Soggetto Attuale" document returned by the
+    Italian SISTER cadastral portal.  Describes all cadastral units
+    owned by a given natural person (persona fisica) grouped by commune.
+
+    Changes from v1:
+    - xs:include cadastral-base.xsd
+    - IntestazioneGruppoType.MutazioneSoggettiva: fixed maxOccurs 1 → unbounded
+      (CRITICAL BUG FIX: a group can have multiple ownership mutations)
+    - VisuraSoggettoAttualeType.GruppoUnitaImmobiliari: maxOccurs 1 → unbounded
+      (a person can own units across multiple communes)
+    - SoggettoPFType.Sesso: xs:string → SessoType enum
+    - SoggettoPFType.DataNascita: xs:string → DataCatastaleType
+    - DatiClassamentoF.RenditaEuro: xs:string → MonetaEuroType
+    - DatiLiquidazione.UnitaImmobiliari: xs:string → xs:integer
+    - MutazioneSoggettivaType.DataMutazione: new optional attribute (via base)
+  -->
+
+  <xs:include schemaLocation="cadastral-base.xsd"/>
+
+  <xs:element name="VisuraSoggettoAttuale" type="VisuraSoggettoAttualeType"/>
+
+  <!-- ── Natural person (persona fisica) identity ─────────────────────── -->
+  <xs:complexType name="SoggettoPFType">
+    <xs:attribute name="CodiceFiscale"  type="CodiceFiscaleType"/>
+    <xs:attribute name="Cognome"        type="xs:string"/>
+    <xs:attribute name="Nome"           type="xs:string"/>
+    <xs:attribute name="Sesso"          type="SessoType"/>
+    <xs:attribute name="DataNascita"    type="DataCatastaleType"/>
+    <xs:attribute name="CodiceComune"   type="xs:string"/>
+    <xs:attribute name="Provincia"      type="ProvinciaType"/>
+    <xs:attribute name="ComuneNascita"  type="xs:string"/>
+  </xs:complexType>
+
+  <xs:complexType name="SoggettoIndividuatoType">
+    <xs:sequence>
+      <xs:element name="SoggettoPF" type="SoggettoPFType" minOccurs="0" maxOccurs="1"/>
+    </xs:sequence>
+  </xs:complexType>
+
+  <!-- ── Request parameters ───────────────────────────────────────────────── -->
+  <xs:complexType name="DatiRichiestaType">
+    <xs:sequence>
+      <xs:element name="SoggettoIndividuato" type="SoggettoIndividuatoType"
+                  minOccurs="0" maxOccurs="1"/>
+    </xs:sequence>
+    <xs:attribute name="TipoCatasto"  type="xs:string">
+      <xs:annotation><xs:documentation>
+        F=Fabbricati, T=Terreni, E=Entrambi (both).
+        Note: this attribute uses the broader string type here because the
+        portal also accepts "E" for combined queries, beyond the TipoCatastoType
+        F/T enumeration.
+      </xs:documentation></xs:annotation>
+    </xs:attribute>
+    <xs:attribute name="Provincia"    type="ProvinciaType"/>
+    <xs:attribute name="CodiceComune" type="xs:string"/>
+    <xs:attribute name="Comune"       type="xs:string"/>
+    <xs:attribute name="Protocollo"   type="xs:string"/>
+    <xs:attribute name="Anno"         type="AnnoType"/>
+  </xs:complexType>
+
+  <!-- ── Property identifier (Fabbricati version, with ProgrId and SezUrbana) -->
+  <!--
+    ProgrId: progressive identifier distinguishing multiple sub-units sharing
+    the same Foglio/Particella/Subalterno (rare; used in split-lot scenarios).
+    SezUrbana: urban section code.
+    DatiDerivantiDa: provenance of the classification data.
+  -->
+  <xs:complexType name="IdentificativoDefinitivoType">
+    <xs:sequence>
+      <xs:element name="DatiDerivantiDa" type="DatiDerivantiDaType" minOccurs="0" maxOccurs="1"/>
+    </xs:sequence>
+    <xs:attribute name="Provincia"     type="ProvinciaType"/>
+    <xs:attribute name="CodiceComune"  type="xs:string"/>
+    <xs:attribute name="Comune"        type="xs:string"/>
+    <xs:attribute name="Foglio"        type="xs:string"/>
+    <xs:attribute name="ParticellaNum" type="xs:string"/>
+    <xs:attribute name="Subalterno"    type="xs:string"/>
+    <xs:attribute name="SezUrbana"     type="xs:string"/>
+    <xs:attribute name="ProgrId"       type="xs:string"/>
+  </xs:complexType>
+
+  <xs:complexType name="DatiIdentificativiType">
+    <xs:sequence>
+      <xs:element name="IdentificativoDefinitivo" type="IdentificativoDefinitivoType"
+                  minOccurs="0" maxOccurs="1"/>
+    </xs:sequence>
+  </xs:complexType>
+
+  <xs:complexType name="DatiIndirizzoType">
+    <xs:sequence>
+      <xs:element name="DatiDerivantiDa" type="DatiDerivantiDaType" minOccurs="0" maxOccurs="1"/>
+      <xs:element name="IndirizzoImm"    type="IndirizzoImmType"    minOccurs="0" maxOccurs="1"/>
+    </xs:sequence>
+  </xs:complexType>
+
+  <!-- ── Building classification (Fabbricati) ───────────────────────────── -->
+  <xs:complexType name="DatiClassamentoFType">
+    <xs:sequence>
+      <xs:element name="DatiDerivantiDa" type="DatiDerivantiDaType" minOccurs="0" maxOccurs="1"/>
+      <xs:element name="Consistenza"     type="ConsistenzaType"     minOccurs="0" maxOccurs="1"/>
+    </xs:sequence>
+    <xs:attribute name="ZonaCensuaria" type="xs:string"/>
+    <xs:attribute name="Categoria"     type="CategoriaFabbricatiType"/>
+    <xs:attribute name="Classe"        type="xs:string"/>
+    <xs:attribute name="RenditaEuro"   type="MonetaEuroType"/>
+  </xs:complexType>
+
+  <xs:complexType name="PlanimetriaType">
+    <xs:attribute name="Descrizione" type="xs:string"/>
+  </xs:complexType>
+
+  <xs:complexType name="SuperficieFType">
+    <xs:sequence>
+      <xs:element name="DatiDerivantiDa" type="DatiDerivantiDaType" minOccurs="0" maxOccurs="1"/>
+      <xs:element name="Planimetria"     type="PlanimetriaType"     minOccurs="0" maxOccurs="1"/>
+    </xs:sequence>
+    <xs:attribute name="Totale" type="AreaMQType"/>
+  </xs:complexType>
+
+  <!-- ── One cadastral unit in the group ────────────────────────────────── -->
+  <xs:complexType name="ImmobileFabbricatiSType">
+    <xs:sequence>
+      <xs:element name="DatiIdentificativi" type="DatiIdentificativiType" minOccurs="0" maxOccurs="1"/>
+      <xs:element name="DatiIndirizzo"      type="DatiIndirizzoType"      minOccurs="0" maxOccurs="1"/>
+      <xs:element name="MappaliCorrelati"   type="MappaliCorrelatiType"   minOccurs="0" maxOccurs="1"/>
+      <xs:element name="DatiClassamentoF"   type="DatiClassamentoFType"   minOccurs="0" maxOccurs="1"/>
+      <xs:element name="SuperficieF"        type="SuperficieFType"        minOccurs="0" maxOccurs="1"/>
+    </xs:sequence>
+    <xs:attribute name="IndiceImmobile" type="xs:string"/>
+  </xs:complexType>
+
+  <!-- ── Ownership mutations for the group ──────────────────────────────── -->
+  <!--
+    IntestazioneGruppoType groups ALL MutazioneSoggettiva events that apply
+    to the set of units in a GruppoUnitaImmobiliari.
+    maxOccurs was incorrectly set to 1 in v1 — corrected to unbounded.
+  -->
+  <xs:complexType name="IntestazioneGruppoType">
+    <xs:sequence>
+      <xs:element name="MutazioneSoggettiva" type="MutazioneSoggettivaType"
+                  minOccurs="0" maxOccurs="unbounded"/>
+    </xs:sequence>
+  </xs:complexType>
+
+  <!-- ── One commune-level group of units ────────────────────────────────── -->
+  <xs:complexType name="GruppoUnitaImmobiliariType">
+    <xs:sequence>
+      <xs:element name="ImmobileFabbricatiS" type="ImmobileFabbricatiSType"
+                  minOccurs="0" maxOccurs="unbounded"/>
+      <xs:element name="IntestazioneGruppo"  type="IntestazioneGruppoType"
+                  minOccurs="0" maxOccurs="1"/>
+    </xs:sequence>
+    <xs:attribute name="IndiceGruppo"  type="xs:string"/>
+    <xs:attribute name="TipoCatasto"   type="xs:string"/>
+    <xs:attribute name="CodiceComune"  type="xs:string"/>
+    <xs:attribute name="Descrizione"   type="xs:string"/>
+  </xs:complexType>
+
+  <!-- ── Root document type ──────────────────────────────────────────────── -->
+  <!--
+    GruppoUnitaImmobiliari: maxOccurs was 1 in v1 — corrected to unbounded.
+    A soggetto visura may span multiple communes/cadastral groups.
+  -->
+  <xs:complexType name="VisuraSoggettoAttualeType">
+    <xs:sequence>
+      <xs:element name="TitoloVisura"           type="TitoloVisuraType"            minOccurs="0" maxOccurs="1"/>
+      <xs:element name="DatiRichiesta"          type="DatiRichiestaType"           minOccurs="0" maxOccurs="1"/>
+      <xs:element name="GruppoUnitaImmobiliari" type="GruppoUnitaImmobiliariType"  minOccurs="0" maxOccurs="unbounded"/>
+      <xs:element name="DatiLiquidazione"       type="DatiLiquidazioneType"        minOccurs="0" maxOccurs="1"/>
+      <xs:element name="Richiedente"            type="RichiedenteType"             minOccurs="0" maxOccurs="1"/>
+    </xs:sequence>
+  </xs:complexType>
+
+</xs:schema>

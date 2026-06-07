@@ -3,10 +3,13 @@ import logging
 import os
 import secrets
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Optional
 
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, Header, HTTPException
+from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 from rich.logging import RichHandler
 
 # Re-export for tests using main_module.*
@@ -30,12 +33,9 @@ from .models import (  # noqa: F401
     VisuraRequest,
     VisuraResponse,
     VisuraSoggettoInput,
-    WorkflowInput,
 )
 from .routes import (
     download_documents,
-    execute_workflow,
-    execute_workflow_stream,
     extract_sezioni,
     graceful_shutdown_endpoint,
     health_check,
@@ -135,13 +135,16 @@ async def lifespan(app: FastAPI):
     global visura_service
     await init_db()
     PageLogger.reset_session()
-    try:
-        visura_service = VisuraService()
-        await visura_service.initialize(background_auth=True)
-        logger.info("Servizio visure avviato (autenticazione in background)")
-    except Exception as e:
-        logger.warning("Browser service unavailable — web UI will run in read-only mode: %s", e)
-        visura_service = None
+    if os.getenv("SISTER_NO_QUERY"):
+        logger.info("No-query mode (SISTER_NO_QUERY set) — browser service skipped")
+    else:
+        try:
+            visura_service = VisuraService()
+            await visura_service.initialize(background_auth=True)
+            logger.info("Servizio visure avviato (autenticazione in background)")
+        except Exception as e:
+            logger.warning("Browser service unavailable — web UI will run in read-only mode: %s", e)
+            visura_service = None
 
     try:
         yield
@@ -168,12 +171,8 @@ app = FastAPI(title="SISTER - Cadastral Data Service", lifespan=lifespan)
 # ---------------------------------------------------------------------------
 # Theme, static files, and web UI
 # ---------------------------------------------------------------------------
-
-from pathlib import Path
-from fastapi.staticfiles import StaticFiles
-
 try:
-    from aecs4u_theme import ThemeConfig, setup_theme
+    from aecs4u_theme import ThemeConfig, setup_theme, setup_theme_from_env
 
     _sister_dir = Path(__file__).parent
     _templates_dir = _sister_dir / "templates"
@@ -189,37 +188,44 @@ try:
             CLERK_AFTER_SIGN_IN_URL="/web/",
             CLERK_AFTER_SIGN_UP_URL="/web/",
         )
+        require_auth = os.getenv("REQUIRE_AUTHENTICATION", "true").lower() not in ("false", "0", "no")
         auth_setup = setup_auth(
             app,
             config=auth_config,
             include_routes=True,
             mount_static=True,
-            setup_exception_handlers=True,
+            setup_exception_handlers=False,
         )
+        from urllib.parse import quote as _urlquote
+
+        from aecs4u_auth.dependencies import RedirectToLogin
+        from aecs4u_auth.routers.auth import router as auth_router
+        from fastapi.responses import RedirectResponse
+
+        app.include_router(auth_router)
+
+        if require_auth:
+
+            @app.exception_handler(RedirectToLogin)
+            async def _redirect_to_login(request: Request, exc: RedirectToLogin):
+                url = "/auth/login"
+                if exc.return_url:
+                    url = f"{url}?next_url={_urlquote(exc.return_url, safe='')}"
+                return RedirectResponse(url=url, status_code=302)
+
         app.state.auth_setup = auth_setup
         app.state.auth_config = auth_config
-        logger.info("Autenticazione configurata (mode=%s)", auth_config.AUTH_MODE)
+        auth_mode = getattr(auth_config, "AUTH_MODE", getattr(auth_config, "auth_mode", "unknown"))
+        logger.info("Autenticazione configurata (mode=%s)", auth_mode)
     except ImportError:
         logger.warning("aecs4u-auth non disponibile: autenticazione disabilitata")
     except Exception as e:
         logger.warning("Errore configurazione auth: %s", e)
 
-    # --- Theme setup ---
-    theme_config = ThemeConfig(
-        site_id="sister",
-        site_name="SISTER",
-        site_tagline="Cadastral Data Extraction Service",
-        primary_color="#1e40af",
-        sidebar_enabled=True,
-        footer_enabled=True,
-        footer_copyright="AECS4U Srl",
-    )
-
-    theme_setup = setup_theme(
+    # --- Theme setup --- reads AECS4U_SITE_NAME, THEME_PRIMARY_COLOR etc. from env
+    theme_setup = setup_theme_from_env(
         app,
-        config=theme_config,
         templates_dir=str(_templates_dir),
-        mount_static=True,
     )
     app.state.theme_setup = theme_setup
 
@@ -290,24 +296,6 @@ async def _richiedi_elenco_immobili(
     _: None = Depends(require_api_key),
 ):
     return await richiedi_elenco_immobili(request, service, force=force)
-
-
-@app.post("/visura/workflow")
-async def _execute_workflow(
-    request: WorkflowInput,
-    service: VisuraService = Depends(get_visura_service),
-    _: None = Depends(require_api_key),
-):
-    return await execute_workflow(request, service)
-
-
-@app.post("/visura/workflow/stream")
-async def _execute_workflow_stream(
-    request: WorkflowInput,
-    service: VisuraService = Depends(get_visura_service),
-    _: None = Depends(require_api_key),
-):
-    return await execute_workflow_stream(request, service)
 
 
 @app.post("/visura/download-documents")

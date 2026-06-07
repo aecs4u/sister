@@ -40,6 +40,9 @@ dependencies = [
     "httpx>=0.27.0",
     "jinja2>=3.1.0",
     "aecs4u-theme",
+    "lxml>=6.1.1",
+    "sqlalchemy>=2.0.50",
+    "starlette>=1.2.1",
 ]
 
 [project.optional-dependencies]
@@ -61,8 +64,8 @@ Changelog = "https://github.com/aecs4u/sister/blob/main/CHANGELOG.md"
 sister = "sister.cli:run"
 
 [tool.uv.sources]
-aecs4u-auth = { git = "https://github.com/aecs4u/aecs4u-auth.git" }
-aecs4u-theme = { git = "https://github.com/aecs4u/aecs4u-theme.git" }
+aecs4u-auth = { git = "https://github.com/aecs4u/aecs4u-auth.git", branch = "main" }
+aecs4u-theme = { git = "https://github.com/aecs4u/aecs4u-theme.git", branch = "main" }
 
 [tool.setuptools]
 packages = ["sister"]
@@ -84,3 +87,25 @@ testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_functions = ["test_*"]
 asyncio_mode = "auto"
+
+[tool.deptry]
+exclude = ["alembic", "examples", "scripts"]
+
+[tool.deptry.package_module_name_map]
+beautifulsoup4 = ["bs4"]
+python-dotenv  = ["dotenv"]
+
+[tool.deptry.per_rule_ignores]
+DEP002 = [
+    "uvicorn",         # runtime server — invoked via CLI
+    "aiosqlite",       # async SQLite driver, implicit via sqlmodel/aecs4u-auth
+    "jinja2",          # templating, implicit via fastapi
+    "pytest-cov",      # dev tool in optional-dependencies
+    "pytest-asyncio",  # dev tool
+    "black",           # dev tool
+    "ruff",            # dev tool
+    "aecs4u-theme",    # static files via importlib / mount
+]
+DEP001 = [
+    "playwright",      # optional, comes via aecs4u-auth[browser] — not a direct dep
+]
