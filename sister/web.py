@@ -152,19 +152,18 @@ def _collapse_to_logical_docs(docs: list[dict]) -> list[dict]:
 
 
 def _build_document_tree(docs: list[dict]) -> list[dict]:
-    """Build the hierarchical documents taxonomy from *logical* documents.
+    """Build the hierarchical document index using the unified query-type taxonomy.
 
-        Elenchi Immobili
-        Planimetrie
-        Elaborati Planimetrici → EPA
-        Visure → Tipo (Storica/Analitica/Sintetica)
-               → Fabbricati e Terreni (Fabbricati/Terreni)   [faceted: same docs re-sliced]
-        Soggetto → Persona Fisica / Persona Giuridica
+    Single-step query groups (top-level), with subtypes as children:
+      Visura per Immobile → Fabbricati / Terreni / (non classificate)
+      Visura per Soggetto → Persona Fisica / Persona Giuridica
+      Intestatari
+      Planimetrie
+      Elaborati Planimetrici → EPA
+      Richieste
 
     Input should already be collapsed via _collapse_to_logical_docs().
-    Returns a list of node dicts: {key, label, icon, color, count, docs, children}.
-    Internal nodes carry children (and possibly their own direct docs); leaf nodes
-    carry docs. ``count`` on a faceted/internal node is the distinct document count.
+    Returns node dicts: {key, label, icon, color, count, docs, children}.
     """
     from collections import defaultdict
 
@@ -190,51 +189,23 @@ def _build_document_tree(docs: list[dict]) -> list[dict]:
 
     tree: list[dict] = []
 
-    if by_type.get("elenco_immobili"):
-        tree.append(leaf("elenco_immobili", "Elenchi Immobili", "fa-list", "primary", by_type["elenco_immobili"]))
-
-    if by_type.get("planimetria"):
-        tree.append(leaf("planimetria", "Planimetrie", "fa-ruler-combined", "secondary", by_type["planimetria"]))
-
-    elab = by_type.get("elaborato_planimetrico", [])
-    epa = by_type.get("epa", [])
-    if elab or epa:
-        children = [leaf("epa", "EPA", "fa-file-lines", "secondary", epa)] if epa else []
-        tree.append(node("elaborato_planimetrico", "Elaborati Planimetrici", "fa-drafting-compass",
-                         "secondary", children, count=len(elab) + len(epa), docs=elab))
-
+    # ── Visura per Immobile ────────────────────────────────────────────────
     visure = [d for d in docs if (d.get("document_type") or "") in _VISURA_TYPES]
     if visure:
-        tipo_meta = {
-            "storica":   ("Storica",   "fa-clock-rotate-left"),
-            "analitica": ("Analitica", "fa-magnifying-glass-chart"),
-            "sintetica": ("Sintetica", "fa-compress"),
-        }
-        tipo_children = []
-        for k, (lbl, ic) in tipo_meta.items():
-            items = [d for d in visure if _doc_tipo_visura(d) == k]
-            if items:
-                tipo_children.append(leaf(f"visura_tipo_{k}", lbl, ic, "success", items))
+        fab  = [d for d in visure if _doc_catasto_ft(d) == "fabbricati"]
+        ter  = [d for d in visure if _doc_catasto_ft(d) == "terreni"]
+        rest = [d for d in visure if _doc_catasto_ft(d) is None]
+        children: list[dict] = []
+        if fab:
+            children.append(leaf("visura_fabbricati", "Fabbricati", "fa-building", "success", fab))
+        if ter:
+            children.append(leaf("visura_terreni", "Terreni", "fa-seedling", "warning", ter))
+        if rest:
+            children.append(leaf("visura_altro", "Non classificate", "fa-file-contract", "secondary", rest))
+        tree.append(node("visura_immobile", "Visura per Immobile", "fa-house", "success",
+                         children, count=len(visure)))
 
-        ft_meta = {
-            "fabbricati": ("Fabbricati", "fa-building", "success"),
-            "terreni":    ("Terreni",    "fa-seedling", "warning"),
-        }
-        ft_children = []
-        for k, (lbl, ic, col) in ft_meta.items():
-            items = [d for d in visure if _doc_catasto_ft(d) == k]
-            if items:
-                ft_children.append(leaf(f"visura_ft_{k}", lbl, ic, col, items))
-
-        facets = []
-        if tipo_children:
-            facets.append(node("visura_tipo", "Tipo", "fa-layer-group", "success",
-                              tipo_children, count=sum(c["count"] for c in tipo_children)))
-        if ft_children:
-            facets.append(node("visura_ft", "Fabbricati e Terreni", "fa-table-cells-large", "success",
-                              ft_children, count=sum(c["count"] for c in ft_children)))
-        tree.append(node("visure", "Visure", "fa-file-contract", "success", facets, count=len(visure)))
-
+    # ── Visura per Soggetto ────────────────────────────────────────────────
     soggetti = by_type.get("visura_soggetto", [])
     if soggetti:
         pf = [d for d in soggetti if _soggetto_kind(d) == "pf"]
@@ -244,7 +215,28 @@ def _build_document_tree(docs: list[dict]) -> list[dict]:
             children.append(leaf("soggetto_pf", "Persona Fisica", "fa-user", "info", pf))
         if pg:
             children.append(leaf("soggetto_pg", "Persona Giuridica", "fa-building-user", "info", pg))
-        tree.append(node("soggetto", "Soggetto", "fa-user-group", "info", children, count=len(soggetti)))
+        tree.append(node("visura_soggetto", "Visura per Soggetto", "fa-user-group", "info",
+                         children, count=len(soggetti)))
+
+    # ── Intestatari ────────────────────────────────────────────────────────
+    if by_type.get("elenco_immobili"):
+        tree.append(leaf("intestati", "Intestatari", "fa-users", "primary", by_type["elenco_immobili"]))
+
+    # ── Planimetrie ────────────────────────────────────────────────────────
+    if by_type.get("planimetria"):
+        tree.append(leaf("planimetria", "Planimetrie", "fa-ruler-combined", "secondary", by_type["planimetria"]))
+
+    # ── Elaborati Planimetrici ─────────────────────────────────────────────
+    elab = by_type.get("elaborato_planimetrico", [])
+    epa  = by_type.get("epa", [])
+    if elab or epa:
+        children = [leaf("epa", "EPA", "fa-file-lines", "secondary", epa)] if epa else []
+        tree.append(node("epa", "Elaborati Planimetrici", "fa-drafting-compass",
+                         "secondary", children, count=len(elab) + len(epa), docs=elab))
+
+    # ── Richieste ──────────────────────────────────────────────────────────
+    if by_type.get("richieste"):
+        tree.append(leaf("richieste", "Richieste", "fa-clock-rotate-left", "secondary", by_type["richieste"]))
 
     return tree
 
@@ -301,6 +293,11 @@ def _dossier_subtype(name: str, kind: str, data: Any) -> str:
         if stem.startswith("richieste_"):
             return "richieste"
         if stem.startswith("req_") or stem.startswith("wf_search_") or stem.startswith("wf_"):
+            tc = (data.get("tipo_catasto") or "") if isinstance(data, dict) else ""
+            if tc == "F":
+                return "visura_fabbricati"
+            if tc == "T":
+                return "visura_terreni"
             return "visura"
         # fallback: infer from data payload keys
         d = (data.get("data") or {}) if isinstance(data, dict) else {}
@@ -323,7 +320,7 @@ def _dossier_subtype(name: str, kind: str, data: Any) -> str:
         return "altro"
 
     if kind == "multi_response":
-        return "visura"
+        return "multi_response"
 
     return "altro"
 
@@ -442,27 +439,69 @@ def _dossier_meta(name: str, data: Any, size_bytes: int, mtime: float) -> dict:
     }
 
 
-_DOSSIER_KIND_META = {
-    "workflow":       ("Multi-step (workflow)",    "fa-diagram-project",    "primary"),
-    "response":       ("Risposta (single-step)",   "fa-file-circle-check",  "success"),
-    "multi_response": ("Risposta F+T (coppia)",    "fa-copy",               "success"),
-    "batch":          ("Batch",                    "fa-layer-group",        "warning"),
-    "altro":          ("Altro",                    "fa-file",               "secondary"),
+# ---------------------------------------------------------------------------
+# Unified query-type taxonomy — shared by documents and dossiers pages.
+# Top-level groups (key → label, icon, color).
+# ---------------------------------------------------------------------------
+_QUERY_GROUP_META: dict[str, tuple[str, str, str]] = {
+    "visura_immobile": ("Visura per Immobile",     "fa-house",              "success"),
+    "visura_soggetto": ("Visura per Soggetto",      "fa-user-group",         "info"),
+    "intestati":       ("Intestatari",              "fa-users",              "primary"),
+    "planimetria":     ("Planimetrie",              "fa-ruler-combined",     "secondary"),
+    "epa":             ("Elaborati Planimetrici",   "fa-drafting-compass",   "secondary"),
+    "richieste":       ("Richieste",                "fa-clock-rotate-left",  "secondary"),
+    "workflow":        ("Workflow Multi-step",       "fa-diagram-project",    "primary"),
+    "batch":           ("Batch",                    "fa-layer-group",        "warning"),
+    "altro":           ("Altro",                    "fa-file",               "secondary"),
 }
 
-_DOSSIER_SUBTYPE_META: dict[str, tuple[str, str]] = {
-    # response subtypes  (label, icon)
-    "visura":            ("Visura Catastale",          "fa-file-contract"),
-    "soggetto_pf":       ("Soggetto — Persona Fisica", "fa-user"),
-    "persona_giuridica": ("Persona Giuridica",         "fa-building"),
-    "intestati":         ("Intestati",                 "fa-users"),
-    "elenco_immobili":   ("Elenco Immobili",           "fa-list"),
-    "richieste":         ("Consultazione Richieste",   "fa-clock-rotate-left"),
-    # batch subtypes
-    "soggetto":          ("Soggetto",                  "fa-user"),
-    # fallback
-    "altro":             ("Altro",                     "fa-file"),
+# Subgroups within each top-level group (key → label, icon, color).
+_QUERY_SUBGROUP_META: dict[str, tuple[str, str, str]] = {
+    # Under visura_immobile
+    "visura_fabbricati": ("Fabbricati",           "fa-building",             "success"),
+    "visura_terreni":    ("Terreni",              "fa-seedling",             "warning"),
+    "visura":            ("Visura Catastale",      "fa-file-contract",        "success"),
+    "multi_response":    ("Coppia F+T",            "fa-copy",                 "success"),
+    # Under intestati
+    "intestati":         ("Intestatari",           "fa-users",                "primary"),
+    "elenco_immobili":   ("Elenco Immobili",       "fa-list",                 "primary"),
+    # Under visura_soggetto
+    "soggetto_pf":       ("Persona Fisica",        "fa-user",                 "info"),
+    "persona_giuridica": ("Persona Giuridica",     "fa-building-user",        "info"),
+    # Under workflow (keyed by preset name)
+    "due-diligence":     ("Due Diligence",         "fa-file-contract",        "primary"),
+    "patrimonio":        ("Asset Investigation",   "fa-magnifying-glass",     "info"),
+    "fondiario":         ("Land Survey",           "fa-mountain",             "success"),
+    "aziendale":         ("Corporate Audit",       "fa-briefcase",            "warning"),
+    # Under batch
+    "soggetto":          ("Soggetto",              "fa-user",                 "warning"),
+    # Generic fallback
+    "altro":             ("Altro",                 "fa-file",                 "secondary"),
 }
+
+
+def _dossier_query_group(kind: str, subtype: str) -> str:
+    """Map a dossier's (kind, subtype) to the unified query-type group key."""
+    if kind == "workflow":
+        return "workflow"
+    if kind == "batch":
+        return "batch"
+    if kind == "multi_response":
+        return "visura_immobile"
+    if kind == "response":
+        if subtype in ("visura", "visura_fabbricati", "visura_terreni"):
+            return "visura_immobile"
+        if subtype in ("intestati", "elenco_immobili"):
+            return "intestati"
+        if subtype in ("soggetto_pf", "persona_giuridica"):
+            return "visura_soggetto"
+        if subtype == "richieste":
+            return "richieste"
+    return "altro"
+
+
+# Kept for backwards compat with any internal callers (batch-viewer etc.).
+_DOSSIER_KIND_META = _QUERY_GROUP_META
 
 
 def _is_batch_dossier(data: Any) -> bool:
@@ -1698,71 +1737,80 @@ async def web_dossiers(request: Request, path: str = "", download: str = "",
                 continue
             dossiers.append(_dossier_meta(child.name, data, stat.st_size, stat.st_mtime))
 
-    # Group by kind, then by subtype within each kind
+    # Group by query type (unified taxonomy), then by subtype within each group
     from collections import defaultdict
-    buckets: dict[str, list[dict]] = defaultdict(list)
-    for d in dossiers:
-        buckets[d["kind"]].append(d)
 
-    groups = []
-    for key in ("workflow", "multi_response", "response", "batch", "altro"):
-        entries = buckets.get(key)
-        if not entries:
-            continue
-        label, icon, color = _DOSSIER_KIND_META[key]
-
-        # Collapse wf_pair entries (same group_key) into a single paired card
-        collapsed: list[dict] = []
+    def _collapse_pairs(entries: list[dict]) -> list[dict]:
+        """Collapse wf_pair entries sharing the same group_key into one paired card."""
         pair_groups: dict[str, list[dict]] = defaultdict(list)
         for d in entries:
-            gk = d.get("group_key", f"solo:{d['name']}")
-            pair_groups[gk].append(d)
+            pair_groups[d.get("group_key", f"solo:{d['name']}")].append(d)
+        out: list[dict] = []
         for gk, peers in pair_groups.items():
             if gk.startswith("wf_pair:") and len(peers) > 1:
-                # Merge into one representative card with a `peers` list
-                base = gk[len("wf_pair:"):]
+                base_name = gk[len("wf_pair:"):]
                 primary = sorted(peers, key=lambda p: p["mtime"])[0]
                 total_results = sum(p.get("n_results", 0) for p in peers)
-                ok_all = all(p.get("ok") is not False for p in peers)
                 merged = dict(primary)
                 merged.update({
-                    "title": base.replace("_", " "),
+                    "title": base_name.replace("_", " "),
                     "paired": True,
-                    "peers": sorted(peers, key=lambda p: p["mtime"]),
-                    "ok": ok_all,
+                    "peers": sorted(peers, key=lambda p: p["subtype"]),
+                    "ok": all(p.get("ok") is not False for p in peers),
                     "n_results": total_results,
                     "badges": [f"{total_results} risultati"] if total_results else [],
-                    "response_meta": {"n_results": total_results, "exported_at": primary.get("response_meta", {}).get("exported_at", "")},
+                    "response_meta": {
+                        "n_results": total_results,
+                        "exported_at": primary.get("response_meta", {}).get("exported_at", ""),
+                    },
                 })
-                collapsed.append(merged)
+                out.append(merged)
             else:
-                collapsed.extend(peers)
+                out.extend(peers)
+        return out
 
-        # Build subgroups within this kind
+    # Bucket dossiers by query group
+    q_buckets: dict[str, list[dict]] = defaultdict(list)
+    for d in dossiers:
+        q_buckets[_dossier_query_group(d["kind"], d["subtype"])].append(d)
+
+    groups = []
+    for qkey in ("visura_immobile", "visura_soggetto", "intestati",
+                 "planimetria", "epa", "richieste", "workflow", "batch", "altro"):
+        entries = q_buckets.get(qkey)
+        if not entries:
+            continue
+        label, icon, color = _QUERY_GROUP_META[qkey]
+
+        collapsed = _collapse_pairs(entries)
+
+        # Subgroup by subtype (+ kind for multi_response disambiguation)
         sub_buckets: dict[str, list[dict]] = defaultdict(list)
         for d in collapsed:
-            sub_buckets[d["subtype"]].append(d)
+            skey = d["subtype"] if d["kind"] != "multi_response" else "multi_response"
+            sub_buckets[skey].append(d)
 
         subgroups = []
         for skey, sentries in sub_buckets.items():
-            smeta = _DOSSIER_SUBTYPE_META.get(skey)
+            smeta = _QUERY_SUBGROUP_META.get(skey)
             if smeta:
-                slabel, sicon = smeta
+                slabel, sicon, scolor = smeta
             else:
                 slabel = skey.replace("-", " ").replace("_", " ").title()
-                sicon = "fa-diagram-project"
+                sicon  = "fa-file"
+                scolor = color
             subgroups.append({
-                "key": f"{key}_{skey}",
-                "label": slabel,
-                "icon": sicon,
-                "color": color,
-                "count": len(sentries),
+                "key":     f"{qkey}_{skey}",
+                "label":   slabel,
+                "icon":    sicon,
+                "color":   scolor,
+                "count":   len(sentries),
                 "entries": sentries,
             })
         subgroups.sort(key=lambda g: (g["label"] == "Altro", g["label"]))
 
         groups.append({
-            "key": key, "label": label, "icon": icon, "color": color,
+            "key": qkey, "label": label, "icon": icon, "color": color,
             "count": len(collapsed),
             "subgroups": subgroups,
         })

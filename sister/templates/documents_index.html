@@ -1,57 +1,21 @@
 {% extends "_base.html" %}
-{% from "_doc_macros.html" import doc_table, doc_macros_css, doc_macros_js %}
+{% from "_doc_macros.html" import shared_section_css, jump_chips, query_section,
+                                   query_subsection, doc_table, doc_macros_css, doc_macros_js %}
 
 {% block page_title %}Documenti{% endblock %}
 
 {% block extra_css %}
 {{ super() }}
+{{ shared_section_css() }}
 {{ doc_macros_css() }}
 <style>
 .hero-section { background: linear-gradient(135deg, #495057 0%, #212529 100%); color: white; padding: 2rem 0; margin-bottom: 2rem; }
-
-/* Tree nodes */
-.doc-node { margin-bottom: .5rem; }
-.doc-node-l0 > .doc-node-header { font-size: 1.05rem; }
-.doc-node-header {
-    display: flex; align-items: center; gap: .5rem;
-    padding: .55rem .85rem; cursor: pointer; user-select: none;
-    background: #f8f9fa; border: 1px solid #dee2e6; border-radius: .4rem;
-    border-left: 4px solid var(--node-color, #6c757d);
+@media print {
+  .hero-section { background: #f8f9fa !important; color: #333 !important; }
+  .collapse { display: block !important; height: auto !important; }
 }
-.doc-node-header:hover { background: #f1f3f5; }
-.doc-node-chevron { transition: transform .2s; font-size: .7rem; }
-.doc-node-header[aria-expanded="false"] .doc-node-chevron { transform: rotate(-90deg); }
-.doc-node-body { padding: .5rem 0 .25rem 1.25rem; border-left: 2px dashed #e9ecef; margin-left: 1.1rem; }
-.doc-node-l0 > .collapse > .doc-node-body,
-.doc-node-l0 > .collapsing > .doc-node-body { border-left: none; margin-left: 0; padding-left: .25rem; }
-.facet-note { font-size: .75rem; color: #6c757d; font-style: italic; margin: .15rem 0 .5rem .25rem; }
-
-@media print { .no-print { display: none !important; } .hero-section { background: #f8f9fa !important; color: #333 !important; }
-    .collapse { display: block !important; height: auto !important; } }
 </style>
 {% endblock %}
-
-{# ── Recursive tree node ───────────────────────────────────────────────────── #}
-{% macro render_node(node, level) %}
-<div class="doc-node doc-node-l{{ level }}" style="--node-color: var(--bs-{{ node.color }})">
-    <div class="doc-node-header" role="button" data-bs-toggle="collapse"
-         data-bs-target="#node-{{ node.key }}" aria-expanded="true" aria-controls="node-{{ node.key }}">
-        <i class="fas {{ node.icon }} text-{{ node.color }}"></i>
-        <span class="fw-semibold">{{ node.label }}</span>
-        <span class="badge bg-{{ node.color }}">{{ node.count }}</span>
-        <i class="fas fa-chevron-down doc-node-chevron ms-auto text-muted"></i>
-    </div>
-    <div class="collapse show" id="node-{{ node.key }}">
-        <div class="doc-node-body">
-            {% if node.key == 'visure' %}
-            <p class="facet-note"><i class="fas fa-circle-info me-1"></i>Le stesse visure sono classificate per <strong>Tipo</strong> e per <strong>Fabbricati/Terreni</strong>.</p>
-            {% endif %}
-            {% if node.docs %}{{ doc_table(node.key, node.docs, node.color, '/web/documents') }}{% endif %}
-            {% for child in node.children %}{{ render_node(child, level + 1) }}{% endfor %}
-        </div>
-    </div>
-</div>
-{% endmacro %}
 
 {% block content %}
 {# ── Hero ───────────────────────────────────────────────────────────────── #}
@@ -88,17 +52,19 @@
     </div>
     {% else %}
 
-    {# Quick jump chips #}
-    <div class="d-flex flex-wrap gap-2 mb-4 no-print">
-        {% for g in tree %}
-        <a href="#node-{{ g.key }}" class="btn btn-sm btn-outline-{{ g.color }}">
-            <i class="fas {{ g.icon }} me-1"></i>{{ g.label }}<span class="badge bg-{{ g.color }} ms-1">{{ g.count }}</span>
-        </a>
-        {% endfor %}
-    </div>
+    {{ jump_chips(tree) }}
 
-    {% for node in tree %}
-    {{ render_node(node, 0) }}
+    {% for g in tree %}
+    {% call query_section(g) %}
+        {# Direct documents on the group node (e.g. Elaborati Planimetrici root) #}
+        {% if g.docs %}{{ doc_table(g.key, g.docs, g.color, '/web/documents') }}{% endif %}
+        {# Sub-nodes #}
+        {% for sg in g.children %}
+        {% call query_subsection(sg) %}
+            {{ doc_table(sg.key, sg.docs, sg.color, '/web/documents') }}
+        {% endcall %}
+        {% endfor %}
+    {% endcall %}
     {% endfor %}
 
     {% endif %}
