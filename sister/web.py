@@ -868,6 +868,13 @@ async def web_document_view(request: Request, path: str, user=Depends(_require_a
     return theme.render(template, request, user=user, doc=doc)
 
 
+@router.get("/web/files")
+@router.get("/web/files/{path:path}")
+async def web_files_redirect(request: Request, path: str = ""):
+    target = "/web/documents" + (f"/{path}" if path else "")
+    return RedirectResponse(url=target, status_code=301)
+
+
 @router.get("/web/documents", response_class=HTMLResponse)
 @router.get("/web/documents/{path:path}", response_class=HTMLResponse)
 async def web_documents(request: Request, path: str = "", user=Depends(_require_auth)):
