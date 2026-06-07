@@ -268,9 +268,9 @@
 <script>
 (function () {
     let selectedIdx = null;
-    let sortState = {};  // tableId → {col, dir}
+    let sortState = {};
 
-    /* ── Helpers ─────────────────────────────────────────────────────────── */
+    /* ── Helpers ─────────────────────────────────────────────────────── */
     function bodyRows(tid) {
         return Array.from(document.querySelectorAll('#' + tid + ' tbody tr:not(.empty-row)'));
     }
@@ -279,62 +279,71 @@
         return bodyRows(tid).filter(function (tr) { return tr.style.display !== 'none'; });
     }
 
-    /* ── Selection ───────────────────────────────────────────────────────── */
+    /* ── Selection ───────────────────────────────────────────────────── */
     function applySelection() {
         var bar = document.getElementById('sel-bar');
-        var counts = [];
 
-        ['t1', 't2'].forEach(function (tid) {
-            var visible = 0;
-            bodyRows(tid).forEach(function (tr) {
-                var idx = parseInt(tr.dataset.idx, 10);
-                if (selectedIdx === null) {
-                    tr.classList.remove('selected', 'dimmed');
-                    visible++;
-                } else if (idx === selectedIdx) {
-                    tr.classList.add('selected');
-                    tr.classList.remove('dimmed');
-                    visible++;
-                } else {
-                    tr.classList.add('dimmed');
-                    tr.classList.remove('selected');
-                }
-            });
-
-            // empty-state row for t2 when selection has no matches
-            if (tid === 't2') {
-                var emptyRow = document.getElementById('t2-empty');
-                if (selectedIdx !== null && visible === 0) {
-                    if (!emptyRow) {
-                        emptyRow = document.createElement('tr');
-                        emptyRow.id = 't2-empty';
-                        emptyRow.className = 'empty-row';
-                        var td = document.createElement('td');
-                        td.colSpan = 99;
-                        td.textContent = 'Nessun risultato per questa organizzazione.';
-                        emptyRow.appendChild(td);
-                        var tbody = document.getElementById('t2-tbody');
-                        if (tbody) tbody.appendChild(emptyRow);
-                    }
-                    emptyRow.style.display = '';
-                } else if (emptyRow) {
-                    emptyRow.style.display = 'none';
-                }
-                document.getElementById('t2-count').textContent = visible;
-                if (selectedIdx !== null) counts.push(visible + ' {{ 'corrisp.' if is_entity_match else 'immobili' }}');
+        // T1: dim non-matching rows but keep all visible (org list stays browseable)
+        bodyRows('t1').forEach(function (tr) {
+            var idx = parseInt(tr.dataset.idx, 10);
+            if (selectedIdx === null) {
+                tr.classList.remove('selected', 'dimmed');
+            } else if (idx === selectedIdx) {
+                tr.classList.add('selected');
+                tr.classList.remove('dimmed');
+            } else {
+                tr.classList.add('dimmed');
+                tr.classList.remove('selected');
             }
         });
 
+        // T2: true filter — hide non-matching rows so only the selected org's entries show
+        var t2Visible = 0;
+        bodyRows('t2').forEach(function (tr) {
+            var idx = parseInt(tr.dataset.idx, 10);
+            var filteredOut = tr.dataset.filteredHidden === '1';
+            var selMatch = (selectedIdx === null) || (idx === selectedIdx);
+            var show = !filteredOut && selMatch;
+            tr.style.display = show ? '' : 'none';
+            tr.classList.remove('selected', 'dimmed');
+            if (show) t2Visible++;
+        });
+
+        // Empty-state row for T2 when selected org has no entries
+        var emptyRow = document.getElementById('t2-empty');
+        if (selectedIdx !== null && t2Visible === 0) {
+            if (!emptyRow) {
+                emptyRow = document.createElement('tr');
+                emptyRow.id = 't2-empty';
+                emptyRow.className = 'empty-row';
+                var td = document.createElement('td');
+                td.colSpan = 99;
+                td.textContent = 'Nessun risultato per questa organizzazione.';
+                emptyRow.appendChild(td);
+                var tbody = document.getElementById('t2-tbody');
+                if (tbody) tbody.appendChild(emptyRow);
+            }
+            emptyRow.style.display = '';
+        } else if (emptyRow) {
+            emptyRow.style.display = 'none';
+        }
+
+        var t2CountEl = document.getElementById('t2-count');
+        if (t2CountEl) t2CountEl.textContent = t2Visible;
+
         if (selectedIdx !== null) {
             bar.classList.add('visible');
-            document.getElementById('sel-counts').textContent = '— ' + counts.join(', ');
-            // Scroll t2 to first matching row
-            var first = document.querySelector('#t2 tbody tr[data-idx="' + selectedIdx + '"]');
-            if (first) first.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+            document.getElementById('sel-counts').textContent =
+                '— ' + t2Visible + ' {{ 'corrisp.' if is_entity_match else 'immobili' }}';
+            // Scroll T2 to first visible match
+            var firstT2 = document.querySelector('#t2 tbody tr[data-idx="' + selectedIdx + '"]');
+            if (firstT2 && firstT2.style.display !== 'none') {
+                firstT2.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+            }
         } else {
             bar.classList.remove('visible');
             document.getElementById('sel-counts').textContent = '';
-            document.getElementById('t2-count').textContent = bodyRows('t2').length;
+            if (t2CountEl) t2CountEl.textContent = visibleRows('t2').length;
         }
     }
 
@@ -342,6 +351,11 @@
         selectedIdx = (selectedIdx === idx) ? null : idx;
         document.getElementById('sel-label').textContent = selectedIdx !== null ? label : '–';
         applySelection();
+        // Scroll T1 to the selected org (useful when click comes from T2)
+        if (selectedIdx !== null) {
+            var t1Row = document.querySelector('#t1 tbody tr[data-idx="' + selectedIdx + '"]');
+            if (t1Row) t1Row.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        }
     };
 
     window.resetSelection = function () {
@@ -349,31 +363,45 @@
         document.getElementById('sel-label').textContent = '–';
         ['filter-t1', 'filter-t2'].forEach(function (id) {
             var el = document.getElementById(id);
-            if (el) { el.value = ''; filterTable(id === 'filter-t1' ? 't1' : 't2', id === 'filter-t1' ? 't1-count' : 't2-count', ''); }
+            if (el) {
+                el.value = '';
+                filterTable(id === 'filter-t1' ? 't1' : 't2',
+                            id === 'filter-t1' ? 't1-count' : 't2-count', '');
+            }
         });
         applySelection();
     };
 
-    /* ── Text filter ─────────────────────────────────────────────────────── */
+    /* ── Text filter ─────────────────────────────────────────────────── */
     window.filterTable = function (tid, countId, query) {
         var q = query.toLowerCase();
         var visible = 0;
         bodyRows(tid).forEach(function (tr) {
-            var show = tr.textContent.toLowerCase().includes(q);
-            tr.style.display = show ? '' : 'none';
-            if (show) visible++;
+            var match = tr.textContent.toLowerCase().includes(q);
+            tr.dataset.filteredHidden = match ? '' : '1';
+
+            if (tid === 't2') {
+                // T2 display combines text filter AND selection filter
+                var idx = parseInt(tr.dataset.idx, 10);
+                var selMatch = (selectedIdx === null) || (idx === selectedIdx);
+                var show = match && selMatch;
+                tr.style.display = show ? '' : 'none';
+                if (show) visible++;
+            } else {
+                tr.style.display = match ? '' : 'none';
+                if (match) visible++;
+            }
         });
         var badge = document.getElementById(countId);
         if (badge) badge.textContent = visible;
     };
 
-    /* ── Sort ────────────────────────────────────────────────────────────── */
+    /* ── Sort ────────────────────────────────────────────────────────── */
     window.sortTable = function (tid, colIdx) {
         var st = sortState[tid] || {};
         var newDir = (st.col === colIdx && st.dir === 'asc') ? 'desc' : 'asc';
         sortState[tid] = { col: colIdx, dir: newDir };
 
-        // Update header classes
         document.querySelectorAll('#' + tid + ' thead th').forEach(function (th, i) {
             th.classList.remove('sort-asc', 'sort-desc');
             if (i === colIdx) th.classList.add('sort-' + newDir);
@@ -392,7 +420,7 @@
         rows.forEach(function (r) { tbody.appendChild(r); });
     };
 
-    /* ── CSV export ──────────────────────────────────────────────────────── */
+    /* ── CSV export ──────────────────────────────────────────────────── */
     window.exportCsv = function (tid, filename) {
         var rows = visibleRows(tid);
         var headers = Array.from(document.querySelectorAll('#' + tid + ' thead th'))
@@ -414,7 +442,7 @@
         return /[,"\n]/.test(v) ? '"' + v + '"' : v;
     }
 
-    /* ── Keyboard navigation (↑↓ on table 1) ────────────────────────────── */
+    /* ── Keyboard navigation (↑↓ on table 1) ────────────────────────── */
     document.addEventListener('keydown', function (e) {
         if (e.key === 'Escape') { window.resetSelection(); return; }
         if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
@@ -424,8 +452,7 @@
         var rows = visibleRows('t1');
         if (!rows.length) return;
 
-        var curIdx = selectedIdx;
-        var curPos = rows.findIndex(function (tr) { return parseInt(tr.dataset.idx, 10) === curIdx; });
+        var curPos = rows.findIndex(function (tr) { return parseInt(tr.dataset.idx, 10) === selectedIdx; });
         var nextPos = e.key === 'ArrowDown'
             ? Math.min(curPos + 1, rows.length - 1)
             : Math.max(curPos - 1, 0);
@@ -440,10 +467,8 @@
         nextRow.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     });
 
-    /* ── Init ────────────────────────────────────────────────────────────── */
-    // Default sort t1 by organization name
+    /* ── Init ────────────────────────────────────────────────────────── */
     sortTable('t1', 1);
-    // Restore natural idx order after sort by re-sorting on #
     sortTable('t1', 0);
 })();
 </script>
