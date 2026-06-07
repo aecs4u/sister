@@ -939,6 +939,9 @@ async def web_documents(request: Request, path: str = "", template: str = "",
 
     theme = _get_theme(request)
 
+    # Normalize trailing slash (e.g. /web/documents/21/ → "21")
+    path = path.strip("/")
+
     # Integer path → DB-backed structured document viewer
     if path and path.isdigit():
         doc = await get_document_by_id(int(path))
