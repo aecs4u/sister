@@ -7,61 +7,89 @@
 <style>
 .hero-section { background: linear-gradient(135deg, #495057 0%, #1a1d20 100%); color: white; padding: 1.5rem 0; margin-bottom: 1.5rem; }
 
+/* KPI bar */
+.kpi-bar { display: flex; flex-wrap: wrap; gap: .6rem; margin-bottom: 1.25rem; }
+.kpi { background: #fff; border: 1px solid #dee2e6; border-radius: .45rem;
+       padding: .5rem .9rem; min-width: 9rem; flex: 1; }
+.kpi-label { font-size: .7rem; text-transform: uppercase; letter-spacing: .04em; color: #6c757d; }
+.kpi-value { font-size: 1.45rem; font-weight: 700; line-height: 1.1; }
+.kpi-sub   { font-size: .72rem; color: #6c757d; }
+.kpi-ok    { border-left: 3px solid #198754; }
+.kpi-err   { border-left: 3px solid #dc3545; }
+.kpi-info  { border-left: 3px solid #0dcaf0; }
+.kpi-muted { border-left: 3px solid #adb5bd; }
+
 /* Section headers */
 .tbl-section { margin-bottom: 1.5rem; }
 .tbl-section-head {
     display: flex; align-items: center; gap: .6rem;
-    padding: .5rem .85rem; background: #f8f9fa;
+    padding: .45rem .85rem; background: #f8f9fa;
     border: 1px solid #dee2e6; border-left: 4px solid var(--sec-color, #6c757d);
     border-radius: .4rem; margin-bottom: .5rem; font-size: .92rem; font-weight: 600;
+    flex-wrap: wrap;
 }
+.tbl-section-actions { margin-left: auto; display: flex; gap: .4rem; }
 
 /* Tables */
 .btbl { width: 100%; border-collapse: collapse; font-size: .82rem; }
 .btbl thead th {
     background: #f1f3f5; position: sticky; top: 0; z-index: 2;
-    padding: .45rem .6rem; border-bottom: 2px solid #dee2e6;
-    white-space: nowrap; cursor: default;
+    padding: .4rem .6rem; border-bottom: 2px solid #dee2e6;
+    white-space: nowrap; user-select: none;
 }
-.btbl tbody td { padding: .35rem .6rem; border-bottom: 1px solid #f0f0f0; vertical-align: top; }
-.btbl tbody tr { cursor: pointer; transition: background .1s; }
-.btbl tbody tr:hover { background: #f8f9fa; }
-.btbl tbody tr.selected { background: #fff3cd !important; }
-.btbl tbody tr.dimmed { opacity: .22; }
+.btbl thead th.sortable { cursor: pointer; }
+.btbl thead th.sortable:hover { background: #e9ecef; }
+.btbl thead th .sort-icon { font-size: .65rem; color: #adb5bd; margin-left: .25rem; }
+.btbl thead th.sort-asc .sort-icon::before  { content: '▲'; color: #495057; }
+.btbl thead th.sort-desc .sort-icon::before { content: '▼'; color: #495057; }
+.btbl thead th:not(.sort-asc):not(.sort-desc) .sort-icon::before { content: '⇅'; }
+
+.btbl tbody td { padding: .32rem .6rem; border-bottom: 1px solid #f0f0f0; vertical-align: top; }
+.btbl tbody tr { cursor: pointer; transition: background .08s; }
+.btbl tbody tr:hover  { background: #f8f9fa; }
+.btbl tbody tr.selected  { background: #fff3cd !important; }
+.btbl tbody tr.dimmed    { opacity: .18; }
+.btbl tbody tr.row-error { border-left: 3px solid #dc3545; }
 
 /* Scrollable wrappers */
-.tbl-scroll { max-height: 340px; overflow-y: auto; border: 1px solid #dee2e6; border-radius: .3rem; }
-.tbl-scroll-sm { max-height: 240px; overflow-y: auto; border: 1px solid #dee2e6; border-radius: .3rem; }
+.tbl-scroll { max-height: 360px; overflow-y: auto; border: 1px solid #dee2e6; border-radius: .3rem; }
 
-/* Filter inputs */
-.tbl-filter { width: 100%; font-size: .78rem; padding: .25rem .5rem;
-              border: 1px solid #dee2e6; border-radius: .25rem; margin-bottom: .4rem; }
+/* Filter bar */
+.tbl-filter-bar { display: flex; gap: .5rem; margin-bottom: .4rem; align-items: center; }
+.tbl-filter { flex: 1; font-size: .78rem; padding: .25rem .5rem;
+              border: 1px solid #dee2e6; border-radius: .25rem; }
 .tbl-filter:focus { outline: none; border-color: #86b7fe; box-shadow: 0 0 0 2px rgba(13,110,253,.15); }
 
-/* Status badges */
+/* Status */
 .st-ok  { color: #198754; font-weight: 600; }
 .st-err { color: #dc3545; font-weight: 600; }
 
-/* Selection reset bar */
+/* Selection bar */
 #sel-bar {
-    display: none; position: sticky; top: 0; z-index: 10;
+    display: none; position: sticky; top: 0; z-index: 20;
     background: #fff3cd; border: 1px solid #ffc107; border-radius: .4rem;
     padding: .4rem .85rem; margin-bottom: 1rem;
     align-items: center; gap: .6rem; font-size: .88rem;
 }
 #sel-bar.visible { display: flex; }
 
+/* Error tooltip */
+.err-icon { cursor: help; color: #dc3545; }
+
+/* Empty-state row */
+.empty-row td { text-align: center; color: #6c757d; padding: 1rem !important; font-style: italic; }
+
 @media print {
   .no-print { display: none !important; }
   .hero-section { background: #f8f9fa !important; color: #333 !important; }
-  .tbl-scroll, .tbl-scroll-sm { max-height: none; overflow: visible; }
+  .tbl-scroll { max-height: none; overflow: visible; }
   .btbl tbody tr.dimmed { display: none; }
 }
 </style>
 {% endblock %}
 
 {% block content %}
-{# ── Hero ───────────────────────────────────────────────────────────────────── #}
+{# ── Hero ──────────────────────────────────────────────────────────────────── #}
 <div class="hero-section no-print">
     <div class="container-fluid">
         <nav class="mb-2" aria-label="breadcrumb">
@@ -72,16 +100,7 @@
             </ol>
         </nav>
         <div class="d-flex flex-wrap justify-content-between align-items-end gap-3">
-            <div>
-                <h1 class="h4 fw-bold mb-1"><i class="fas fa-table-list me-2"></i>{{ name }}</h1>
-                <div class="d-flex flex-wrap gap-2 opacity-90">
-                    <span class="badge bg-light text-dark">{{ stats.total }} organizzazioni</span>
-                    <span class="badge bg-success">{{ stats.ok }} completate</span>
-                    {% if stats.error %}<span class="badge bg-danger">{{ stats.error }} errori</span>{% endif %}
-                    <span class="badge bg-info text-dark">{{ stats.with_immobili }} con immobili</span>
-                    <span class="badge bg-secondary">{{ stats.total_immobili }} immobili totali</span>
-                </div>
-            </div>
+            <h1 class="h4 fw-bold mb-0"><i class="fas fa-table-list me-2"></i>{{ name }}</h1>
             <div class="d-flex gap-2 no-print">
                 <a href="/web/dossiers/{{ name }}?download=1" class="btn btn-sm btn-outline-light">
                     <i class="fas fa-download me-1"></i>JSON
@@ -96,80 +115,99 @@
 
 <div class="container-fluid">
 
-{# ── Selection reset bar ────────────────────────────────────────────────────── #}
+{# ── KPI bar ─────────────────────────────────────────────────────────────────── #}
+<div class="kpi-bar">
+    <div class="kpi kpi-ok">
+        <div class="kpi-label">Completate</div>
+        <div class="kpi-value">{{ stats.ok }}</div>
+        <div class="kpi-sub">{{ stats.pct_ok }}% di {{ stats.total }}</div>
+    </div>
+    {% if stats.error %}
+    <div class="kpi kpi-err">
+        <div class="kpi-label">Errori</div>
+        <div class="kpi-value text-danger">{{ stats.error }}</div>
+        <div class="kpi-sub">clicca riga rossa</div>
+    </div>
+    {% endif %}
+    <div class="kpi kpi-info">
+        <div class="kpi-label">Con {{ 'corrispondenze' if is_entity_match else 'immobili' }}</div>
+        <div class="kpi-value">{{ stats.with_immobili }}</div>
+        <div class="kpi-sub">{{ stats.pct_with }}% — {{ stats.total_immobili }} totali</div>
+    </div>
+    <div class="kpi kpi-muted">
+        <div class="kpi-label">Senza risultati</div>
+        <div class="kpi-value text-muted">{{ stats.without_immobili }}</div>
+        <div class="kpi-sub">{{ 100 - stats.pct_ok - (stats.error / stats.total * 100)|int if stats.total else 0 }}%</div>
+    </div>
+</div>
+
+{# ── Selection reset bar ─────────────────────────────────────────────────────── #}
 <div id="sel-bar" class="no-print">
     <i class="fas fa-filter text-warning"></i>
     <span>Filtrato su: <strong id="sel-label">–</strong></span>
+    <span id="sel-counts" class="text-muted small"></span>
     <button class="btn btn-sm btn-outline-secondary ms-auto" onclick="resetSelection()">
-        <i class="fas fa-xmark me-1"></i>Mostra tutti
+        <i class="fas fa-xmark me-1"></i>Mostra tutti <kbd>Esc</kbd>
     </button>
 </div>
 
-{# ── TABLE 1: Organizations (non-data) ──────────────────────────────────────── #}
+{# ── TABLE 1: Organizations ──────────────────────────────────────────────────── #}
 <div class="tbl-section">
     <div class="tbl-section-head" style="--sec-color: #0d6efd">
         <i class="fas fa-building text-primary"></i>
         <span>Organizzazioni</span>
-        <span class="badge bg-primary ms-1">{{ stats.total }}</span>
-        <span class="text-muted fw-normal small ms-auto">Clicca una riga per filtrare le tabelle successive</span>
+        <span class="badge bg-primary" id="t1-count">{{ summary_rows | length }}</span>
+        <div class="tbl-section-actions no-print">
+            <button class="btn btn-xs btn-outline-secondary py-0 px-2" style="font-size:.75rem" onclick="exportCsv('t1','organizzazioni')">
+                <i class="fas fa-file-csv me-1"></i>CSV
+            </button>
+        </div>
     </div>
-    <input class="tbl-filter no-print" id="filter-t1" placeholder="Cerca organizzazione, P.IVA, stato…" oninput="filterTable('t1', this.value)">
-    <div class="tbl-scroll">
+    <div class="tbl-filter-bar no-print">
+        <input class="tbl-filter" id="filter-t1" placeholder="Cerca organizzazione, P.IVA, stato…"
+               oninput="filterTable('t1','t1-count',this.value)">
+        <span class="text-muted small no-print">↑↓ per navigare</span>
+    </div>
+    <div class="tbl-scroll" id="scroll-t1">
         <table class="btbl" id="t1">
             <thead>
                 <tr>
-                    <th>#</th>
-                    <th>Organizzazione</th>
-                    <th>P.IVA</th>
+                    <th class="sortable" onclick="sortTable('t1',0)">#<span class="sort-icon"></span></th>
+                    <th class="sortable" onclick="sortTable('t1',1)">Organizzazione<span class="sort-icon"></span></th>
+                    <th class="sortable" onclick="sortTable('t1',2)">P.IVA (input)<span class="sort-icon"></span></th>
+                    <th class="sortable" onclick="sortTable('t1',3)">CF restituito<span class="sort-icon"></span></th>
                     <th>Catasto</th>
-                    <th>Stato</th>
-                    <th>Immobili</th>
-                    <th>Timestamp</th>
-                </tr>
-            </thead>
-            <tbody>
-                {% for r in summary_rows %}
-                <tr data-idx="{{ r.idx }}" onclick="selectIdx({{ r.idx }}, '{{ r.organization_name | e }}')">
-                    <td class="text-muted">{{ r.idx + 1 }}</td>
-                    <td class="fw-semibold">{{ r.organization_name }}</td>
-                    <td class="font-monospace small">{{ r.vat_number }}</td>
-                    <td>{{ r.tipo_catasto }}</td>
-                    <td class="{{ 'st-ok' if r.status == 'completed' else 'st-err' }}">
-                        {{ '✓' if r.status == 'completed' else '✗' }} {{ r.status }}
-                    </td>
-                    <td>{{ r.n_immobili if r.n_immobili else '–' }}</td>
-                    <td class="text-muted">{{ r.timestamp }}</td>
-                </tr>
-                {% endfor %}
-            </tbody>
-        </table>
-    </div>
-</div>
-
-{# ── TABLE 2: Data (response-level fields) ──────────────────────────────────── #}
-<div class="tbl-section">
-    <div class="tbl-section-head" style="--sec-color: #198754">
-        <i class="fas fa-arrow-right-from-bracket text-success"></i>
-        <span>Dati risposta</span>
-        <span class="badge bg-success ms-1" id="t2-count">{{ data_rows | length }}</span>
-    </div>
-    <div class="tbl-scroll-sm">
-        <table class="btbl" id="t2">
-            <thead>
-                <tr>
-                    <th>Organizzazione</th>
-                    <th>Soggetto (CF / P.IVA)</th>
-                    <th>Risultati totali</th>
+                    <th class="sortable" onclick="sortTable('t1',5)">Stato<span class="sort-icon"></span></th>
+                    <th class="sortable" onclick="sortTable('t1',6)">{{ 'Corrisp.' if is_entity_match else 'Immobili' }}<span class="sort-icon"></span></th>
+                    <th class="sortable" onclick="sortTable('t1',7)">Timestamp<span class="sort-icon"></span></th>
                     <th>Errore</th>
                 </tr>
             </thead>
             <tbody>
-                {% for r in data_rows %}
-                <tr data-idx="{{ r.idx }}" onclick="selectIdx({{ r.idx }}, '{{ r.organization_name | e }}')">
+                {% for r in summary_rows %}
+                <tr data-idx="{{ r.idx }}"
+                    class="{{ 'row-error' if r.status == 'error' else '' }}"
+                    onclick="selectIdx({{ r.idx }}, {{ r.organization_name | tojson }})">
+                    <td class="text-muted">{{ r.idx + 1 }}</td>
                     <td class="fw-semibold">{{ r.organization_name }}</td>
-                    <td class="font-monospace small">{{ r.soggetto }}</td>
-                    <td>{{ r.total_results if r.total_results else '–' }}</td>
-                    <td class="{{ 'st-err' if r.error else 'text-muted' }}">{{ r.error or '–' }}</td>
+                    <td class="font-monospace small">{{ r.vat_number }}</td>
+                    <td class="font-monospace small {% if r.soggetto and r.soggetto != r.vat_number %}text-warning fw-bold{% else %}text-muted{% endif %}">
+                        {{ r.soggetto or '–' }}
+                    </td>
+                    <td>{{ r.tipo_catasto }}</td>
+                    <td class="{{ 'st-ok' if r.status == 'completed' else 'st-err' }}">
+                        {{ '✓' if r.status == 'completed' else '✗' }}
+                    </td>
+                    <td>{{ r.n_immobili if r.n_immobili else '–' }}</td>
+                    <td class="text-muted">{{ r.timestamp }}</td>
+                    <td>
+                        {% if r.error %}
+                        <span class="err-icon" title="{{ r.error | truncate(200) | e }}">
+                            <i class="fas fa-circle-exclamation"></i>
+                            <span class="small text-danger">{{ r.error | truncate(40) }}</span>
+                        </span>
+                        {% endif %}
+                    </td>
                 </tr>
                 {% endfor %}
             </tbody>
@@ -177,35 +215,48 @@
     </div>
 </div>
 
-{# ── TABLE 3: Immobili ───────────────────────────────────────────────────────── #}
+{# ── TABLE 2: Corrispondenze / Immobili (ex Table 3 — Table 2 merged into Table 1) ── #}
 <div class="tbl-section">
     <div class="tbl-section-head" style="--sec-color: #6f42c1">
-        <i class="fas fa-house text-purple" style="color:#6f42c1"></i>
-        <span>Immobili</span>
-        <span class="badge ms-1" style="background:#6f42c1" id="t3-count">{{ stats.total_immobili }}</span>
+        <i class="fas {{ 'fa-diagram-predecessor' if is_entity_match else 'fa-house' }}" style="color:#6f42c1"></i>
+        <span>{{ 'Corrispondenze' if is_entity_match else 'Immobili' }}</span>
+        <span class="badge ms-1" style="background:#6f42c1" id="t2-count">{{ stats.total_immobili }}</span>
+        {% if is_entity_match %}
+        <span class="text-muted fw-normal small">soggetti corrispondenti restituiti dalla visura persona giuridica</span>
+        {% endif %}
+        <div class="tbl-section-actions no-print">
+            <button class="btn btn-xs btn-outline-secondary py-0 px-2" style="font-size:.75rem" onclick="exportCsv('t2','{{ 'corrispondenze' if is_entity_match else 'immobili' }}')">
+                <i class="fas fa-file-csv me-1"></i>CSV
+            </button>
+        </div>
     </div>
     {% if immobili_rows %}
-    <input class="tbl-filter no-print" id="filter-t3" placeholder="Cerca denominazione, sede, CF…" oninput="filterTable('t3', this.value)">
-    <div class="tbl-scroll">
-        <table class="btbl" id="t3">
+    <div class="tbl-filter-bar no-print">
+        <input class="tbl-filter" id="filter-t2" placeholder="Cerca denominazione, sede, CF…"
+               oninput="filterTable('t2','t2-count',this.value)">
+    </div>
+    <div class="tbl-scroll" id="scroll-t2">
+        <table class="btbl" id="t2">
             <thead>
                 <tr>
-                    <th>Organizzazione</th>
-                    {% for col in immobili_cols %}<th>{{ col }}</th>{% endfor %}
+                    <th class="sortable" onclick="sortTable('t2',0)">Organizzazione<span class="sort-icon"></span></th>
+                    {% for col in immobili_cols %}
+                    <th class="sortable" onclick="sortTable('t2',{{ loop.index }})">{{ col }}<span class="sort-icon"></span></th>
+                    {% endfor %}
                 </tr>
             </thead>
-            <tbody>
+            <tbody id="t2-tbody">
                 {% for r in immobili_rows %}
-                <tr data-idx="{{ r.idx }}" onclick="selectIdx({{ r.idx }}, '{{ r.organization_name | e }}')">
+                <tr data-idx="{{ r.idx }}" onclick="selectIdx({{ r.idx }}, {{ r.organization_name | tojson }})">
                     <td class="fw-semibold">{{ r.organization_name }}</td>
-                    {% for col in immobili_cols %}<td>{{ r.get(col, '') }}</td>{% endfor %}
+                    {% for col in immobili_cols %}<td>{{ r.get(col, '') or '–' }}</td>{% endfor %}
                 </tr>
                 {% endfor %}
             </tbody>
         </table>
     </div>
     {% else %}
-    <div class="text-muted small ps-2">Nessun immobile trovato nelle risposte.</div>
+    <div class="text-muted small ps-2 py-2">Nessun risultato trovato nelle risposte.</div>
     {% endif %}
 </div>
 
@@ -217,87 +268,183 @@
 <script>
 (function () {
     let selectedIdx = null;
+    let sortState = {};  // tableId → {col, dir}
 
-    function allRows(tableId) {
-        return document.querySelectorAll('#' + tableId + ' tbody tr');
+    /* ── Helpers ─────────────────────────────────────────────────────────── */
+    function bodyRows(tid) {
+        return Array.from(document.querySelectorAll('#' + tid + ' tbody tr:not(.empty-row)'));
     }
 
+    function visibleRows(tid) {
+        return bodyRows(tid).filter(function (tr) { return tr.style.display !== 'none'; });
+    }
+
+    /* ── Selection ───────────────────────────────────────────────────────── */
     function applySelection() {
-        const bar = document.getElementById('sel-bar');
-        ['t1', 't2', 't3'].forEach(function (tid) {
-            allRows(tid).forEach(function (tr) {
-                const idx = parseInt(tr.dataset.idx, 10);
+        var bar = document.getElementById('sel-bar');
+        var counts = [];
+
+        ['t1', 't2'].forEach(function (tid) {
+            var visible = 0;
+            bodyRows(tid).forEach(function (tr) {
+                var idx = parseInt(tr.dataset.idx, 10);
                 if (selectedIdx === null) {
                     tr.classList.remove('selected', 'dimmed');
+                    visible++;
                 } else if (idx === selectedIdx) {
                     tr.classList.add('selected');
                     tr.classList.remove('dimmed');
+                    visible++;
                 } else {
                     tr.classList.add('dimmed');
                     tr.classList.remove('selected');
                 }
             });
-        });
 
-        // Update counts for t2 and t3
-        ['t2', 't3'].forEach(function (tid) {
-            const visible = Array.from(allRows(tid)).filter(function (tr) {
-                return selectedIdx === null || parseInt(tr.dataset.idx, 10) === selectedIdx;
-            }).length;
-            const badge = document.getElementById(tid + '-count');
-            if (badge) badge.textContent = visible;
+            // empty-state row for t2 when selection has no matches
+            if (tid === 't2') {
+                var emptyRow = document.getElementById('t2-empty');
+                if (selectedIdx !== null && visible === 0) {
+                    if (!emptyRow) {
+                        emptyRow = document.createElement('tr');
+                        emptyRow.id = 't2-empty';
+                        emptyRow.className = 'empty-row';
+                        var td = document.createElement('td');
+                        td.colSpan = 99;
+                        td.textContent = 'Nessun risultato per questa organizzazione.';
+                        emptyRow.appendChild(td);
+                        var tbody = document.getElementById('t2-tbody');
+                        if (tbody) tbody.appendChild(emptyRow);
+                    }
+                    emptyRow.style.display = '';
+                } else if (emptyRow) {
+                    emptyRow.style.display = 'none';
+                }
+                document.getElementById('t2-count').textContent = visible;
+                if (selectedIdx !== null) counts.push(visible + ' {{ 'corrisp.' if is_entity_match else 'immobili' }}');
+            }
         });
 
         if (selectedIdx !== null) {
             bar.classList.add('visible');
-            // Scroll selected rows into view in t2 and t3
-            ['t2', 't3'].forEach(function (tid) {
-                const first = document.querySelector('#' + tid + ' tbody tr[data-idx="' + selectedIdx + '"]');
-                if (first) first.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-            });
+            document.getElementById('sel-counts').textContent = '— ' + counts.join(', ');
+            // Scroll t2 to first matching row
+            var first = document.querySelector('#t2 tbody tr[data-idx="' + selectedIdx + '"]');
+            if (first) first.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
         } else {
             bar.classList.remove('visible');
-            // Restore counts
-            document.getElementById('t2-count').textContent = allRows('t2').length;
-            document.getElementById('t3-count').textContent = allRows('t3').length;
+            document.getElementById('sel-counts').textContent = '';
+            document.getElementById('t2-count').textContent = bodyRows('t2').length;
         }
     }
 
     window.selectIdx = function (idx, label) {
-        if (selectedIdx === idx) {
-            // Clicking the same row again → deselect
-            selectedIdx = null;
-            document.getElementById('sel-label').textContent = '–';
-        } else {
-            selectedIdx = idx;
-            document.getElementById('sel-label').textContent = label;
-        }
+        selectedIdx = (selectedIdx === idx) ? null : idx;
+        document.getElementById('sel-label').textContent = selectedIdx !== null ? label : '–';
         applySelection();
     };
 
     window.resetSelection = function () {
         selectedIdx = null;
         document.getElementById('sel-label').textContent = '–';
-        // Clear text filters too
-        ['filter-t1', 'filter-t3'].forEach(function (id) {
-            const el = document.getElementById(id);
-            if (el) { el.value = ''; filterTable(id === 'filter-t1' ? 't1' : 't3', ''); }
+        ['filter-t1', 'filter-t2'].forEach(function (id) {
+            var el = document.getElementById(id);
+            if (el) { el.value = ''; filterTable(id === 'filter-t1' ? 't1' : 't2', id === 'filter-t1' ? 't1-count' : 't2-count', ''); }
         });
         applySelection();
     };
 
-    window.filterTable = function (tableId, query) {
-        const q = query.toLowerCase();
-        allRows(tableId).forEach(function (tr) {
-            const text = tr.textContent.toLowerCase();
-            tr.style.display = text.includes(q) ? '' : 'none';
+    /* ── Text filter ─────────────────────────────────────────────────────── */
+    window.filterTable = function (tid, countId, query) {
+        var q = query.toLowerCase();
+        var visible = 0;
+        bodyRows(tid).forEach(function (tr) {
+            var show = tr.textContent.toLowerCase().includes(q);
+            tr.style.display = show ? '' : 'none';
+            if (show) visible++;
         });
+        var badge = document.getElementById(countId);
+        if (badge) badge.textContent = visible;
     };
 
-    // Keyboard shortcut: Escape → reset
+    /* ── Sort ────────────────────────────────────────────────────────────── */
+    window.sortTable = function (tid, colIdx) {
+        var st = sortState[tid] || {};
+        var newDir = (st.col === colIdx && st.dir === 'asc') ? 'desc' : 'asc';
+        sortState[tid] = { col: colIdx, dir: newDir };
+
+        // Update header classes
+        document.querySelectorAll('#' + tid + ' thead th').forEach(function (th, i) {
+            th.classList.remove('sort-asc', 'sort-desc');
+            if (i === colIdx) th.classList.add('sort-' + newDir);
+        });
+
+        var tbody = document.querySelector('#' + tid + ' tbody');
+        var rows = Array.from(tbody.querySelectorAll('tr:not(.empty-row)'));
+        rows.sort(function (a, b) {
+            var av = (a.cells[colIdx] || {}).textContent.trim();
+            var bv = (b.cells[colIdx] || {}).textContent.trim();
+            var an = parseFloat(av.replace(/[^0-9.\-]/g, ''));
+            var bn = parseFloat(bv.replace(/[^0-9.\-]/g, ''));
+            var cmp = (!isNaN(an) && !isNaN(bn)) ? (an - bn) : av.localeCompare(bv, 'it');
+            return newDir === 'asc' ? cmp : -cmp;
+        });
+        rows.forEach(function (r) { tbody.appendChild(r); });
+    };
+
+    /* ── CSV export ──────────────────────────────────────────────────────── */
+    window.exportCsv = function (tid, filename) {
+        var rows = visibleRows(tid);
+        var headers = Array.from(document.querySelectorAll('#' + tid + ' thead th'))
+                          .map(function (th) { return th.textContent.trim().replace(/[⇅▲▼]/g,'').trim(); });
+        var lines = [headers.map(csvEsc).join(',')];
+        rows.forEach(function (tr) {
+            var cells = Array.from(tr.cells).map(function (td) { return csvEsc(td.textContent.trim()); });
+            lines.push(cells.join(','));
+        });
+        var blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8;' });
+        var a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = filename + '.csv';
+        a.click();
+    };
+
+    function csvEsc(v) {
+        v = v.replace(/"/g, '""');
+        return /[,"\n]/.test(v) ? '"' + v + '"' : v;
+    }
+
+    /* ── Keyboard navigation (↑↓ on table 1) ────────────────────────────── */
     document.addEventListener('keydown', function (e) {
-        if (e.key === 'Escape') window.resetSelection();
+        if (e.key === 'Escape') { window.resetSelection(); return; }
+        if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
+        if (document.activeElement && document.activeElement.tagName === 'INPUT') return;
+
+        e.preventDefault();
+        var rows = visibleRows('t1');
+        if (!rows.length) return;
+
+        var curIdx = selectedIdx;
+        var curPos = rows.findIndex(function (tr) { return parseInt(tr.dataset.idx, 10) === curIdx; });
+        var nextPos = e.key === 'ArrowDown'
+            ? Math.min(curPos + 1, rows.length - 1)
+            : Math.max(curPos - 1, 0);
+        if (curPos === -1) nextPos = 0;
+
+        var nextRow = rows[nextPos];
+        var nextDataIdx = parseInt(nextRow.dataset.idx, 10);
+        var orgName = nextRow.cells[1] ? nextRow.cells[1].textContent.trim() : '';
+        selectedIdx = nextDataIdx;
+        document.getElementById('sel-label').textContent = orgName;
+        applySelection();
+        nextRow.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     });
+
+    /* ── Init ────────────────────────────────────────────────────────────── */
+    // Default sort t1 by organization name
+    sortTable('t1', 1);
+    // Restore natural idx order after sort by re-sorting on #
+    sortTable('t1', 0);
 })();
 </script>
 {% endblock %}

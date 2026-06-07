@@ -480,7 +480,6 @@ def _parse_batch_dossier(data: list) -> dict:
     import ast
 
     summary_rows: list[dict] = []
-    data_rows: list[dict] = []
     immobili_rows: list[dict] = []
     immobili_col_set: set[str] = set()
 
@@ -500,22 +499,21 @@ def _parse_batch_dossier(data: list) -> dict:
         imm_list = raw.get("immobili") or []
         n_imm = len(imm_list) if isinstance(imm_list, list) else 0
 
+        err_raw = raw.get("error") or item.get("error")
+        err_str = str(err_raw).strip() if err_raw and str(err_raw).strip() not in ("None", "") else ""
+        soggetto = str(raw.get("soggetto") or "").strip()
+
         summary_rows.append({
             "idx": idx,
             "organization_name": org,
             "vat_number": item.get("vat_number") or "",
+            "soggetto": soggetto,
             "tipo_catasto": item.get("tipo_catasto") or "",
             "status": status,
             "n_immobili": n_imm,
-            "timestamp": ts,
-        })
-
-        data_rows.append({
-            "idx": idx,
-            "organization_name": org,
-            "soggetto": raw.get("soggetto") or "",
             "total_results": raw.get("total_results") or 0,
-            "error": str(raw.get("error") or item.get("error") or "") if (raw.get("error") or item.get("error")) else "",
+            "timestamp": ts,
+            "error": err_str,
         })
 
         for imm in (imm_list if isinstance(imm_list, list) else []):
@@ -538,17 +536,25 @@ def _parse_batch_dossier(data: list) -> dict:
     n_ok = sum(1 for r in summary_rows if r["status"] == "completed")
     n_err = sum(1 for r in summary_rows if r["status"] == "error")
 
+    n_with = sum(1 for r in summary_rows if r["n_immobili"])
+    # Detect whether immobili rows are cadastral (have Foglio/Comune) or entity matches
+    is_entity_match = bool(immobili_col_set) and not (immobili_col_set & {"Foglio", "Comune", "Categoria"})
+
     return {
         "summary_rows": summary_rows,
-        "data_rows": data_rows,
         "immobili_rows": immobili_rows,
+        # data_rows removed — soggetto/total_results/error merged into summary_rows
         "immobili_cols": immobili_cols,
+        "is_entity_match": is_entity_match,
         "stats": {
             "total": len(data),
             "ok": n_ok,
             "error": n_err,
-            "with_immobili": sum(1 for r in summary_rows if r["n_immobili"]),
+            "with_immobili": n_with,
+            "without_immobili": len(data) - n_with - n_err,
             "total_immobili": total_immobili,
+            "pct_ok": round(n_ok / len(data) * 100) if data else 0,
+            "pct_with": round(n_with / len(data) * 100) if data else 0,
         },
     }
 
