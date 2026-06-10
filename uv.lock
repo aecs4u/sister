@@ -5,7 +5,7 @@ requires-python = ">=3.11"
 [[package]]
 name = "aecs4u-auth"
 version = "1.11.0"
-source = { git = "https://github.com/aecs4u/aecs4u-auth.git?branch=main#b247accbc2b641894116af632d9cdd637086de4a" }
+source = { git = "https://github.com/aecs4u/aecs4u-auth.git?branch=main#f8a222498b431581a77b31a5d5e46ab05ef01c84" }
 dependencies = [
     { name = "bcrypt" },
     { name = "clerk-backend-api" },
