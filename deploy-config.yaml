@@ -8,17 +8,16 @@ gcp:
   service_name: "sister-service"
 
 cloudrun:
-  memory: "2Gi"
-  cpu: 2
+  memory: "512Mi"
+  cpu: 1
   min_instances: 0
-  max_instances: 1
-  concurrency: 10
+  max_instances: 3
+  concurrency: 80
   execution_environment: "gen2"
   platform: "managed"
   port: 8080
-  timeout: 600
+  timeout: 300
   cpu_boost: true
-  no_cpu_throttling: true
   allow_unauthenticated: true
 
 cloudbuild:
