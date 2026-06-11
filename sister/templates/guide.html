@@ -1,0 +1,375 @@
+{% extends "_base.html" %}
+{% block page_title %}Guida Utente{% endblock %}
+
+{% block extra_css %}
+{{ super() }}
+<style>
+.guide-hero { background: linear-gradient(135deg, #0d6efd 0%, #0a58ca 100%); color: white; padding: 2rem 0; margin-bottom: 2rem; }
+.guide-section { margin-bottom: 2.5rem; }
+.guide-section h2 { font-size: 1.25rem; font-weight: 700; border-bottom: 2px solid #0d6efd; padding-bottom: .4rem; margin-bottom: 1rem; color: #0d6efd; }
+.guide-section h3 { font-size: 1rem; font-weight: 600; margin-top: 1.25rem; margin-bottom: .5rem; }
+.step-badge { display: inline-flex; align-items: center; justify-content: center; width: 1.6rem; height: 1.6rem; border-radius: 50%; background: #0d6efd; color: white; font-size: .75rem; font-weight: 700; flex-shrink: 0; }
+.flow-step { display: flex; align-items: flex-start; gap: .75rem; padding: .4rem 0; }
+.flow-step:not(:last-child) { border-bottom: 1px solid #f0f0f0; }
+.alert-2026 { background: #fff3cd; border-left: 4px solid #ffc107; }
+@media print { .guide-hero { background: #f8f9fa !important; color: #333 !important; } }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="guide-hero no-print">
+    <div class="container-fluid">
+        <nav class="mb-3" aria-label="breadcrumb">
+            <ol class="breadcrumb mb-0">
+                <li class="breadcrumb-item"><a href="/web/" class="text-white-50">Dashboard</a></li>
+                <li class="breadcrumb-item active text-white">Guida Utente</li>
+            </ol>
+        </nav>
+        <h1 class="display-6 fw-bold mb-1"><i class="fas fa-book-open me-3"></i>Guida Utente SISTER</h1>
+        <p class="lead mb-0 opacity-75">Guida operativa ai servizi catastali e ipotecari telematici</p>
+    </div>
+</div>
+
+<div class="container-fluid">
+    <div class="row">
+        {# TOC sidebar #}
+        <div class="col-lg-3 d-none d-lg-block">
+            <div class="card border-0 shadow-sm sticky-top" style="top:1rem">
+                <div class="card-header bg-primary text-white py-2">
+                    <small class="fw-semibold"><i class="fas fa-list me-2"></i>Indice</small>
+                </div>
+                <div class="list-group list-group-flush small">
+                    <a href="#cos-e" class="list-group-item list-group-item-action py-2">1. Cos'è SISTER</a>
+                    <a href="#chi-lo-usa" class="list-group-item list-group-item-action py-2">2. Chi lo usa</a>
+                    <a href="#come-si-entra" class="list-group-item list-group-item-action py-2">3. Come si entra</a>
+                    <a href="#prima-attivazione" class="list-group-item list-group-item-action py-2">4. Prima attivazione</a>
+                    <a href="#aree-principali" class="list-group-item list-group-item-action py-2">5. Aree principali</a>
+                    <a href="#flussi" class="list-group-item list-group-item-action py-2">6. Flussi operativi</a>
+                    <a href="#preparazione" class="list-group-item list-group-item-action py-2">7. Cosa preparare</a>
+                    <a href="#errori" class="list-group-item list-group-item-action py-2">8. Errori frequenti</a>
+                    <a href="#supporto" class="list-group-item list-group-item-action py-2">9. Accesso e supporto</a>
+                    <a href="#riepilogo" class="list-group-item list-group-item-action py-2">10. Riepilogo</a>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-lg-9">
+
+            {# 1 #}
+            <div class="guide-section" id="cos-e">
+                <h2><i class="fas fa-info-circle me-2"></i>1. Cos'è SISTER</h2>
+                <p>SISTER è il portale telematico dell'Agenzia delle Entrate per accedere a:</p>
+                <div class="table-responsive">
+                    <table class="table table-bordered table-sm">
+                        <thead class="table-primary"><tr><th>Servizio</th><th>Descrizione</th></tr></thead>
+                        <tbody>
+                            <tr><td><strong>Banche dati catastali</strong></td><td>Visure, ricerche per soggetto/immobile/indirizzo, elenco immobili</td></tr>
+                            <tr><td><strong>Banche dati ipotecarie</strong></td><td>Ispezioni, note, titoli, registri di pubblicità immobiliare</td></tr>
+                            <tr><td><strong>Presentazione documenti</strong></td><td>Docfa, Pregeo, Voltura, Modello Unico, planimetrie</td></tr>
+                            <tr><td><strong>Amministrazione</strong></td><td>Gestione utenza, contatti, pagamenti, convenzioni</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            {# 2 #}
+            <div class="guide-section" id="chi-lo-usa">
+                <h2><i class="fas fa-users me-2"></i>2. Chi lo usa</h2>
+                <div class="table-responsive">
+                    <table class="table table-bordered table-sm">
+                        <thead class="table-primary"><tr><th>Categoria</th><th>Accesso tipico</th></tr></thead>
+                        <tbody>
+                            <tr><td>Professionisti tecnici</td><td>Geometri, ingegneri, architetti</td></tr>
+                            <tr><td>Notai e pubblici ufficiali</td><td>Con convenzione dedicata</td></tr>
+                            <tr><td>Soggetti privati convenzionati</td><td>Aziende, studi legali, agenzie immobiliari</td></tr>
+                            <tr><td>Enti / istituzioni</td><td>Comuni, enti pubblici</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+                <p class="text-muted small">Per la consultazione serve una <strong>convenzione attiva</strong> con l'Agenzia.</p>
+            </div>
+
+            {# 3 #}
+            <div class="guide-section" id="come-si-entra">
+                <h2><i class="fas fa-sign-in-alt me-2"></i>3. Come si entra</h2>
+                <h3>Percorso passo-passo</h3>
+                <div class="card border-0 bg-light p-3">
+                    {% for step, action in [
+                        ("1", "Vai nell'<strong>area riservata</strong> dell'Agenzia delle Entrate"),
+                        ("2", "Autenticati con <strong>SPID</strong>, <strong>CIE</strong>, <strong>CNS</strong> oppure credenziali Entratel / Fisconline / Sister"),
+                        ("3", "Vai in <strong>Servizi</strong>"),
+                        ("4", "Apri <strong>Fabbricati e terreni</strong>"),
+                        ("5", "Se già abilitato: entra nelle funzioni Sister. Se non abilitato: seleziona <strong>Adesione ai servizi Sister</strong>")
+                    ] %}
+                    <div class="flow-step">
+                        <span class="step-badge">{{ step }}</span>
+                        <span>{{ action | safe }}</span>
+                    </div>
+                    {% endfor %}
+                </div>
+            </div>
+
+            {# 4 #}
+            <div class="guide-section" id="prima-attivazione">
+                <h2><i class="fas fa-user-plus me-2"></i>4. Prima attivazione</h2>
+                <div class="table-responsive">
+                    <table class="table table-bordered table-sm">
+                        <thead class="table-primary"><tr><th>Passaggio</th><th>Azione</th></tr></thead>
+                        <tbody>
+                            <tr><td>1</td><td>Accedi dall'area riservata</td></tr>
+                            <tr><td>2</td><td>Apri <strong>Servizi › Fabbricati e terreni › Adesione ai servizi Sister</strong></td></tr>
+                            <tr><td>3</td><td>Scegli il tipo di convenzione</td></tr>
+                            <tr><td>4</td><td>Compila la domanda</td></tr>
+                            <tr><td>5</td><td>Firma digitalmente (dove richiesto)</td></tr>
+                            <tr><td>6</td><td>Invia la richiesta</td></tr>
+                            <tr><td>7</td><td>Controlla lo stato in <strong>Stato della richiesta</strong></td></tr>
+                        </tbody>
+                    </table>
+                </div>
+                <h3>Tipi di convenzione</h3>
+                <div class="table-responsive">
+                    <table class="table table-bordered table-sm">
+                        <thead class="table-secondary"><tr><th>Tipo</th><th>Destinatari</th></tr></thead>
+                        <tbody>
+                            <tr><td>Consultazione persona fisica</td><td>Professionisti singoli, privati</td></tr>
+                            <tr><td>Consultazione persona giuridica</td><td>Studi, società, aziende</td></tr>
+                            <tr><td>Comuni / enti</td><td>Enti pubblici, amministrazioni</td></tr>
+                            <tr><td>Presentazione documenti</td><td>Soggetti abilitati a Docfa, Pregeo, Voltura</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            {# 5 #}
+            <div class="guide-section" id="aree-principali">
+                <h2><i class="fas fa-th-large me-2"></i>5. Le aree principali</h2>
+
+                <h3><i class="fas fa-search text-primary me-1"></i> A. Consultazioni catastali</h3>
+                <div class="table-responsive">
+                    <table class="table table-bordered table-sm">
+                        <thead class="table-primary"><tr><th>Funzione</th><th>Quando usarla</th></tr></thead>
+                        <tbody>
+                            <tr><td><strong>Visura catastale</strong></td><td>Dati catastali, intestazioni, identificativi, rendita</td></tr>
+                            <tr><td><strong>Ricerca per immobile</strong></td><td>Hai foglio / particella / subalterno</td></tr>
+                            <tr><td><strong>Ricerca per soggetto</strong></td><td>Hai nome, CF o denominazione</td></tr>
+                            <tr><td><strong>Ricerca per indirizzo</strong></td><td>Hai l'indirizzo dell'immobile</td></tr>
+                            <tr><td><strong>Ricerca per partita</strong></td><td>Hai il numero di partita catastale</td></tr>
+                            <tr><td><strong>Elenco immobili</strong></td><td>Lista completa per un dato foglio/particella</td></tr>
+                            <tr><td><strong>Estratto di mappa</strong></td><td>Mappa catastale di una particella</td></tr>
+                            <tr><td><strong>Punti fiduciali</strong></td><td>Coordinate dei punti di riferimento topografico</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+
+                <h3><i class="fas fa-balance-scale text-warning me-1"></i> B. Ispezioni ipotecarie</h3>
+                <div class="table-responsive">
+                    <table class="table table-bordered table-sm">
+                        <thead class="table-warning"><tr><th>Funzione</th><th>Quando usarla</th></tr></thead>
+                        <tbody>
+                            <tr><td><strong>Ricerca per persona fisica</strong></td><td>CF di una persona naturale</td></tr>
+                            <tr><td><strong>Ricerca per persona giuridica</strong></td><td>P.IVA / denominazione di una società</td></tr>
+                            <tr><td><strong>Ricerca per immobile</strong></td><td>Dati catastali dell'immobile</td></tr>
+                            <tr><td><strong>Ricerca per nota</strong></td><td>Numero specifico di nota</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+                <div class="alert alert-warning small py-2">Il sistema mostra il <strong>costo</strong> prima della conferma. Verifica sempre l'importo.</div>
+
+                <h3><i class="fas fa-file-upload text-success me-1"></i> C. Presentazione documenti</h3>
+                <div class="table-responsive">
+                    <table class="table table-bordered table-sm">
+                        <thead class="table-success"><tr><th>Documento</th><th>Scopo</th></tr></thead>
+                        <tbody>
+                            <tr><td><strong>Docfa</strong></td><td>Dichiarazione di nuova costruzione o variazione catastale</td></tr>
+                            <tr><td><strong>Pregeo</strong></td><td>Atti di aggiornamento geometrico del catasto terreni</td></tr>
+                            <tr><td><strong>Voltura</strong></td><td>Trasferimento di proprietà nei registri catastali</td></tr>
+                            <tr><td><strong>Modello Unico</strong></td><td>Pratica unificata (notarile)</td></tr>
+                            <tr><td><strong>Visura planimetrica</strong></td><td>Richiesta planimetria di un immobile</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            {# 6 #}
+            <div class="guide-section" id="flussi">
+                <h2><i class="fas fa-project-diagram me-2"></i>6. Flussi operativi rapidi</h2>
+
+                {% set flows = [
+                    ("1 — Visura catastale per immobile", [
+                        ("1","Entra in Consultazioni catastali"),
+                        ("2","Scegli Ricerca per immobile"),
+                        ("3","Inserisci: Comune, sezione, foglio, particella, subalterno"),
+                        ("4","Invia la richiesta"),
+                        ("5","Apri la risposta"),
+                        ("6","Salva o stampa il risultato"),
+                    ]),
+                    ("2 — Visura per persona", [
+                        ("1","Entra in Consultazioni catastali"),
+                        ("2","Scegli Persona fisica o Persona giuridica"),
+                        ("3","Inserisci i dati identificativi (CF / denominazione)"),
+                        ("4","Scegli l'ambito: nazionale, provinciale o comunale"),
+                        ("5","Invia"),
+                        ("6","Apri l'elenco immobili / la visura restituita"),
+                    ]),
+                    ("3 — Ispezione ipotecaria", [
+                        ("1","Entra in Reparti di Pubblicità Immobiliare / Ispezioni ipotecarie"),
+                        ("2","Seleziona il tipo di ricerca: persona fisica, giuridica, immobile, nota"),
+                        ("3","Inserisci i dati richiesti"),
+                        ("4","Verifica il costo (mostrato prima della conferma)"),
+                        ("5","Conferma"),
+                        ("6","Scarica la risposta e la ricevuta"),
+                    ]),
+                    ("4 — Planimetria catastale", [
+                        ("1","Entra in Presentazione documenti › Visura planimetrica"),
+                        ("2","Compila la richiesta indicando un soggetto intestatario"),
+                        ("3","Firma digitalmente il modulo"),
+                        ("4","Invia la richiesta"),
+                        ("5","Controlla lo stato"),
+                        ("6","Visualizza e salva la planimetria"),
+                    ]),
+                ] %}
+
+                <div class="row g-3">
+                {% for title, steps in flows %}
+                <div class="col-md-6">
+                    <div class="card border-0 shadow-sm h-100">
+                        <div class="card-header bg-primary text-white py-2 small fw-semibold">
+                            <i class="fas fa-stream me-1"></i>Flusso {{ title }}
+                        </div>
+                        <div class="card-body p-3">
+                        {% for n, action in steps %}
+                        <div class="flow-step">
+                            <span class="step-badge">{{ n }}</span>
+                            <span class="small">{{ action }}</span>
+                        </div>
+                        {% endfor %}
+                        </div>
+                    </div>
+                </div>
+                {% endfor %}
+                </div>
+
+                <div class="card border-0 shadow-sm mt-3">
+                    <div class="card-header bg-success text-white py-2 small fw-semibold">
+                        <i class="fas fa-search-plus me-1"></i>Flusso 5 — Due diligence immobiliare completa
+                    </div>
+                    <div class="card-body p-0">
+                        <div class="table-responsive">
+                            <table class="table table-sm mb-0">
+                                <thead class="table-light"><tr><th>Passo</th><th>Azione</th><th>Perché</th></tr></thead>
+                                <tbody>
+                                    <tr><td>1</td><td>Ricerca per persona (nazionale)</td><td>Trova tutti gli immobili del soggetto in Italia</td></tr>
+                                    <tr><td>2</td><td>Visura catastale per ogni immobile</td><td>Dati catastali, rendita, intestazione</td></tr>
+                                    <tr><td>3</td><td>Elenco immobili per foglio/particella</td><td>Lista completa dei subalterni</td></tr>
+                                    <tr><td>4</td><td>Ispezione ipotecaria per soggetto</td><td>Formalità, ipoteche, pignoramenti</td></tr>
+                                    <tr><td>5</td><td>Elenco note per conservatoria</td><td>Dettaglio delle note ipotecarie</td></tr>
+                                    <tr><td>6</td><td>Estratto di mappa</td><td>Mappa catastale della particella</td></tr>
+                                    <tr><td>7</td><td>Planimetria (se abilitato)</td><td>Piantina dell'unità immobiliare</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            {# 7 #}
+            <div class="guide-section" id="preparazione">
+                <h2><i class="fas fa-clipboard-check me-2"></i>7. Cosa preparare prima di usare SISTER</h2>
+                <div class="table-responsive">
+                    <table class="table table-bordered table-sm">
+                        <thead class="table-primary"><tr><th>Elemento</th><th>Quando serve</th></tr></thead>
+                        <tbody>
+                            <tr><td><strong>SPID / CIE / CNS</strong></td><td>Sempre (autenticazione)</td></tr>
+                            <tr><td><strong>Convenzione attiva</strong></td><td>Sempre (verifica in Gestione utenza)</td></tr>
+                            <tr><td><strong>Firma digitale</strong></td><td>Presentazione documenti, planimetrie, adesioni</td></tr>
+                            <tr><td><strong>Dati catastali completi</strong></td><td>Ricerche per immobile (comune, foglio, particella, sub)</td></tr>
+                            <tr><td><strong>Codice fiscale del soggetto</strong></td><td>Ricerche per persona, planimetrie</td></tr>
+                            <tr><td><strong>Delega / incarico</strong></td><td>Quando si agisce per conto di terzi</td></tr>
+                            <tr><td><strong>Metodo di pagamento</strong></td><td>Ispezioni ipotecarie, certificati</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            {# 8 #}
+            <div class="guide-section" id="errori">
+                <h2><i class="fas fa-exclamation-triangle me-2 text-warning"></i>8. Errori frequenti e soluzioni</h2>
+                <div class="table-responsive">
+                    <table class="table table-bordered table-sm">
+                        <thead class="table-warning"><tr><th>Errore</th><th>Causa</th><th>Soluzione</th></tr></thead>
+                        <tbody>
+                            <tr><td>Immobile non trovato</td><td>Riferimenti catastali incompleti o errati</td><td>Verifica comune, sezione, foglio, particella, sub</td></tr>
+                            <tr><td>CF non validato</td><td>Codice fiscale errato o non attivo</td><td>Controlla il CF con il servizio di verifica dell'Agenzia</td></tr>
+                            <tr><td>Planimetria non rilasciata</td><td>Soggetto non intestatario o CF non validato</td><td>Verifica intestazione e correttezza del CF</td></tr>
+                            <tr><td>Planimetria non trovata</td><td>Menu sbagliato</td><td>Si trova in <strong>Presentazione documenti</strong>, non in Consultazioni</td></tr>
+                            <tr><td>Omonimie nei risultati</td><td>Ricerca per nome troppo generica</td><td>Usa i dati catastali (foglio/particella) quando possibile</td></tr>
+                            <tr><td>Funzione bloccata</td><td>Convenzione scaduta o profilo non abilitato</td><td>Controlla in Gestione utenza e Pagamenti</td></tr>
+                            <tr><td>Visura vs ispezione confuse</td><td>Sono due servizi diversi</td><td>Catastale = dati immobile; ipotecaria = registri pubblici</td></tr>
+                            <tr><td>Scrivania del Territorio</td><td>Non più disponibile</td><td>Migrata su Sister dal 1 aprile 2026</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            {# 9 #}
+            <div class="guide-section" id="supporto">
+                <h2><i class="fas fa-headset me-2"></i>9. Password, accesso e supporto</h2>
+                <div class="row g-3">
+                    <div class="col-md-6">
+                        <div class="card border-0 shadow-sm h-100">
+                            <div class="card-header bg-secondary text-white py-2 small fw-semibold">Problemi di accesso</div>
+                            <div class="card-body p-0">
+                                <table class="table table-sm mb-0">
+                                    <tbody>
+                                        <tr><td>Password dimenticata</td><td class="text-muted small">Procedura di recupero dall'area riservata</td></tr>
+                                        <tr><td>Contatti non aggiornati</td><td class="text-muted small">Aggiorna in Gestione utenza prima del recupero</td></tr>
+                                        <tr><td>Convenzione scaduta</td><td class="text-muted small">Rinnova tramite Pagamenti / Gestione contabile</td></tr>
+                                        <tr><td>Errore tecnico</td><td class="text-muted small">Contatta l'assistenza Sister online</td></tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-md-6">
+                        <div class="card border-0 shadow-sm h-100">
+                            <div class="card-header bg-secondary text-white py-2 small fw-semibold">Assistenza</div>
+                            <div class="card-body small">
+                                <p><strong>Assistenza Sister:</strong> problemi tecnici, convenzioni, password</p>
+                                <p><strong>Assistenza servizi catastali e ipotecari:</strong> funzionamento dei servizi</p>
+                                <p class="mb-0"><strong>Gestione utenza:</strong> stato utenza e permessi</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            {# 10 #}
+            <div class="guide-section" id="riepilogo">
+                <h2><i class="fas fa-map me-2"></i>10. Riepilogo — Quando usare cosa</h2>
+                <div class="table-responsive">
+                    <table class="table table-bordered table-sm">
+                        <thead class="table-primary"><tr><th>Obiettivo</th><th>Strumento</th><th>Menu</th></tr></thead>
+                        <tbody>
+                            <tr><td>Dati catastali, intestazioni, rendita</td><td><strong>Visura catastale</strong></td><td>Consultazioni</td></tr>
+                            <tr><td>Hai foglio/particella/sub</td><td><strong>Ricerca per immobile</strong></td><td>Consultazioni</td></tr>
+                            <tr><td>Parti dal soggetto (CF/nome)</td><td><strong>Ricerca per persona</strong></td><td>Consultazioni</td></tr>
+                            <tr><td>Cerchi un indirizzo</td><td><strong>Ricerca per indirizzo</strong></td><td>Consultazioni</td></tr>
+                            <tr><td>Formalità, note, ipoteche</td><td><strong>Ispezione ipotecaria</strong></td><td>Reparti PI</td></tr>
+                            <tr><td>Mappa catastale</td><td><strong>Estratto di mappa</strong></td><td>Consultazioni</td></tr>
+                            <tr><td>Piantina dell'immobile</td><td><strong>Planimetria</strong></td><td>Presentazione documenti</td></tr>
+                            <tr><td>Docfa, Pregeo, Voltura</td><td><strong>Presentazione documenti</strong></td><td>Presentazione documenti</td></tr>
+                            <tr><td>Gestire utenti e permessi</td><td><strong>Gestione utenza</strong></td><td>Gestione utenza</td></tr>
+                            <tr><td>Pagamenti e rinnovi</td><td><strong>Pagamenti</strong></td><td>Pagamenti</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+                <div class="alert alert-2026 p-3 mt-3 small">
+                    <i class="fas fa-exclamation-triangle text-warning me-2"></i>
+                    <strong>Alert 2026:</strong> Scrivania del Territorio non è più disponibile dal 1 aprile 2026. Tutte le funzioni sono state migrate su Sister.
+                </div>
+            </div>
+
+        </div>{# /col #}
+    </div>{# /row #}
+</div>
+{% endblock %}

@@ -1,0 +1,313 @@
+{% extends "_base.html" %}
+{% block page_title %}Glossario{% endblock %}
+
+{% block extra_css %}
+{{ super() }}
+<style>
+.gl-hero { background: linear-gradient(135deg, #6f42c1 0%, #59359a 100%); color: white; padding: 2rem 0; margin-bottom: 2rem; }
+.gl-section { margin-bottom: 2.5rem; }
+.gl-section h2 { font-size: 1.2rem; font-weight: 700; border-bottom: 2px solid #6f42c1; padding-bottom: .4rem; margin-bottom: 1rem; color: #6f42c1; }
+.gl-section h3 { font-size: .95rem; font-weight: 600; margin-top: 1.25rem; margin-bottom: .4rem; color: #495057; }
+.badge-type { font-size: .7rem; font-family: var(--bs-font-monospace); }
+.chip-demo { display: inline-flex; align-items: center; gap: .3rem; font-size: .75rem; border-radius: .3rem; padding: .2rem .55rem; border: 1px solid; }
+.chip-fab  { background: #d1e7dd; color: #0a3622; border-color: #a3cfbb; }
+.chip-ter  { background: #fff3cd; color: #664d03; border-color: #ffe69c; }
+.chip-sogg { background: #cff4fc; color: #055160; border-color: #9eeaf9; }
+.chip-sto  { background: #e2e3e5; color: #2b2d2f; border-color: #c4c8cb; }
+.chip-epa  { background: #e0cffc; color: #2c0b5b; border-color: #c29ffa; }
+.chip-plan { background: #f8d7da; color: #58151c; border-color: #f1aeb5; }
+.chip-eln  { background: #d2f4ea; color: #0a3622; border-color: #a3cfbb; }
+.chip-other{ background: #f8f9fa; color: #495057; border-color: #dee2e6; }
+.term-dt { font-weight: 600; font-family: var(--bs-font-monospace); font-size: .8rem; background: #f8f9fa; padding: .1rem .4rem; border-radius: .25rem; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="gl-hero no-print">
+    <div class="container-fluid">
+        <nav class="mb-3" aria-label="breadcrumb">
+            <ol class="breadcrumb mb-0">
+                <li class="breadcrumb-item"><a href="/web/" class="text-white-50">Dashboard</a></li>
+                <li class="breadcrumb-item active text-white">Glossario</li>
+            </ol>
+        </nav>
+        <h1 class="display-6 fw-bold mb-1"><i class="fas fa-book me-3"></i>Glossario</h1>
+        <p class="lead mb-0 opacity-75">Tipi di documento, sottotipi di visura e concetti chiave</p>
+    </div>
+</div>
+
+<div class="container-fluid">
+    <div class="row">
+        {# TOC #}
+        <div class="col-lg-3 d-none d-lg-block">
+            <div class="card border-0 shadow-sm sticky-top" style="top:1rem">
+                <div class="card-header py-2" style="background:#6f42c1;color:white">
+                    <small class="fw-semibold"><i class="fas fa-list me-2"></i>Sezioni</small>
+                </div>
+                <div class="list-group list-group-flush small">
+                    <a href="#tipi-documento" class="list-group-item list-group-item-action py-2">Tipi di documento</a>
+                    <a href="#sottotipi-visura" class="list-group-item list-group-item-action py-2">Sottotipi di visura</a>
+                    <a href="#formati-file" class="list-group-item list-group-item-action py-2">Formati file</a>
+                    <a href="#dossier" class="list-group-item list-group-item-action py-2">Dossier</a>
+                    <a href="#catasto" class="list-group-item list-group-item-action py-2">Termini catastali</a>
+                    <a href="#ipotecario" class="list-group-item list-group-item-action py-2">Termini ipotecari</a>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-lg-9">
+
+            {# ── Tipi di documento ─────────────────────────── #}
+            <div class="gl-section" id="tipi-documento">
+                <h2><i class="fas fa-tag me-2"></i>Tipi di documento</h2>
+                <p class="text-muted small">Ogni documento nel database ha un campo <code>document_type</code> che determina come viene classificato, visualizzato e raggruppato nell'indice.</p>
+
+                <div class="table-responsive">
+                    <table class="table table-bordered table-sm align-middle">
+                        <thead class="table-light">
+                            <tr><th>Tipo</th><th>Nome visualizzato</th><th>Colore</th><th>Descrizione</th></tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td><span class="term-dt">visura_fabbricati</span></td>
+                                <td>Visura Fabbricati</td>
+                                <td><span class="chip-demo chip-fab"><i class="fas fa-building"></i> Fabbricati</span></td>
+                                <td>Visura catastale di un'unità immobiliare (fabbricato). Contiene dati catastali, classamento, rendita, intestatari, indirizzo. Corrisponde ai tag XML <code>VisuraFabbricatiAttuale</code> e <code>VisuraFabbricatiStorica</code>.</td>
+                            </tr>
+                            <tr>
+                                <td><span class="term-dt">visura_terreni</span></td>
+                                <td>Visura Terreni</td>
+                                <td><span class="chip-demo chip-ter"><i class="fas fa-seedling"></i> Terreni</span></td>
+                                <td>Visura catastale di una particella terreno (catasto terreni). Contiene qualità, classe, superficie, reddito dominicale e agrario, intestatari. Corrisponde ai tag XML <code>VisuraTerrenoAttuale</code> e <code>VisuraTerrenoStorica</code>.</td>
+                            </tr>
+                            <tr>
+                                <td><span class="term-dt">visura_storica</span></td>
+                                <td>Visura Storica</td>
+                                <td><span class="chip-demo chip-sto"><i class="fas fa-clock-rotate-left"></i> Storica</span></td>
+                                <td>Visura con evoluzione storica completa delle mutazioni soggettive e oggettive nel tempo. Usata quando il file è nominato con prefisso <code>vi_sto</code> o quando il tipo non è determinabile dal contenuto.</td>
+                            </tr>
+                            <tr>
+                                <td><span class="term-dt">visura_soggetto</span></td>
+                                <td>Visura per Soggetto</td>
+                                <td><span class="chip-demo chip-sogg"><i class="fas fa-user"></i> Soggetto</span></td>
+                                <td>Elenco degli immobili intestati a una persona fisica (CF) o giuridica (P.IVA). Non è una visura di un singolo immobile: è la lista completa del patrimonio catastale del soggetto. Corrisponde ai tag XML <code>VisuraSoggettoAttuale</code> e <code>VisuraSoggettoStorica</code>.</td>
+                            </tr>
+                            <tr>
+                                <td><span class="term-dt">elenco_immobili</span></td>
+                                <td>Intestatari / Elenco Immobili</td>
+                                <td><span class="chip-demo chip-eln"><i class="fas fa-list"></i> Elenco</span></td>
+                                <td>Lista degli intestatari di un immobile specifico, oppure lista degli immobili in un determinato foglio/particella. Utile per identificare tutti i comproprietari o tutti i subalterni di una particella.</td>
+                            </tr>
+                            <tr>
+                                <td><span class="term-dt">planimetria</span></td>
+                                <td>Planimetria</td>
+                                <td><span class="chip-demo chip-plan"><i class="fas fa-ruler-combined"></i> Planimetria</span></td>
+                                <td>Piantina grafica dell'unità immobiliare depositata al catasto. Richiede l'abilitazione alla presentazione documenti. Il soggetto richiedente deve essere intestatario dell'immobile.</td>
+                            </tr>
+                            <tr>
+                                <td><span class="term-dt">elaborato_planimetrico</span></td>
+                                <td>Elaborato Planimetrico (EPA)</td>
+                                <td><span class="chip-demo chip-epa"><i class="fas fa-drafting-compass"></i> EPA</span></td>
+                                <td>Documento tecnico contenente la planimetria elaborata di un'unità immobiliare, comprensiva di dati metrici, superfici e annotazioni tecniche. Prodotto dagli uffici catastali.</td>
+                            </tr>
+                            <tr>
+                                <td><span class="term-dt">visura_pnf</span></td>
+                                <td>Visura PNF / Soggetto Storica</td>
+                                <td><span class="chip-demo chip-other"><i class="fas fa-file-contract"></i> PNF</span></td>
+                                <td>Visura relativa a soggetti del Pre-Nuovo Catasto Fabbricati (PNF). Riguarda immobili censiti prima della conversione al sistema attuale; include la storia delle variazioni soggettive sotto il vecchio regime catastale.</td>
+                            </tr>
+                            <tr>
+                                <td><span class="term-dt">visura</span></td>
+                                <td>Non classificata</td>
+                                <td><span class="chip-demo chip-other"><i class="fas fa-file-contract"></i> Visura</span></td>
+                                <td>Tipo generico assegnato quando il parser non riesce a identificare il tipo dal contenuto XML (file mancante, formato non riconosciuto, o documento senza tag XML standard). Da classificare manualmente.</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            {# ── Sottotipi di visura ───────────────────────── #}
+            <div class="gl-section" id="sottotipi-visura">
+                <h2><i class="fas fa-layer-group me-2"></i>Sottotipi di visura</h2>
+                <p class="text-muted small">Il campo <code>visura_subtype</code> specifica il tipo di elaborazione catastale richiesta al portale SISTER al momento della produzione del documento.</p>
+
+                <div class="table-responsive">
+                    <table class="table table-bordered table-sm">
+                        <thead class="table-light">
+                            <tr><th>Sottotipo</th><th>Nome</th><th>Descrizione</th><th>Titolo XML tipico</th></tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td><span class="term-dt">attuale</span></td>
+                                <td>Visura Attuale</td>
+                                <td>Fotografia della situazione catastale corrente. Mostra lo stato dell'immobile alla data della richiesta, senza la storia delle mutazioni pregresse.</td>
+                                <td class="text-muted small font-monospace">Visura attuale fabbricato</td>
+                            </tr>
+                            <tr>
+                                <td><span class="term-dt">storica</span></td>
+                                <td>Visura Storica</td>
+                                <td>Visura con la storia completa delle mutazioni. Mostra l'evoluzione nel tempo di titolarità e caratteristiche tecniche. Sottotipo generico quando non è specificato analitica/sintetica.</td>
+                                <td class="text-muted small font-monospace">Visura storico fabbricato</td>
+                            </tr>
+                            <tr>
+                                <td><span class="term-dt">storica_analitica</span></td>
+                                <td>Storica Analitica</td>
+                                <td>Versione dettagliata della visura storica: elenca ogni singola mutazione soggettiva (passaggi di proprietà) e oggettiva (variazioni fisiche o di classamento) con date e riferimenti agli atti.</td>
+                                <td class="text-muted small font-monospace">Visura storica analitica</td>
+                            </tr>
+                            <tr>
+                                <td><span class="term-dt">storica_sintetica</span></td>
+                                <td>Storica Sintetica</td>
+                                <td>Versione riassuntiva della visura storica: mostra solo i dati principali di ciascuna mutazione, senza il dettaglio degli atti. Più compatta ma meno completa della versione analitica.</td>
+                                <td class="text-muted small font-monospace">Visura storica sintetica</td>
+                            </tr>
+                            <tr>
+                                <td><span class="term-dt">storica_completa</span></td>
+                                <td>Storica Completa</td>
+                                <td>Visura con tutto il dettaglio storico disponibile, comprensivo di dati tecnici, planimetrici e di classamento per ogni periodo. La più esaustiva tra le tipologie storiche.</td>
+                                <td class="text-muted small font-monospace">Visura storica completa</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+                <div class="alert alert-info small py-2 mt-2">
+                    <i class="fas fa-info-circle me-1"></i>
+                    Il sistema SISTER richiede automaticamente la <strong>Storica Analitica</strong> in formato XML per tutti i documenti generati via automazione. Le visure <em>Attuale</em> sono prodotte su richieste specifiche.
+                </div>
+            </div>
+
+            {# ── Formati file ─────────────────────────────── #}
+            <div class="gl-section" id="formati-file">
+                <h2><i class="fas fa-file me-2"></i>Formati file</h2>
+                <div class="table-responsive">
+                    <table class="table table-bordered table-sm">
+                        <thead class="table-light"><tr><th>Formato</th><th>Estensione</th><th>Descrizione</th></tr></thead>
+                        <tbody>
+                            <tr>
+                                <td><span class="badge bg-danger badge-type">P7M</span></td>
+                                <td><code>.p7m</code></td>
+                                <td>File XML firmato digitalmente con firma CAdES (Cryptographic Message Syntax). È il formato ufficiale SISTER: contiene il documento XML con dati strutturati avvolto in una firma digitale verificabile. Leggibile dopo l'estrazione dell'XML interno.</td>
+                            </tr>
+                            <tr>
+                                <td><span class="badge bg-success badge-type">XML</span></td>
+                                <td><code>.xml</code></td>
+                                <td>File XML grezzo (non firmato), oppure XML estratto da un P7M. Contiene gli stessi dati strutturati del P7M ma senza firma digitale. Parsabile direttamente.</td>
+                            </tr>
+                            <tr>
+                                <td><span class="badge bg-primary badge-type">PDF</span></td>
+                                <td><code>.pdf</code></td>
+                                <td>Versione leggibile del documento, generata dal portale SISTER come rendering del contenuto XML. Non contiene dati strutturati parsabili: viene trattato come allegato al P7M/XML corrispondente (stesso nome base).</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            {# ── Dossier ──────────────────────────────────── #}
+            <div class="gl-section" id="dossier">
+                <h2><i class="fas fa-folder-open me-2"></i>Dossier</h2>
+                <p>Un <strong>dossier</strong> in SISTER è il risultato grezzo di una singola richiesta al portale, salvato come file JSON nella directory <code>data/dossiers/</code>. Ogni richiesta che il sistema invia al portale SISTER produce un dossier.</p>
+
+                <div class="row g-3 mb-3">
+                    <div class="col-md-6">
+                        <div class="card border-0 bg-light h-100">
+                            <div class="card-body small">
+                                <h6 class="fw-semibold">Cosa contiene un dossier</h6>
+                                <ul class="mb-0">
+                                    <li>Tipo di richiesta (visura, soggetto, intestati, …)</li>
+                                    <li>Parametri della query (provincia, foglio, particella, CF, …)</li>
+                                    <li>Risposta strutturata del portale (dati dell'immobile, intestatari, classamento)</li>
+                                    <li>Timestamp e stato della richiesta</li>
+                                    <li>Riferimenti ai file scaricati (P7M/PDF)</li>
+                                </ul>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-md-6">
+                        <div class="card border-0 bg-light h-100">
+                            <div class="card-body small">
+                                <h6 class="fw-semibold">Dossier vs Documento</h6>
+                                <ul class="mb-0">
+                                    <li>Il <strong>dossier</strong> è la risposta JSON della singola richiesta SISTER</li>
+                                    <li>Il <strong>documento</strong> (PDF/P7M/XML) è il file ufficiale scaricato che accompagna la risposta</li>
+                                    <li>Più dossier possono puntare allo stesso documento se la stessa visura è richiesta più volte</li>
+                                    <li>I documenti sono visibili in <a href="/web/documents">Documenti</a>; i dossier in <a href="/web/dossiers">Dossier</a></li>
+                                </ul>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <h3>Tipi di dossier</h3>
+                <div class="table-responsive">
+                    <table class="table table-bordered table-sm">
+                        <thead class="table-light"><tr><th>Tipo</th><th>Descrizione</th><th>Parametri principali</th></tr></thead>
+                        <tbody>
+                            <tr><td>Visura per immobile</td><td>Dati catastali di un'unità immobiliare specifica</td><td>Provincia, comune, foglio, particella, subalterno</td></tr>
+                            <tr><td>Visura per soggetto</td><td>Patrimonio catastale di una persona fisica</td><td>Codice fiscale, provincia (opzionale)</td></tr>
+                            <tr><td>Visura persona giuridica</td><td>Patrimonio catastale di una società</td><td>Partita IVA</td></tr>
+                            <tr><td>Intestatari / Elenco immobili</td><td>Chi possiede cosa in un foglio/particella</td><td>Provincia, foglio, particella</td></tr>
+                            <tr><td>Ricerca per indirizzo</td><td>Trova il catastale dato un indirizzo</td><td>Comune, indirizzo</td></tr>
+                            <tr><td>Estratto di mappa</td><td>Mappa catastale della particella</td><td>Provincia, foglio, particella</td></tr>
+                            <tr><td>Elaborato planimetrico</td><td>Planimetria elaborata dell'unità</td><td>Provincia, foglio, particella, subalterno</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+
+                <div class="alert alert-secondary small py-2 mt-2">
+                    <i class="fas fa-info-circle me-1"></i>
+                    I dossier sono la fonte primaria per le query recenti. I <strong>Documenti</strong> (<code>/web/documents</code>) rappresentano invece l'archivio strutturato di tutti i file scaricati, indicizzati dal parser XML.
+                </div>
+            </div>
+
+            {# ── Termini catastali ─────────────────────────── #}
+            <div class="gl-section" id="catasto">
+                <h2><i class="fas fa-map-marked-alt me-2"></i>Termini catastali</h2>
+                <div class="table-responsive">
+                    <table class="table table-bordered table-sm">
+                        <thead class="table-light"><tr><th>Termine</th><th>Definizione</th></tr></thead>
+                        <tbody>
+                            <tr><td><strong>Catasto Fabbricati (CF)</strong></td><td>Registro delle unità immobiliari urbane: appartamenti, uffici, negozi, capannoni, ecc. Ciascuna unità ha una categoria, classe e rendita catastale.</td></tr>
+                            <tr><td><strong>Catasto Terreni (CT)</strong></td><td>Registro dei terreni: campi, boschi, aree agricole. Le particelle terreni hanno qualità, classe, superficie e redditi dominicale e agrario.</td></tr>
+                            <tr><td><strong>Foglio</strong></td><td>Suddivisione cartografica del territorio comunale. Ogni comune è diviso in fogli numerati.</td></tr>
+                            <tr><td><strong>Particella</strong></td><td>Unità minima di mappatura catastale all'interno di un foglio. Identifica un terreno o la base fondiaria di un fabbricato.</td></tr>
+                            <tr><td><strong>Subalterno</strong></td><td>Ulteriore suddivisione della particella nel catasto fabbricati: identifica la singola unità immobiliare (es. appartamento 1, appartamento 2, …) all'interno dello stesso edificio.</td></tr>
+                            <tr><td><strong>Sezione Urbana</strong></td><td>Suddivisione interna al comune per i grandi centri urbani (es. RA per Ravenna). Precede il foglio negli identificativi catastali.</td></tr>
+                            <tr><td><strong>Rendita catastale</strong></td><td>Valore convenzionale attribuito a un'unità immobiliare dal catasto, usato come base imponibile per alcune imposte (IMU, IRPEF, ecc.).</td></tr>
+                            <tr><td><strong>Classamento</strong></td><td>Attribuzione della categoria e classe a un'unità immobiliare. Determina la rendita catastale.</td></tr>
+                            <tr><td><strong>Categoria catastale</strong></td><td>Classificazione del tipo d'uso dell'immobile (es. A/2 = abitazione civile, A/4 = abitazione popolare, C/1 = negozio, D/8 = fabbricato industriale).</td></tr>
+                            <tr><td><strong>Mutazione soggettiva</strong></td><td>Cambio di intestazione: vendita, donazione, successione, ecc. Registra chi era proprietario e fino a quando.</td></tr>
+                            <tr><td><strong>Mutazione oggettiva</strong></td><td>Variazione delle caratteristiche fisiche o di classamento dell'immobile: frazionamento, fusione, variazione di consistenza o rendita.</td></tr>
+                            <tr><td><strong>Intestatario</strong></td><td>Soggetto (persona fisica o giuridica) titolare di un diritto reale sull'immobile (proprietà, usufrutto, diritto di superficie, ecc.).</td></tr>
+                            <tr><td><strong>Diritto reale</strong></td><td>Tipo di diritto sull'immobile: proprietà (01), usufrutto (02), uso (03), abitazione (04), enfiteusi (05), superficie (06), ecc.</td></tr>
+                            <tr><td><strong>PNF</strong></td><td>Pre-Nuovo Catasto Fabbricati. Regime catastale precedente alla riforma che ha introdotto il sistema attuale di categorie e rendite.</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            {# ── Termini ipotecari ─────────────────────────── #}
+            <div class="gl-section" id="ipotecario">
+                <h2><i class="fas fa-balance-scale me-2"></i>Termini ipotecari</h2>
+                <div class="table-responsive">
+                    <table class="table table-bordered table-sm">
+                        <thead class="table-light"><tr><th>Termine</th><th>Definizione</th></tr></thead>
+                        <tbody>
+                            <tr><td><strong>Ispezione ipotecaria</strong></td><td>Ricerca nei registri immobiliari (Conservatoria dei Registri Immobiliari) per verificare la storia giuridica di un immobile: ipoteche, pignoramenti, atti traslativi, servitù.</td></tr>
+                            <tr><td><strong>Conservatoria / Reparto PI</strong></td><td>Ufficio dell'Agenzia delle Entrate che gestisce i Registri Immobiliari (Pubblicità Immobiliare). Tiene traccia di tutti gli atti che trasferiscono o gravano diritti su immobili.</td></tr>
+                            <tr><td><strong>Nota</strong></td><td>Documento depositato in conservatoria che attesta un atto giuridico (compravendita, ipoteca, pignoramento, …). Identificata da numero e anno.</td></tr>
+                            <tr><td><strong>Ipoteca</strong></td><td>Garanzia reale su un immobile a favore di un creditore. In caso di insolvenza, il creditore può espropriare e vendere il bene.</td></tr>
+                            <tr><td><strong>Pignoramento</strong></td><td>Atto con cui un creditore vincola un immobile in attesa dell'esecuzione forzata. L'immobile non può essere venduto liberamente.</td></tr>
+                            <tr><td><strong>Trascrizione</strong></td><td>Pubblicazione di un atto nei registri immobiliari (es. compravendita). Rende l'atto opponibile ai terzi.</td></tr>
+                            <tr><td><strong>Iscrizione</strong></td><td>Registrazione di un diritto accessorio come l'ipoteca. Diversa dalla trascrizione: si usa per diritti di garanzia.</td></tr>
+                            <tr><td><strong>Formalità</strong></td><td>Termine generico che comprende sia trascrizioni sia iscrizioni nei registri immobiliari.</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+        </div>{# /col #}
+    </div>{# /row #}
+</div>
+{% endblock %}

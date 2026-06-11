@@ -126,6 +126,77 @@ def require_shutdown_api_key(x_api_key: Optional[str] = Header(default=None, ali
 
 
 # ---------------------------------------------------------------------------
+# Lifespan helpers
+# ---------------------------------------------------------------------------
+
+
+def _chrome_cdp_cmd(port: int) -> list[str]:
+    """Build the Chrome launch command for CDP mode.
+
+    Uses a dedicated user-data-dir so it starts as an independent process
+    even when a regular Chrome is already running (Chrome is single-instance
+    per profile; a separate dir bypasses that constraint).
+    """
+    from pathlib import Path as _Path
+    profile_dir = os.getenv("SISTER_CHROME_PROFILE", str(_Path.home() / ".local/share/sister/chrome-profile"))
+    return [
+        "google-chrome",
+        f"--remote-debugging-port={port}",
+        f"--user-data-dir={profile_dir}",
+        "--no-first-run",
+        "--no-default-browser-check",
+    ]
+
+
+async def _ensure_chrome_cdp() -> None:
+    """If BROWSER_CDP_ENDPOINT is configured, check it is reachable and launch Chrome if not."""
+    import httpx
+
+    cdp_endpoint = os.getenv("BROWSER_CDP_ENDPOINT", "").strip()
+    if not cdp_endpoint:
+        return
+
+    try:
+        async with httpx.AsyncClient(timeout=2.0) as client:
+            resp = await client.get(f"{cdp_endpoint}/json/version")
+            if resp.status_code == 200:
+                info = resp.json()
+                logger.info("Chrome CDP già attivo: %s", info.get("Browser", cdp_endpoint))
+                return
+    except Exception:
+        pass
+
+    from urllib.parse import urlparse
+    port = urlparse(cdp_endpoint).port or 9222
+    cmd = _chrome_cdp_cmd(port)
+    logger.info("Chrome CDP non raggiungibile su %s — avvio: %s", cdp_endpoint, " ".join(cmd))
+    try:
+        await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+            start_new_session=True,
+        )
+        # Wait up to 5 s for Chrome to start accepting connections
+        for _ in range(5):
+            await asyncio.sleep(1)
+            try:
+                async with httpx.AsyncClient(timeout=1.0) as client:
+                    resp = await client.get(f"{cdp_endpoint}/json/version")
+                    if resp.status_code == 200:
+                        info = resp.json()
+                        logger.info("Chrome avviato: %s", info.get("Browser", "ok"))
+                        return
+            except Exception:
+                pass
+        logger.warning("Chrome avviato ma CDP non ancora raggiungibile su %s", cdp_endpoint)
+    except FileNotFoundError:
+        logger.error("google-chrome non trovato in PATH — impossibile avviare CDP")
+    except Exception as e:
+        logger.error("Errore avvio Chrome: %s", e)
+
+
+# ---------------------------------------------------------------------------
 # Lifespan
 # ---------------------------------------------------------------------------
 
@@ -138,6 +209,7 @@ async def lifespan(app: FastAPI):
     if os.getenv("SISTER_NO_QUERY"):
         logger.info("No-query mode (SISTER_NO_QUERY set) — browser service skipped")
     else:
+        await _ensure_chrome_cdp()
         try:
             visura_service = VisuraService()
             autostart = os.getenv("SISTER_BROWSER_AUTOSTART", "true").lower() not in ("false", "0", "no")
@@ -403,6 +475,25 @@ async def _ottieni_visura(
     _: None = Depends(require_api_key),
 ):
     return await ottieni_visura(request_id, service)
+
+
+@app.post("/visura/queue/clear")
+async def _clear_queue(
+    service: VisuraService = Depends(get_visura_service),
+    _: None = Depends(require_api_key),
+):
+    """Drain all pending requests from the queue without stopping the worker."""
+    drained = 0
+    while not service.request_queue.empty():
+        try:
+            service.request_queue.get_nowait()
+            service.request_queue.task_done()
+            drained += 1
+        except Exception:
+            break
+    service.pending_request_ids.clear()
+    logger.info("Queue cleared: %d requests drained", drained)
+    return {"drained": drained, "queue_size": service.request_queue.qsize()}
 
 
 @app.post("/shutdown")

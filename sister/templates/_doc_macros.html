@@ -219,7 +219,7 @@
     {% for f in d.files %}
     {% set cls = 'attach-pdf' if f.file_format == 'PDF' else ('attach-p7m' if f.file_format == 'P7M' else 'attach-xml') %}
     {% set ic = 'fa-file-pdf' if f.file_format == 'PDF' else 'fa-file-code' %}
-    <a class="attach {{ cls }}" href="{{ prefix }}/{{ f.id }}/download" title="{{ f.filename }}">
+    <a class="attach {{ cls }}" href="{{ prefix }}/{{ f.id }}" title="{{ f.filename }}">
         <i class="fas {{ ic }}"></i>{{ f.file_format }}{% if f.size_human %} · {{ f.size_human }}{% endif %}
     </a>
     {% endfor %}
@@ -228,18 +228,27 @@
 
 {# Documents table. `docs` = list of logical documents; links use `prefix`
    (/web/documents or /web/dossiers). `show_location` toggles the Ubicazione
-   column (hidden inside a property dossier where it is redundant). #}
-{% macro doc_table(table_id, docs, color, prefix='/web/documents', show_location=True) %}
+   column (hidden inside a property dossier where it is redundant).
+   `is_soggetto` replaces Ubicazione/Dati Catastali/Catasto with CF/VAT columns. #}
+{% macro doc_table(table_id, docs, color, prefix='/web/documents', show_location=True, is_soggetto=False) %}
 <div class="table-responsive">
     <table class="table table-hover table-sm mb-0 doc-table" id="doc-table-{{ table_id }}">
         <thead class="table-light">
             <tr>
                 <th>Oggetto</th>
                 <th>Tipo</th>
+                <th>Sottotipo</th>
+                {% if is_soggetto %}
+                <th>Codice Fiscale</th>
+                <th>Partita IVA</th>
+                <th>Data Riferimento</th>
+                {% else %}
                 {% if show_location %}<th>Ubicazione</th>{% endif %}
                 <th>Dati Catastali</th>
                 <th>Catasto</th>
+                <th>Data Riferimento</th>
                 <th class="text-end">Intestati</th>
+                {% endif %}
                 <th>Allegati</th>
                 <th>Data</th>
                 <th class="text-end no-print">Azioni</th>
@@ -259,6 +268,22 @@
                     {% endif %}
                 </td>
                 <td><span class="badge bg-light text-dark border">{{ (d.document_type or '-')|replace('_', ' ') }}</span></td>
+                <td>
+                    {%- set sub = d.visura_subtype or '' -%}
+                    {%- if sub == 'attuale' %}<span class="badge bg-success-subtle text-success border border-success-subtle">attuale</span>
+                    {%- elif sub == 'storica' %}<span class="badge bg-secondary-subtle text-secondary border border-secondary-subtle">storica</span>
+                    {%- elif sub == 'storica_analitica' %}<span class="badge bg-secondary-subtle text-secondary border border-secondary-subtle">st. analitica</span>
+                    {%- elif sub == 'storica_sintetica' %}<span class="badge bg-secondary-subtle text-secondary border border-secondary-subtle">st. sintetica</span>
+                    {%- elif sub == 'storica_completa' %}<span class="badge bg-secondary-subtle text-secondary border border-secondary-subtle">st. completa</span>
+                    {%- elif sub == 'sintetica' %}<span class="badge bg-info-subtle text-info border border-info-subtle">sintetica</span>
+                    {%- else %}<span class="text-muted">-</span>
+                    {%- endif %}
+                </td>
+                {% if is_soggetto %}
+                <td class="font-monospace small">{{ d.cf or '' }}</td>
+                <td class="font-monospace small">{{ d.vat or '' }}</td>
+                <td class="text-muted small">{{ d.situazione_al or '-' }}</td>
+                {% else %}
                 {% if show_location %}
                 <td>
                     {% if d.comune or d.provincia %}{{ d.comune or '-' }}{% if d.provincia %} <span class="text-muted">({{ d.provincia }})</span>{% endif %}
@@ -278,9 +303,11 @@
                     {% elif d.tipo_catasto == 'E' %}<span class="badge bg-info">E</span>
                     {% else %}<span class="text-muted">-</span>{% endif %}
                 </td>
+                <td class="text-muted small">{{ d.situazione_al or '-' }}</td>
                 <td class="text-end">
                     {% if d.intestati_count %}<span class="badge bg-light text-dark border">{{ d.intestati_count }}</span>{% else %}<span class="text-muted">-</span>{% endif %}
                 </td>
+                {% endif %}
                 <td>{{ file_chips(d, prefix) }}</td>
                 <td class="text-muted small">{{ d.created_display or '-' }}</td>
                 <td class="text-end no-print">
@@ -309,6 +336,9 @@
 .attach-pdf { color: #dc3545; border-color: #dc3545; }
 .attach:hover { filter: brightness(.9); }
 .doc-actions .btn { --bs-btn-padding-y: .15rem; --bs-btn-padding-x: .4rem; --bs-btn-font-size: .75rem; }
+.doc-table thead th.th-sortable { cursor: pointer; user-select: none; white-space: nowrap; }
+.doc-table thead th.th-sortable:hover { background: #e9ecef; }
+.sort-icon { font-size: .7rem; opacity: .6; }
 </style>
 {% endmacro %}
 
@@ -316,6 +346,46 @@
 {% macro doc_macros_js() %}
 <script>
 (function () {
+    function parseItalianDate(s) {
+        var m = s.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+        return m ? new Date(+m[3], +m[2] - 1, +m[1]) : null;
+    }
+
+    function makeSortable(tbl) {
+        var ths = Array.from(tbl.querySelectorAll('thead th'));
+        ths.forEach(function (th, idx) {
+            if (th.classList.contains('no-print')) return;
+            th.classList.add('th-sortable');
+            th.dataset.sortDir = '';
+            th.addEventListener('click', function () {
+                var asc = th.dataset.sortDir !== 'asc';
+                ths.forEach(function (t) {
+                    t.dataset.sortDir = '';
+                    var ic = t.querySelector('.sort-icon');
+                    if (ic) ic.textContent = '';
+                });
+                th.dataset.sortDir = asc ? 'asc' : 'desc';
+                var icon = th.querySelector('.sort-icon');
+                if (!icon) { icon = document.createElement('span'); icon.className = 'sort-icon ms-1'; th.appendChild(icon); }
+                icon.textContent = asc ? ' ↑' : ' ↓';
+                var tbody = tbl.querySelector('tbody');
+                var rows = Array.from(tbody.querySelectorAll('tr')).filter(function (r) { return r.style.display !== 'none'; });
+                var hidden = Array.from(tbody.querySelectorAll('tr')).filter(function (r) { return r.style.display === 'none'; });
+                rows.sort(function (a, b) {
+                    var ca = ((a.querySelectorAll('td')[idx] || {}).textContent || '').trim().replace(/\s+/g, ' ');
+                    var cb = ((b.querySelectorAll('td')[idx] || {}).textContent || '').trim().replace(/\s+/g, ' ');
+                    var da = parseItalianDate(ca), db = parseItalianDate(cb);
+                    if (da && db) return asc ? da - db : db - da;
+                    var na = parseFloat(ca), nb = parseFloat(cb);
+                    if (!isNaN(na) && !isNaN(nb) && ca !== '' && cb !== '') return asc ? na - nb : nb - na;
+                    return asc ? ca.localeCompare(cb, 'it') : cb.localeCompare(ca, 'it');
+                });
+                rows.forEach(function (r) { tbody.appendChild(r); });
+                hidden.forEach(function (r) { tbody.appendChild(r); });
+            });
+        });
+    }
+
     function addFilter(tbl) {
         var bar = document.createElement('div');
         bar.className = 'd-flex gap-2 p-2 no-print';
@@ -342,7 +412,11 @@
         bar.appendChild(inp); bar.appendChild(btn);
         tbl.closest('.table-responsive').before(bar);
     }
-    document.querySelectorAll('.doc-table').forEach(addFilter);
+
+    document.querySelectorAll('.doc-table').forEach(function (tbl) {
+        addFilter(tbl);
+        makeSortable(tbl);
+    });
 })();
 </script>
 {% endmacro %}

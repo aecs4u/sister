@@ -321,6 +321,11 @@
 
                             {% if doc.file_path %}
                             <p class="mb-3">
+                                {% if doc.file_format == 'PDF' %}
+                                <a href="/web/documents/{{ doc.id }}/view" target="_blank" class="btn btn-sm btn-outline-secondary me-2">
+                                    <i class="fas fa-eye me-1"></i>Visualizza PDF
+                                </a>
+                                {% endif %}
                                 <a href="/web/documents/{{ doc.id }}/download" class="btn btn-sm btn-outline-primary">
                                     <i class="fas fa-download me-1"></i>Download {{ doc.file_format }}
                                 </a>

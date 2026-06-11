@@ -181,6 +181,8 @@ class VisuraDocumentDB(SQLModel, table=True):
     subalterno: Optional[str] = None
     sezione_urbana: Optional[str] = None
     tipo_catasto: Optional[str] = None  # T or F
+    visura_subtype: Optional[str] = None  # attuale | storica | storica_analitica | storica_sintetica | storica_completa
+    situazione_al: Optional[str] = None  # reference date DD/MM/YYYY from TitoloVisura/@SituazioneAl
     intestati_json: Optional[str] = Field(default=None, sa_column=Column(Text))  # parsed owners from XML
     dati_immobile_json: Optional[str] = Field(default=None, sa_column=Column(Text))  # parsed property data from XML
     xml_content: Optional[str] = Field(default=None, sa_column=Column(Text))  # raw XML content

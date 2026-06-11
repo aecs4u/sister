@@ -36,13 +36,22 @@
                 </p>
             </div>
             <div class="d-flex gap-2 mt-3 mt-md-0">
+                <button onclick="toggleAllSections(true)" class="btn btn-outline-light"><i class="fas fa-angles-down me-2"></i>Espandi</button>
+                <button onclick="toggleAllSections(false)" class="btn btn-outline-light"><i class="fas fa-angles-up me-2"></i>Riduci</button>
                 <a href="/web/dossiers" class="btn btn-outline-light"><i class="fas fa-folder-open me-2"></i>Dossier</a>
+                <a href="/web/documents?view=map" class="btn btn-outline-light"><i class="fas fa-map-location-dot me-2"></i>Mappa</a>
+                <form method="post" action="/web/documents/rescan" class="d-inline">
+                    <button type="submit" class="btn btn-outline-warning"><i class="fas fa-rotate me-2"></i>Aggiorna</button>
+                </form>
+                <button onclick="exportNamed(this)" class="btn btn-outline-success"><i class="fas fa-file-export me-2"></i>Esporta con nomi</button>
                 <a href="/web/documents?view=files" class="btn btn-outline-light"><i class="fas fa-hard-drive me-2"></i>Sfoglia file</a>
                 <button onclick="window.print()" class="btn btn-outline-light"><i class="fas fa-print me-2"></i>Stampa</button>
             </div>
         </div>
     </div>
 </div>
+
+<div id="export-toast-container" style="position:fixed;top:1.2rem;right:1.2rem;z-index:9999;min-width:320px"></div>
 
 <div class="container-fluid">
     {% if not tree %}
@@ -57,11 +66,11 @@
     {% for g in tree %}
     {% call query_section(g) %}
         {# Direct documents on the group node (e.g. Elaborati Planimetrici root) #}
-        {% if g.docs %}{{ doc_table(g.key, g.docs, g.color, '/web/documents') }}{% endif %}
+        {% if g.docs %}{{ doc_table(g.key, g.docs, g.color, '/web/documents', is_soggetto=g.is_soggetto) }}{% endif %}
         {# Sub-nodes #}
         {% for sg in g.children %}
         {% call query_subsection(sg) %}
-            {{ doc_table(sg.key, sg.docs, sg.color, '/web/documents') }}
+            {{ doc_table(sg.key, sg.docs, sg.color, '/web/documents', is_soggetto=sg.is_soggetto) }}
         {% endcall %}
         {% endfor %}
     {% endcall %}
@@ -74,4 +83,44 @@
 {% block extra_js %}
 {{ super() }}
 {{ doc_macros_js() }}
+<script>
+async function exportNamed(btn) {
+    btn.disabled = true;
+    const icon = btn.querySelector('i');
+    icon.className = 'fas fa-spinner fa-spin me-2';
+    try {
+        const resp = await fetch('/web/documents/export-named', {method: 'POST'});
+        const data = await resp.json();
+        const ok = !data.error;
+        const msg = data.error
+            ? `<strong>Errore:</strong> ${data.error}`
+            : `<strong>${data.copied}</strong> copiati · <strong>${data.skipped}</strong> già presenti · <strong>${data.missing}</strong> file mancanti`
+              + (data.copied > 0 ? `<br><small class="text-muted">${data.dest}</small>` : '');
+        showExportToast(ok ? 'success' : 'danger', msg);
+    } catch(e) {
+        showExportToast('danger', 'Errore di rete: ' + e.message);
+    } finally {
+        btn.disabled = false;
+        icon.className = 'fas fa-file-export me-2';
+    }
+}
+
+function showExportToast(type, html) {
+    const c = document.getElementById('export-toast-container');
+    const id = 'toast-' + Date.now();
+    c.insertAdjacentHTML('beforeend', `
+        <div id="${id}" class="alert alert-${type} alert-dismissible shadow mb-2" role="alert">
+            ${html}
+            <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+        </div>`);
+    setTimeout(() => document.getElementById(id)?.remove(), 8000);
+}
+
+function toggleAllSections(expand) {
+    document.querySelectorAll('[id^="q-body-"], [id^="q-sub-"]').forEach(function(el) {
+        var bsCollapse = bootstrap.Collapse.getOrCreateInstance(el, {toggle: false});
+        expand ? bsCollapse.show() : bsCollapse.hide();
+    });
+}
+</script>
 {% endblock %}

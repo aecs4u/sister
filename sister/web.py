@@ -62,7 +62,7 @@ def _doc_tipo_visura(d: dict) -> Optional[str]:
     """
     dt = d.get("document_type") or ""
     title = (d.get("oggetto") or "").lower()
-    if dt == "visura_storica" or "storic" in title:
+    if "storic" in title:
         return "storica"
     if "sintetic" in title:
         return "sintetica"
@@ -79,7 +79,7 @@ def _doc_catasto_ft(d: dict) -> Optional[str]:
     tc = (d.get("tipo_catasto") or "").upper()
     if dt == "visura_terreni" or tc == "T":
         return "terreni"
-    if dt in ("visura_fabbricati", "visura_storica") or tc == "F":
+    if dt == "visura_fabbricati" or tc == "F":
         return "fabbricati"
     return None
 
@@ -87,13 +87,43 @@ def _doc_catasto_ft(d: dict) -> Optional[str]:
 def _soggetto_kind(d: dict) -> str:
     """Persona Fisica vs Persona Giuridica.
 
-    Heuristic on oggetto/filename (no dedicated DB flag exists). Documents tagged
-    pnf / 'giuridic' are treated as Persona Giuridica; everything else as Persona Fisica.
+    11-digit VAT numbers indicate Persona Giuridica; 16-char alphanumeric CFs
+    indicate Persona Fisica. Explicit keywords in the name are also checked.
     """
     blob = ((d.get("oggetto") or "") + " " + (d.get("filename") or "")).lower()
     if "giuridic" in blob or "pnf" in blob or "_pg_" in blob or "persona_giuridica" in blob:
         return "pg"
+    cf = _extract_cf(d)
+    if cf and len(cf) == 11 and cf.isdigit():
+        return "pg"
     return "pf"
+
+
+_CF_RE = re.compile(r"(?<![A-Z0-9])([A-Z]{6}\d{2}[A-Z]\d{2}[A-Z]\d{3}[A-Z]|\d{11})(?![A-Z0-9])", re.IGNORECASE)
+
+
+def _extract_cf(d: dict) -> str | None:
+    """Return the fiscal code / VAT for the queried subject of a soggetto visura.
+
+    For soggetto documents the intestati_json holds property co-owners, not the
+    queried subject — so oggetto/filename (which always embeds the CF by naming
+    convention) takes priority; intestati_json is a last-resort fallback for
+    docs whose name contains no CF (e.g. "VISURA LORENZIN BARBARA").
+    """
+    for text in (d.get("oggetto") or "", d.get("filename") or ""):
+        m = _CF_RE.search(text.upper())
+        if m:
+            return m.group(1)
+    import json as _json
+    raw = d.get("intestati_json")
+    if raw:
+        try:
+            ints = _json.loads(raw)
+            if ints and isinstance(ints, list) and ints[0].get("CF"):
+                return ints[0]["CF"]
+        except Exception:
+            pass
+    return None
 
 
 def _collapse_to_logical_docs(docs: list[dict]) -> list[dict]:
@@ -108,7 +138,8 @@ def _collapse_to_logical_docs(docs: list[dict]) -> list[dict]:
     Logical identity (in priority order):
       1. response_id + document_type + cadastral coords  (when available)
       2. document_type + cadastral coords                (foglio/particella present)
-      3. document_type + oggetto/filename                (e.g. soggetto PDFs w/o coords)
+      3. visura_soggetto: document_type + CF + visura_subtype
+      4. document_type + oggetto/filename                (fallback)
 
     response_id is honoured first so that, once live/backfilled data links files to
     their Richiesta, attachments group correctly without code changes.
@@ -118,6 +149,12 @@ def _collapse_to_logical_docs(docs: list[dict]) -> list[dict]:
     def _logical_key(d: dict):
         rid = d.get("response_id")
         dt = d.get("document_type") or ""
+        # Soggetto visure: group by CF + subtype regardless of coordinates.
+        # Coordinates on soggetto P7Ms are the first owned property, not the identity key.
+        if dt == "visura_soggetto":
+            cf = _extract_cf(d)
+            if cf:
+                return (rid, dt, cf, d.get("visura_subtype") or "", d.get("situazione_al") or "")
         if d.get("foglio") or d.get("particella"):
             return (rid, dt, d.get("provincia"), d.get("comune"),
                     d.get("foglio"), d.get("particella"), d.get("subalterno"), d.get("sezione_urbana"))
@@ -147,8 +184,190 @@ def _collapse_to_logical_docs(docs: list[dict]) -> list[dict]:
         primary["n_pdf"] = sum(1 for f in primary["files"] if f["file_format"] == "PDF")
         primary_structured = (primary.get("file_format") or "").upper() in ("P7M", "XML")
         primary["viewable"] = primary_structured and (primary.get("document_type") or "") in _VIEWABLE_DOC_TYPES
+        if primary.get("document_type") == "visura_soggetto":
+            cf = _extract_cf(primary)
+            if cf and len(cf) == 16:
+                primary["cf"] = cf
+            elif cf and len(cf) == 11 and cf.isdigit():
+                primary["vat"] = cf
         logical.append(primary)
     return logical
+
+
+def _build_property_map(docs: list[dict]) -> dict:
+    """Group documents by cadastral coordinates into a nested property map.
+
+    Visura-soggetto documents are nested as owner children under property docs
+    (visura_storica / visura_fabbricati / visura_terreni) whose ``intestati_json``
+    lists their CF.  Documents not linked to any property parcel appear in the
+    ``soggetti`` section grouped by person.
+
+    Returns:
+      ``immobili``: provincia → foglio → particella → subalterno → docs
+      ``soggetti``: list of {cf, label, docs} for unlinked soggetto documents
+    """
+    import json, re
+
+    _SOGGETTO_TYPE = "visura_soggetto"
+
+    def _decorate_one(d: dict) -> dict:
+        d.setdefault("size_human", _human_size(d["file_size"]) if d.get("file_size") else "")
+        d.setdefault("created_display", (d.get("created_at") or "")[:16].replace("T", " "))
+        d.setdefault("viewable", (d.get("document_type") or "") in _VIEWABLE_DOC_TYPES)
+        return d
+
+    def _decorate(items: list[dict]) -> list[dict]:
+        return [_decorate_one(d) for d in items]
+
+    def _cf_from_oggetto(obj: str) -> Optional[str]:
+        m = re.search(r"\(([A-Z0-9]{11,16})\)", obj or "")
+        return m.group(1) if m else None
+
+    def _cfs_from_intestati(istr: str) -> list[str]:
+        try:
+            seen, out = set(), []
+            for row in json.loads(istr):
+                cf = row.get("CF")
+                if cf and cf not in seen:
+                    seen.add(cf)
+                    out.append(cf)
+            return out
+        except Exception:
+            return []
+
+    # Global CF → [soggetto docs] index (ALL visura_soggetto regardless of coords)
+    cf_soggetti: dict[str, list[dict]] = {}
+    for d in docs:
+        if (d.get("document_type") or "") == _SOGGETTO_TYPE:
+            cf = _cf_from_oggetto(d.get("oggetto") or "")
+            if cf:
+                cf_soggetti.setdefault(cf, []).append(d)
+
+    # Separate docs with cadastral coords from the rest
+    immobili_docs = [d for d in docs if d.get("foglio") and d.get("particella") and d.get("provincia")]
+
+    # Track doc IDs claimed as owner children under a property doc
+    claimed_ids: set[int] = set()
+
+    def _owner_docs_for(property_doc: dict) -> list[dict]:
+        """Return visura_soggetto docs for all owners in this property doc."""
+        istr = property_doc.get("intestati_json")
+        if not istr:
+            return []
+        result = []
+        for cf in _cfs_from_intestati(istr):
+            for od in cf_soggetti.get(cf, []):
+                did = od.get("id")
+                if did not in claimed_ids:
+                    claimed_ids.add(did)
+                    result.append(_decorate_one(dict(od)))
+        return sorted(result, key=lambda d: (d.get("oggetto") or d.get("filename") or ""))
+
+    # Build raw nested dict: provincia → foglio → particella → subalterno
+    prov_raw: dict[str, dict] = {}
+    for d in immobili_docs:
+        prov = (d.get("provincia") or "?").strip().upper()
+        comune = (d.get("comune") or "").strip() or None
+        foglio = (d.get("foglio") or "").strip().lstrip("0") or (d.get("foglio") or "")
+        particella = (d.get("particella") or "").strip().lstrip("0") or (d.get("particella") or "")
+        sub = (d.get("subalterno") or "").strip() or None
+        sezu = (d.get("sezione_urbana") or "").strip() or None
+
+        p = prov_raw.setdefault(prov, {})
+        f = p.setdefault(foglio, {})
+        pt = f.setdefault(particella, {"comune": None, "sezione_urbana": None, "subs": {}})
+        if comune and not pt["comune"]:
+            pt["comune"] = comune
+        if sezu and not pt["sezione_urbana"]:
+            pt["sezione_urbana"] = sezu
+        pt["subs"].setdefault(sub or "__nessuno__", []).append(d)
+
+    def _sort_num(val: str) -> tuple:
+        return (0, int(val)) if val.isdigit() else (1, val)
+
+    def _sort_sub(sub_key: str) -> tuple:
+        if sub_key == "__nessuno__":
+            return (1, [])
+        parts = sub_key.split("/")
+        try:
+            return (0, [int(p) for p in parts])
+        except ValueError:
+            return (0, [sub_key])
+
+    def _build_tree():
+        result = []
+        for prov_key in sorted(prov_raw.keys()):
+            fogli_list = []
+            for foglio_key in sorted(prov_raw[prov_key].keys(), key=_sort_num):
+                particelle_list = []
+                for pt_key in sorted(prov_raw[prov_key][foglio_key].keys(), key=_sort_num):
+                    pt_data = prov_raw[prov_key][foglio_key][pt_key]
+                    subs_list = []
+                    for sub_key in sorted(pt_data["subs"].keys(), key=_sort_sub):
+                        raw = _decorate(pt_data["subs"][sub_key])
+
+                        # Separate property docs from soggetto docs at this sub-level
+                        prop_docs = [d for d in raw if (d.get("document_type") or "") != _SOGGETTO_TYPE]
+                        sogg_here = [d for d in raw if (d.get("document_type") or "") == _SOGGETTO_TYPE]
+
+                        # Soggetti at parcel level are always owned by this parcel —
+                        # mark them claimed so they don't appear in the Soggetti section
+                        for d in sogg_here:
+                            claimed_ids.add(d.get("id"))
+
+                        # Attach owner docs to each property doc
+                        for d in prop_docs:
+                            d["owner_docs"] = _owner_docs_for(d)
+
+                        # Soggetti at this sub not claimed by any property doc stay as siblings
+                        orphan_sogg = [d for d in sogg_here if d.get("id") not in
+                                       {od.get("id") for pd in prop_docs for od in pd.get("owner_docs", [])}]
+
+                        final = sorted(prop_docs + orphan_sogg, key=lambda d: d.get("filename") or "")
+                        subs_list.append({
+                            "subalterno": None if sub_key == "__nessuno__" else sub_key,
+                            "docs": final,
+                        })
+                    particelle_list.append({
+                        "particella": pt_key,
+                        "comune": pt_data["comune"],
+                        "sezione_urbana": pt_data["sezione_urbana"],
+                        "subalternos": subs_list,
+                        "total_docs": sum(len(s["docs"]) for s in subs_list),
+                    })
+                fogli_list.append({
+                    "foglio": foglio_key,
+                    "particelle": particelle_list,
+                    "total_docs": sum(p["total_docs"] for p in particelle_list),
+                })
+            result.append({
+                "provincia": prov_key,
+                "fogli": fogli_list,
+                "total_docs": sum(f["total_docs"] for f in fogli_list),
+            })
+        return result
+
+    def _build_soggetti(immobili_tree):
+        """Soggetti not linked to any property doc, grouped by person (CF)."""
+        by_cf: dict[str, dict] = {}
+        for d in docs:
+            if (d.get("document_type") or "") != _SOGGETTO_TYPE:
+                continue
+            if d.get("id") in claimed_ids:
+                continue
+            oggetto = d.get("oggetto") or ""
+            m = re.search(r"\(([A-Z0-9]{11,16})\)", oggetto)
+            cf = m.group(1) if m else "__no_cf__"
+            label = oggetto[: m.start()].strip() if m else (oggetto or d.get("filename") or "—")
+            if cf not in by_cf:
+                by_cf[cf] = {"cf": cf if cf != "__no_cf__" else None, "label": label, "docs": []}
+            by_cf[cf]["docs"].append(_decorate_one(d))
+        for entry in by_cf.values():
+            entry["docs"].sort(key=lambda d: d.get("filename") or "")
+        return sorted(by_cf.values(), key=lambda x: x["label"])
+
+    immobili_tree = _build_tree()
+    return {"immobili": immobili_tree, "soggetti": _build_soggetti(immobili_tree)}
 
 
 def _build_document_tree(docs: list[dict]) -> list[dict]:
@@ -175,13 +394,15 @@ def _build_document_tree(docs: list[dict]) -> list[dict]:
             d.setdefault("viewable", (d.get("document_type") or "") in _VIEWABLE_DOC_TYPES)
         return rows
 
-    def leaf(key, label, icon, color, items):
+    def leaf(key, label, icon, color, items, is_soggetto=False):
         return {"key": key, "label": label, "icon": icon, "color": color,
-                "count": len(items), "docs": _decorate(items), "children": []}
+                "count": len(items), "docs": _decorate(items), "children": [],
+                "is_soggetto": is_soggetto}
 
-    def node(key, label, icon, color, children, count, docs=None):
+    def node(key, label, icon, color, children, count, docs=None, is_soggetto=False):
         return {"key": key, "label": label, "icon": icon, "color": color,
-                "count": count, "docs": _decorate(docs or []), "children": children}
+                "count": count, "docs": _decorate(docs or []), "children": children,
+                "is_soggetto": is_soggetto}
 
     by_type: dict[str, list[dict]] = defaultdict(list)
     for d in docs:
@@ -190,6 +411,36 @@ def _build_document_tree(docs: list[dict]) -> list[dict]:
     tree: list[dict] = []
 
     # ── Visura per Immobile ────────────────────────────────────────────────
+    # Subtype order and display metadata for grouping within Fabbricati / Terreni.
+    _SUBTYPE_ORDER = [
+        ("attuale",           "Attuale",           "fa-calendar-check",    "success"),
+        ("storica_analitica", "Storica Analitica", "fa-clock-rotate-left", "secondary"),
+        ("storica_sintetica", "Storica Sintetica", "fa-clock-rotate-left", "secondary"),
+        ("storica_completa",  "Storica Completa",  "fa-clock-rotate-left", "secondary"),
+        ("storica",           "Storica",           "fa-clock-rotate-left", "secondary"),
+        ("",                  "Non classificate",  "fa-file-contract",     "secondary"),
+    ]
+
+    def _catasto_subtype_leaves(items: list[dict], catasto_label: str, catasto_key: str, catasto_color: str) -> list[dict]:
+        """Flatten catasto type + subtype into sibling leaves: 'Fabbricati · Storica' etc."""
+        from collections import defaultdict
+        by_sub: dict[str, list[dict]] = defaultdict(list)
+        for d in items:
+            by_sub[d.get("visura_subtype") or ""].append(d)
+        present_subs = [sub for sub, *_ in _SUBTYPE_ORDER if by_sub.get(sub)]
+        if len(present_subs) <= 1:
+            # Only one subtype — keep as simple leaf with just the catasto label
+            return [leaf(catasto_key, catasto_label, "fa-building" if catasto_key == "visura_fabbricati" else "fa-seedling",
+                         catasto_color, items)]
+        result = []
+        for sub, sub_label, icon, color in _SUBTYPE_ORDER:
+            group = by_sub.get(sub, [])
+            if not group:
+                continue
+            combined_label = f"{catasto_label} · {sub_label}" if sub else f"{catasto_label} · Non classificate"
+            result.append(leaf(f"{catasto_key}_{sub or 'altro'}", combined_label, icon, color, group))
+        return result
+
     visure = [d for d in docs if (d.get("document_type") or "") in _VISURA_TYPES]
     if visure:
         fab  = [d for d in visure if _doc_catasto_ft(d) == "fabbricati"]
@@ -197,9 +448,9 @@ def _build_document_tree(docs: list[dict]) -> list[dict]:
         rest = [d for d in visure if _doc_catasto_ft(d) is None]
         children: list[dict] = []
         if fab:
-            children.append(leaf("visura_fabbricati", "Fabbricati", "fa-building", "success", fab))
+            children.extend(_catasto_subtype_leaves(fab, "Fabbricati", "visura_fabbricati", "success"))
         if ter:
-            children.append(leaf("visura_terreni", "Terreni", "fa-seedling", "warning", ter))
+            children.extend(_catasto_subtype_leaves(ter, "Terreni", "visura_terreni", "warning"))
         if rest:
             children.append(leaf("visura_altro", "Non classificate", "fa-file-contract", "secondary", rest))
         tree.append(node("visura_immobile", "Visura per Immobile", "fa-house", "success",
@@ -212,11 +463,11 @@ def _build_document_tree(docs: list[dict]) -> list[dict]:
         pg = [d for d in soggetti if _soggetto_kind(d) == "pg"]
         children = []
         if pf:
-            children.append(leaf("soggetto_pf", "Persona Fisica", "fa-user", "info", pf))
+            children.append(leaf("soggetto_pf", "Persona Fisica", "fa-user", "info", pf, is_soggetto=True))
         if pg:
-            children.append(leaf("soggetto_pg", "Persona Giuridica", "fa-building-user", "info", pg))
+            children.append(leaf("soggetto_pg", "Persona Giuridica", "fa-building-user", "info", pg, is_soggetto=True))
         tree.append(node("visura_soggetto", "Visura per Soggetto", "fa-user-group", "info",
-                         children, count=len(soggetti)))
+                         children, count=len(soggetti), is_soggetto=True))
 
     # ── Intestatari ────────────────────────────────────────────────────────
     if by_type.get("elenco_immobili"):
@@ -1291,6 +1542,30 @@ async def web_privacy(request: Request):
     return theme.render("privacy_policy.html", request, user=user)
 
 
+@router.get("/web/guide", response_class=HTMLResponse)
+async def web_guide(request: Request):
+    """User guide for the SISTER portal."""
+    theme = _get_theme(request)
+    user = _get_user(request)
+    return theme.render("guide.html", request, user=user)
+
+
+@router.get("/web/cheatsheet", response_class=HTMLResponse)
+async def web_cheatsheet(request: Request):
+    """Quick-reference cheat sheet for SISTER."""
+    theme = _get_theme(request)
+    user = _get_user(request)
+    return theme.render("cheatsheet.html", request, user=user)
+
+
+@router.get("/web/glossary", response_class=HTMLResponse)
+async def web_glossary(request: Request):
+    """Glossary of document types and cadastral terms."""
+    theme = _get_theme(request)
+    user = _get_user(request)
+    return theme.render("glossary.html", request, user=user)
+
+
 # ---------------------------------------------------------------------------
 # Document browser + structured viewers  (/web/documents/*)
 # ---------------------------------------------------------------------------
@@ -1382,6 +1657,12 @@ def _render_doc_from_db(doc: dict, request, theme, user, force_template: str | N
         template = "visura_terreni_attuale.html"
     else:
         template = "result_detail.html"
+    if template == "result_detail.html":
+        result = _doc_as_result(doc)
+        return theme.render(
+            "result_detail.html", request, user=user,
+            result=result, request_id=str(doc.get("id") or doc.get("filename") or ""),
+        )
     return theme.render(template, request, user=user, doc=doc)
 
 
@@ -1517,6 +1798,64 @@ async def web_files_redirect(request: Request, path: str = ""):
     return RedirectResponse(url=target, status_code=301)
 
 
+@router.post("/web/documents/export-named")
+async def web_documents_export_named(request: Request, user=Depends(_require_auth)):
+    """Copy all documents to documents/named/ using the display name stored in oggetto."""
+    import shutil
+    from pathlib import Path
+    from .database import get_all_documents
+
+    base = _files_base()
+    dest_dir = base / "named"
+    dest_dir.mkdir(exist_ok=True)
+
+    docs = await get_all_documents(limit=10000)
+    mapping = {d["filename"]: d["oggetto"] for d in docs if d.get("filename") and d.get("oggetto") and d["filename"] != d["oggetto"]}
+
+    copied, skipped, missing = [], [], []
+    for old_name, new_name in mapping.items():
+        src = base / old_name
+        if not src.exists():
+            missing.append(old_name)
+            continue
+        dst = dest_dir / new_name
+        if dst.exists() and dst.stat().st_size == src.stat().st_size:
+            skipped.append(new_name)
+            continue
+        shutil.copy2(src, dst)
+        copied.append(new_name)
+        logger.info("Exported: %s → named/%s", old_name, new_name)
+
+    return {
+        "copied": len(copied),
+        "skipped": len(skipped),
+        "missing": len(missing),
+        "dest": str(dest_dir),
+        "files": copied,
+        "missing_files": missing,
+    }
+
+
+@router.get("/web/documents/{doc_id}/view")
+async def web_document_view(request: Request, doc_id: int, user=Depends(_require_auth)):
+    """Serve the document file inline (for in-browser PDF viewing)."""
+    from pathlib import Path
+    from fastapi import HTTPException
+    from fastapi.responses import Response
+
+    doc = await get_document_by_id(doc_id)
+    if doc is None or not doc.get("file_path"):
+        raise HTTPException(status_code=404, detail="Document file not found")
+    p = Path(doc["file_path"])
+    if not p.exists() or not p.is_file():
+        raise HTTPException(status_code=404, detail="Document file not found")
+    _MEDIA = {".pdf": "application/pdf", ".p7m": "application/pkcs7-mime", ".xml": "application/xml"}
+    media_type = _MEDIA.get(p.suffix.lower(), "application/octet-stream")
+    filename = doc.get("filename") or p.name
+    headers = {"Content-Disposition": f'inline; filename="{filename}"'}
+    return Response(content=p.read_bytes(), media_type=media_type, headers=headers)
+
+
 @router.get("/web/documents/{doc_id}/download")
 async def web_document_download(request: Request, doc_id: int, user=Depends(_require_auth)):
     """Download the original file backing a DB-indexed document."""
@@ -1530,6 +1869,104 @@ async def web_document_download(request: Request, doc_id: int, user=Depends(_req
     if not p.exists() or not p.is_file():
         raise HTTPException(status_code=404, detail="Document file not found")
     return FileResponse(str(p), filename=doc.get("filename") or p.name)
+
+
+@router.post("/web/documents/rescan", response_class=HTMLResponse)
+async def web_documents_rescan(request: Request, user=Depends(_require_auth)):
+    """Scan the documents directory for files not yet indexed in the DB and register them."""
+    import asyncio
+    from pathlib import Path
+    from .database import get_indexed_file_paths, get_indexed_filenames
+    from .utils import _parse_visura_xml, _parse_visura_pdf, _save_documents_to_db
+
+    base = _files_base()
+    if not base.exists():
+        return RedirectResponse("/web/documents", status_code=303)
+
+    indexed_paths = set((await get_indexed_file_paths()).keys())
+    indexed_names = await get_indexed_filenames()
+
+    _EXT_FORMAT = {".pdf": "PDF", ".xml": "XML", ".p7m": "P7M"}
+    _NAME_TYPE = [
+        ("vi_att_fab", "visura_fabbricati"),
+        ("vi_sto_fab", "visura_fabbricati"),
+        ("vi_att_ter", "visura_terreni"),
+        ("vi_sto_ter", "visura_terreni"),
+        ("vs_att", "visura_soggetto"),
+        ("vs_sin", "visura_soggetto"),
+        ("vs_sto", "visura_soggetto"),
+        ("sogg", "visura_soggetto"),
+        ("pnf", "visura_pnf"),
+    ]
+
+    def _guess_type_from_name(name: str) -> str:
+        n = name.lower()
+        for prefix, dtype in _NAME_TYPE:
+            if prefix in n:
+                return dtype
+        return "visura"
+
+    # Subdirectories whose contents should never be indexed (export artefacts, etc.)
+    _excluded_prefixes = {str(base / "named") + "/"}
+
+    def _excluded(p: Path) -> bool:
+        s = str(p)
+        return any(s.startswith(pfx) for pfx in _excluded_prefixes)
+
+    # First pass: parse all P7M/XML files to build a stem → parsed_data map
+    # so PDFs can inherit coordinates from their paired signed counterpart.
+    parsed_by_stem: dict[str, dict] = {}
+    for fpath in sorted(base.rglob("*")):
+        if _excluded(fpath) or not fpath.is_file() or fpath.suffix.lower() not in (".p7m", ".xml"):
+            continue
+        stem = fpath.stem  # e.g. "DOC_123" from "DOC_123.p7m"
+        if stem in parsed_by_stem:
+            continue
+        result = await asyncio.to_thread(_parse_visura_xml, str(fpath))
+        if result:
+            parsed_by_stem[stem] = result
+
+    new_docs = []
+    for fpath in sorted(base.rglob("*")):
+        if _excluded(fpath) or not fpath.is_file():
+            continue
+        ext = fpath.suffix.lower()
+        if ext not in _EXT_FORMAT:
+            continue
+        if str(fpath) in indexed_paths or fpath.name in indexed_names:
+            continue
+
+        fmt = _EXT_FORMAT[ext]
+        parsed = None
+        if ext in (".p7m", ".xml"):
+            parsed = parsed_by_stem.get(fpath.stem)
+            if parsed is None:
+                parsed = await asyncio.to_thread(_parse_visura_xml, str(fpath))
+        else:
+            # PDF: try to inherit metadata from a paired P7M/XML with the same stem
+            parsed = parsed_by_stem.get(fpath.stem)
+            if parsed is None:
+                # No paired structured file — parse PDF content directly
+                parsed = await asyncio.to_thread(_parse_visura_pdf, str(fpath))
+
+        if parsed is None:
+            parsed = {"tipo": _guess_type_from_name(fpath.name)}
+
+        new_docs.append({
+            "filename": fpath.name,
+            "path": str(fpath),
+            "file_format": fmt,
+            "file_size": fpath.stat().st_size,
+            "oggetto": None,
+            "richiesta_del": None,
+            "parsed_data": parsed,
+        })
+
+    if new_docs:
+        await _save_documents_to_db(new_docs)
+        logger.info("Rescan: %d nuovi documenti indicizzati", len(new_docs))
+
+    return RedirectResponse("/web/documents", status_code=303)
 
 
 @router.get("/web/documents", response_class=HTMLResponse)
@@ -1566,6 +2003,14 @@ async def web_documents(request: Request, path: str = "", template: str = "",
     if not path and view != "files":
         files = await get_all_documents(limit=10000)
         logical = _collapse_to_logical_docs(files)
+        if view == "map":
+            prop_map = _build_property_map(logical)
+            return theme.render(
+                "documents_map.html", request, user=user,
+                prop_map=prop_map,
+                total=len(logical),
+                n_files=len(files),
+            )
         tree = _build_document_tree(logical)
         return theme.render(
             "documents_index.html", request, user=user,
@@ -1891,6 +2336,75 @@ async def web_browser_restart(request: Request, user=Depends(_require_auth)):
         return JSONResponse({"error": "Service not initialized"}, status_code=503)
     result = await visura_service.restart_browser()
     return JSONResponse(result)
+
+
+@router.post("/web/browser/launch-chrome", response_class=JSONResponse)
+async def web_browser_launch_chrome(request: Request, user=Depends(_require_auth)):
+    """Launch Google Chrome with CDP if not already running, then start the browser session."""
+    import asyncio
+    import os
+    import httpx
+    from urllib.parse import urlparse
+    from .main import visura_service, _chrome_cdp_cmd
+
+    cdp_endpoint = os.getenv("BROWSER_CDP_ENDPOINT", "http://localhost:9222")
+    launched = False
+    pid = None
+
+    # Check if CDP endpoint is already reachable
+    chrome_version = None
+    chrome_status = None
+    try:
+        async with httpx.AsyncClient(timeout=2.0) as client:
+            resp = await client.get(f"{cdp_endpoint}/json/version")
+            if resp.status_code == 200:
+                chrome_version = resp.json().get("Browser", "unknown")
+                chrome_status = "already_running"
+    except Exception:
+        pass
+
+    if chrome_status is None:
+        port = urlparse(cdp_endpoint).port or 9222
+        cmd = _chrome_cdp_cmd(port)
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL,
+                start_new_session=True,
+            )
+            pid = proc.pid
+            launched = True
+            # Wait up to 5 s for Chrome to accept CDP connections
+            for _ in range(5):
+                await asyncio.sleep(1)
+                try:
+                    async with httpx.AsyncClient(timeout=1.0) as client:
+                        resp = await client.get(f"{cdp_endpoint}/json/version")
+                        if resp.status_code == 200:
+                            chrome_version = resp.json().get("Browser", "unknown")
+                            chrome_status = "launched"
+                            break
+                except Exception:
+                    pass
+            if chrome_status is None:
+                return JSONResponse({"status": "launched", "pid": pid, "error": "Chrome started but CDP not yet reachable"})
+        except FileNotFoundError:
+            return JSONResponse({"error": "google-chrome not found in PATH"}, status_code=500)
+        except Exception as e:
+            return JSONResponse({"error": str(e)}, status_code=500)
+
+    # Connect the sister browser session
+    if visura_service is None:
+        return JSONResponse({"status": chrome_status, "pid": pid, "browser": chrome_version,
+                             "session": "skipped", "session_error": "visura_service not initialized"})
+    try:
+        session_result = await visura_service.start_browser()
+        return JSONResponse({"status": chrome_status, "pid": pid, "browser": chrome_version,
+                             "launched": launched, "session": session_result})
+    except Exception as e:
+        return JSONResponse({"status": chrome_status, "pid": pid, "browser": chrome_version,
+                             "launched": launched, "session_error": str(e)})
 
 
 # ---------------------------------------------------------------------------

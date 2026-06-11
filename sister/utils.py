@@ -1275,15 +1275,42 @@ def _parse_visura_xml(file_path: str) -> dict | None:
             "xml_content": content[:50000],
         }
 
-        # Determine document type
-        if soup.find("VisuraFabbricatiStorica") or soup.find("VisuraFabbricati"):
+        # Determine document type and subtype from XML root element and TitoloVisura
+        titolo_tag = soup.find("TitoloVisura")
+        titolo = (titolo_tag.get("Titolo", "") if titolo_tag else "").lower()
+        # SituazioneAl="20260604" → "04/06/2026"
+        situazione_raw = titolo_tag.get("SituazioneAl", "") if titolo_tag else ""
+        if len(situazione_raw) == 8 and situazione_raw.isdigit():
+            result["situazione_al"] = f"{situazione_raw[6:8]}/{situazione_raw[4:6]}/{situazione_raw[0:4]}"
+        else:
+            result["situazione_al"] = situazione_raw or None
+
+        def _subtype_from_titolo(t: str) -> str:
+            if "complet" in t:
+                return "storica_completa"
+            if "storic" in t and "analitic" in t:
+                return "storica_analitica"
+            if "storic" in t and "sintetic" in t:
+                return "storica_sintetica"
+            if "storic" in t:
+                return "storica"
+            if "attual" in t and "sintetic" in t:
+                return "sintetica"
+            if "attual" in t:
+                return "attuale"
+            return ""
+
+        if soup.find("VisuraFabbricatiStorica") or soup.find("VisuraFabbricatiAttuale") or soup.find("VisuraFabbricati"):
             result["tipo"] = "visura_fabbricati"
             result["tipo_catasto"] = "F"
-        elif soup.find("VisuraTerrenoStorica") or soup.find("VisuraTerreno"):
+            result["visura_subtype"] = _subtype_from_titolo(titolo)
+        elif soup.find("VisuraTerrenoStorica") or soup.find("VisuraTerrenoAttuale") or soup.find("VisuraTerreno"):
             result["tipo"] = "visura_terreni"
             result["tipo_catasto"] = "T"
-        elif soup.find("VisuraSoggetto") or soup.find("VisuraSoggettoStorica"):
+            result["visura_subtype"] = _subtype_from_titolo(titolo)
+        elif soup.find("VisuraSoggetto") or soup.find("VisuraSoggettoStorica") or soup.find("VisuraSoggettoAttuale"):
             result["tipo"] = "visura_soggetto"
+            result["visura_subtype"] = _subtype_from_titolo(titolo)
         else:
             result["tipo"] = "visura"
 
@@ -1357,6 +1384,99 @@ def _parse_visura_xml(file_path: str) -> dict | None:
         return None
 
 
+def _parse_visura_pdf(file_path: str) -> dict | None:
+    """Extract document type and metadata from a SISTER visura PDF using pdftotext.
+
+    Returns a dict in the same shape as _parse_visura_xml, or None on failure.
+    Only the fields reliably present in PDF output are populated:
+    tipo, visura_subtype, tipo_catasto, provincia, comune, foglio, particella,
+    subalterno, sezione_urbana, indirizzo, situazione_al.
+    """
+    import subprocess
+    import re as _re
+
+    try:
+        text = subprocess.check_output(
+            ["pdftotext", file_path, "-"], stderr=subprocess.DEVNULL, text=True, timeout=15
+        )
+    except Exception as e:
+        log.debug("_parse_visura_pdf: pdftotext failed for %s: %s", file_path, e)
+        return None
+
+    t = text.lower()
+
+    # --- document type + subtype ---
+    def _subtype(t: str) -> str:
+        if "storica" in t and "sintetica" in t:
+            return "storica_sintetica"
+        if "storica" in t and "analitica" in t:
+            return "storica_analitica"
+        if "storica" in t and "completa" in t:
+            return "storica_completa"
+        if "storica" in t:
+            return "storica"
+        if "attuale" in t and "sintetica" in t:
+            return "sintetica"
+        if "attuale" in t:
+            return "attuale"
+        return ""
+
+    tipo: str | None = None
+    subtype = ""
+    tipo_catasto: str | None = None
+
+    if "per soggetto" in t or "visura soggetto" in t:
+        tipo = "visura_soggetto"
+        subtype = _subtype(t)
+    elif "fabbricat" in t or "urbano" in t:
+        tipo = "visura_fabbricati"
+        subtype = _subtype(t)
+        tipo_catasto = "F"
+    elif "terren" in t:
+        tipo = "visura_terreni"
+        subtype = _subtype(t)
+        tipo_catasto = "T"
+    else:
+        tipo = "visura"
+
+    result: dict = {"tipo": tipo, "visura_subtype": subtype or None, "tipo_catasto": tipo_catasto}
+
+    # --- situazione al (reference date) ---
+    m = _re.search(r"situazione[^\d]+(\d{2}/\d{2}/\d{4})", t)
+    if m:
+        result["situazione_al"] = m.group(1)
+
+    # --- provincia + comune from "Direzione Provinciale di <Comune>" header ---
+    m = _re.search(r"direzione provinciale di ([A-Z][A-Za-zÀ-ÿ '\-]+)\b", text)
+    if m:
+        result["comune"] = m.group(1).strip().upper()
+
+    # --- coordinates (catasto documents only) ---
+    if tipo in ("visura_fabbricati", "visura_terreni"):
+        # "Comune di RAVENNA (H199) (RA)"
+        m = _re.search(r"Comune di ([A-Z][A-Z ]+)\s*\([A-Z0-9]+\)\s*\(([A-Z]{2})\)", text)
+        if m:
+            result["comune"] = m.group(1).strip()
+            result["provincia"] = m.group(2)
+
+        # Foglio / Particella / Subalterno
+        m = _re.search(r"Foglio[:\s]+(\d+)", text, _re.IGNORECASE)
+        if m:
+            result["foglio"] = m.group(1)
+        m = _re.search(r"Particella[:\s]+(\d+)", text, _re.IGNORECASE)
+        if m:
+            result["particella"] = m.group(1)
+        m = _re.search(r"Subalterno[:\s]+(\d+)", text, _re.IGNORECASE)
+        if m:
+            result["subalterno"] = m.group(1)
+
+        m = _re.search(r"Indirizzo[:\s]+([A-Z]{2,}[^\n]{5,60})", text)
+        if m:
+            result["indirizzo"] = m.group(1).strip()
+
+    return result
+
+
 async def _save_documents_to_db(documents: list[dict]) -> None:
     """Persist downloaded documents to the visura_documents table, skipping duplicates."""
     import json
@@ -1403,6 +1523,8 @@ async def _save_documents_to_db(documents: list[dict]) -> None:
                 subalterno=subalterno,
                 sezione_urbana=parsed.get("sezione_urbana"),
                 tipo_catasto=parsed.get("tipo_catasto"),
+                visura_subtype=parsed.get("visura_subtype") or None,
+                situazione_al=parsed.get("situazione_al") or None,
                 intestati_json=json.dumps(parsed.get("intestati", []), ensure_ascii=False) if parsed.get("intestati") else None,
                 dati_immobile_json=json.dumps({
                     "immobile": parsed.get("immobile", {}),

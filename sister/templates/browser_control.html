@@ -104,6 +104,12 @@
             </div>
             <div class="card-body d-flex flex-column gap-3">
                 <div>
+                    <button id="btn-launch-chrome" class="btn btn-outline-primary w-100" onclick="launchChrome()">
+                        <i class="fas fa-chrome me-2"></i>Lancia Chrome (CDP :9222)
+                    </button>
+                    <small class="text-muted">Avvia Google Chrome con <code>--remote-debugging-port=9222</code> se non è già in esecuzione.</small>
+                </div>
+                <div>
                     <button id="btn-start" class="btn btn-success w-100" onclick="browserAction('start')">
                         <i class="fas fa-play me-2"></i>Avvia sessione
                     </button>
@@ -193,6 +199,41 @@
             if (r.ok) applyStatus(await r.json());
         } catch (_) {}
     }
+
+    window.launchChrome = async function () {
+        const btn = document.getElementById('btn-launch-chrome');
+        const res = document.getElementById('action-result');
+        if (btn) btn.disabled = true;
+        res.className = 'alert alert-info d-block';
+        res.textContent = 'Avvio Chrome in corso…';
+        log('→ launch-chrome', 'warn');
+        try {
+            const r = await fetch('/web/browser/launch-chrome', { method: 'POST' });
+            const data = await r.json();
+            if (data.error && !data.status) {
+                res.className = 'alert alert-danger d-block';
+                res.textContent = data.error;
+                log(`✗ ${data.error}`, 'err');
+            } else {
+                const chromeMsg = data.status === 'already_running'
+                    ? `Chrome già attivo (${data.browser})`
+                    : `Chrome avviato pid ${data.pid} — ${data.browser || ''}`;
+                const sessionMsg = data.session_error
+                    ? ` | Sessione: ${data.session_error}`
+                    : data.session ? ` | Sessione: ${data.session.state || 'ok'}` : '';
+                res.className = `alert ${data.session_error ? 'alert-warning' : 'alert-success'} d-block`;
+                res.textContent = chromeMsg + sessionMsg;
+                log(`✓ launch-chrome → ${data.status}${sessionMsg}`, 'ok');
+                await poll();
+            }
+        } catch (e) {
+            res.className = 'alert alert-danger d-block';
+            res.textContent = String(e);
+            log(`✗ ${e}`, 'err');
+        } finally {
+            if (btn) btn.disabled = false;
+        }
+    };
 
     window.browserAction = async function (action, force) {
         const btns = ['btn-start','btn-restart','btn-stop','btn-stop-force'];

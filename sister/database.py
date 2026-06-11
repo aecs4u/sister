@@ -444,6 +444,8 @@ async def get_documents_for_response(request_id: str, foglio: str = None, partic
             "subalterno": row.subalterno,
             "sezione_urbana": row.sezione_urbana,
             "tipo_catasto": row.tipo_catasto,
+            "visura_subtype": row.visura_subtype,
+            "situazione_al": row.situazione_al,
             "intestati": json.loads(row.intestati_json) if row.intestati_json else [],
             "dati_immobile": _dati.get("immobile", {}) if (_dati := json.loads(row.dati_immobile_json) if row.dati_immobile_json else {}) else {},
             "classamento": _dati.get("classamento", []),
@@ -498,6 +500,16 @@ async def get_indexed_file_paths() -> dict[str, int]:
         return {row.file_path: row.id for row in result}
 
 
+async def get_indexed_filenames() -> set[str]:
+    """Return the set of filenames already indexed (basename only)."""
+    session_factory = _get_session_factory()
+    async with session_factory() as session:
+        result = await session.execute(
+            select(VisuraDocumentDB.filename).where(VisuraDocumentDB.filename.isnot(None))
+        )
+        return {row.filename for row in result}
+
+
 async def get_indexed_file_metadata() -> dict[str, dict]:
     """Return {file_path: {"id": doc_id, "oggetto": new_name}} for all indexed documents."""
     session_factory = _get_session_factory()
@@ -538,7 +550,10 @@ async def get_all_documents(limit: int = 100, offset: int = 0) -> list[dict]:
             "particella": row.particella,
             "subalterno": row.subalterno,
             "tipo_catasto": row.tipo_catasto,
+            "visura_subtype": row.visura_subtype,
+            "situazione_al": row.situazione_al,
             "intestati_count": len(json.loads(row.intestati_json)) if row.intestati_json else 0,
+            "intestati_json": row.intestati_json,
             "created_at": row.created_at.isoformat() if row.created_at else None,
         })
     return docs

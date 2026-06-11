@@ -1,0 +1,235 @@
+{% extends "_base.html" %}
+{% block page_title %}Cheat Sheet{% endblock %}
+
+{% block extra_css %}
+{{ super() }}
+<style>
+.cs-hero { background: linear-gradient(135deg, #198754 0%, #146c43 100%); color: white; padding: 2rem 0; margin-bottom: 2rem; }
+.cs-card { border: 0; box-shadow: 0 1px 4px rgba(0,0,0,.08); margin-bottom: 1.25rem; }
+.cs-card .card-header { font-weight: 600; font-size: .9rem; padding: .5rem .85rem; }
+.cs-card table { font-size: .83rem; margin-bottom: 0; }
+.flow-code { background: #212529; color: #f8f9fa; border-radius: .4rem; padding: .75rem 1rem; font-family: var(--bs-font-monospace); font-size: .8rem; line-height: 1.7; }
+.flow-code .arrow { color: #6ea8fe; }
+.checklist li { padding: .25rem 0; }
+.checklist li::marker { content: "☐  "; }
+.alert-2026 { background: #fff3cd; border-left: 4px solid #ffc107; font-size: .85rem; }
+@media print { .cs-hero { background: #f8f9fa !important; color: #333 !important; } }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="cs-hero no-print">
+    <div class="container-fluid">
+        <nav class="mb-3" aria-label="breadcrumb">
+            <ol class="breadcrumb mb-0">
+                <li class="breadcrumb-item"><a href="/web/" class="text-white-50">Dashboard</a></li>
+                <li class="breadcrumb-item active text-white">Cheat Sheet</li>
+            </ol>
+        </nav>
+        <h1 class="display-6 fw-bold mb-1"><i class="fas fa-bolt me-3"></i>Cheat Sheet Operativo SISTER</h1>
+        <p class="lead mb-0 opacity-75">Riferimento rapido per l'uso quotidiano dei servizi catastali e ipotecari</p>
+    </div>
+</div>
+
+<div class="container-fluid">
+    <div class="row g-3">
+
+        {# Accesso #}
+        <div class="col-md-6 col-xl-4">
+            <div class="card cs-card h-100">
+                <div class="card-header bg-primary text-white"><i class="fas fa-sign-in-alt me-2"></i>Accesso</div>
+                <div class="card-body p-0">
+                    <table class="table table-sm">
+                        <tbody>
+                            <tr><td class="fw-semibold">Login</td><td>Area riservata (SPID / CIE / CNS)</td></tr>
+                            <tr><td class="fw-semibold">Navigazione</td><td>Servizi › Fabbricati e terreni › Sister</td></tr>
+                        </tbody>
+                    </table>
+                    <div class="px-3 pb-3">
+                        <div class="small text-muted fw-semibold mb-1">Prima attivazione</div>
+                        <div class="flow-code">Servizi › Fabbricati e terreni<br>
+<span class="arrow">›</span> Adesione ai servizi Sister<br>
+<span class="arrow">›</span> Scegli convenzione<br>
+<span class="arrow">›</span> Compila › Firma digitale<br>
+<span class="arrow">›</span> Invia › Stato della richiesta</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        {# Quale ricerca #}
+        <div class="col-md-6 col-xl-4">
+            <div class="card cs-card h-100">
+                <div class="card-header bg-success text-white"><i class="fas fa-search me-2"></i>Quale ricerca scegliere</div>
+                <div class="card-body p-0">
+                    <table class="table table-sm">
+                        <thead class="table-light"><tr><th>Hai…</th><th>Usa…</th></tr></thead>
+                        <tbody>
+                            <tr><td>Foglio / particella / sub</td><td><strong>Ricerca per immobile</strong></td></tr>
+                            <tr><td>Nome / CF / denominazione</td><td><strong>Ricerca per persona</strong></td></tr>
+                            <tr><td>Indirizzo</td><td><strong>Ricerca per indirizzo</strong></td></tr>
+                            <tr><td>Numero di nota</td><td><strong>Ricerca nota</strong></td></tr>
+                            <tr><td>Registro immobiliare</td><td><strong>Ispezione ipotecaria</strong></td></tr>
+                            <tr><td>Planimetria</td><td><strong>Visura planimetrica</strong></td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        {# Menu principali #}
+        <div class="col-md-6 col-xl-4">
+            <div class="card cs-card h-100">
+                <div class="card-header bg-secondary text-white"><i class="fas fa-bars me-2"></i>Menu principali</div>
+                <div class="card-body p-0">
+                    <table class="table table-sm">
+                        <tbody>
+                            <tr><td class="fw-semibold small">Consultazioni</td><td class="small">Visure, ricerche catastali, mappe, punti fiduciali</td></tr>
+                            <tr><td class="fw-semibold small">Ispezioni ipotecarie</td><td class="small">Registri immobiliari, note, titoli depositati</td></tr>
+                            <tr><td class="fw-semibold small">Presentazione documenti</td><td class="small">Docfa, Pregeo, Voltura, Modello Unico, planimetrie</td></tr>
+                            <tr><td class="fw-semibold small">Pagamenti</td><td class="small">Attivazione utenze, ricevute, rinnovi, saldi</td></tr>
+                            <tr><td class="fw-semibold small">Gestione utenza</td><td class="small">Utenti, contatti, abilitazioni, profili</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        {# Flussi — visura per immobile #}
+        <div class="col-md-6 col-xl-3">
+            <div class="card cs-card h-100">
+                <div class="card-header bg-primary text-white"><i class="fas fa-building me-2"></i>Visura per immobile</div>
+                <div class="card-body">
+                    <div class="flow-code">Comune <span class="arrow">›</span> sezione (se c'è)<br>
+<span class="arrow">›</span> foglio <span class="arrow">›</span> particella <span class="arrow">›</span> sub<br>
+<span class="arrow">›</span> Invia <span class="arrow">›</span> Verifica <span class="arrow">›</span> Salva</div>
+                </div>
+            </div>
+        </div>
+
+        {# Flussi — visura per persona #}
+        <div class="col-md-6 col-xl-3">
+            <div class="card cs-card h-100">
+                <div class="card-header bg-info text-white"><i class="fas fa-user me-2"></i>Visura per persona</div>
+                <div class="card-body">
+                    <div class="flow-code">PF / PG <span class="arrow">›</span> CF o denominazione<br>
+<span class="arrow">›</span> Ambito (naz / prov / com)<br>
+<span class="arrow">›</span> Invia <span class="arrow">›</span> Apri risultato</div>
+                </div>
+            </div>
+        </div>
+
+        {# Flussi — ispezione ipotecaria #}
+        <div class="col-md-6 col-xl-3">
+            <div class="card cs-card h-100">
+                <div class="card-header bg-warning text-dark"><i class="fas fa-balance-scale me-2"></i>Ispezione ipotecaria</div>
+                <div class="card-body">
+                    <div class="flow-code">Tipo ricerca (PF / PG / imm / nota)<br>
+<span class="arrow">›</span> Dati soggetto / immobile<br>
+<span class="arrow">›</span> Verifica costo <span class="arrow">›</span> Conferma<br>
+<span class="arrow">›</span> Scarica esito + ricevuta</div>
+                </div>
+            </div>
+        </div>
+
+        {# Flussi — planimetria #}
+        <div class="col-md-6 col-xl-3">
+            <div class="card cs-card h-100">
+                <div class="card-header bg-secondary text-white"><i class="fas fa-drafting-compass me-2"></i>Planimetria catastale</div>
+                <div class="card-body">
+                    <div class="flow-code">Presentazione documenti<br>
+<span class="arrow">›</span> Visura planimetrica<br>
+<span class="arrow">›</span> Compila <span class="arrow">›</span> Firma digitale<br>
+<span class="arrow">›</span> Invia <span class="arrow">›</span> Controlla stato</div>
+                    <p class="text-muted small mt-2 mb-0">Solo per soggetti abilitati e CF validato.</p>
+                </div>
+            </div>
+        </div>
+
+        {# Checklist pre-invio #}
+        <div class="col-md-6 col-xl-4">
+            <div class="card cs-card h-100">
+                <div class="card-header bg-dark text-white"><i class="fas fa-clipboard-check me-2"></i>Checklist pre-invio</div>
+                <div class="card-body">
+                    <ul class="checklist ps-3 small mb-0">
+                        <li>Convenzione attiva</li>
+                        <li>Profilo corretto</li>
+                        <li>Dati inseriti completi</li>
+                        <li>Codice fiscale corretto e validato</li>
+                        <li>Intestatario corretto (se richiesto)</li>
+                        <li>Firma digitale disponibile (se richiesta)</li>
+                        <li>Pagamento pronto (se dovuto)</li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+
+        {# Scorciatoie #}
+        <div class="col-md-6 col-xl-4">
+            <div class="card cs-card h-100">
+                <div class="card-header bg-success text-white"><i class="fas fa-lightbulb me-2"></i>Scorciatoie pratiche</div>
+                <div class="card-body p-0">
+                    <table class="table table-sm">
+                        <tbody>
+                            <tr><td class="fw-semibold small">Due diligence</td><td class="small">Prima visura catastale, poi ispezione ipotecaria</td></tr>
+                            <tr><td class="fw-semibold small">Evitare omonimie</td><td class="small">Parti dai dati catastali (foglio/particella) invece che dal nome</td></tr>
+                            <tr><td class="fw-semibold small">Indagine soggetto</td><td class="small">Ricerca persona nazionale → per ogni provincia → ispezione ipotecaria</td></tr>
+                            <tr><td class="fw-semibold small">Problemi ricorrenti</td><td class="small">Controlla password, convenzione, ruolo e contatti in Gestione utenza</td></tr>
+                            <tr><td class="fw-semibold small">Costo ispezione</td><td class="small">Il sistema mostra il costo prima della conferma; verifica sempre</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        {# Costi #}
+        <div class="col-md-6 col-xl-4">
+            <div class="card cs-card h-100">
+                <div class="card-header bg-secondary text-white"><i class="fas fa-euro-sign me-2"></i>Costi indicativi</div>
+                <div class="card-body p-0">
+                    <table class="table table-sm">
+                        <tbody>
+                            <tr><td>Visura catastale</td><td><span class="badge bg-success">Gratuita</span> <span class="text-muted small">(convenzionati)</span></td></tr>
+                            <tr><td>Ispezione ipotecaria</td><td><span class="badge bg-warning text-dark">A pagamento</span></td></tr>
+                            <tr><td>Estratto di mappa</td><td><span class="badge bg-success">Gratuito</span> <span class="text-muted small">(convenzionati)</span></td></tr>
+                            <tr><td>Planimetria</td><td><span class="badge bg-success">Gratuita</span> <span class="text-muted small">(abilitati)</span></td></tr>
+                            <tr><td>Certificati catastali</td><td><span class="badge bg-warning text-dark">A pagamento</span></td></tr>
+                        </tbody>
+                    </table>
+                    <p class="text-muted small px-3 pb-2">I costi esatti dipendono dalla convenzione attiva. Il sistema mostra l'importo prima della conferma.</p>
+                </div>
+            </div>
+        </div>
+
+        {# Errori comuni #}
+        <div class="col-12">
+            <div class="card cs-card">
+                <div class="card-header bg-warning text-dark"><i class="fas fa-exclamation-triangle me-2"></i>Errori comuni</div>
+                <div class="card-body p-0">
+                    <div class="table-responsive">
+                        <table class="table table-sm mb-0">
+                            <thead class="table-light"><tr><th>Errore</th><th>Soluzione</th></tr></thead>
+                            <tbody>
+                                <tr><td>Immobile non trovato</td><td>Verifica tutti i riferimenti catastali (comune, foglio, particella, sub)</td></tr>
+                                <tr><td>CF non validato</td><td>Controlla che il codice fiscale sia corretto e attivo</td></tr>
+                                <tr><td>Planimetria non disponibile</td><td>Verifica di essere in Presentazione documenti › Visura planimetrica</td></tr>
+                                <tr><td>Funzione non disponibile</td><td>Verifica che la convenzione sia attiva e il profilo abilitato</td></tr>
+                                <tr><td>Confusione visura / ispezione</td><td>La visura catastale è diversa dall'ispezione ipotecaria: dati diversi, menu diversi</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        {# Alert 2026 #}
+        <div class="col-12">
+            <div class="alert alert-2026 p-3">
+                <i class="fas fa-exclamation-triangle text-warning me-2"></i>
+                <strong>Alert 2026:</strong> Scrivania del Territorio non è più disponibile dal 1 aprile 2026. Tutte le funzioni sono migrate su Sister.
+            </div>
+        </div>
+
+    </div>{# /row #}
+</div>
+{% endblock %}

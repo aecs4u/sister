@@ -54,3 +54,8 @@ original_file.pdf
 
 # Docker
 docker-compose.override.yaml
+# Local runtime / build (do not commit)
+.venv
+/data/
+/logs
+/outputs
