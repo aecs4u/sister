@@ -33,13 +33,16 @@ from .form_config import get_available_form_groups, get_single_step_groups, get_
 # Sister's web UI proxies workflow list/detail requests to opendata.
 _OPENDATA_API_URL = os.getenv("OPENDATA_API_URL", "http://localhost:8024")
 
+
 # Base directory for the document browser (/web/documents).
 # Defaults to the parent of the DB data folder (the project data root).
 def _files_base() -> "Path":
     from pathlib import Path
     from .database import DB_PATH
+
     data_root = Path(DB_PATH).parent.parent
     return Path(os.getenv("SISTER_FILES_BASE", str(data_root / "documents"))).resolve()
+
 
 logger = logging.getLogger("sister")
 
@@ -115,6 +118,7 @@ def _extract_cf(d: dict) -> str | None:
         if m:
             return m.group(1)
     import json as _json
+
     raw = d.get("intestati_json")
     if raw:
         try:
@@ -156,8 +160,16 @@ def _collapse_to_logical_docs(docs: list[dict]) -> list[dict]:
             if cf:
                 return (rid, dt, cf, d.get("visura_subtype") or "", d.get("situazione_al") or "")
         if d.get("foglio") or d.get("particella"):
-            return (rid, dt, d.get("provincia"), d.get("comune"),
-                    d.get("foglio"), d.get("particella"), d.get("subalterno"), d.get("sezione_urbana"))
+            return (
+                rid,
+                dt,
+                d.get("provincia"),
+                d.get("comune"),
+                d.get("foglio"),
+                d.get("particella"),
+                d.get("subalterno"),
+                d.get("sezione_urbana"),
+            )
         return (rid, dt, (d.get("oggetto") or d.get("filename") or str(d.get("id"))))
 
     def _fmt_rank(d: dict) -> int:  # structured files first
@@ -320,31 +332,42 @@ def _build_property_map(docs: list[dict]) -> dict:
                             d["owner_docs"] = _owner_docs_for(d)
 
                         # Soggetti at this sub not claimed by any property doc stay as siblings
-                        orphan_sogg = [d for d in sogg_here if d.get("id") not in
-                                       {od.get("id") for pd in prop_docs for od in pd.get("owner_docs", [])}]
+                        orphan_sogg = [
+                            d
+                            for d in sogg_here
+                            if d.get("id") not in {od.get("id") for pd in prop_docs for od in pd.get("owner_docs", [])}
+                        ]
 
                         final = sorted(prop_docs + orphan_sogg, key=lambda d: d.get("filename") or "")
-                        subs_list.append({
-                            "subalterno": None if sub_key == "__nessuno__" else sub_key,
-                            "docs": final,
-                        })
-                    particelle_list.append({
-                        "particella": pt_key,
-                        "comune": pt_data["comune"],
-                        "sezione_urbana": pt_data["sezione_urbana"],
-                        "subalternos": subs_list,
-                        "total_docs": sum(len(s["docs"]) for s in subs_list),
-                    })
-                fogli_list.append({
-                    "foglio": foglio_key,
-                    "particelle": particelle_list,
-                    "total_docs": sum(p["total_docs"] for p in particelle_list),
-                })
-            result.append({
-                "provincia": prov_key,
-                "fogli": fogli_list,
-                "total_docs": sum(f["total_docs"] for f in fogli_list),
-            })
+                        subs_list.append(
+                            {
+                                "subalterno": None if sub_key == "__nessuno__" else sub_key,
+                                "docs": final,
+                            }
+                        )
+                    particelle_list.append(
+                        {
+                            "particella": pt_key,
+                            "comune": pt_data["comune"],
+                            "sezione_urbana": pt_data["sezione_urbana"],
+                            "subalternos": subs_list,
+                            "total_docs": sum(len(s["docs"]) for s in subs_list),
+                        }
+                    )
+                fogli_list.append(
+                    {
+                        "foglio": foglio_key,
+                        "particelle": particelle_list,
+                        "total_docs": sum(p["total_docs"] for p in particelle_list),
+                    }
+                )
+            result.append(
+                {
+                    "provincia": prov_key,
+                    "fogli": fogli_list,
+                    "total_docs": sum(f["total_docs"] for f in fogli_list),
+                }
+            )
         return result
 
     def _build_soggetti(immobili_tree):
@@ -395,14 +418,28 @@ def _build_document_tree(docs: list[dict]) -> list[dict]:
         return rows
 
     def leaf(key, label, icon, color, items, is_soggetto=False):
-        return {"key": key, "label": label, "icon": icon, "color": color,
-                "count": len(items), "docs": _decorate(items), "children": [],
-                "is_soggetto": is_soggetto}
+        return {
+            "key": key,
+            "label": label,
+            "icon": icon,
+            "color": color,
+            "count": len(items),
+            "docs": _decorate(items),
+            "children": [],
+            "is_soggetto": is_soggetto,
+        }
 
     def node(key, label, icon, color, children, count, docs=None, is_soggetto=False):
-        return {"key": key, "label": label, "icon": icon, "color": color,
-                "count": count, "docs": _decorate(docs or []), "children": children,
-                "is_soggetto": is_soggetto}
+        return {
+            "key": key,
+            "label": label,
+            "icon": icon,
+            "color": color,
+            "count": count,
+            "docs": _decorate(docs or []),
+            "children": children,
+            "is_soggetto": is_soggetto,
+        }
 
     by_type: dict[str, list[dict]] = defaultdict(list)
     for d in docs:
@@ -413,25 +450,35 @@ def _build_document_tree(docs: list[dict]) -> list[dict]:
     # ── Visura per Immobile ────────────────────────────────────────────────
     # Subtype order and display metadata for grouping within Fabbricati / Terreni.
     _SUBTYPE_ORDER = [
-        ("attuale",           "Attuale",           "fa-calendar-check",    "success"),
+        ("attuale", "Attuale", "fa-calendar-check", "success"),
         ("storica_analitica", "Storica Analitica", "fa-clock-rotate-left", "secondary"),
         ("storica_sintetica", "Storica Sintetica", "fa-clock-rotate-left", "secondary"),
-        ("storica_completa",  "Storica Completa",  "fa-clock-rotate-left", "secondary"),
-        ("storica",           "Storica",           "fa-clock-rotate-left", "secondary"),
-        ("",                  "Non classificate",  "fa-file-contract",     "secondary"),
+        ("storica_completa", "Storica Completa", "fa-clock-rotate-left", "secondary"),
+        ("storica", "Storica", "fa-clock-rotate-left", "secondary"),
+        ("", "Non classificate", "fa-file-contract", "secondary"),
     ]
 
-    def _catasto_subtype_leaves(items: list[dict], catasto_label: str, catasto_key: str, catasto_color: str) -> list[dict]:
+    def _catasto_subtype_leaves(
+        items: list[dict], catasto_label: str, catasto_key: str, catasto_color: str
+    ) -> list[dict]:
         """Flatten catasto type + subtype into sibling leaves: 'Fabbricati · Storica' etc."""
         from collections import defaultdict
+
         by_sub: dict[str, list[dict]] = defaultdict(list)
         for d in items:
             by_sub[d.get("visura_subtype") or ""].append(d)
         present_subs = [sub for sub, *_ in _SUBTYPE_ORDER if by_sub.get(sub)]
         if len(present_subs) <= 1:
             # Only one subtype — keep as simple leaf with just the catasto label
-            return [leaf(catasto_key, catasto_label, "fa-building" if catasto_key == "visura_fabbricati" else "fa-seedling",
-                         catasto_color, items)]
+            return [
+                leaf(
+                    catasto_key,
+                    catasto_label,
+                    "fa-building" if catasto_key == "visura_fabbricati" else "fa-seedling",
+                    catasto_color,
+                    items,
+                )
+            ]
         result = []
         for sub, sub_label, icon, color in _SUBTYPE_ORDER:
             group = by_sub.get(sub, [])
@@ -443,8 +490,8 @@ def _build_document_tree(docs: list[dict]) -> list[dict]:
 
     visure = [d for d in docs if (d.get("document_type") or "") in _VISURA_TYPES]
     if visure:
-        fab  = [d for d in visure if _doc_catasto_ft(d) == "fabbricati"]
-        ter  = [d for d in visure if _doc_catasto_ft(d) == "terreni"]
+        fab = [d for d in visure if _doc_catasto_ft(d) == "fabbricati"]
+        ter = [d for d in visure if _doc_catasto_ft(d) == "terreni"]
         rest = [d for d in visure if _doc_catasto_ft(d) is None]
         children: list[dict] = []
         if fab:
@@ -453,8 +500,7 @@ def _build_document_tree(docs: list[dict]) -> list[dict]:
             children.extend(_catasto_subtype_leaves(ter, "Terreni", "visura_terreni", "warning"))
         if rest:
             children.append(leaf("visura_altro", "Non classificate", "fa-file-contract", "secondary", rest))
-        tree.append(node("visura_immobile", "Visura per Immobile", "fa-house", "success",
-                         children, count=len(visure)))
+        tree.append(node("visura_immobile", "Visura per Immobile", "fa-house", "success", children, count=len(visure)))
 
     # ── Visura per Soggetto ────────────────────────────────────────────────
     soggetti = by_type.get("visura_soggetto", [])
@@ -466,8 +512,17 @@ def _build_document_tree(docs: list[dict]) -> list[dict]:
             children.append(leaf("soggetto_pf", "Persona Fisica", "fa-user", "info", pf, is_soggetto=True))
         if pg:
             children.append(leaf("soggetto_pg", "Persona Giuridica", "fa-building-user", "info", pg, is_soggetto=True))
-        tree.append(node("visura_soggetto", "Visura per Soggetto", "fa-user-group", "info",
-                         children, count=len(soggetti), is_soggetto=True))
+        tree.append(
+            node(
+                "visura_soggetto",
+                "Visura per Soggetto",
+                "fa-user-group",
+                "info",
+                children,
+                count=len(soggetti),
+                is_soggetto=True,
+            )
+        )
 
     # ── Intestatari ────────────────────────────────────────────────────────
     if by_type.get("elenco_immobili"):
@@ -479,11 +534,20 @@ def _build_document_tree(docs: list[dict]) -> list[dict]:
 
     # ── Elaborati Planimetrici ─────────────────────────────────────────────
     elab = by_type.get("elaborato_planimetrico", [])
-    epa  = by_type.get("epa", [])
+    epa = by_type.get("epa", [])
     if elab or epa:
         children = [leaf("epa", "EPA", "fa-file-lines", "secondary", epa)] if epa else []
-        tree.append(node("epa", "Elaborati Planimetrici", "fa-drafting-compass",
-                         "secondary", children, count=len(elab) + len(epa), docs=elab))
+        tree.append(
+            node(
+                "epa",
+                "Elaborati Planimetrici",
+                "fa-drafting-compass",
+                "secondary",
+                children,
+                count=len(elab) + len(epa),
+                docs=elab,
+            )
+        )
 
     # ── Richieste ──────────────────────────────────────────────────────────
     if by_type.get("richieste"):
@@ -496,6 +560,7 @@ def _dossiers_base() -> "Path":
     """Filesystem root holding dossier JSON files (multi/single-step query responses)."""
     from pathlib import Path
     from .database import DB_PATH
+
     data_root = Path(DB_PATH).parent.parent
     return Path(os.getenv("SISTER_DOSSIERS_BASE", str(data_root / "dossiers"))).resolve()
 
@@ -510,6 +575,7 @@ def _dossier_group_key(name: str, kind: str, data: Any) -> str:
     All other dossiers get a unique key equal to their stem.
     """
     import re
+
     stem = name.rsplit(".", 1)[0]
 
     if kind == "response" and stem.startswith("wf_"):
@@ -629,8 +695,12 @@ def _dossier_meta(name: str, data: Any, size_bytes: int, mtime: float) -> dict:
             sogg = d.get("soggetto")
             if sogg:
                 request_params.append({"k": "CF / P.IVA", "v": str(sogg)})
-            for field, label in (("provincia", "Provincia"), ("comune", "Comune"),
-                                  ("foglio", "Foglio"), ("particella", "Particella")):
+            for field, label in (
+                ("provincia", "Provincia"),
+                ("comune", "Comune"),
+                ("foglio", "Foglio"),
+                ("particella", "Particella"),
+            ):
                 if d.get(field):
                     request_params.append({"k": label, "v": str(d[field])})
 
@@ -649,9 +719,7 @@ def _dossier_meta(name: str, data: Any, size_bytes: int, mtime: float) -> dict:
         n_results = len(data)
         request_params.append({"k": "Operazioni", "v": str(len(data))})
 
-    elif isinstance(data, dict) and data and all(
-        isinstance(v, dict) and "request_id" in v for v in data.values()
-    ):
+    elif isinstance(data, dict) and data and all(isinstance(v, dict) and "request_id" in v for v in data.values()):
         # dict-of-responses files (e.g. immobili.json, results.json)
         # Each value is a response keyed by request_id.
         kind = "multi_response"
@@ -664,8 +732,7 @@ def _dossier_meta(name: str, data: Any, size_bytes: int, mtime: float) -> dict:
             label = _TC_LABEL.get(tc, tc) if tc else "?"
             request_params.append({"k": label, "v": f"{nr} risultati" if nr else "–"})
         n_results = sum(
-            (e.get("data") or {}).get("total_results") or 0
-            for e in entries_list if isinstance(e.get("data"), dict)
+            (e.get("data") or {}).get("total_results") or 0 for e in entries_list if isinstance(e.get("data"), dict)
         )
         response_meta = {"n_results": n_results, "exported_at": ""}
 
@@ -695,39 +762,39 @@ def _dossier_meta(name: str, data: Any, size_bytes: int, mtime: float) -> dict:
 # Top-level groups (key → label, icon, color).
 # ---------------------------------------------------------------------------
 _QUERY_GROUP_META: dict[str, tuple[str, str, str]] = {
-    "visura_immobile": ("Visura per Immobile",     "fa-house",              "success"),
-    "visura_soggetto": ("Visura per Soggetto",      "fa-user-group",         "info"),
-    "intestati":       ("Intestatari",              "fa-users",              "primary"),
-    "planimetria":     ("Planimetrie",              "fa-ruler-combined",     "secondary"),
-    "epa":             ("Elaborati Planimetrici",   "fa-drafting-compass",   "secondary"),
-    "richieste":       ("Richieste",                "fa-clock-rotate-left",  "secondary"),
-    "workflow":        ("Workflow Multi-step",       "fa-diagram-project",    "primary"),
-    "batch":           ("Batch",                    "fa-layer-group",        "warning"),
-    "altro":           ("Altro",                    "fa-file",               "secondary"),
+    "visura_immobile": ("Visura per Immobile", "fa-house", "success"),
+    "visura_soggetto": ("Visura per Soggetto", "fa-user-group", "info"),
+    "intestati": ("Intestatari", "fa-users", "primary"),
+    "planimetria": ("Planimetrie", "fa-ruler-combined", "secondary"),
+    "epa": ("Elaborati Planimetrici", "fa-drafting-compass", "secondary"),
+    "richieste": ("Richieste", "fa-clock-rotate-left", "secondary"),
+    "workflow": ("Workflow Multi-step", "fa-diagram-project", "primary"),
+    "batch": ("Batch", "fa-layer-group", "warning"),
+    "altro": ("Altro", "fa-file", "secondary"),
 }
 
 # Subgroups within each top-level group (key → label, icon, color).
 _QUERY_SUBGROUP_META: dict[str, tuple[str, str, str]] = {
     # Under visura_immobile
-    "visura_fabbricati": ("Fabbricati",           "fa-building",             "success"),
-    "visura_terreni":    ("Terreni",              "fa-seedling",             "warning"),
-    "visura":            ("Visura Catastale",      "fa-file-contract",        "success"),
-    "multi_response":    ("Coppia F+T",            "fa-copy",                 "success"),
+    "visura_fabbricati": ("Fabbricati", "fa-building", "success"),
+    "visura_terreni": ("Terreni", "fa-seedling", "warning"),
+    "visura": ("Visura Catastale", "fa-file-contract", "success"),
+    "multi_response": ("Coppia F+T", "fa-copy", "success"),
     # Under intestati
-    "intestati":         ("Intestatari",           "fa-users",                "primary"),
-    "elenco_immobili":   ("Elenco Immobili",       "fa-list",                 "primary"),
+    "intestati": ("Intestatari", "fa-users", "primary"),
+    "elenco_immobili": ("Elenco Immobili", "fa-list", "primary"),
     # Under visura_soggetto
-    "soggetto_pf":       ("Persona Fisica",        "fa-user",                 "info"),
-    "persona_giuridica": ("Persona Giuridica",     "fa-building-user",        "info"),
+    "soggetto_pf": ("Persona Fisica", "fa-user", "info"),
+    "persona_giuridica": ("Persona Giuridica", "fa-building-user", "info"),
     # Under workflow (keyed by preset name)
-    "due-diligence":     ("Due Diligence",         "fa-file-contract",        "primary"),
-    "patrimonio":        ("Asset Investigation",   "fa-magnifying-glass",     "info"),
-    "fondiario":         ("Land Survey",           "fa-mountain",             "success"),
-    "aziendale":         ("Corporate Audit",       "fa-briefcase",            "warning"),
+    "due-diligence": ("Due Diligence", "fa-file-contract", "primary"),
+    "patrimonio": ("Asset Investigation", "fa-magnifying-glass", "info"),
+    "fondiario": ("Land Survey", "fa-mountain", "success"),
+    "aziendale": ("Corporate Audit", "fa-briefcase", "warning"),
     # Under batch
-    "soggetto":          ("Soggetto",              "fa-user",                 "warning"),
+    "soggetto": ("Soggetto", "fa-user", "warning"),
     # Generic fallback
-    "altro":             ("Altro",                 "fa-file",                 "secondary"),
+    "altro": ("Altro", "fa-file", "secondary"),
 }
 
 
@@ -760,8 +827,10 @@ def _is_batch_dossier(data: Any) -> bool:
     if not isinstance(data, list) or not data:
         return False
     first = data[0]
-    return isinstance(first, dict) and "data" in first and (
-        "organization_name" in first or "vat_number" in first or "request_id" in first
+    return (
+        isinstance(first, dict)
+        and "data" in first
+        and ("organization_name" in first or "vat_number" in first or "request_id" in first)
     )
 
 
@@ -793,18 +862,20 @@ def _parse_batch_dossier(data: list) -> dict:
         err_str = str(err_raw).strip() if err_raw and str(err_raw).strip() not in ("None", "") else ""
         soggetto = str(raw.get("soggetto") or "").strip()
 
-        summary_rows.append({
-            "idx": idx,
-            "organization_name": org,
-            "vat_number": item.get("vat_number") or "",
-            "soggetto": soggetto,
-            "tipo_catasto": item.get("tipo_catasto") or "",
-            "status": status,
-            "n_immobili": n_imm,
-            "total_results": raw.get("total_results") or 0,
-            "timestamp": ts,
-            "error": err_str,
-        })
+        summary_rows.append(
+            {
+                "idx": idx,
+                "organization_name": org,
+                "vat_number": item.get("vat_number") or "",
+                "soggetto": soggetto,
+                "tipo_catasto": item.get("tipo_catasto") or "",
+                "status": status,
+                "n_immobili": n_imm,
+                "total_results": raw.get("total_results") or 0,
+                "timestamp": ts,
+                "error": err_str,
+            }
+        )
 
         for imm in (imm_list if isinstance(imm_list, list) else []):
             if not isinstance(imm, dict):
@@ -817,8 +888,19 @@ def _parse_batch_dossier(data: list) -> dict:
             immobili_rows.append(row)
 
     # Stable column order for immobili table
-    priority = ["Denominazione", "Sede", "Codice Fiscale", "Comune", "Provincia",
-                "Foglio", "Particella", "Sub", "Categoria", "Classe", "Rendita"]
+    priority = [
+        "Denominazione",
+        "Sede",
+        "Codice Fiscale",
+        "Comune",
+        "Provincia",
+        "Foglio",
+        "Particella",
+        "Sub",
+        "Categoria",
+        "Classe",
+        "Rendita",
+    ]
     immobili_cols = [c for c in priority if c in immobili_col_set]
     immobili_cols += sorted(c for c in immobili_col_set if c not in priority)
 
@@ -857,38 +939,53 @@ def _dossier_to_result(name: str, data: Any) -> dict:
     exhaustive nested dump. The raw JSON panel always reflects the full file.
     """
     base = {
-        "status": "completed", "request_type": "dossier", "tipo_catasto": "-",
-        "requested_at_display": "-", "responded_at_display": "-",
-        "provincia": "-", "comune": "-", "foglio": "-", "particella": "-",
-        "sezione": "-", "subalterno": "-", "error": None,
-        "documents": [], "page_visit_rows": [],
+        "status": "completed",
+        "request_type": "dossier",
+        "tipo_catasto": "-",
+        "requested_at_display": "-",
+        "responded_at_display": "-",
+        "provincia": "-",
+        "comune": "-",
+        "foglio": "-",
+        "particella": "-",
+        "sezione": "-",
+        "subalterno": "-",
+        "error": None,
+        "documents": [],
+        "page_visit_rows": [],
     }
 
     if isinstance(data, dict) and "steps" in data:
-        base.update({
-            "request_id": data.get("workflow_id") or name,
-            "request_type": data.get("preset") or "workflow",
-            "data": data,
-            "sections": _build_result_sections(data),
-        })
+        base.update(
+            {
+                "request_id": data.get("workflow_id") or name,
+                "request_type": data.get("preset") or "workflow",
+                "data": data,
+                "sections": _build_result_sections(data),
+            }
+        )
     elif isinstance(data, dict) and ("data" in data or "request_id" in data):
         payload = data.get("data") if isinstance(data.get("data"), dict) else data
-        base.update({
-            "request_id": data.get("request_id") or name,
-            "tipo_catasto": data.get("tipo_catasto") or "-",
-            "responded_at_display": data.get("exported_at") or "-",
-            "error": data.get("error"),
-            "status": "completed" if data.get("success", True) else "failed",
-            "data": payload or {"_": True},
-            "sections": _build_result_sections(payload),
-        })
+        base.update(
+            {
+                "request_id": data.get("request_id") or name,
+                "tipo_catasto": data.get("tipo_catasto") or "-",
+                "responded_at_display": data.get("exported_at") or "-",
+                "error": data.get("error"),
+                "status": "completed" if data.get("success", True) else "failed",
+                "data": payload or {"_": True},
+                "sections": _build_result_sections(payload),
+            }
+        )
     else:
         wrapped = {"contenuto": data}
-        base.update({
-            "request_id": name,
-            "data": wrapped,
-            "sections": _build_result_sections(wrapped),
-        })
+        base.update(
+            {
+                "request_id": name,
+                "data": wrapped,
+                "sections": _build_result_sections(wrapped),
+            }
+        )
     return base
 
 
@@ -914,6 +1011,7 @@ async def _require_auth(request: Request):
     """Dependency: require authenticated user or redirect to login."""
     try:
         from aecs4u_auth.dependencies import get_current_user
+
         return await get_current_user(request)
     except Exception:
         # Auth not configured or user not authenticated — allow in dev mode
@@ -1046,8 +1144,17 @@ def _build_result_sections(data: Optional[dict]) -> list[dict]:
                     {
                         "Nominativo": row.get("Nominativo") or row.get("nominativo") or "-",
                         "Codice Fiscale": row.get("CF") or row.get("CodiceFiscale") or "-",
-                        "Quota": (row.get("DirittiReali") or {}).get("Quota", "") if isinstance(row.get("DirittiReali"), dict) else "",
-                        "Diritto": (row.get("DirittiReali") or {}).get("Descrizione") or (row.get("DirittiReali") or {}).get("CodiceDir", "") if isinstance(row.get("DirittiReali"), dict) else "",
+                        "Quota": (
+                            (row.get("DirittiReali") or {}).get("Quota", "")
+                            if isinstance(row.get("DirittiReali"), dict)
+                            else ""
+                        ),
+                        "Diritto": (
+                            (row.get("DirittiReali") or {}).get("Descrizione")
+                            or (row.get("DirittiReali") or {}).get("CodiceDir", "")
+                            if isinstance(row.get("DirittiReali"), dict)
+                            else ""
+                        ),
                     }
                     for row in (parsed.get("intestati") or [])
                 ],
@@ -1067,24 +1174,28 @@ def _build_result_sections(data: Optional[dict]) -> list[dict]:
                 continue
             if all(isinstance(item, dict) for item in value):
                 if key in {"steps", "persisted_steps"}:
-                    sections.append({
-                        "name": key,
-                        "dom_id": dom_id,
-                        "title": title,
-                        "kind": "workflow_steps",
-                        "value": value,
-                        "count": len(value),
-                    })
+                    sections.append(
+                        {
+                            "name": key,
+                            "dom_id": dom_id,
+                            "title": title,
+                            "kind": "workflow_steps",
+                            "value": value,
+                            "count": len(value),
+                        }
+                    )
                 elif key == "downloaded_pdfs":
                     docs = _normalize_downloaded_pdfs(value)
-                    sections.append({
-                        "name": key,
-                        "dom_id": dom_id,
-                        "title": "Downloaded Documents",
-                        "kind": "downloaded_docs",
-                        "docs": docs,
-                        "count": len(docs),
-                    })
+                    sections.append(
+                        {
+                            "name": key,
+                            "dom_id": dom_id,
+                            "title": "Downloaded Documents",
+                            "kind": "downloaded_docs",
+                            "docs": docs,
+                            "count": len(docs),
+                        }
+                    )
                 elif all(_is_flat_row(item) for item in value):
                     cleaned_rows = [_clean_row(item) for item in value]
                     columns: list[str] = []
@@ -1096,53 +1207,63 @@ def _build_result_sections(data: Optional[dict]) -> list[dict]:
                     rows = [{col: row.get(col, "") for col in columns} for row in cleaned_rows]
                     if not columns or all(all(not v for v in row.values()) for row in rows):
                         continue
-                    sections.append({
-                        "name": key,
-                        "dom_id": dom_id,
-                        "title": title,
-                        "kind": "flat_table",
-                        "columns": columns,
-                        "rows": rows,
-                        "count": len(rows),
-                    })
+                    sections.append(
+                        {
+                            "name": key,
+                            "dom_id": dom_id,
+                            "title": title,
+                            "kind": "flat_table",
+                            "columns": columns,
+                            "rows": rows,
+                            "count": len(rows),
+                        }
+                    )
                 else:
-                    sections.append({
+                    sections.append(
+                        {
+                            "name": key,
+                            "dom_id": dom_id,
+                            "title": title,
+                            "kind": "nested_table",
+                            "value": value,
+                            "count": len(value),
+                        }
+                    )
+            else:
+                sections.append(
+                    {
                         "name": key,
                         "dom_id": dom_id,
                         "title": title,
-                        "kind": "nested_table",
+                        "kind": "list",
+                        "items": [str(item) for item in value],
                         "value": value,
                         "count": len(value),
-                    })
-            else:
-                sections.append({
+                    }
+                )
+        elif isinstance(value, dict):
+            items = [(k, v) for k, v in value.items() if k]
+            sections.append(
+                {
                     "name": key,
                     "dom_id": dom_id,
                     "title": title,
-                    "kind": "list",
-                    "items": [str(item) for item in value],
+                    "kind": "object",
+                    "items": items,
                     "value": value,
-                    "count": len(value),
-                })
-        elif isinstance(value, dict):
-            items = [(k, v) for k, v in value.items() if k]
-            sections.append({
-                "name": key,
-                "dom_id": dom_id,
-                "title": title,
-                "kind": "object",
-                "items": items,
-                "value": value,
-                "count": len(items),
-            })
+                    "count": len(items),
+                }
+            )
         else:
-            sections.append({
-                "name": key,
-                "dom_id": dom_id,
-                "title": title,
-                "kind": "value",
-                "value": value,
-            })
+            sections.append(
+                {
+                    "name": key,
+                    "dom_id": dom_id,
+                    "title": title,
+                    "kind": "value",
+                    "value": value,
+                }
+            )
     return sections
 
 
@@ -1155,6 +1276,7 @@ def _build_result_sections(data: Optional[dict]) -> list[dict]:
 async def favicon():
     """Serve favicon."""
     import os
+
     icon = os.path.join(os.path.dirname(__file__), "static", "icons", "favicon.ico")
     if os.path.exists(icon):
         return FileResponse(icon)
@@ -1183,6 +1305,7 @@ async def landing(request: Request):
 def _get_auth_status() -> dict:
     """Get browser/auth status from the running service, if available."""
     from .main import visura_service
+
     if visura_service is not None:
         return visura_service.auth_status
     return {"state": "unavailable", "message": "Browser service not initialized"}
@@ -1195,8 +1318,11 @@ async def web_index(request: Request, user=Depends(_require_auth)):
     stats = await count_result_rows()
     recent = await find_result_rows(limit=5)
     return theme.render(
-        "index.html", request, user=user,
-        stats=stats, recent=recent,
+        "index.html",
+        request,
+        user=user,
+        stats=stats,
+        recent=recent,
         auth_status=_get_auth_status(),
     )
 
@@ -1206,7 +1332,9 @@ async def web_forms(request: Request, user=Depends(_require_auth)):
     """Query submission forms."""
     theme = _get_theme(request)
     return theme.render(
-        "forms.html", request, user=user,
+        "forms.html",
+        request,
+        user=user,
         form_groups=get_available_form_groups(),
         single_step_groups=get_single_step_groups(),
         workflow_groups=get_workflow_groups(),
@@ -1235,6 +1363,7 @@ async def web_results_refresh(request: Request, user=Depends(_require_auth)):
 
     # Force the async engine to pick up data written by the sync sqlite3 connection
     from . import database as _db
+
     if _db._engine is not None:
         await _db._engine.dispose()
         _db._engine = None
@@ -1268,7 +1397,8 @@ async def web_results(
         tipo_catasto=tipo_catasto,
         source=source,
         status=status,
-        limit=limit, offset=offset,
+        limit=limit,
+        offset=offset,
     )
     total_count = await count_total_result_rows(
         provincia=provincia,
@@ -1284,9 +1414,7 @@ async def web_results(
         item["responded_at_display"] = _format_timestamp(item.get("responded_at"))
         if item.get("source") != "workflow":
             item["status"] = (
-                "completed" if item.get("success") is True
-                else "failed" if item.get("success") is False
-                else "pending"
+                "completed" if item.get("success") is True else "failed" if item.get("success") is False else "pending"
             )
     stats = await count_result_rows(
         provincia=provincia,
@@ -1348,12 +1476,22 @@ async def web_results(
         next_url = _build_url("/web/results", offset=offset + limit, **current_filters)
 
     return theme.render(
-        "results.html", request, user=user,
-        results=results, stats=stats,
-        provincia=provincia, comune=comune, foglio=foglio, particella=particella,
-        tipo_catasto=tipo_catasto, source=source, status=status,
-        limit=limit, offset=offset,
-        prev_url=prev_url, next_url=next_url,
+        "results.html",
+        request,
+        user=user,
+        results=results,
+        stats=stats,
+        provincia=provincia,
+        comune=comune,
+        foglio=foglio,
+        particella=particella,
+        tipo_catasto=tipo_catasto,
+        source=source,
+        status=status,
+        limit=limit,
+        offset=offset,
+        prev_url=prev_url,
+        next_url=next_url,
         stats_urls=stats_urls,
         active_filters=active_filters,
         current_count=len(results),
@@ -1369,6 +1507,7 @@ async def web_result_detail(request: Request, request_id: str, user=Depends(_req
     if result is None and request_id.startswith("wf_"):
         # Workflow runs are stored in opendata — proxy the lookup
         import httpx
+
         try:
             async with httpx.AsyncClient(timeout=10) as client:
                 resp = await client.get(f"{_OPENDATA_API_URL}/catasto/workflow/runs/{request_id}")
@@ -1378,8 +1517,12 @@ async def web_result_detail(request: Request, request_id: str, user=Depends(_req
             logger.warning("Could not fetch workflow %s from opendata: %s", request_id, exc)
     if result is None:
         response = theme.render(
-            "result_detail.html", request, user=user,
-            result=None, request_id=request_id, not_found=True,
+            "result_detail.html",
+            request,
+            user=user,
+            result=None,
+            request_id=request_id,
+            not_found=True,
         )
         if hasattr(response, "status_code"):
             response.status_code = 404
@@ -1389,7 +1532,9 @@ async def web_result_detail(request: Request, request_id: str, user=Depends(_req
     result["responded_at_display"] = _format_timestamp(result.get("responded_at"))
     result["sections"] = _build_result_sections(result.get("data"))
     result["documents"] = await get_documents_for_response(
-        request_id, foglio=result.get("foglio"), particella=result.get("particella"),
+        request_id,
+        foglio=result.get("foglio"),
+        particella=result.get("particella"),
     )
     for doc in result["documents"]:
         doc["xml_parsed"] = _parse_xml_to_dict(doc.get("xml_content", ""))
@@ -1399,9 +1544,22 @@ async def web_result_detail(request: Request, request_id: str, user=Depends(_req
             {
                 "Nominativo": row.get("Nominativo") or row.get("nominativo") or "-",
                 "Codice Fiscale": row.get("CF") or row.get("CodiceFiscale") or "-",
-                "Quota": (row.get("DirittiReali") or {}).get("Quota", "") if isinstance(row.get("DirittiReali"), dict) else "",
-                "Diritto": (row.get("DirittiReali") or {}).get("Descrizione") or (row.get("DirittiReali") or {}).get("CodiceDir", "") if isinstance(row.get("DirittiReali"), dict) else "",
-                "Periodo": (row.get("DirittiReali") or {}).get("FineDiritto", "") if isinstance(row.get("DirittiReali"), dict) else "",
+                "Quota": (
+                    (row.get("DirittiReali") or {}).get("Quota", "")
+                    if isinstance(row.get("DirittiReali"), dict)
+                    else ""
+                ),
+                "Diritto": (
+                    (row.get("DirittiReali") or {}).get("Descrizione")
+                    or (row.get("DirittiReali") or {}).get("CodiceDir", "")
+                    if isinstance(row.get("DirittiReali"), dict)
+                    else ""
+                ),
+                "Periodo": (
+                    (row.get("DirittiReali") or {}).get("FineDiritto", "")
+                    if isinstance(row.get("DirittiReali"), dict)
+                    else ""
+                ),
             }
             for row in (doc.get("intestati") or [])
         ]
@@ -1437,8 +1595,12 @@ async def web_result_detail(request: Request, request_id: str, user=Depends(_req
         for v in (result.get("page_visits") or [])
     ]
     return theme.render(
-        "result_detail.html", request, user=user,
-        result=result, request_id=request_id, not_found=False,
+        "result_detail.html",
+        request,
+        user=user,
+        result=result,
+        request_id=request_id,
+        not_found=False,
     )
 
 
@@ -1477,8 +1639,13 @@ async def web_workflows(
         run["updated_at_display"] = _format_timestamp(run.get("updated_at"))
 
     return theme.render(
-        "workflows.html", request, user=user,
-        runs=runs, status=status, limit=limit, offset=offset,
+        "workflows.html",
+        request,
+        user=user,
+        runs=runs,
+        status=status,
+        limit=limit,
+        offset=offset,
         auth_status=_get_auth_status(),
     )
 
@@ -1503,8 +1670,11 @@ async def web_workflow_detail(request: Request, workflow_id: str, user=Depends(_
 
     if result is None:
         response = theme.render(
-            "workflow_detail.html", request, user=user,
-            result=None, workflow_id=workflow_id,
+            "workflow_detail.html",
+            request,
+            user=user,
+            result=None,
+            workflow_id=workflow_id,
         )
         if hasattr(response, "status_code"):
             response.status_code = 404
@@ -1514,15 +1684,20 @@ async def web_workflow_detail(request: Request, workflow_id: str, user=Depends(_
     result["responded_at_display"] = _format_timestamp(result.get("responded_at"))
     result["sections"] = _build_result_sections(result.get("data"))
     result["documents"] = await get_documents_for_response(
-        workflow_id, foglio=result.get("foglio"), particella=result.get("particella"),
+        workflow_id,
+        foglio=result.get("foglio"),
+        particella=result.get("particella"),
     )
     for doc in result["documents"]:
         doc["xml_parsed"] = _parse_xml_to_dict(doc.get("xml_content", ""))
         doc.pop("xml_content", None)
     result["page_visit_rows"] = []
     return theme.render(
-        "workflow_detail.html", request, user=user,
-        result=result, workflow_id=workflow_id,
+        "workflow_detail.html",
+        request,
+        user=user,
+        result=result,
+        workflow_id=workflow_id,
     )
 
 
@@ -1570,6 +1745,7 @@ async def web_glossary(request: Request):
 # Document browser + structured viewers  (/web/documents/*)
 # ---------------------------------------------------------------------------
 
+
 def _human_size(n: int) -> str:
     for unit in ("B", "KB", "MB", "GB"):
         if n < 1024:
@@ -1583,20 +1759,20 @@ def _file_icon(ext: str, is_dir: bool) -> tuple[str, str]:
     if is_dir:
         return "fa-folder", "text-warning"
     return {
-        ".pdf":    ("fa-file-pdf",   "text-danger"),
-        ".p7m":    ("fa-file-shield","text-warning"),
-        ".json":   ("fa-file-code",  "text-info"),
-        ".xml":    ("fa-file-code",  "text-secondary"),
-        ".csv":    ("fa-file-csv",   "text-success"),
-        ".xlsx":   ("fa-file-excel", "text-success"),
-        ".xls":    ("fa-file-excel", "text-success"),
-        ".png":    ("fa-file-image", "text-secondary"),
-        ".jpg":    ("fa-file-image", "text-secondary"),
-        ".jpeg":   ("fa-file-image", "text-secondary"),
-        ".sqlite": ("fa-database",   "text-primary"),
-        ".log":    ("fa-scroll",     "text-muted"),
-        ".txt":    ("fa-file-lines", "text-muted"),
-        ".zip":    ("fa-file-zipper","text-secondary"),
+        ".pdf": ("fa-file-pdf", "text-danger"),
+        ".p7m": ("fa-file-shield", "text-warning"),
+        ".json": ("fa-file-code", "text-info"),
+        ".xml": ("fa-file-code", "text-secondary"),
+        ".csv": ("fa-file-csv", "text-success"),
+        ".xlsx": ("fa-file-excel", "text-success"),
+        ".xls": ("fa-file-excel", "text-success"),
+        ".png": ("fa-file-image", "text-secondary"),
+        ".jpg": ("fa-file-image", "text-secondary"),
+        ".jpeg": ("fa-file-image", "text-secondary"),
+        ".sqlite": ("fa-database", "text-primary"),
+        ".log": ("fa-scroll", "text-muted"),
+        ".txt": ("fa-file-lines", "text-muted"),
+        ".zip": ("fa-file-zipper", "text-secondary"),
     }.get(ext, ("fa-file", "text-muted"))
 
 
@@ -1615,8 +1791,12 @@ def _render_doc_from_db(doc: dict, request, theme, user, force_template: str | N
             "Nominativo": r.get("Nominativo") or r.get("nominativo") or "-",
             "Codice Fiscale": r.get("CF") or r.get("CodiceFiscale") or "-",
             "Quota": (r.get("DirittiReali") or {}).get("Quota", "") if isinstance(r.get("DirittiReali"), dict) else "",
-            "Diritto": (r.get("DirittiReali") or {}).get("Descrizione", "") if isinstance(r.get("DirittiReali"), dict) else "",
-            "Periodo": (r.get("DirittiReali") or {}).get("FineDiritto", "") if isinstance(r.get("DirittiReali"), dict) else "",
+            "Diritto": (
+                (r.get("DirittiReali") or {}).get("Descrizione", "") if isinstance(r.get("DirittiReali"), dict) else ""
+            ),
+            "Periodo": (
+                (r.get("DirittiReali") or {}).get("FineDiritto", "") if isinstance(r.get("DirittiReali"), dict) else ""
+            ),
         }
         for r in (doc.get("intestati") or [])
     ]
@@ -1645,8 +1825,11 @@ def _render_doc_from_db(doc: dict, request, theme, user, force_template: str | N
     if force_template and force_template.replace(".html", "") == "result_detail":
         result = _doc_as_result(doc)
         return theme.render(
-            "result_detail.html", request, user=user,
-            result=result, request_id=str(doc.get("id") or doc.get("filename") or ""),
+            "result_detail.html",
+            request,
+            user=user,
+            result=result,
+            request_id=str(doc.get("id") or doc.get("filename") or ""),
         )
 
     if "VisuraFabbricatiStorica" in xml_p or "VisuraFabbricati" in xml_p:
@@ -1660,8 +1843,11 @@ def _render_doc_from_db(doc: dict, request, theme, user, force_template: str | N
     if template == "result_detail.html":
         result = _doc_as_result(doc)
         return theme.render(
-            "result_detail.html", request, user=user,
-            result=result, request_id=str(doc.get("id") or doc.get("filename") or ""),
+            "result_detail.html",
+            request,
+            user=user,
+            result=result,
+            request_id=str(doc.get("id") or doc.get("filename") or ""),
         )
     return theme.render(template, request, user=user, doc=doc)
 
@@ -1708,9 +1894,11 @@ async def web_document_view(request: Request, path: str, user=Depends(_require_a
 
     if not str(target).startswith(str(base)):
         from fastapi import HTTPException
+
         raise HTTPException(status_code=403, detail="Access denied")
     if not target.exists() or not target.is_file():
         from fastapi import HTTPException
+
         raise HTTPException(status_code=404, detail="Not found")
 
     # Parse the file (handles .p7m extraction + XML parsing)
@@ -1718,6 +1906,7 @@ async def web_document_view(request: Request, path: str, user=Depends(_require_a
     ext = target.suffix.lower()
     if ext == ".p7m":
         from .utils import _extract_p7m
+
         extracted = _extract_p7m(str(target))
         if extracted and Path(extracted).exists():
             xml_content = Path(extracted).read_text(encoding="utf-8", errors="ignore")
@@ -1736,15 +1925,23 @@ async def web_document_view(request: Request, path: str, user=Depends(_require_a
         "file_path": str(target),
         "oggetto": target.stem,
         "document_type": "",
-        "provincia": "", "comune": "", "foglio": "", "particella": "",
-        "subalterno": "", "sezione_urbana": "", "tipo_catasto": "",
-        "intestati": [], "classamento": [], "indirizzo": "",
+        "provincia": "",
+        "comune": "",
+        "foglio": "",
+        "particella": "",
+        "subalterno": "",
+        "sezione_urbana": "",
+        "tipo_catasto": "",
+        "intestati": [],
+        "classamento": [],
+        "indirizzo": "",
         "xml_parsed": xml_parsed,
     }
 
     # Populate structured fields from xml_parsed if possible
     if xml_parsed:
         from .utils import _parse_visura_xml
+
         parsed = _parse_visura_xml(str(target))
         if parsed:
             doc.update({k: v for k, v in parsed.items() if k != "xml_content"})
@@ -1755,8 +1952,12 @@ async def web_document_view(request: Request, path: str, user=Depends(_require_a
             "Nominativo": r.get("Nominativo") or r.get("nominativo") or "-",
             "Codice Fiscale": r.get("CF") or r.get("CodiceFiscale") or "-",
             "Quota": (r.get("DirittiReali") or {}).get("Quota", "") if isinstance(r.get("DirittiReali"), dict) else "",
-            "Diritto": (r.get("DirittiReali") or {}).get("Descrizione", "") if isinstance(r.get("DirittiReali"), dict) else "",
-            "Periodo": (r.get("DirittiReali") or {}).get("FineDiritto", "") if isinstance(r.get("DirittiReali"), dict) else "",
+            "Diritto": (
+                (r.get("DirittiReali") or {}).get("Descrizione", "") if isinstance(r.get("DirittiReali"), dict) else ""
+            ),
+            "Periodo": (
+                (r.get("DirittiReali") or {}).get("FineDiritto", "") if isinstance(r.get("DirittiReali"), dict) else ""
+            ),
         }
         for r in (doc.get("intestati") or [])
     ]
@@ -1810,7 +2011,11 @@ async def web_documents_export_named(request: Request, user=Depends(_require_aut
     dest_dir.mkdir(exist_ok=True)
 
     docs = await get_all_documents(limit=10000)
-    mapping = {d["filename"]: d["oggetto"] for d in docs if d.get("filename") and d.get("oggetto") and d["filename"] != d["oggetto"]}
+    mapping = {
+        d["filename"]: d["oggetto"]
+        for d in docs
+        if d.get("filename") and d.get("oggetto") and d["filename"] != d["oggetto"]
+    }
 
     copied, skipped, missing = [], [], []
     for old_name, new_name in mapping.items():
@@ -1952,15 +2157,17 @@ async def web_documents_rescan(request: Request, user=Depends(_require_auth)):
         if parsed is None:
             parsed = {"tipo": _guess_type_from_name(fpath.name)}
 
-        new_docs.append({
-            "filename": fpath.name,
-            "path": str(fpath),
-            "file_format": fmt,
-            "file_size": fpath.stat().st_size,
-            "oggetto": None,
-            "richiesta_del": None,
-            "parsed_data": parsed,
-        })
+        new_docs.append(
+            {
+                "filename": fpath.name,
+                "path": str(fpath),
+                "file_format": fmt,
+                "file_size": fpath.stat().st_size,
+                "oggetto": None,
+                "richiesta_del": None,
+                "parsed_data": parsed,
+            }
+        )
 
     if new_docs:
         await _save_documents_to_db(new_docs)
@@ -1971,8 +2178,9 @@ async def web_documents_rescan(request: Request, user=Depends(_require_auth)):
 
 @router.get("/web/documents", response_class=HTMLResponse)
 @router.get("/web/documents/{path:path}", response_class=HTMLResponse)
-async def web_documents(request: Request, path: str = "", template: str = "",
-                        view: str = "", user=Depends(_require_auth)):
+async def web_documents(
+    request: Request, path: str = "", template: str = "", view: str = "", user=Depends(_require_auth)
+):
     """Documents hub — single-step query responses.
 
     Root (``/web/documents``) shows the hierarchical per-type index built from the
@@ -1995,8 +2203,7 @@ async def web_documents(request: Request, path: str = "", template: str = "",
     if path and path.isdigit():
         doc = await get_document_by_id(int(path))
         if doc is None:
-            return theme.render("result_detail.html", request, user=user,
-                                result=None, request_id=path, not_found=True)
+            return theme.render("result_detail.html", request, user=user, result=None, request_id=path, not_found=True)
         return _render_doc_from_db(doc, request, theme, user, force_template=template or None)
 
     # Root with no explicit path → hierarchical document index (unless browsing files)
@@ -2006,14 +2213,18 @@ async def web_documents(request: Request, path: str = "", template: str = "",
         if view == "map":
             prop_map = _build_property_map(logical)
             return theme.render(
-                "documents_map.html", request, user=user,
+                "documents_map.html",
+                request,
+                user=user,
                 prop_map=prop_map,
                 total=len(logical),
                 n_files=len(files),
             )
         tree = _build_document_tree(logical)
         return theme.render(
-            "documents_index.html", request, user=user,
+            "documents_index.html",
+            request,
+            user=user,
             tree=tree,
             total=len(logical),
             n_files=len(files),
@@ -2025,9 +2236,11 @@ async def web_documents(request: Request, path: str = "", template: str = "",
     # Prevent path traversal
     if not str(target).startswith(str(base)):
         from fastapi import HTTPException
+
         raise HTTPException(status_code=403, detail="Access denied")
     if not target.exists():
         from fastapi import HTTPException
+
         raise HTTPException(status_code=404, detail="Not found")
 
     # Serve files directly
@@ -2066,19 +2279,25 @@ async def web_documents(request: Request, path: str = "", template: str = "",
         doc_id = meta["id"] if meta else None
         new_name = meta["oggetto"] if meta else None
 
-        entries.append({
-            "name": child.name,
-            "new_name": new_name or "",
-            "path": rel_path,
-            "is_dir": is_dir,
-            "ext": ext,
-            "size_bytes": size_bytes,
-            "size_human": _human_size(size_bytes) if not is_dir else (f"{child_count} items" if child_count is not None else ""),
-            "mtime": datetime.fromtimestamp(stat.st_mtime).strftime("%Y-%m-%d %H:%M"),
-            "icon": icon,
-            "icon_color": icon_color,
-            "doc_id": doc_id,
-        })
+        entries.append(
+            {
+                "name": child.name,
+                "new_name": new_name or "",
+                "path": rel_path,
+                "is_dir": is_dir,
+                "ext": ext,
+                "size_bytes": size_bytes,
+                "size_human": (
+                    _human_size(size_bytes)
+                    if not is_dir
+                    else (f"{child_count} items" if child_count is not None else "")
+                ),
+                "mtime": datetime.fromtimestamp(stat.st_mtime).strftime("%Y-%m-%d %H:%M"),
+                "icon": icon,
+                "icon_color": icon_color,
+                "doc_id": doc_id,
+            }
+        )
 
     # Breadcrumbs
     parts = [p for p in path.split("/") if p] if path else []
@@ -2090,7 +2309,9 @@ async def web_documents(request: Request, path: str = "", template: str = "",
     n_files = len(entries) - n_dirs
 
     return theme.render(
-        "files_browser.html", request, user=user,
+        "files_browser.html",
+        request,
+        user=user,
         entries=entries,
         current_path=path,
         breadcrumbs=breadcrumbs,
@@ -2130,24 +2351,27 @@ async def web_dossier_view(request: Request, path: str, user=Depends(_require_au
     try:
         data = _json.loads(target.read_text(encoding="utf-8", errors="ignore"))
     except Exception as exc:
-        return theme.render("result_detail.html", request, user=user,
-                            result=None, request_id=target.name,
-                            not_found=True, error=str(exc))
+        return theme.render(
+            "result_detail.html",
+            request,
+            user=user,
+            result=None,
+            request_id=target.name,
+            not_found=True,
+            error=str(exc),
+        )
 
     if _is_batch_dossier(data):
         parsed = _parse_batch_dossier(data)
-        return theme.render("dossier_batch_viewer.html", request, user=user,
-                            name=target.name, **parsed)
+        return theme.render("dossier_batch_viewer.html", request, user=user, name=target.name, **parsed)
 
     result = _dossier_to_result(target.name, data)
-    return theme.render("result_detail.html", request, user=user,
-                        result=result, request_id=target.name)
+    return theme.render("result_detail.html", request, user=user, result=result, request_id=target.name)
 
 
 @router.get("/web/dossiers", response_class=HTMLResponse)
 @router.get("/web/dossiers/{path:path}", response_class=HTMLResponse)
-async def web_dossiers(request: Request, path: str = "", download: str = "",
-                       user=Depends(_require_auth)):
+async def web_dossiers(request: Request, path: str = "", download: str = "", user=Depends(_require_auth)):
     """Dossiers hub — multi-step (workflow) and single-step query responses.
 
     Root lists the dossier JSON files; a file path serves the raw JSON
@@ -2193,22 +2417,24 @@ async def web_dossiers(request: Request, path: str = "", download: str = "",
         out: list[dict] = []
         for gk, peers in pair_groups.items():
             if gk.startswith("wf_pair:") and len(peers) > 1:
-                base_name = gk[len("wf_pair:"):]
+                base_name = gk[len("wf_pair:") :]
                 primary = sorted(peers, key=lambda p: p["mtime"])[0]
                 total_results = sum(p.get("n_results", 0) for p in peers)
                 merged = dict(primary)
-                merged.update({
-                    "title": base_name.replace("_", " "),
-                    "paired": True,
-                    "peers": sorted(peers, key=lambda p: p["subtype"]),
-                    "ok": all(p.get("ok") is not False for p in peers),
-                    "n_results": total_results,
-                    "badges": [f"{total_results} risultati"] if total_results else [],
-                    "response_meta": {
+                merged.update(
+                    {
+                        "title": base_name.replace("_", " "),
+                        "paired": True,
+                        "peers": sorted(peers, key=lambda p: p["subtype"]),
+                        "ok": all(p.get("ok") is not False for p in peers),
                         "n_results": total_results,
-                        "exported_at": primary.get("response_meta", {}).get("exported_at", ""),
-                    },
-                })
+                        "badges": [f"{total_results} risultati"] if total_results else [],
+                        "response_meta": {
+                            "n_results": total_results,
+                            "exported_at": primary.get("response_meta", {}).get("exported_at", ""),
+                        },
+                    }
+                )
                 out.append(merged)
             else:
                 out.extend(peers)
@@ -2220,8 +2446,17 @@ async def web_dossiers(request: Request, path: str = "", download: str = "",
         q_buckets[_dossier_query_group(d["kind"], d["subtype"])].append(d)
 
     groups = []
-    for qkey in ("visura_immobile", "visura_soggetto", "intestati",
-                 "planimetria", "epa", "richieste", "workflow", "batch", "altro"):
+    for qkey in (
+        "visura_immobile",
+        "visura_soggetto",
+        "intestati",
+        "planimetria",
+        "epa",
+        "richieste",
+        "workflow",
+        "batch",
+        "altro",
+    ):
         entries = q_buckets.get(qkey)
         if not entries:
             continue
@@ -2242,26 +2477,35 @@ async def web_dossiers(request: Request, path: str = "", download: str = "",
                 slabel, sicon, scolor = smeta
             else:
                 slabel = skey.replace("-", " ").replace("_", " ").title()
-                sicon  = "fa-file"
+                sicon = "fa-file"
                 scolor = color
-            subgroups.append({
-                "key":     f"{qkey}_{skey}",
-                "label":   slabel,
-                "icon":    sicon,
-                "color":   scolor,
-                "count":   len(sentries),
-                "entries": sentries,
-            })
+            subgroups.append(
+                {
+                    "key": f"{qkey}_{skey}",
+                    "label": slabel,
+                    "icon": sicon,
+                    "color": scolor,
+                    "count": len(sentries),
+                    "entries": sentries,
+                }
+            )
         subgroups.sort(key=lambda g: (g["label"] == "Altro", g["label"]))
 
-        groups.append({
-            "key": qkey, "label": label, "icon": icon, "color": color,
-            "count": len(collapsed),
-            "subgroups": subgroups,
-        })
+        groups.append(
+            {
+                "key": qkey,
+                "label": label,
+                "icon": icon,
+                "color": color,
+                "count": len(collapsed),
+                "subgroups": subgroups,
+            }
+        )
 
     return theme.render(
-        "dossiers_index.html", request, user=user,
+        "dossiers_index.html",
+        request,
+        user=user,
         groups=groups,
         total=len(dossiers),
     )
@@ -2276,6 +2520,7 @@ async def web_dossiers(request: Request, path: str = "", download: str = "",
 async def web_browser(request: Request, user=Depends(_require_auth)):
     """Browser session control panel."""
     from .main import visura_service
+
     theme = _get_theme(request)
     svc = visura_service
     status = svc.auth_status if svc else {"state": "unavailable", "message": "Service not initialized"}
@@ -2284,8 +2529,11 @@ async def web_browser(request: Request, user=Depends(_require_auth)):
         extra = {
             "queue_size": svc.request_queue.qsize(),
             "pending_requests": len(svc.pending_request_ids),
-            "last_login": svc.browser_manager.last_login_time.strftime("%Y-%m-%d %H:%M:%S")
-            if svc.browser_manager.last_login_time else None,
+            "last_login": (
+                svc.browser_manager.last_login_time.strftime("%Y-%m-%d %H:%M:%S")
+                if svc.browser_manager.last_login_time
+                else None
+            ),
             "mode": status.get("mode", "local"),
             "authenticated": svc.browser_manager.authenticated,
         }
@@ -2296,24 +2544,38 @@ async def web_browser(request: Request, user=Depends(_require_auth)):
 async def web_browser_status(request: Request, user=Depends(_require_auth)):
     """JSON status for live polling from the control panel."""
     from .main import visura_service
+
     svc = visura_service
     if svc is None:
-        return JSONResponse({"state": "unavailable", "message": "Service not initialized",
-                             "queue_size": 0, "pending_requests": 0, "last_login": None})
+        return JSONResponse(
+            {
+                "state": "unavailable",
+                "message": "Service not initialized",
+                "queue_size": 0,
+                "pending_requests": 0,
+                "last_login": None,
+            }
+        )
     st = svc.auth_status
-    return JSONResponse({
-        **st,
-        "queue_size": svc.request_queue.qsize(),
-        "pending_requests": len(svc.pending_request_ids),
-        "last_login": svc.browser_manager.last_login_time.strftime("%Y-%m-%d %H:%M:%S")
-        if svc.browser_manager.last_login_time else None,
-        "authenticated": svc.browser_manager.authenticated,
-    })
+    return JSONResponse(
+        {
+            **st,
+            "queue_size": svc.request_queue.qsize(),
+            "pending_requests": len(svc.pending_request_ids),
+            "last_login": (
+                svc.browser_manager.last_login_time.strftime("%Y-%m-%d %H:%M:%S")
+                if svc.browser_manager.last_login_time
+                else None
+            ),
+            "authenticated": svc.browser_manager.authenticated,
+        }
+    )
 
 
 @router.post("/web/browser/start", response_class=JSONResponse)
 async def web_browser_start(request: Request, user=Depends(_require_auth)):
     from .main import visura_service
+
     if visura_service is None:
         return JSONResponse({"error": "Service not initialized"}, status_code=503)
     result = await visura_service.start_browser()
@@ -2323,6 +2585,7 @@ async def web_browser_start(request: Request, user=Depends(_require_auth)):
 @router.post("/web/browser/stop", response_class=JSONResponse)
 async def web_browser_stop(request: Request, force: bool = False, user=Depends(_require_auth)):
     from .main import visura_service
+
     if visura_service is None:
         return JSONResponse({"error": "Service not initialized"}, status_code=503)
     result = await visura_service.stop_browser(force=force)
@@ -2332,6 +2595,7 @@ async def web_browser_stop(request: Request, force: bool = False, user=Depends(_
 @router.post("/web/browser/restart", response_class=JSONResponse)
 async def web_browser_restart(request: Request, user=Depends(_require_auth)):
     from .main import visura_service
+
     if visura_service is None:
         return JSONResponse({"error": "Service not initialized"}, status_code=503)
     result = await visura_service.restart_browser()
@@ -2388,7 +2652,9 @@ async def web_browser_launch_chrome(request: Request, user=Depends(_require_auth
                 except Exception:
                     pass
             if chrome_status is None:
-                return JSONResponse({"status": "launched", "pid": pid, "error": "Chrome started but CDP not yet reachable"})
+                return JSONResponse(
+                    {"status": "launched", "pid": pid, "error": "Chrome started but CDP not yet reachable"}
+                )
         except FileNotFoundError:
             return JSONResponse({"error": "google-chrome not found in PATH"}, status_code=500)
         except Exception as e:
@@ -2396,15 +2662,36 @@ async def web_browser_launch_chrome(request: Request, user=Depends(_require_auth
 
     # Connect the sister browser session
     if visura_service is None:
-        return JSONResponse({"status": chrome_status, "pid": pid, "browser": chrome_version,
-                             "session": "skipped", "session_error": "visura_service not initialized"})
+        return JSONResponse(
+            {
+                "status": chrome_status,
+                "pid": pid,
+                "browser": chrome_version,
+                "session": "skipped",
+                "session_error": "visura_service not initialized",
+            }
+        )
     try:
         session_result = await visura_service.start_browser()
-        return JSONResponse({"status": chrome_status, "pid": pid, "browser": chrome_version,
-                             "launched": launched, "session": session_result})
+        return JSONResponse(
+            {
+                "status": chrome_status,
+                "pid": pid,
+                "browser": chrome_version,
+                "launched": launched,
+                "session": session_result,
+            }
+        )
     except Exception as e:
-        return JSONResponse({"status": chrome_status, "pid": pid, "browser": chrome_version,
-                             "launched": launched, "session_error": str(e)})
+        return JSONResponse(
+            {
+                "status": chrome_status,
+                "pid": pid,
+                "browser": chrome_version,
+                "launched": launched,
+                "session_error": str(e),
+            }
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -2437,14 +2724,26 @@ async def web_api_batch(request: Request, user=Depends(_require_auth)):
 
     # Map common CSV column aliases to API field names
     _COLUMN_ALIASES = {
-        "p.iva": "identificativo", "piva": "identificativo", "partita_iva": "identificativo",
-        "vat": "identificativo", "organization": "identificativo", "company": "identificativo",
-        "denominazione": "identificativo", "ragione_sociale": "identificativo",
-        "cf": "codice_fiscale", "tax_code": "codice_fiscale",
-        "province": "provincia", "municipality": "comune", "city": "comune",
-        "sheet": "foglio", "parcel": "particella", "sub": "subalterno",
-        "type": "tipo_catasto", "catasto": "tipo_catasto",
-        "address": "indirizzo", "via": "indirizzo",
+        "p.iva": "identificativo",
+        "piva": "identificativo",
+        "partita_iva": "identificativo",
+        "vat": "identificativo",
+        "organization": "identificativo",
+        "company": "identificativo",
+        "denominazione": "identificativo",
+        "ragione_sociale": "identificativo",
+        "cf": "codice_fiscale",
+        "tax_code": "codice_fiscale",
+        "province": "provincia",
+        "municipality": "comune",
+        "city": "comune",
+        "sheet": "foglio",
+        "parcel": "particella",
+        "sub": "subalterno",
+        "type": "tipo_catasto",
+        "catasto": "tipo_catasto",
+        "address": "indirizzo",
+        "via": "indirizzo",
     }
     for row in rows:
         for alias, canonical in _COLUMN_ALIASES.items():
@@ -2473,11 +2772,13 @@ async def web_api_batch(request: Request, user=Depends(_require_auth)):
             except Exception as e:
                 results.append({"row": i + 1, "status": "error", "error": str(e)})
 
-    return JSONResponse({
-        "command": command,
-        "total_rows": len(rows),
-        "results": results,
-    })
+    return JSONResponse(
+        {
+            "command": command,
+            "total_rows": len(rows),
+            "results": results,
+        }
+    )
 
 
 @router.post("/web/api/workflow/stream")
@@ -2490,7 +2791,8 @@ async def web_api_workflow_stream(request: Request, user=Depends(_require_auth))
     async def stream_events():
         async with httpx.AsyncClient(timeout=600) as client:
             async with client.stream(
-                "POST", f"{_OPENDATA_API_URL}/catasto/workflow/stream",
+                "POST",
+                f"{_OPENDATA_API_URL}/catasto/workflow/stream",
                 json=body,
             ) as resp:
                 buffer = ""

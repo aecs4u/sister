@@ -12,9 +12,11 @@ import httpx
 
 SISTER_URL = "http://localhost:8025"
 DB_PATH = "/mnt/mobile/data/aecs4u.it/classaction/recrowd.sqlite"
-OUTPUT_PATH = Path(__file__).parent.parent / "outputs" / f"recrowd_soggetto_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
-POLL_INTERVAL = 5   # seconds between status checks
-TIMEOUT = 300       # max seconds to wait per query
+OUTPUT_PATH = (
+    Path(__file__).parent.parent / "outputs" / f"recrowd_soggetto_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+)
+POLL_INTERVAL = 5  # seconds between status checks
+TIMEOUT = 300  # max seconds to wait per query
 
 
 def get_proponents() -> list[dict]:
@@ -75,18 +77,22 @@ def main():
                 request_id = submit(client, vat)
                 if not request_id:
                     print("ERROR: no request_id")
-                    results.append({"organization_name": name, "vat_number": vat, "status": "error", "error": "no request_id"})
+                    results.append(
+                        {"organization_name": name, "vat_number": vat, "status": "error", "error": "no request_id"}
+                    )
                     continue
 
                 result = poll(client, request_id)
                 status = result.get("status")
                 print(status)
-                results.append({
-                    "organization_name": name,
-                    "vat_number": vat,
-                    "request_id": request_id,
-                    **result,
-                })
+                results.append(
+                    {
+                        "organization_name": name,
+                        "vat_number": vat,
+                        "request_id": request_id,
+                        **result,
+                    }
+                )
             except Exception as e:
                 print(f"EXCEPTION: {e}")
                 results.append({"organization_name": name, "vat_number": vat, "status": "error", "error": str(e)})

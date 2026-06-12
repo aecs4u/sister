@@ -45,13 +45,15 @@ def _submit_result_to_response(results: list, tipos_catasto: list, message: str)
         if isinstance(r, SubmitResult):
             request_ids.append(r.request_id)
             if r.cached and r.response:
-                cached_data.append({
-                    "request_id": r.request_id,
-                    "tipo_catasto": r.response.tipo_catasto,
-                    "status": "completed" if r.response.success else "error",
-                    "data": r.response.data,
-                    "error": r.response.error,
-                })
+                cached_data.append(
+                    {
+                        "request_id": r.request_id,
+                        "tipo_catasto": r.response.tipo_catasto,
+                        "status": "completed" if r.response.success else "error",
+                        "data": r.response.data,
+                        "error": r.response.error,
+                    }
+                )
         elif isinstance(r, str):
             request_ids.append(r)
 
@@ -91,7 +93,8 @@ async def richiedi_visura(request: VisuraInput, service: VisuraService, force: b
         results = await service.add_requests_batch(visura_requests, force=force)
 
         return _submit_result_to_response(
-            results, tipos_catasto,
+            results,
+            tipos_catasto,
             f"Richieste per {request.comune} F.{request.foglio} P.{request.particella}",
         )
 
@@ -173,14 +176,16 @@ async def richiedi_intestati_immobile(request: VisuraIntestatiInput, service: Vi
 
         if hasattr(result, "cached") and result.cached and result.response:
             resp = result.response
-            return JSONResponse({
-                "request_id": result.request_id,
-                "tipo_catasto": tipo_catasto,
-                "status": "completed" if resp.success else "error",
-                "data": resp.data,
-                "error": resp.error,
-                "timestamp": resp.timestamp.isoformat() if resp.timestamp else None,
-            })
+            return JSONResponse(
+                {
+                    "request_id": result.request_id,
+                    "tipo_catasto": tipo_catasto,
+                    "status": "completed" if resp.success else "error",
+                    "data": resp.data,
+                    "error": resp.error,
+                    "timestamp": resp.timestamp.isoformat() if resp.timestamp else None,
+                }
+            )
 
         return JSONResponse(
             {
@@ -335,7 +340,9 @@ async def richiedi_visura_soggetto(request: VisuraSoggettoInput, service: Visura
         raise HTTPException(status_code=500, detail="Errore interno del server")
 
 
-async def richiedi_visura_persona_giuridica(request: VisuraPersonaGiuridicaInput, service: VisuraService, force: bool = False):
+async def richiedi_visura_persona_giuridica(
+    request: VisuraPersonaGiuridicaInput, service: VisuraService, force: bool = False
+):
     """Ricerca per persona giuridica (P.IVA o denominazione)."""
     try:
         tipo_catasto = request.tipo_catasto or "E"
@@ -350,15 +357,17 @@ async def richiedi_visura_persona_giuridica(request: VisuraPersonaGiuridicaInput
 
         result = await service.add_persona_giuridica_request(pnf_request, force=force)
 
-        return JSONResponse({
-            "request_id": request_id,
-            "identificativo": request.identificativo,
-            "tipo_catasto": tipo_catasto,
-            "provincia": request.provincia or "NAZIONALE",
-            "status": "queued",
-            "message": f"Ricerca persona giuridica {request.identificativo} aggiunta alla coda",
-            "queue_position": service.request_queue.qsize(),
-        })
+        return JSONResponse(
+            {
+                "request_id": request_id,
+                "identificativo": request.identificativo,
+                "tipo_catasto": tipo_catasto,
+                "provincia": request.provincia or "NAZIONALE",
+                "status": "queued",
+                "message": f"Ricerca persona giuridica {request.identificativo} aggiunta alla coda",
+                "queue_position": service.request_queue.qsize(),
+            }
+        )
 
     except HTTPException:
         raise
@@ -388,15 +397,17 @@ async def richiedi_elenco_immobili(request: ElencoImmobiliInput, service: Visura
 
         result = await service.add_elenco_immobili_request(eimm_request, force=force)
 
-        return JSONResponse({
-            "request_id": request_id,
-            "provincia": request.provincia,
-            "comune": request.comune,
-            "tipo_catasto": tipo_catasto,
-            "status": "queued",
-            "message": f"Elenco immobili per {request.comune} aggiunto alla coda",
-            "queue_position": service.request_queue.qsize(),
-        })
+        return JSONResponse(
+            {
+                "request_id": request_id,
+                "provincia": request.provincia,
+                "comune": request.comune,
+                "tipo_catasto": tipo_catasto,
+                "status": "queued",
+                "message": f"Elenco immobili per {request.comune} aggiunto alla coda",
+                "queue_position": service.request_queue.qsize(),
+            }
+        )
 
     except HTTPException:
         raise
@@ -413,11 +424,13 @@ async def download_documents(service: VisuraService):
     """Download all available documents from SISTER Richieste page."""
     try:
         documents = await service.download_richieste_documents()
-        return JSONResponse({
-            "status": "completed",
-            "total_documents": len(documents),
-            "documents": [{k: v for k, v in d.items() if k != "parsed_data"} for d in documents],
-        })
+        return JSONResponse(
+            {
+                "status": "completed",
+                "total_documents": len(documents),
+                "documents": [{k: v for k, v in d.items() if k != "parsed_data"} for d in documents],
+            }
+        )
     except Exception as e:
         logger.error("Errore download documenti: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
@@ -447,23 +460,27 @@ async def richiedi_ispezione_ipotecaria(request: IspezioneIpotecariaInput, servi
         result = await service.add_ispezione_ipotecaria_request(ipotecaria_request, force=force)
 
         if isinstance(result, SubmitResult) and result.cached and result.response:
-            return JSONResponse({
-                "request_id": result.request_id,
-                "tipo_ricerca": request.tipo_ricerca,
-                "status": "cached",
-                "data": result.response.data,
-            })
+            return JSONResponse(
+                {
+                    "request_id": result.request_id,
+                    "tipo_ricerca": request.tipo_ricerca,
+                    "status": "cached",
+                    "data": result.response.data,
+                }
+            )
 
-        return JSONResponse({
-            "request_id": request_id,
-            "tipo_ricerca": request.tipo_ricerca,
-            "provincia": request.provincia,
-            "tipo_catasto": tipo_catasto,
-            "auto_confirm": request.auto_confirm,
-            "status": "queued",
-            "message": f"Ispezione ipotecaria ({request.tipo_ricerca}) aggiunta alla coda",
-            "queue_position": service.request_queue.qsize(),
-        })
+        return JSONResponse(
+            {
+                "request_id": request_id,
+                "tipo_ricerca": request.tipo_ricerca,
+                "provincia": request.provincia,
+                "tipo_catasto": tipo_catasto,
+                "auto_confirm": request.auto_confirm,
+                "status": "queued",
+                "message": f"Ispezione ipotecaria ({request.tipo_ricerca}) aggiunta alla coda",
+                "queue_position": service.request_queue.qsize(),
+            }
+        )
 
     except HTTPException:
         raise
@@ -501,21 +518,25 @@ async def richiedi_generic_sister(
         submit = await service.add_generic_request(request, force=force)
 
         if isinstance(submit, SubmitResult) and submit.cached and submit.response:
-            return JSONResponse({
-                "request_id": submit.request_id,
-                "search_type": search_type,
-                "status": "cached",
-                "data": submit.response.data,
-            })
+            return JSONResponse(
+                {
+                    "request_id": submit.request_id,
+                    "search_type": search_type,
+                    "status": "cached",
+                    "data": submit.response.data,
+                }
+            )
 
-        return JSONResponse({
-            "request_id": request_id,
-            "search_type": search_type,
-            "provincia": provincia,
-            "tipo_catasto": tipo_catasto,
-            "status": "queued",
-            "queue_position": service.request_queue.qsize(),
-        })
+        return JSONResponse(
+            {
+                "request_id": request_id,
+                "search_type": search_type,
+                "provincia": provincia,
+                "tipo_catasto": tipo_catasto,
+                "status": "queued",
+                "queue_position": service.request_queue.qsize(),
+            }
+        )
 
     except HTTPException:
         raise

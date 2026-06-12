@@ -12,7 +12,6 @@ from playwright.async_api import Page
 log = logging.getLogger("sister.utils")
 
 
-
 class PageLogger(_BasePageLogger):
     """Extended PageLogger that saves screenshots and collects page visit metadata."""
 
@@ -25,6 +24,7 @@ class PageLogger(_BasePageLogger):
         screenshot_url = None
         try:
             from .database import OUTPUTS_DIR
+
             if page and not page.is_closed():
                 pages_dir = os.path.join(OUTPUTS_DIR, "pages", _BasePageLogger._session_id or "unknown")
                 os.makedirs(pages_dir, exist_ok=True)
@@ -50,14 +50,16 @@ class PageLogger(_BasePageLogger):
                         errors = visit.get("errors", [])
                     except Exception:
                         pass
-                self.page_visits.append({
-                    "step": step_name,
-                    "url": page.url,
-                    "timestamp": datetime.now().isoformat(),
-                    "screenshot_url": screenshot_url,
-                    "form_elements": form_elements,
-                    "errors": errors,
-                })
+                self.page_visits.append(
+                    {
+                        "step": step_name,
+                        "url": page.url,
+                        "timestamp": datetime.now().isoformat(),
+                        "screenshot_url": screenshot_url,
+                        "form_elements": form_elements,
+                        "errors": errors,
+                    }
+                )
         except Exception:
             pass
 
@@ -141,6 +143,7 @@ async def _collect_page_metadata(page: Page, step_name: str, screenshot_url: str
         "errors": errors,
     }
 
+
 SISTER_SCELTA_SERVIZIO_URL = "https://sister3.agenziaentrate.gov.it/Visure/SceltaServizio.do?tipo=/T/TM/VCVC_"
 
 
@@ -168,7 +171,8 @@ async def _navigate_to_scelta_servizio(page: Page, page_logger: PageLogger, max_
         if "login.jsp" in current_url:
             log.warning(
                 "Sessione SISTER non pronta (login.jsp), tentativo %d/%d — navigando via portale ADE...",
-                attempt, max_retries,
+                attempt,
+                max_retries,
             )
             await page_logger.log(page, f"login_jsp_tentativo_{attempt}")
 
@@ -229,7 +233,9 @@ async def _navigate_to_scelta_servizio(page: Page, page_logger: PageLogger, max_
                             provincia_count = await page.locator("select[name='listacom'] option").count()
                             if provincia_count > 1:
                                 await page_logger.log(page, "scelta_servizio")
-                                log.info("SceltaServizio raggiunta dopo ADE redirect (%d province)", provincia_count - 1)
+                                log.info(
+                                    "SceltaServizio raggiunta dopo ADE redirect (%d province)", provincia_count - 1
+                                )
                                 return
 
             except Exception as e:
@@ -426,7 +432,13 @@ async def run_visura(
     subalterno_info = f", sub={subalterno}" if subalterno else ""
     log.info(
         "[bold]Visura[/bold] %s/%s F.%s P.%s%s%s tipo=%s",
-        provincia, comune, foglio, particella, sezione_info, subalterno_info, tipo_catasto,
+        provincia,
+        comune,
+        foglio,
+        particella,
+        sezione_info,
+        subalterno_info,
+        tipo_catasto,
     )
 
     # STEP 1: Selezione Ufficio Provinciale
@@ -449,9 +461,7 @@ async def run_visura(
     provincia_value = await find_best_option_match(page, "select[name='listacom']", provincia)
 
     if not provincia_value:
-        raise Exception(
-            f"Provincia '{provincia}' non trovata. Disponibili: {', '.join(available_provinces[:10])}"
-        )
+        raise Exception(f"Provincia '{provincia}' non trovata. Disponibili: {', '.join(available_provinces[:10])}")
 
     log.info("Provincia: [cyan]%s[/cyan]", provincia_value)
     try:
@@ -511,7 +521,12 @@ async def run_visura(
             log.info("Sezione urbana: [cyan]%s[/cyan]", sezione_urbana)
 
     # Inserisci foglio, particella, subalterno
-    log.info("Foglio: [cyan]%s[/cyan]  Particella: [cyan]%s[/cyan]%s", foglio, particella, f"  Sub: [cyan]{subalterno}[/cyan]" if subalterno else "")
+    log.info(
+        "Foglio: [cyan]%s[/cyan]  Particella: [cyan]%s[/cyan]%s",
+        foglio,
+        particella,
+        f"  Sub: [cyan]{subalterno}[/cyan]" if subalterno else "",
+    )
     await page.locator("input[name='foglio']").click()
     await page.locator("input[name='foglio']").fill(str(foglio))
     await page.locator("input[name='particella1']").click()
@@ -600,7 +615,9 @@ async def run_visura(
         immobili = []
 
     # Check if we're on the AssenzaSubalterno page with radio buttons
-    radio_buttons_check = page.locator("input[type='radio'][property='visImmSel'], input[type='radio'][name='visImmSel']")
+    radio_buttons_check = page.locator(
+        "input[type='radio'][property='visImmSel'], input[type='radio'][name='visImmSel']"
+    )
     has_radio_list = await radio_buttons_check.count() > 0
 
     # Se non servono intestati E non siamo sulla pagina con lista immobili
@@ -660,11 +677,15 @@ async def run_visura(
             # Select the radio button
             radio = radio_buttons.nth(radio_idx)
             await radio.click()
-            log.info("[%d/%d] Immobile radio %d — Sub.%s %s%s",
-                     item_num, total_active, radio_idx + 1,
-                     imm_data.get("Sub", "?"),
-                     imm_data.get("Indirizzo", "")[:30],
-                     " [Bene comune — skip intestati]" if is_bene_comune else "")
+            log.info(
+                "[%d/%d] Immobile radio %d — Sub.%s %s%s",
+                item_num,
+                total_active,
+                radio_idx + 1,
+                imm_data.get("Sub", "?"),
+                imm_data.get("Indirizzo", "")[:30],
+                " [Bene comune — skip intestati]" if is_bene_comune else "",
+            )
 
             # --- Click "Intestati" (skip for Bene comune non censibile) ---
             intestati_btn = page.locator("input[name='intestati'][value='Intestati']")
@@ -699,7 +720,9 @@ async def run_visura(
 
                             has_captcha = await _wait_for_captcha(page)
                             if not has_captcha:
-                                inoltra_btn = page.locator("input[name='inoltra'][value='Inoltra'], input[type='submit'][value='Inoltra']")
+                                inoltra_btn = page.locator(
+                                    "input[name='inoltra'][value='Inoltra'], input[type='submit'][value='Inoltra']"
+                                )
                                 if await inoltra_btn.count() > 0:
                                     await inoltra_btn.click()
                                     await page.wait_for_load_state("networkidle", timeout=30000)
@@ -710,7 +733,9 @@ async def run_visura(
                         if "RicercaPF" in current_url:
                             log.info("Pagina RicercaPF — procedendo con ricerca")
                             await page_logger.log(page, f"ricerca_pf_{radio_idx + 1}")
-                            ricerca_btn = page.locator("input[type='submit'][value='Ricerca'], input[name='ricerca'][value='Ricerca']")
+                            ricerca_btn = page.locator(
+                                "input[type='submit'][value='Ricerca'], input[name='ricerca'][value='Ricerca']"
+                            )
                             if await ricerca_btn.count() > 0:
                                 await ricerca_btn.first.click()
                                 await page.wait_for_load_state("networkidle", timeout=30000)
@@ -723,7 +748,9 @@ async def run_visura(
                             first_radio = page.locator("input[type='radio']").first
                             if await first_radio.count() > 0:
                                 await first_radio.click()
-                            submit_btn = page.locator("input[type='submit'][value='Conferma'], input[type='submit'][value='Prosegui'], input[type='submit']").first
+                            submit_btn = page.locator(
+                                "input[type='submit'][value='Conferma'], input[type='submit'][value='Prosegui'], input[type='submit']"
+                            ).first
                             if await submit_btn.count() > 0:
                                 await submit_btn.click()
                                 await page.wait_for_load_state("networkidle", timeout=30000)
@@ -745,13 +772,23 @@ async def run_visura(
 
                     # Re-submit search to get immobili list back
                     radio_buttons = await _resubmit_search_for_immobili_list(
-                        page, page_logger, provincia, comune, sezione, foglio, particella,
-                        tipo_catasto, subalterno, sezione_urbana,
+                        page,
+                        page_logger,
+                        provincia,
+                        comune,
+                        sezione,
+                        foglio,
+                        particella,
+                        tipo_catasto,
+                        subalterno,
+                        sezione_urbana,
                     )
                 else:
                     # No "Visura per Soggetto" button — go back from intestati page
                     await _navigate_back_to_immobili_list(page)
-                    radio_buttons = page.locator("input[type='radio'][property='visImmSel'], input[type='radio'][name='visImmSel']")
+                    radio_buttons = page.locator(
+                        "input[type='radio'][property='visImmSel'], input[type='radio'][name='visImmSel']"
+                    )
 
                 # Re-select the same radio for the next action (Visura Per Immobile)
                 radio = radio_buttons.nth(radio_idx)
@@ -776,7 +813,9 @@ async def run_visura(
 
                 if not has_captcha:
                     # No CAPTCHA — click Inoltra manually
-                    inoltra_btn = page.locator("input[name='inoltra'][value='Inoltra'], input[type='submit'][value='Inoltra']")
+                    inoltra_btn = page.locator(
+                        "input[name='inoltra'][value='Inoltra'], input[type='submit'][value='Inoltra']"
+                    )
                     if await inoltra_btn.count() > 0:
                         await inoltra_btn.click()
                         await page.wait_for_load_state("networkidle", timeout=30000)
@@ -786,8 +825,16 @@ async def run_visura(
 
                 # Re-submit search to get immobili list back (SISTER loses session state after Inoltra)
                 radio_buttons = await _resubmit_search_for_immobili_list(
-                    page, page_logger, provincia, comune, sezione, foglio, particella,
-                    tipo_catasto, subalterno, sezione_urbana,
+                    page,
+                    page_logger,
+                    provincia,
+                    comune,
+                    sezione,
+                    foglio,
+                    particella,
+                    tipo_catasto,
+                    subalterno,
+                    sezione_urbana,
                 )
 
             await _fill_richiedente_motivo(page, sezione_urbana=sezione_urbana)
@@ -795,7 +842,12 @@ async def run_visura(
             log.info("[%d/%d] Completato immobile radio %d", item_num, total_active, radio_idx + 1)
 
     except Exception as e:
-        log.error("Errore estrazione intestati/visure (item %d/%d): %s", item_num if 'item_num' in dir() else 0, total_active if 'total_active' in dir() else 0, e)
+        log.error(
+            "Errore estrazione intestati/visure (item %d/%d): %s",
+            item_num if "item_num" in dir() else 0,
+            total_active if "total_active" in dir() else 0,
+            e,
+        )
 
     if not results_list and immobili:
         results_list = [{"result_index": 1, "immobile": immobili[0] if immobili else {}, "intestati": all_intestati}]
@@ -809,8 +861,14 @@ async def run_visura(
             log.warning("Errore download PDF da Richieste: %s", e)
 
     elapsed = time.time() - time0
-    log.info("[green]Visura completata[/green] in %.1fs — %d immobili, %d intestati, %d soppressi saltati, %d PDF scaricati",
-             elapsed, len(immobili), len(all_intestati), skipped_soppresso, len(downloaded_pdfs))
+    log.info(
+        "[green]Visura completata[/green] in %.1fs — %d immobili, %d intestati, %d soppressi saltati, %d PDF scaricati",
+        elapsed,
+        len(immobili),
+        len(all_intestati),
+        skipped_soppresso,
+        len(downloaded_pdfs),
+    )
 
     result = {
         "immobili": immobili,
@@ -826,8 +884,16 @@ async def run_visura(
 
 
 async def _resubmit_search_for_immobili_list(
-    page, page_logger, provincia, comune, sezione, foglio, particella,
-    tipo_catasto, subalterno, sezione_urbana,
+    page,
+    page_logger,
+    provincia,
+    comune,
+    sezione,
+    foglio,
+    particella,
+    tipo_catasto,
+    subalterno,
+    sezione_urbana,
 ):
     """Re-submit the property search to restore the immobili list.
 
@@ -1072,9 +1138,15 @@ async def _download_richieste_documents(page, page_logger) -> list[dict]:
             await download.save_as(save_path)
             file_size = os.path.getsize(save_path)
 
-            log.info("[%d/%d] Scaricato: %s (%s, %d bytes) — %s",
-                     len(downloaded) + 1, len(richieste_meta),
-                     final_filename, file_format, file_size, oggetto[:50])
+            log.info(
+                "[%d/%d] Scaricato: %s (%s, %d bytes) — %s",
+                len(downloaded) + 1,
+                len(richieste_meta),
+                final_filename,
+                file_format,
+                file_size,
+                oggetto[:50],
+            )
 
             doc_info = {
                 "filename": final_filename,
@@ -1103,10 +1175,14 @@ async def _download_richieste_documents(page, page_logger) -> list[dict]:
                 parsed = _parse_visura_xml(save_path)
                 if parsed:
                     doc_info["parsed_data"] = parsed
-                    log.info("  XML: %s F.%s P.%s Sub.%s — %d intestati",
-                             parsed.get("tipo", ""), parsed.get("foglio", ""),
-                             parsed.get("particella", ""), parsed.get("subalterno", ""),
-                             len(parsed.get("intestati", [])))
+                    log.info(
+                        "  XML: %s F.%s P.%s Sub.%s — %d intestati",
+                        parsed.get("tipo", ""),
+                        parsed.get("foglio", ""),
+                        parsed.get("particella", ""),
+                        parsed.get("subalterno", ""),
+                        len(parsed.get("intestati", [])),
+                    )
 
             downloaded.append(doc_info)
 
@@ -1164,6 +1240,7 @@ def _parse_richieste_table(html_content: str) -> list[dict]:
                     salva_href = href
                     # Extract idRichiesta from URL
                     import urllib.parse
+
                     parsed_url = urllib.parse.urlparse(href)
                     params = urllib.parse.parse_qs(parsed_url.query)
                     id_richiesta = params.get("idRichiesta", [""])[0]
@@ -1174,14 +1251,16 @@ def _parse_richieste_table(html_content: str) -> list[dict]:
         if not salva_href:
             continue
 
-        results.append({
-            "richiesta_del": richiesta_del,
-            "oggetto": oggetto,
-            "formato": formato,
-            "costo": costo,
-            "salva_href": salva_href,
-            "id_richiesta": id_richiesta,
-        })
+        results.append(
+            {
+                "richiesta_del": richiesta_del,
+                "oggetto": oggetto,
+                "formato": formato,
+                "costo": costo,
+                "salva_href": salva_href,
+                "id_richiesta": id_richiesta,
+            }
+        )
 
     return results
 
@@ -1219,13 +1298,15 @@ def _extract_p7m(file_path: str) -> str | None:
     After extraction, renames the output to a descriptive filename based on content.
     """
     import subprocess
+
     out_path = file_path.rsplit(".p7m", 1)[0]
     if not out_path or out_path == file_path:
         out_path = file_path + ".extracted"
     try:
         result = subprocess.run(
             ["openssl", "cms", "-verify", "-inform", "DER", "-in", file_path, "-noverify", "-out", out_path],
-            capture_output=True, timeout=30,
+            capture_output=True,
+            timeout=30,
         )
         if result.returncode == 0 and os.path.exists(out_path) and os.path.getsize(out_path) > 0:
             log.info("P7M estratto: %s → %s (%d bytes)", file_path, out_path, os.path.getsize(out_path))
@@ -1300,7 +1381,11 @@ def _parse_visura_xml(file_path: str) -> dict | None:
                 return "attuale"
             return ""
 
-        if soup.find("VisuraFabbricatiStorica") or soup.find("VisuraFabbricatiAttuale") or soup.find("VisuraFabbricati"):
+        if (
+            soup.find("VisuraFabbricatiStorica")
+            or soup.find("VisuraFabbricatiAttuale")
+            or soup.find("VisuraFabbricati")
+        ):
             result["tipo"] = "visura_fabbricati"
             result["tipo_catasto"] = "F"
             result["visura_subtype"] = _subtype_from_titolo(titolo)
@@ -1396,9 +1481,7 @@ def _parse_visura_pdf(file_path: str) -> dict | None:
     import re as _re
 
     try:
-        text = subprocess.check_output(
-            ["pdftotext", file_path, "-"], stderr=subprocess.DEVNULL, text=True, timeout=15
-        )
+        text = subprocess.check_output(["pdftotext", file_path, "-"], stderr=subprocess.DEVNULL, text=True, timeout=15)
     except Exception as e:
         log.debug("_parse_visura_pdf: pdftotext failed for %s: %s", file_path, e)
         return None
@@ -1499,12 +1582,17 @@ async def _save_documents_to_db(documents: list[dict]) -> None:
 
             # Skip if duplicate exists (same property + document type)
             if foglio and particella:
-                existing = await session.execute(text(
-                    "SELECT id FROM visura_documents "
-                    "WHERE foglio = :f AND particella = :p AND subalterno = :s AND document_type = :t LIMIT 1"
-                ), {"f": foglio, "p": particella, "s": subalterno, "t": doc_type})
+                existing = await session.execute(
+                    text(
+                        "SELECT id FROM visura_documents "
+                        "WHERE foglio = :f AND particella = :p AND subalterno = :s AND document_type = :t LIMIT 1"
+                    ),
+                    {"f": foglio, "p": particella, "s": subalterno, "t": doc_type},
+                )
                 if existing.fetchone():
-                    log.debug("Documento duplicato saltato: %s F.%s P.%s Sub.%s", doc_type, foglio, particella, subalterno)
+                    log.debug(
+                        "Documento duplicato saltato: %s F.%s P.%s Sub.%s", doc_type, foglio, particella, subalterno
+                    )
                     skipped += 1
                     continue
 
@@ -1525,12 +1613,21 @@ async def _save_documents_to_db(documents: list[dict]) -> None:
                 tipo_catasto=parsed.get("tipo_catasto"),
                 visura_subtype=parsed.get("visura_subtype") or None,
                 situazione_al=parsed.get("situazione_al") or None,
-                intestati_json=json.dumps(parsed.get("intestati", []), ensure_ascii=False) if parsed.get("intestati") else None,
-                dati_immobile_json=json.dumps({
-                    "immobile": parsed.get("immobile", {}),
-                    "classamento": parsed.get("classamento", []),
-                    "indirizzo": parsed.get("indirizzo", ""),
-                }, ensure_ascii=False) if parsed.get("immobile") or parsed.get("classamento") else None,
+                intestati_json=(
+                    json.dumps(parsed.get("intestati", []), ensure_ascii=False) if parsed.get("intestati") else None
+                ),
+                dati_immobile_json=(
+                    json.dumps(
+                        {
+                            "immobile": parsed.get("immobile", {}),
+                            "classamento": parsed.get("classamento", []),
+                            "indirizzo": parsed.get("indirizzo", ""),
+                        },
+                        ensure_ascii=False,
+                    )
+                    if parsed.get("immobile") or parsed.get("classamento")
+                    else None
+                ),
                 xml_content=parsed.get("xml_content"),
             )
             session.add(row)
@@ -1670,6 +1767,7 @@ async def run_visura_soggetto(
     per_conto_di=None,
 ):
     import os
+
     if per_conto_di is None:
         per_conto_di = os.getenv("ADE_USERNAME", "")
     """National search by codice fiscale on the SISTER portal.
@@ -1682,7 +1780,9 @@ async def run_visura_soggetto(
     prov_label = provincia or "NAZIONALE"
     log.info(
         "[bold]Ricerca soggetto[/bold] CF=%s tipo=%s provincia=%s",
-        codice_fiscale, tipo_catasto, prov_label,
+        codice_fiscale,
+        tipo_catasto,
+        prov_label,
     )
 
     # STEP 1: Navigate to SceltaServizio
@@ -1813,7 +1913,8 @@ async def run_visura_soggetto(
     elapsed = time.time() - time0
     log.info(
         "[green]Ricerca soggetto completata[/green] in %.1fs — %d risultati",
-        elapsed, len(immobili),
+        elapsed,
+        len(immobili),
     )
 
     return {
@@ -1837,6 +1938,7 @@ async def run_visura_persona_giuridica(
     If provincia is None, selects "NAZIONALE" for nationwide search.
     """
     import os
+
     if per_conto_di is None:
         per_conto_di = os.getenv("ADE_USERNAME", "")
 
@@ -1845,7 +1947,9 @@ async def run_visura_persona_giuridica(
     prov_label = provincia or "NAZIONALE"
     log.info(
         "[bold]Ricerca persona giuridica[/bold] id=%s tipo=%s provincia=%s",
-        identificativo, tipo_catasto, prov_label,
+        identificativo,
+        tipo_catasto,
+        prov_label,
     )
 
     # STEP 1: Navigate to SceltaServizio
@@ -1973,6 +2077,7 @@ async def run_elenco_immobili(
     Uses the EIMM (Elenco immobili) service on SISTER.
     """
     import os
+
     if per_conto_di is None:
         per_conto_di = os.getenv("ADE_USERNAME", "")
 
@@ -1981,7 +2086,10 @@ async def run_elenco_immobili(
     foglio_info = f" F.{foglio}" if foglio else ""
     log.info(
         "[bold]Elenco immobili[/bold] %s/%s%s tipo=%s",
-        provincia, comune, foglio_info, tipo_catasto,
+        provincia,
+        comune,
+        foglio_info,
+        tipo_catasto,
     )
 
     # STEP 1: Navigate and select province
@@ -2074,8 +2182,21 @@ def _extract_result_tables(page_html: str) -> list:
     soup = BeautifulSoup(page_html, "html.parser")
     for table in soup.find_all("table"):
         headers_text = " ".join(th.get_text(strip=True) for th in table.find_all("th"))
-        if any(kw in headers_text for kw in ("Foglio", "Particella", "Comune", "Provincia", "Denominazione",
-                                              "Nota", "Partita", "Indirizzo", "Fiduciale", "Mappa")):
+        if any(
+            kw in headers_text
+            for kw in (
+                "Foglio",
+                "Particella",
+                "Comune",
+                "Provincia",
+                "Denominazione",
+                "Nota",
+                "Partita",
+                "Indirizzo",
+                "Fiduciale",
+                "Mappa",
+            )
+        ):
             return parse_table(str(table))
     return []
 
@@ -2106,6 +2227,7 @@ async def _navigate_select_province_and_click(page, page_logger, provincia, menu
 async def _fill_richiedente_motivo(page, motivo="Esplorazione", per_conto_di=None, sezione_urbana=None):
     """Fill the richiedente, motivo, and sezione urbana fields if present."""
     import os
+
     if per_conto_di is None:
         per_conto_di = os.getenv("ADE_USERNAME", "")
 
@@ -2151,7 +2273,12 @@ async def _submit_and_extract(page, page_logger, step_name):
 
 
 async def run_ricerca_indirizzo(
-    page, provincia, comune, indirizzo, tipo_catasto="T", sezione=None,
+    page,
+    provincia,
+    comune,
+    indirizzo,
+    tipo_catasto="T",
+    sezione=None,
 ):
     """Search by address (IND) on SISTER."""
     time0 = time.time()
@@ -2186,14 +2313,22 @@ async def run_ricerca_indirizzo(
     log.info("[green]Ricerca indirizzo completata[/green] in %.1fs — %d risultati", elapsed, len(immobili))
 
     return {
-        "provincia": provincia, "comune": comune, "indirizzo": indirizzo,
-        "immobili": immobili, "total_results": len(immobili),
+        "provincia": provincia,
+        "comune": comune,
+        "indirizzo": indirizzo,
+        "immobili": immobili,
+        "total_results": len(immobili),
         **({"error": "NESSUNA CORRISPONDENZA TROVATA"} if results is None else {}),
     }
 
 
 async def run_ricerca_partita(
-    page, provincia, comune, partita, tipo_catasto="T", sezione=None,
+    page,
+    provincia,
+    comune,
+    partita,
+    tipo_catasto="T",
+    sezione=None,
 ):
     """Search by partita catastale (PART) on SISTER."""
     time0 = time.time()
@@ -2225,14 +2360,21 @@ async def run_ricerca_partita(
     log.info("[green]Ricerca partita completata[/green] in %.1fs — %d risultati", elapsed, len(immobili))
 
     return {
-        "provincia": provincia, "comune": comune, "partita": partita,
-        "immobili": immobili, "total_results": len(immobili),
+        "provincia": provincia,
+        "comune": comune,
+        "partita": partita,
+        "immobili": immobili,
+        "total_results": len(immobili),
         **({"error": "NESSUNA CORRISPONDENZA TROVATA"} if results is None else {}),
     }
 
 
 async def run_ricerca_nota(
-    page, provincia, numero_nota, anno_nota=None, tipo_catasto="T",
+    page,
+    provincia,
+    numero_nota,
+    anno_nota=None,
+    tipo_catasto="T",
 ):
     """Search by annotation/note reference (NOTA) on SISTER."""
     time0 = time.time()
@@ -2268,14 +2410,23 @@ async def run_ricerca_nota(
     log.info("[green]Ricerca nota completata[/green] in %.1fs — %d risultati", elapsed, len(rows))
 
     return {
-        "provincia": provincia, "numero_nota": numero_nota, "anno_nota": anno_nota,
-        "risultati": rows, "total_results": len(rows),
+        "provincia": provincia,
+        "numero_nota": numero_nota,
+        "anno_nota": anno_nota,
+        "risultati": rows,
+        "total_results": len(rows),
         **({"error": "NESSUNA CORRISPONDENZA TROVATA"} if results is None else {}),
     }
 
 
 async def run_ricerca_mappa(
-    page, provincia, comune, foglio, tipo_catasto="T", sezione=None, particella=None,
+    page,
+    provincia,
+    comune,
+    foglio,
+    tipo_catasto="T",
+    sezione=None,
+    particella=None,
 ):
     """View/extract cadastral map data (EM) on SISTER.
 
@@ -2317,14 +2468,22 @@ async def run_ricerca_mappa(
     log.info("[green]Ricerca mappa completata[/green] in %.1fs — %d risultati", elapsed, len(rows))
 
     return {
-        "provincia": provincia, "comune": comune, "foglio": foglio,
-        "risultati": rows, "total_results": len(rows),
+        "provincia": provincia,
+        "comune": comune,
+        "foglio": foglio,
+        "risultati": rows,
+        "total_results": len(rows),
         **({"error": "NESSUNA CORRISPONDENZA TROVATA"} if results is None else {}),
     }
 
 
 async def run_export_mappa(
-    page, provincia, comune, foglio, tipo_catasto="T", sezione=None,
+    page,
+    provincia,
+    comune,
+    foglio,
+    tipo_catasto="T",
+    sezione=None,
 ):
     """Export cadastral map data (EXPM) on SISTER."""
     time0 = time.time()
@@ -2353,14 +2512,21 @@ async def run_export_mappa(
     log.info("[green]Export mappa completata[/green] in %.1fs — %d risultati", elapsed, len(rows))
 
     return {
-        "provincia": provincia, "comune": comune, "foglio": foglio,
-        "risultati": rows, "total_results": len(rows),
+        "provincia": provincia,
+        "comune": comune,
+        "foglio": foglio,
+        "risultati": rows,
+        "total_results": len(rows),
         **({"error": "NESSUNA CORRISPONDENZA TROVATA"} if results is None else {}),
     }
 
 
 async def run_originali_impianto(
-    page, provincia, comune, tipo_catasto="T", foglio=None,
+    page,
+    provincia,
+    comune,
+    tipo_catasto="T",
+    foglio=None,
 ):
     """Retrieve original registration records (OOII) on SISTER."""
     time0 = time.time()
@@ -2391,14 +2557,20 @@ async def run_originali_impianto(
     log.info("[green]Originali impianto completati[/green] in %.1fs — %d risultati", elapsed, len(rows))
 
     return {
-        "provincia": provincia, "comune": comune,
-        "risultati": rows, "total_results": len(rows),
+        "provincia": provincia,
+        "comune": comune,
+        "risultati": rows,
+        "total_results": len(rows),
         **({"error": "NESSUNA CORRISPONDENZA TROVATA"} if results is None else {}),
     }
 
 
 async def run_punti_fiduciali(
-    page, provincia, comune, tipo_catasto="T", foglio=None,
+    page,
+    provincia,
+    comune,
+    tipo_catasto="T",
+    foglio=None,
 ):
     """Retrieve survey reference points (FID) on SISTER."""
     time0 = time.time()
@@ -2429,8 +2601,10 @@ async def run_punti_fiduciali(
     log.info("[green]Punti fiduciali completati[/green] in %.1fs — %d risultati", elapsed, len(rows))
 
     return {
-        "provincia": provincia, "comune": comune,
-        "risultati": rows, "total_results": len(rows),
+        "provincia": provincia,
+        "comune": comune,
+        "risultati": rows,
+        "total_results": len(rows),
         **({"error": "NESSUNA CORRISPONDENZA TROVATA"} if results is None else {}),
     }
 
@@ -2444,8 +2618,7 @@ async def _navigate_to_ispezioni(page, page_logger, provincia, cartacee=False):
     """
     # First navigate to Visure and select province
     await _navigate_select_province_and_click(
-        page, page_logger, provincia,
-        "Passa a Ispezioni Cartacee" if cartacee else "Passa a Ispezioni"
+        page, page_logger, provincia, "Passa a Ispezioni Cartacee" if cartacee else "Passa a Ispezioni"
     )
 
     # Click "Conferma Lettura" to enter the Ispezioni module
@@ -2478,7 +2651,13 @@ async def _navigate_to_ispezioni(page, page_logger, provincia, cartacee=False):
 
 
 async def run_ispezioni(
-    page, provincia, comune, tipo_catasto="T", foglio=None, particella=None, tipo_ricerca="PF",
+    page,
+    provincia,
+    comune,
+    tipo_catasto="T",
+    foglio=None,
+    particella=None,
+    tipo_ricerca="PF",
 ):
     """Search property inspection records (ISP) on SISTER.
 
@@ -2522,14 +2701,21 @@ async def run_ispezioni(
     log.info("[green]Ispezioni completate[/green] in %.1fs — %d risultati", elapsed, len(rows))
 
     return {
-        "provincia": provincia, "comune": comune,
-        "risultati": rows, "total_results": len(rows),
+        "provincia": provincia,
+        "comune": comune,
+        "risultati": rows,
+        "total_results": len(rows),
         **({"error": "NESSUNA CORRISPONDENZA TROVATA"} if results is None else {}),
     }
 
 
 async def run_ispezioni_cartacee(
-    page, provincia, comune, tipo_catasto="T", foglio=None, particella=None,
+    page,
+    provincia,
+    comune,
+    tipo_catasto="T",
+    foglio=None,
+    particella=None,
 ):
     """Search paper inspection records (ISPCART) on SISTER."""
     time0 = time.time()
@@ -2569,14 +2755,20 @@ async def run_ispezioni_cartacee(
     log.info("[green]Ispezioni cartacee completate[/green] in %.1fs — %d risultati", elapsed, len(rows))
 
     return {
-        "provincia": provincia, "comune": comune,
-        "risultati": rows, "total_results": len(rows),
+        "provincia": provincia,
+        "comune": comune,
+        "risultati": rows,
+        "total_results": len(rows),
         **({"error": "NESSUNA CORRISPONDENZA TROVATA"} if results is None else {}),
     }
 
 
 async def run_elaborato_planimetrico(
-    page, provincia, comune, tipo_catasto="F", foglio=None,
+    page,
+    provincia,
+    comune,
+    tipo_catasto="F",
+    foglio=None,
 ):
     """Retrieve Elaborato Planimetrico (ELPL) on SISTER.
 
@@ -2614,8 +2806,10 @@ async def run_elaborato_planimetrico(
     log.info("[green]Elaborato planimetrico completato[/green] in %.1fs — %d risultati", elapsed, len(rows))
 
     return {
-        "provincia": provincia, "comune": comune,
-        "risultati": rows, "total_results": len(rows),
+        "provincia": provincia,
+        "comune": comune,
+        "risultati": rows,
+        "total_results": len(rows),
         **({"error": "NESSUNA CORRISPONDENZA TROVATA"} if results is None else {}),
     }
 
@@ -2630,7 +2824,9 @@ async def run_riepilogo_visure(page):
     await _navigate_to_scelta_servizio(page, page_logger)
 
     # Navigate to Riepilogo
-    await page.goto("https://sister3.agenziaentrate.gov.it/Visure/RiepilogoVisure/UtentiRiepilogoVisure.do", timeout=30000)
+    await page.goto(
+        "https://sister3.agenziaentrate.gov.it/Visure/RiepilogoVisure/UtentiRiepilogoVisure.do", timeout=30000
+    )
     await page.wait_for_load_state("networkidle", timeout=30000)
     await page_logger.log(page, "riepilogo_visure")
 
@@ -2640,7 +2836,8 @@ async def run_riepilogo_visure(page):
     log.info("[green]Riepilogo visure completato[/green] in %.1fs — %d risultati", elapsed, len(results))
 
     return {
-        "risultati": results, "total_results": len(results),
+        "risultati": results,
+        "total_results": len(results),
     }
 
 
@@ -2669,7 +2866,8 @@ async def run_consultazione_richieste(page):
     log.info("[green]Consultazione richieste completata[/green] in %.1fs — %d risultati", elapsed, len(results))
 
     return {
-        "risultati": results, "total_results": len(results),
+        "risultati": results,
+        "total_results": len(results),
     }
 
 
@@ -2709,18 +2907,19 @@ async def _extract_cost_from_page(page):
 
     # Look for cost patterns: "Costo: € X,XX" or "Importo: X,XX" or "EUR X.XX"
     import re
+
     patterns = [
-        r'[Cc]osto[:\s]+[€EUR\s]*([\d.,]+)',
-        r'[Ii]mporto[:\s]+[€EUR\s]*([\d.,]+)',
-        r'[Pp]rezzo[:\s]+[€EUR\s]*([\d.,]+)',
-        r'€\s*([\d.,]+)',
-        r'EUR\s*([\d.,]+)',
+        r"[Cc]osto[:\s]+[€EUR\s]*([\d.,]+)",
+        r"[Ii]mporto[:\s]+[€EUR\s]*([\d.,]+)",
+        r"[Pp]rezzo[:\s]+[€EUR\s]*([\d.,]+)",
+        r"€\s*([\d.,]+)",
+        r"EUR\s*([\d.,]+)",
     ]
     for pattern in patterns:
         match = re.search(pattern, page_text)
         if match:
             cost_text = match.group(0).strip()
-            cost_val = match.group(1).replace('.', '').replace(',', '.')
+            cost_val = match.group(1).replace(".", "").replace(",", ".")
             try:
                 return cost_text, float(cost_val)
             except ValueError:
@@ -2791,6 +2990,7 @@ async def run_ispezione_ipotecaria(
     auto_confirm: if True, automatically confirm cost without prompting
     """
     import os
+
     time0 = time.time()
     page_logger = PageLogger("ispezione_ipotecaria")
 
@@ -2888,8 +3088,11 @@ async def run_ispezione_ipotecaria(
         elapsed = time.time() - time0
         log.warning("Nessuna corrispondenza (%.1fs)", elapsed)
         return {
-            "tipo_ricerca": tipo_ricerca, "provincia": provincia,
-            "risultati": [], "total_results": 0, "cost": None,
+            "tipo_ricerca": tipo_ricerca,
+            "provincia": provincia,
+            "risultati": [],
+            "total_results": 0,
+            "cost": None,
             "error": "NESSUNA CORRISPONDENZA TROVATA",
         }
 
@@ -2899,8 +3102,10 @@ async def run_ispezione_ipotecaria(
     if not cost_result["confirmed"]:
         elapsed = time.time() - time0
         return {
-            "tipo_ricerca": tipo_ricerca, "provincia": provincia,
-            "risultati": [], "total_results": 0,
+            "tipo_ricerca": tipo_ricerca,
+            "provincia": provincia,
+            "risultati": [],
+            "total_results": 0,
             "cost": {"text": cost_result.get("cost_text"), "value": cost_result.get("cost_value")},
             "confirmed": False,
             "error": cost_result.get("error", "Cost confirmation required"),
@@ -2909,12 +3114,18 @@ async def run_ispezione_ipotecaria(
     # Extract results after confirmation
     results = _extract_result_tables(await page.content())
     elapsed = time.time() - time0
-    log.info("[green]Ispezione ipotecaria completata[/green] in %.1fs — %d risultati, costo: %s",
-             elapsed, len(results), cost_result.get("cost_text", "N/A"))
+    log.info(
+        "[green]Ispezione ipotecaria completata[/green] in %.1fs — %d risultati, costo: %s",
+        elapsed,
+        len(results),
+        cost_result.get("cost_text", "N/A"),
+    )
 
     return {
-        "tipo_ricerca": tipo_ricerca, "provincia": provincia,
-        "risultati": results, "total_results": len(results),
+        "tipo_ricerca": tipo_ricerca,
+        "provincia": provincia,
+        "risultati": results,
+        "total_results": len(results),
         "cost": {"text": cost_result.get("cost_text"), "value": cost_result.get("cost_value")},
         "confirmed": True,
     }
@@ -3106,7 +3317,8 @@ async def extract_all_sezioni(page: Page, tipo_catasto: str = "T", max_province:
 
                 log.info(
                     "Provincia %s completata — %d sezioni totali finora",
-                    provincia["text"], len(sezioni_data),
+                    provincia["text"],
+                    len(sezioni_data),
                 )
 
                 # Torna alla pagina principale per la prossima provincia
@@ -3126,7 +3338,14 @@ async def extract_all_sezioni(page: Page, tipo_catasto: str = "T", max_province:
 
 
 async def run_visura_immobile(
-    page, provincia="Trieste", comune="Trieste", sezione=None, foglio="9", particella="166", subalterno=None, sezione_urbana=None
+    page,
+    provincia="Trieste",
+    comune="Trieste",
+    sezione=None,
+    foglio="9",
+    particella="166",
+    subalterno=None,
+    sezione_urbana=None,
 ):
     """
     Esegue una visura catastale per un immobile specifico (solo per fabbricati con subalterno).
@@ -3148,7 +3367,12 @@ async def run_visura_immobile(
     sezione_info = f", sezione={sezione}" if sezione else ""
     log.info(
         "[bold]Visura immobile[/bold] %s/%s F.%s P.%s Sub.%s%s",
-        provincia, comune, foglio, particella, subalterno, sezione_info,
+        provincia,
+        comune,
+        foglio,
+        particella,
+        subalterno,
+        sezione_info,
     )
 
     if not subalterno:
@@ -3195,7 +3419,9 @@ async def run_visura_immobile(
             log.info("Sezione urbana: [cyan]%s[/cyan]", sezione_urbana)
 
     # Inserisci dati immobile
-    log.info("Foglio: [cyan]%s[/cyan]  Particella: [cyan]%s[/cyan]  Sub: [cyan]%s[/cyan]", foglio, particella, subalterno)
+    log.info(
+        "Foglio: [cyan]%s[/cyan]  Particella: [cyan]%s[/cyan]  Sub: [cyan]%s[/cyan]", foglio, particella, subalterno
+    )
     await page.locator("input[name='foglio']").fill(str(foglio))
     await page.locator("input[name='particella1']").fill(str(particella))
     await page.locator("input[name='subalterno1']").fill(str(subalterno))
@@ -3357,6 +3583,11 @@ async def run_visura_immobile(
     elapsed = time.time() - time0
     log.info("[green]Visura immobile completata[/green] in %.1fs — %d intestati", elapsed, len(intestati))
 
-    result = {"immobile": immobile_data, "intestati": intestati, "total_intestati": len(intestati), "page_visits": page_logger.page_visits}
+    result = {
+        "immobile": immobile_data,
+        "intestati": intestati,
+        "total_intestati": len(intestati),
+        "page_visits": page_logger.page_visits,
+    }
 
     return result

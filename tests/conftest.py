@@ -8,7 +8,6 @@ import types
 
 import pytest
 
-
 # ---------------------------------------------------------------------------
 # Stub heavy optional dependencies that may not be installed in CI
 # ---------------------------------------------------------------------------

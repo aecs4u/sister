@@ -31,18 +31,20 @@ async def test_web_results_passes_extended_filters_and_urls(monkeypatch):
     async def _find_responses(**kwargs):
         assert kwargs["foglio"] == "9"
         assert kwargs["particella"] == "166"
-        return [{
-            "request_id": "req_1",
-            "request_type": "visura",
-            "tipo_catasto": "F",
-            "provincia": "Trieste",
-            "comune": "TRIESTE",
-            "foglio": "9",
-            "particella": "166",
-            "requested_at": "2026-04-12T10:30:00",
-            "responded_at": None,
-            "success": None,
-        }]
+        return [
+            {
+                "request_id": "req_1",
+                "request_type": "visura",
+                "tipo_catasto": "F",
+                "provincia": "Trieste",
+                "comune": "TRIESTE",
+                "foglio": "9",
+                "particella": "166",
+                "requested_at": "2026-04-12T10:30:00",
+                "responded_at": None,
+                "success": None,
+            }
+        ]
 
     async def _count_responses(**kwargs):
         return {"total_requests": 1, "total_responses": 0, "successful": 0, "failed": 0, "pending": 1}
@@ -135,24 +137,26 @@ def _make_result_rows(n, source="single"):
     """Generate n fake result rows."""
     rows = []
     for i in range(n):
-        rows.append({
-            "request_id": f"req_{i}",
-            "request_type": "visura" if source == "single" else "workflow:test",
-            "source": source,
-            "tipo_catasto": "F",
-            "provincia": "Roma",
-            "comune": "ROMA",
-            "foglio": "1",
-            "particella": str(i),
-            "sezione": None,
-            "subalterno": None,
-            "requested_at": f"2026-04-12T10:{i:02d}:00",
-            "responded_at": f"2026-04-12T10:{i:02d}:30",
-            "success": True,
-            "status": "completed",
-            "data": None,
-            "error": None,
-        })
+        rows.append(
+            {
+                "request_id": f"req_{i}",
+                "request_type": "visura" if source == "single" else "workflow:test",
+                "source": source,
+                "tipo_catasto": "F",
+                "provincia": "Roma",
+                "comune": "ROMA",
+                "foglio": "1",
+                "particella": str(i),
+                "sezione": None,
+                "subalterno": None,
+                "requested_at": f"2026-04-12T10:{i:02d}:00",
+                "responded_at": f"2026-04-12T10:{i:02d}:30",
+                "success": True,
+                "status": "completed",
+                "data": None,
+                "error": None,
+            }
+        )
     return rows
 
 
@@ -165,7 +169,7 @@ async def test_web_results_pagination_uses_total_count(monkeypatch):
     async def _find(**kwargs):
         offset = kwargs.get("offset", 0)
         limit = kwargs.get("limit", 50)
-        return all_rows[offset:offset + limit]
+        return all_rows[offset : offset + limit]
 
     async def _count(**kwargs):
         return {"total_requests": 5, "total_responses": 5, "successful": 5, "failed": 0, "partial": 0, "pending": 0}
@@ -207,7 +211,7 @@ async def test_web_results_mixed_single_and_workflow(monkeypatch):
     async def _find(**kwargs):
         src = kwargs.get("source")
         rows = [r for r in all_rows if src is None or r["source"] == src]
-        return rows[:kwargs.get("limit", 50)]
+        return rows[: kwargs.get("limit", 50)]
 
     async def _count(**kwargs):
         return {"total_requests": 3, "total_responses": 3, "successful": 2, "failed": 0, "partial": 1, "pending": 0}
@@ -347,7 +351,9 @@ async def test_web_result_detail_single_query(monkeypatch):
             "data": {
                 "immobili": [{"Foglio": "9", "Particella": "166", "Sub": "3"}],
                 "intestati": [{"Nominativo o denominazione": "TEST USER", "Codice fiscale": "XYZ"}],
-                "page_visits": [{"step": "fill_form", "url": "https://example.com", "timestamp": "2026-04-12T10:30:01"}],
+                "page_visits": [
+                    {"step": "fill_form", "url": "https://example.com", "timestamp": "2026-04-12T10:30:01"}
+                ],
             },
             "error": None,
             "page_visits": [
@@ -619,6 +625,7 @@ class TestCountTotalResultRows:
     @pytest.mark.asyncio
     async def test_returns_zero_for_missing_db(self, tmp_path, monkeypatch):
         from sister import database
+
         monkeypatch.setattr(database, "DB_PATH", str(tmp_path / "nonexistent.sqlite"))
         result = await database.count_total_result_rows()
         assert result == 0
@@ -626,6 +633,7 @@ class TestCountTotalResultRows:
     @pytest.mark.asyncio
     async def test_invalid_status_ignored(self, monkeypatch):
         from sister import database
+
         # Invalid status should be normalized to None (no filter)
         total_all = await database.count_total_result_rows()
         total_bogus = await database.count_total_result_rows(status="bogus_status")
@@ -634,6 +642,7 @@ class TestCountTotalResultRows:
     @pytest.mark.asyncio
     async def test_invalid_source_ignored(self, monkeypatch):
         from sister import database
+
         total_all = await database.count_total_result_rows()
         total_bogus = await database.count_total_result_rows(source="bogus_source")
         assert total_all == total_bogus
@@ -649,6 +658,7 @@ class TestIsDbWritable:
 
     def test_writable_path(self, tmp_path):
         from sister import database
+
         db_file = tmp_path / "test.sqlite"
         db_file.touch()
         old = database._db_writable
@@ -661,6 +671,7 @@ class TestIsDbWritable:
 
     def test_nonexistent_writable_parent(self, tmp_path):
         from sister import database
+
         old = database._db_writable
         database._db_writable = None
         database.DB_PATH = str(tmp_path / "new.sqlite")

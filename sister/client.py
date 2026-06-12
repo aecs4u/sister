@@ -270,10 +270,14 @@ class VisuraClient:
     ) -> dict:
         """Execute a multi-step workflow (POST /visura/workflow)."""
         payload: dict[str, Any] = {
-            "preset": preset, "depth": depth, "max_fanout": max_fanout,
-            "max_owners": max_owners, "max_properties_per_owner": max_properties_per_owner,
+            "preset": preset,
+            "depth": depth,
+            "max_fanout": max_fanout,
+            "max_owners": max_owners,
+            "max_properties_per_owner": max_properties_per_owner,
             "max_historical_properties": max_historical_properties,
-            "max_paid_steps": max_paid_steps, "max_total_steps": max_total_steps,
+            "max_paid_steps": max_paid_steps,
+            "max_total_steps": max_total_steps,
         }
         if provincia:
             payload["provincia"] = provincia
@@ -389,9 +393,7 @@ class VisuraClient:
                 return result
             elapsed = time.monotonic() - start
             if elapsed + interval > timeout:
-                raise TimeoutError(
-                    f"Timed out after {elapsed:.0f}s waiting for {request_id} (last status: {status})"
-                )
+                raise TimeoutError(f"Timed out after {elapsed:.0f}s waiting for {request_id} (last status: {status})")
             await asyncio.sleep(interval)
 
     async def history(

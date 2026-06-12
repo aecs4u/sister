@@ -138,6 +138,7 @@ def _chrome_cdp_cmd(port: int) -> list[str]:
     per profile; a separate dir bypasses that constraint).
     """
     from pathlib import Path as _Path
+
     profile_dir = os.getenv("SISTER_CHROME_PROFILE", str(_Path.home() / ".local/share/sister/chrome-profile"))
     return [
         "google-chrome",
@@ -167,6 +168,7 @@ async def _ensure_chrome_cdp() -> None:
         pass
 
     from urllib.parse import urlparse
+
     port = urlparse(cdp_endpoint).port or 9222
     cmd = _chrome_cdp_cmd(port)
     logger.info("Chrome CDP non raggiungibile su %s — avvio: %s", cdp_endpoint, " ".join(cmd))
@@ -311,16 +313,19 @@ try:
 
     # Mount outputs directory for screenshots
     from .database import OUTPUTS_DIR
+
     _outputs_dir = Path(OUTPUTS_DIR)
     _outputs_dir.mkdir(exist_ok=True)
     app.mount("/outputs", StaticFiles(directory=str(_outputs_dir)), name="outputs")
 
     # Include web routes
     from .web import router as web_router
+
     app.include_router(web_router)
 
     try:
         from .feedback_admin import router as feedback_admin_router
+
         app.include_router(feedback_admin_router)
         logger.info("Feedback admin router registrato")
     except ImportError as e:
@@ -415,7 +420,22 @@ async def _richiedi_generic(
     anno_nota: Optional[str] = None,
     partita: Optional[str] = None,
 ):
-    valid_types = {"indirizzo", "partita", "nota", "mappa", "export-mappa", "originali", "fiduciali", "ispezioni", "ispezioni-cartacee", "elaborato-planimetrico", "riepilogo-visure", "richieste", "ipotecaria-stato", "ipotecaria-elenchi"}
+    valid_types = {
+        "indirizzo",
+        "partita",
+        "nota",
+        "mappa",
+        "export-mappa",
+        "originali",
+        "fiduciali",
+        "ispezioni",
+        "ispezioni-cartacee",
+        "elaborato-planimetrico",
+        "riepilogo-visure",
+        "richieste",
+        "ipotecaria-stato",
+        "ipotecaria-elenchi",
+    }
     normalized = search_type.replace("-", "_")
     if normalized.replace("_", "-") not in {t.replace("_", "-") for t in valid_types}:
         raise HTTPException(status_code=404, detail=f"Search type '{search_type}' not found")
@@ -450,15 +470,17 @@ async def _health_check():
     if visura_service is not None:
         return await health_check(visura_service)
     db_stats = await count_responses()
-    return JSONResponse({
-        "status": "degraded",
-        "auth": {"state": "unavailable", "message": "Browser service not initialized"},
-        "auth_ready": False,
-        "authenticated": False,
-        "queue_size": 0,
-        "pending_requests": 0,
-        "database": db_stats,
-    })
+    return JSONResponse(
+        {
+            "status": "degraded",
+            "auth": {"state": "unavailable", "message": "Browser service not initialized"},
+            "auth_ready": False,
+            "authenticated": False,
+            "queue_size": 0,
+            "pending_requests": 0,
+            "database": db_stats,
+        }
+    )
 
 
 @app.get("/visura/history")

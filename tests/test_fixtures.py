@@ -111,9 +111,7 @@ class TestVisuraInput:
 
     def test_tipo_catasto_omitted_defaults_to_none(self, main_module):
         """README: se tipo_catasto omesso, vengono accodate due richieste (T+F)."""
-        model = main_module.VisuraInput(
-            provincia="Trieste", comune="TRIESTE", foglio="9", particella="166"
-        )
+        model = main_module.VisuraInput(provincia="Trieste", comune="TRIESTE", foglio="9", particella="166")
         assert model.tipo_catasto is None
 
     def test_tipo_catasto_terreni(self, main_module):
@@ -142,8 +140,12 @@ class TestVisuraInput:
 
     def test_with_subalterno(self, main_module):
         model = main_module.VisuraInput(
-            provincia="Trieste", comune="TRIESTE", foglio="9", particella="166",
-            tipo_catasto="F", subalterno="3",
+            provincia="Trieste",
+            comune="TRIESTE",
+            foglio="9",
+            particella="166",
+            tipo_catasto="F",
+            subalterno="3",
         )
         assert model.subalterno == "3"
 
@@ -189,21 +191,33 @@ class TestVisuraIntestatiInput:
         """README: subalterno vietato per Terreni."""
         with pytest.raises(Exception):
             main_module.VisuraIntestatiInput(
-                provincia="Trieste", comune="TRIESTE", foglio="9", particella="166",
-                tipo_catasto="T", subalterno="3",
+                provincia="Trieste",
+                comune="TRIESTE",
+                foglio="9",
+                particella="166",
+                tipo_catasto="T",
+                subalterno="3",
             )
 
     def test_tipo_catasto_case_insensitive(self, main_module):
         model = main_module.VisuraIntestatiInput(
-            provincia="Trieste", comune="TRIESTE", foglio="9", particella="166",
-            tipo_catasto="f", subalterno="3",
+            provincia="Trieste",
+            comune="TRIESTE",
+            foglio="9",
+            particella="166",
+            tipo_catasto="f",
+            subalterno="3",
         )
         assert model.tipo_catasto == "F"
 
     def test_subalterno_whitespace_stripped(self, main_module):
         model = main_module.VisuraIntestatiInput(
-            provincia="Trieste", comune="TRIESTE", foglio="9", particella="166",
-            tipo_catasto="F", subalterno="  3  ",
+            provincia="Trieste",
+            comune="TRIESTE",
+            foglio="9",
+            particella="166",
+            tipo_catasto="F",
+            subalterno="  3  ",
         )
         assert model.subalterno == "3"
 
@@ -211,8 +225,12 @@ class TestVisuraIntestatiInput:
         """Blank subalterno should be treated as missing (None)."""
         with pytest.raises(Exception):
             main_module.VisuraIntestatiInput(
-                provincia="Trieste", comune="TRIESTE", foglio="9", particella="166",
-                tipo_catasto="F", subalterno="   ",
+                provincia="Trieste",
+                comune="TRIESTE",
+                foglio="9",
+                particella="166",
+                tipo_catasto="F",
+                subalterno="   ",
             )
 
 
@@ -349,9 +367,7 @@ class TestVisuraEndpoint:
         """README: se tipo_catasto omesso, vengono accodate due richieste."""
         service = main_module.VisuraService()
         service.processing = True
-        request = main_module.VisuraInput(
-            provincia="Roma", comune="ROMA", foglio="100", particella="50"
-        )
+        request = main_module.VisuraInput(provincia="Roma", comune="ROMA", foglio="100", particella="50")
 
         response = await main_module.richiedi_visura(request, service)
         payload = json.loads(response.body)
@@ -377,8 +393,12 @@ class TestVisuraEndpoint:
         service = main_module.VisuraService()
         service.processing = True
         request = main_module.VisuraInput(
-            provincia="Trieste", comune="TRIESTE", foglio="9", particella="166",
-            tipo_catasto="F", sezione="_",
+            provincia="Trieste",
+            comune="TRIESTE",
+            foglio="9",
+            particella="166",
+            tipo_catasto="F",
+            sezione="_",
         )
 
         response = await main_module.richiedi_visura(request, service)

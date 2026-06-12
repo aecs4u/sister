@@ -111,12 +111,28 @@ SISTER_SEARCH_RESPONSE_FABBRICATI = {
     "status": "completed",
     "data": {
         "immobili": [
-            {"Foglio": "9", "Particella": "166", "Sub": "3", "Categoria": "A/2",
-             "Classe": "5", "Consistenza": "4.5", "Rendita": "500,00",
-             "Indirizzo": "VIA ROMA 10", "Partita": "12345"},
-            {"Foglio": "9", "Particella": "166", "Sub": "5", "Categoria": "C/6",
-             "Classe": "3", "Consistenza": "18", "Rendita": "120,00",
-             "Indirizzo": "VIA ROMA 10", "Partita": "12345"},
+            {
+                "Foglio": "9",
+                "Particella": "166",
+                "Sub": "3",
+                "Categoria": "A/2",
+                "Classe": "5",
+                "Consistenza": "4.5",
+                "Rendita": "500,00",
+                "Indirizzo": "VIA ROMA 10",
+                "Partita": "12345",
+            },
+            {
+                "Foglio": "9",
+                "Particella": "166",
+                "Sub": "5",
+                "Categoria": "C/6",
+                "Classe": "3",
+                "Consistenza": "18",
+                "Rendita": "120,00",
+                "Indirizzo": "VIA ROMA 10",
+                "Partita": "12345",
+            },
         ],
         "results": [],
         "total_results": 2,
@@ -131,9 +147,15 @@ SISTER_SEARCH_RESPONSE_TERRENI = {
     "status": "completed",
     "data": {
         "immobili": [
-            {"Foglio": "100", "Particella": "50", "Qualita": "SEMINATIVO",
-             "Classe": "3", "Superficie": "1.200", "Reddito Dominicale": "15,00",
-             "Reddito Agrario": "10,00"},
+            {
+                "Foglio": "100",
+                "Particella": "50",
+                "Qualita": "SEMINATIVO",
+                "Classe": "3",
+                "Superficie": "1.200",
+                "Reddito Dominicale": "15,00",
+                "Reddito Agrario": "10,00",
+            },
         ],
         "results": [],
         "total_results": 1,
@@ -167,8 +189,7 @@ SISTER_SOGGETTO_RESPONSE = {
     "data": {
         "soggetto": "RSSMRI85E28H501E",
         "immobili": [
-            {"Provincia": "RM", "Comune": "ROMA", "Foglio": "100",
-             "Particella": "50", "Sub": "3", "Categoria": "A/2"},
+            {"Provincia": "RM", "Comune": "ROMA", "Foglio": "100", "Particella": "50", "Sub": "3", "Categoria": "A/2"},
         ],
         "total_results": 1,
     },
@@ -182,8 +203,14 @@ SISTER_PNF_RESPONSE = {
     "data": {
         "soggetto": "02471840997",
         "immobili": [
-            {"Provincia": "TO", "Comune": "TORINO", "Foglio": "45",
-             "Particella": "123", "Sub": "1", "Categoria": "D/1"},
+            {
+                "Provincia": "TO",
+                "Comune": "TORINO",
+                "Foglio": "45",
+                "Particella": "123",
+                "Sub": "1",
+                "Categoria": "D/1",
+            },
         ],
         "total_results": 1,
     },

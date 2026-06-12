@@ -204,8 +204,7 @@ def search(
 
     if not wait:
         console.print(
-            "[dim]Poll results with:[/dim]\n"
-            + "\n".join(f"  [bold]sister get {rid}[/bold]" for rid in request_ids)
+            "[dim]Poll results with:[/dim]\n" + "\n".join(f"  [bold]sister get {rid}[/bold]" for rid in request_ids)
         )
         console.print(
             "[dim]Or wait automatically:[/dim]\n"
@@ -326,9 +325,7 @@ def soggetto(
     tipo_catasto: Optional[str] = typer.Option(
         None, "--tipo-catasto", "-t", help="'T' = Terreni, 'F' = Fabbricati, 'E' = both (default)"
     ),
-    provincia: Optional[str] = typer.Option(
-        None, "--provincia", "-P", help="Province (omit for national search)"
-    ),
+    provincia: Optional[str] = typer.Option(None, "--provincia", "-P", help="Province (omit for national search)"),
     output: Optional[str] = typer.Option(None, "--output", "-o", help="Output file path (.json)"),
     wait: bool = typer.Option(False, "--wait", "-w", help="Wait for result instead of returning immediately"),
     dry_run: bool = typer.Option(False, "--dry-run", help="Preview request without executing"),
@@ -397,9 +394,7 @@ def azienda(
     tipo_catasto: Optional[str] = typer.Option(
         None, "--tipo-catasto", "-t", help="'T' = Terreni, 'F' = Fabbricati, 'E' = both (default)"
     ),
-    provincia: Optional[str] = typer.Option(
-        None, "--provincia", "-P", help="Province (omit for national search)"
-    ),
+    provincia: Optional[str] = typer.Option(None, "--provincia", "-P", help="Province (omit for national search)"),
     output: Optional[str] = typer.Option(None, "--output", "-o", help="Output file path (.json)"),
     wait: bool = typer.Option(False, "--wait", "-w", help="Wait for result"),
     dry_run: bool = typer.Option(False, "--dry-run", help="Preview request without executing"),
@@ -466,9 +461,7 @@ def azienda(
 def elenco(
     provincia: str = typer.Option(..., "--provincia", "-P", help="Province name"),
     comune: str = typer.Option(..., "--comune", "-C", help="Municipality name"),
-    tipo_catasto: Optional[str] = typer.Option(
-        None, "--tipo-catasto", "-t", help="'T' = Terreni, 'F' = Fabbricati"
-    ),
+    tipo_catasto: Optional[str] = typer.Option(None, "--tipo-catasto", "-t", help="'T' = Terreni, 'F' = Fabbricati"),
     foglio: Optional[str] = typer.Option(None, "--foglio", "-F", help="Filter by sheet number"),
     sezione: Optional[str] = typer.Option(None, "--sezione", help="Section (optional)"),
     output: Optional[str] = typer.Option(None, "--output", "-o", help="Output file path (.json)"),
@@ -599,10 +592,13 @@ def indirizzo(
     """Search by street address (IND) on SISTER."""
     client = VisuraClient()
     if dry_run:
-        console.print(f"[bold yellow]DRY RUN[/bold yellow] POST /visura/indirizzo  {provincia}/{comune} '{indirizzo_str}'")
+        console.print(
+            f"[bold yellow]DRY RUN[/bold yellow] POST /visura/indirizzo  {provincia}/{comune} '{indirizzo_str}'"
+        )
         return
-    _generic_search_command("indirizzo", provincia, client, wait, output,
-                            comune=comune, tipo_catasto=tipo_catasto, indirizzo=indirizzo_str)
+    _generic_search_command(
+        "indirizzo", provincia, client, wait, output, comune=comune, tipo_catasto=tipo_catasto, indirizzo=indirizzo_str
+    )
 
 
 @query_app.command()
@@ -621,8 +617,9 @@ def partita(
     if dry_run:
         console.print(f"[bold yellow]DRY RUN[/bold yellow] POST /visura/partita  {provincia}/{comune} P.{partita_num}")
         return
-    _generic_search_command("partita", provincia, client, wait, output,
-                            comune=comune, tipo_catasto=tipo_catasto, partita=partita_num)
+    _generic_search_command(
+        "partita", provincia, client, wait, output, comune=comune, tipo_catasto=tipo_catasto, partita=partita_num
+    )
 
 
 @query_app.command()
@@ -641,8 +638,9 @@ def nota(
     if dry_run:
         console.print(f"[bold yellow]DRY RUN[/bold yellow] POST /visura/nota  {provincia} nota={numero_nota}")
         return
-    _generic_search_command("nota", provincia, client, wait, output,
-                            tipo_catasto=tipo_catasto, numero_nota=numero_nota, anno_nota=anno_nota)
+    _generic_search_command(
+        "nota", provincia, client, wait, output, tipo_catasto=tipo_catasto, numero_nota=numero_nota, anno_nota=anno_nota
+    )
 
 
 @query_app.command()
@@ -661,8 +659,9 @@ def mappa(
     if dry_run:
         console.print(f"[bold yellow]DRY RUN[/bold yellow] POST /visura/mappa  {provincia}/{comune} F.{foglio}")
         return
-    _generic_search_command("mappa", provincia, client, wait, output,
-                            comune=comune, tipo_catasto=tipo_catasto, foglio=foglio)
+    _generic_search_command(
+        "mappa", provincia, client, wait, output, comune=comune, tipo_catasto=tipo_catasto, foglio=foglio
+    )
 
 
 @query_app.command("export-mappa")
@@ -681,8 +680,9 @@ def export_mappa(
     if dry_run:
         console.print(f"[bold yellow]DRY RUN[/bold yellow] POST /visura/export-mappa  {provincia}/{comune} F.{foglio}")
         return
-    _generic_search_command("export_mappa", provincia, client, wait, output,
-                            comune=comune, tipo_catasto=tipo_catasto, foglio=foglio)
+    _generic_search_command(
+        "export_mappa", provincia, client, wait, output, comune=comune, tipo_catasto=tipo_catasto, foglio=foglio
+    )
 
 
 @query_app.command()
@@ -701,8 +701,9 @@ def originali(
     if dry_run:
         console.print(f"[bold yellow]DRY RUN[/bold yellow] POST /visura/originali  {provincia}/{comune}")
         return
-    _generic_search_command("originali", provincia, client, wait, output,
-                            comune=comune, tipo_catasto=tipo_catasto, foglio=foglio)
+    _generic_search_command(
+        "originali", provincia, client, wait, output, comune=comune, tipo_catasto=tipo_catasto, foglio=foglio
+    )
 
 
 @query_app.command()
@@ -721,8 +722,9 @@ def fiduciali(
     if dry_run:
         console.print(f"[bold yellow]DRY RUN[/bold yellow] POST /visura/fiduciali  {provincia}/{comune}")
         return
-    _generic_search_command("fiduciali", provincia, client, wait, output,
-                            comune=comune, tipo_catasto=tipo_catasto, foglio=foglio)
+    _generic_search_command(
+        "fiduciali", provincia, client, wait, output, comune=comune, tipo_catasto=tipo_catasto, foglio=foglio
+    )
 
 
 @query_app.command()
@@ -742,8 +744,17 @@ def ispezioni(
     if dry_run:
         console.print(f"[bold yellow]DRY RUN[/bold yellow] POST /visura/ispezioni  {provincia}/{comune}")
         return
-    _generic_search_command("ispezioni", provincia, client, wait, output,
-                            comune=comune, tipo_catasto=tipo_catasto, foglio=foglio, particella=particella)
+    _generic_search_command(
+        "ispezioni",
+        provincia,
+        client,
+        wait,
+        output,
+        comune=comune,
+        tipo_catasto=tipo_catasto,
+        foglio=foglio,
+        particella=particella,
+    )
 
 
 @query_app.command("ispezioni-cartacee")
@@ -763,8 +774,17 @@ def ispezioni_cartacee(
     if dry_run:
         console.print(f"[bold yellow]DRY RUN[/bold yellow] POST /visura/ispezioni-cartacee  {provincia}/{comune}")
         return
-    _generic_search_command("ispezioni_cart", provincia, client, wait, output,
-                            comune=comune, tipo_catasto=tipo_catasto, foglio=foglio, particella=particella)
+    _generic_search_command(
+        "ispezioni_cart",
+        provincia,
+        client,
+        wait,
+        output,
+        comune=comune,
+        tipo_catasto=tipo_catasto,
+        foglio=foglio,
+        particella=particella,
+    )
 
 
 @query_app.command("elaborato-planimetrico")
@@ -782,8 +802,7 @@ def elaborato_planimetrico(
     if dry_run:
         console.print(f"[bold yellow]DRY RUN[/bold yellow] POST /visura/elaborato-planimetrico  {provincia}/{comune}")
         return
-    _generic_search_command("elaborato_planimetrico", provincia, client, wait, output,
-                            comune=comune, foglio=foglio)
+    _generic_search_command("elaborato_planimetrico", provincia, client, wait, output, comune=comune, foglio=foglio)
 
 
 @query_app.command()
@@ -911,8 +930,16 @@ def ipotecaria_immobile(
         console.print("[bold yellow]DRY RUN[/bold yellow] POST /visura/ispezione-ipotecaria (immobile)")
         return
     _ipotecaria_command(
-        "immobile", provincia, client, wait, output, yes=yes,
-        comune=comune, tipo_catasto=tipo_catasto, foglio=foglio, particella=particella,
+        "immobile",
+        provincia,
+        client,
+        wait,
+        output,
+        yes=yes,
+        comune=comune,
+        tipo_catasto=tipo_catasto,
+        foglio=foglio,
+        particella=particella,
     )
 
 
@@ -932,7 +959,12 @@ def ipotecaria_persona(
         console.print("[bold yellow]DRY RUN[/bold yellow] POST /visura/ispezione-ipotecaria (persona_fisica)")
         return
     _ipotecaria_command(
-        "persona_fisica", provincia, client, wait, output, yes=yes,
+        "persona_fisica",
+        provincia,
+        client,
+        wait,
+        output,
+        yes=yes,
         codice_fiscale=codice_fiscale,
     )
 
@@ -953,7 +985,12 @@ def ipotecaria_azienda(
         console.print("[bold yellow]DRY RUN[/bold yellow] POST /visura/ispezione-ipotecaria (persona_giuridica)")
         return
     _ipotecaria_command(
-        "persona_giuridica", provincia, client, wait, output, yes=yes,
+        "persona_giuridica",
+        provincia,
+        client,
+        wait,
+        output,
+        yes=yes,
         identificativo=identificativo,
     )
 
@@ -975,8 +1012,14 @@ def ipotecaria_nota(
         console.print("[bold yellow]DRY RUN[/bold yellow] POST /visura/ispezione-ipotecaria (nota)")
         return
     _ipotecaria_command(
-        "nota", provincia, client, wait, output, yes=yes,
-        numero_nota=numero_nota, anno_nota=anno_nota,
+        "nota",
+        provincia,
+        client,
+        wait,
+        output,
+        yes=yes,
+        numero_nota=numero_nota,
+        anno_nota=anno_nota,
     )
 
 
@@ -1036,7 +1079,8 @@ def _run_step(client, label, coro):
 @query_app.command()
 def workflow(
     preset: Optional[str] = typer.Option(
-        None, "--preset",
+        None,
+        "--preset",
         help="Named preset: due-diligence, patrimonio, fondiario, aziendale, storico, indirizzo, cross-reference, full-due-diligence, full-patrimonio, full-aziendale",
     ),
     provincia: Optional[str] = typer.Option(None, "--provincia", "-P", help="Province name"),
@@ -1047,9 +1091,7 @@ def workflow(
         None, "--tipo-catasto", "-t", help="'T' = Terreni, 'F' = Fabbricati (omit for both)"
     ),
     sezione: Optional[str] = typer.Option(None, "--sezione", help="Section (optional)"),
-    subalterno: Optional[str] = typer.Option(
-        None, "--subalterno", "-sub", help="Limit intestati to this sub-unit"
-    ),
+    subalterno: Optional[str] = typer.Option(None, "--subalterno", "-sub", help="Limit intestati to this sub-unit"),
     codice_fiscale: Optional[str] = typer.Option(None, "--cf", help="Codice fiscale for soggetto search"),
     azienda_id: Optional[str] = typer.Option(None, "--azienda", help="P.IVA or company name"),
     indirizzo_str: Optional[str] = typer.Option(None, "--indirizzo", "-a", help="Street address"),
@@ -1064,7 +1106,9 @@ def workflow(
     depth: str = typer.Option("standard", "--depth", "-d", help="Workflow depth: light, standard, deep, full"),
     max_fanout: int = typer.Option(20, "--max-fanout", help="Max properties/owners to fan out to per step"),
     max_owners: int = typer.Option(10, "--max-owners", help="Max owners to expand in owner_expand"),
-    max_properties_per_owner: int = typer.Option(20, "--max-properties-per-owner", help="Max properties per owner in portfolio drill"),
+    max_properties_per_owner: int = typer.Option(
+        20, "--max-properties-per-owner", help="Max properties per owner in portfolio drill"
+    ),
     max_historical_properties: int = typer.Option(5, "--max-history", help="Max properties to run history bundle on"),
     max_paid_steps: int = typer.Option(3, "--max-paid", help="Max paid step invocations (ispezione ipotecaria)"),
     max_total_steps: int = typer.Option(100, "--max-steps", help="Overall circuit breaker for total step executions"),
@@ -1120,11 +1164,17 @@ def workflow(
         p = _PRESETS[preset]
 
         if dry_run:
-            console.print(f"[bold yellow]DRY RUN[/bold yellow] — POST /visura/workflow (preset={preset}, depth={depth})")
+            console.print(
+                f"[bold yellow]DRY RUN[/bold yellow] — POST /visura/workflow (preset={preset}, depth={depth})"
+            )
             console.print(f"  {p['description']}")
             console.print(f"  Steps: {' → '.join(p['steps'])}")
-            console.print(f"  Depth: [cyan]{depth}[/cyan]  Fanout: [cyan]{max_fanout}[/cyan]  Owners: [cyan]{max_owners}[/cyan]")
-            console.print(f"  Props/owner: [cyan]{max_properties_per_owner}[/cyan]  History: [cyan]{max_historical_properties}[/cyan]  Paid: [cyan]{max_paid_steps}[/cyan]  Max steps: [cyan]{max_total_steps}[/cyan]")
+            console.print(
+                f"  Depth: [cyan]{depth}[/cyan]  Fanout: [cyan]{max_fanout}[/cyan]  Owners: [cyan]{max_owners}[/cyan]"
+            )
+            console.print(
+                f"  Props/owner: [cyan]{max_properties_per_owner}[/cyan]  History: [cyan]{max_historical_properties}[/cyan]  Paid: [cyan]{max_paid_steps}[/cyan]  Max steps: [cyan]{max_total_steps}[/cyan]"
+            )
             if include_paid:
                 console.print(f"  [yellow]Paid steps enabled (auto_confirm={yes})[/yellow]")
             return
@@ -1137,16 +1187,25 @@ def workflow(
             result = asyncio.run(
                 client.workflow(
                     preset=preset,
-                    provincia=provincia, comune=comune, foglio=foglio,
-                    particella=particella, tipo_catasto=tipo_catasto,
-                    sezione=sezione, subalterno=subalterno,
-                    codice_fiscale=codice_fiscale, identificativo=azienda_id,
+                    provincia=provincia,
+                    comune=comune,
+                    foglio=foglio,
+                    particella=particella,
+                    tipo_catasto=tipo_catasto,
+                    sezione=sezione,
+                    subalterno=subalterno,
+                    codice_fiscale=codice_fiscale,
+                    identificativo=azienda_id,
                     indirizzo=indirizzo_str,
-                    depth=depth, max_fanout=max_fanout,
-                    max_owners=max_owners, max_properties_per_owner=max_properties_per_owner,
+                    depth=depth,
+                    max_fanout=max_fanout,
+                    max_owners=max_owners,
+                    max_properties_per_owner=max_properties_per_owner,
                     max_historical_properties=max_historical_properties,
-                    max_paid_steps=max_paid_steps, max_total_steps=max_total_steps,
-                    auto_confirm=yes, include_paid_steps=include_paid,
+                    max_paid_steps=max_paid_steps,
+                    max_total_steps=max_total_steps,
+                    auto_confirm=yes,
+                    include_paid_steps=include_paid,
                 )
             )
         except VisuraAPIError as e:
@@ -1189,7 +1248,9 @@ def workflow(
             f"[yellow]{summary.get('skipped', 0)}[/yellow] skipped"
         )
         if summary.get("properties", 0) > 0:
-            console.print(f"  Properties: [cyan]{summary['properties']}[/cyan]  Owners: [cyan]{summary.get('owners', 0)}[/cyan]")
+            console.print(
+                f"  Properties: [cyan]{summary['properties']}[/cyan]  Owners: [cyan]{summary.get('owners', 0)}[/cyan]"
+            )
         if summary.get("risk_flags", 0) > 0:
             console.print(f"  [yellow]Risk flags: {summary['risk_flags']}[/yellow]")
 
@@ -1237,14 +1298,16 @@ def workflow(
     if codice_fiscale and (is_person_start or preset == "cross-reference"):
         console.rule("[bold cyan]Soggetto — National CF search[/bold cyan]")
         all_data["soggetto"] = _run_step(
-            client, f"Soggetto CF={codice_fiscale}",
+            client,
+            f"Soggetto CF={codice_fiscale}",
             client.soggetto(codice_fiscale=codice_fiscale, tipo_catasto=tipo_catasto, provincia=provincia),
         )
 
     if azienda_id and (is_company_start or preset == "cross-reference"):
         console.rule("[bold cyan]Azienda — Company search[/bold cyan]")
         all_data["persona_giuridica"] = _run_step(
-            client, f"Persona giuridica ID={azienda_id}",
+            client,
+            f"Persona giuridica ID={azienda_id}",
             client.persona_giuridica(identificativo=azienda_id, tipo_catasto=tipo_catasto, provincia=provincia),
         )
 
@@ -1259,9 +1322,15 @@ def workflow(
     if indirizzo_str and provincia and comune:
         console.rule("[bold cyan]Indirizzo — Address lookup[/bold cyan]")
         all_data["indirizzo"] = _run_step(
-            client, f"Indirizzo '{indirizzo_str}' in {provincia}/{comune}",
-            client.generic_search(search_type="indirizzo", provincia=provincia, comune=comune,
-                                  tipo_catasto=tipo_catasto or "T", indirizzo=indirizzo_str),
+            client,
+            f"Indirizzo '{indirizzo_str}' in {provincia}/{comune}",
+            client.generic_search(
+                search_type="indirizzo",
+                provincia=provincia,
+                comune=comune,
+                tipo_catasto=tipo_catasto or "T",
+                indirizzo=indirizzo_str,
+            ),
         )
 
     # -- Phase: search immobili (if we have foglio/particella) ----------------
@@ -1274,8 +1343,12 @@ def workflow(
         try:
             search_result = asyncio.run(
                 client.search(
-                    provincia=provincia, comune=comune, foglio=foglio,
-                    particella=particella, tipo_catasto=tipo_catasto, sezione=sezione,
+                    provincia=provincia,
+                    comune=comune,
+                    foglio=foglio,
+                    particella=particella,
+                    tipo_catasto=tipo_catasto,
+                    sezione=sezione,
                 )
             )
             request_ids = search_result.get("request_ids", [])
@@ -1330,9 +1403,13 @@ def workflow(
                 try:
                     submit = asyncio.run(
                         client.intestati(
-                            provincia=provincia, comune=comune, foglio=foglio,
-                            particella=particella, tipo_catasto=tc,
-                            subalterno=sub, sezione=sezione,
+                            provincia=provincia,
+                            comune=comune,
+                            foglio=foglio,
+                            particella=particella,
+                            tipo_catasto=tc,
+                            subalterno=sub,
+                            sezione=sezione,
                         )
                     )
                     rid = submit.get("request_id", "")
@@ -1342,7 +1419,9 @@ def workflow(
                     intestati_results.append({"tipo_catasto": tc, "subalterno": sub, "request_id": rid, **res})
                 except (TimeoutError, VisuraAPIError) as e:
                     console.print(f"  [red]{tc}{sub_label}: {e}[/red]")
-                    intestati_results.append({"tipo_catasto": tc, "subalterno": sub, "status": "error", "error": str(e)})
+                    intestati_results.append(
+                        {"tipo_catasto": tc, "subalterno": sub, "status": "error", "error": str(e)}
+                    )
 
     all_data["intestati_results"] = intestati_results
 
@@ -1350,34 +1429,113 @@ def workflow(
 
     enrichment_steps = []
     if with_elenco and provincia and comune:
-        enrichment_steps.append(("elenco_immobili", f"Elenco immobili {provincia}/{comune}",
-                                 client.elenco_immobili(provincia=provincia, comune=comune, tipo_catasto=tipo_catasto, foglio=foglio)))
+        enrichment_steps.append(
+            (
+                "elenco_immobili",
+                f"Elenco immobili {provincia}/{comune}",
+                client.elenco_immobili(provincia=provincia, comune=comune, tipo_catasto=tipo_catasto, foglio=foglio),
+            )
+        )
     if with_mappa and provincia and comune and foglio:
-        enrichment_steps.append(("mappa", f"Mappa F.{foglio}",
-                                 client.generic_search(search_type="mappa", provincia=provincia, comune=comune, tipo_catasto=tipo_catasto or "T", foglio=foglio)))
+        enrichment_steps.append(
+            (
+                "mappa",
+                f"Mappa F.{foglio}",
+                client.generic_search(
+                    search_type="mappa",
+                    provincia=provincia,
+                    comune=comune,
+                    tipo_catasto=tipo_catasto or "T",
+                    foglio=foglio,
+                ),
+            )
+        )
     if with_fiduciali and provincia and comune:
-        enrichment_steps.append(("fiduciali", f"Punti fiduciali {provincia}/{comune}",
-                                 client.generic_search(search_type="fiduciali", provincia=provincia, comune=comune, tipo_catasto=tipo_catasto or "T", foglio=foglio)))
+        enrichment_steps.append(
+            (
+                "fiduciali",
+                f"Punti fiduciali {provincia}/{comune}",
+                client.generic_search(
+                    search_type="fiduciali",
+                    provincia=provincia,
+                    comune=comune,
+                    tipo_catasto=tipo_catasto or "T",
+                    foglio=foglio,
+                ),
+            )
+        )
     if with_originali and provincia and comune:
-        enrichment_steps.append(("originali", f"Originali di impianto {provincia}/{comune}",
-                                 client.generic_search(search_type="originali", provincia=provincia, comune=comune, tipo_catasto=tipo_catasto or "T", foglio=foglio)))
+        enrichment_steps.append(
+            (
+                "originali",
+                f"Originali di impianto {provincia}/{comune}",
+                client.generic_search(
+                    search_type="originali",
+                    provincia=provincia,
+                    comune=comune,
+                    tipo_catasto=tipo_catasto or "T",
+                    foglio=foglio,
+                ),
+            )
+        )
     if with_nota and provincia and numero_nota:
-        enrichment_steps.append(("nota", f"Nota {numero_nota}",
-                                 client.generic_search(search_type="nota", provincia=provincia, tipo_catasto=tipo_catasto or "T", numero_nota=numero_nota)))
+        enrichment_steps.append(
+            (
+                "nota",
+                f"Nota {numero_nota}",
+                client.generic_search(
+                    search_type="nota", provincia=provincia, tipo_catasto=tipo_catasto or "T", numero_nota=numero_nota
+                ),
+            )
+        )
     if with_ispezioni and provincia and comune:
-        enrichment_steps.append(("ispezioni", f"Ispezioni {provincia}/{comune}",
-                                 client.generic_search(search_type="ispezioni", provincia=provincia, comune=comune, tipo_catasto=tipo_catasto or "T", foglio=foglio, particella=particella)))
+        enrichment_steps.append(
+            (
+                "ispezioni",
+                f"Ispezioni {provincia}/{comune}",
+                client.generic_search(
+                    search_type="ispezioni",
+                    provincia=provincia,
+                    comune=comune,
+                    tipo_catasto=tipo_catasto or "T",
+                    foglio=foglio,
+                    particella=particella,
+                ),
+            )
+        )
     if with_ispezioni_cart and provincia and comune:
-        enrichment_steps.append(("ispezioni_cartacee", f"Ispezioni cartacee {provincia}/{comune}",
-                                 client.generic_search(search_type="ispezioni_cart", provincia=provincia, comune=comune, tipo_catasto=tipo_catasto or "T", foglio=foglio, particella=particella)))
+        enrichment_steps.append(
+            (
+                "ispezioni_cartacee",
+                f"Ispezioni cartacee {provincia}/{comune}",
+                client.generic_search(
+                    search_type="ispezioni_cart",
+                    provincia=provincia,
+                    comune=comune,
+                    tipo_catasto=tipo_catasto or "T",
+                    foglio=foglio,
+                    particella=particella,
+                ),
+            )
+        )
 
     # Also add soggetto/azienda as enrichment if not already run as starting phase
     if codice_fiscale and not is_person_start:
-        enrichment_steps.append(("soggetto", f"Soggetto CF={codice_fiscale}",
-                                 client.soggetto(codice_fiscale=codice_fiscale, tipo_catasto=tipo_catasto, provincia=provincia)))
+        enrichment_steps.append(
+            (
+                "soggetto",
+                f"Soggetto CF={codice_fiscale}",
+                client.soggetto(codice_fiscale=codice_fiscale, tipo_catasto=tipo_catasto, provincia=provincia),
+            )
+        )
     if azienda_id and not is_company_start:
-        enrichment_steps.append(("persona_giuridica", f"Persona giuridica ID={azienda_id}",
-                                 client.persona_giuridica(identificativo=azienda_id, tipo_catasto=tipo_catasto, provincia=provincia)))
+        enrichment_steps.append(
+            (
+                "persona_giuridica",
+                f"Persona giuridica ID={azienda_id}",
+                client.persona_giuridica(identificativo=azienda_id, tipo_catasto=tipo_catasto, provincia=provincia),
+            )
+        )
 
     if enrichment_steps:
         console.rule("[bold cyan]Enrichment[/bold cyan]")
@@ -1393,8 +1551,18 @@ def workflow(
     if intestati_results:
         ok = sum(1 for r in intestati_results if r.get("status") == "completed")
         parts.append(f"Intestati: [green]{ok}[/green]/{len(intestati_results)}")
-    for key in ("soggetto", "persona_giuridica", "elenco_immobili", "mappa", "fiduciali",
-                "originali", "nota", "ispezioni", "ispezioni_cartacee", "indirizzo"):
+    for key in (
+        "soggetto",
+        "persona_giuridica",
+        "elenco_immobili",
+        "mappa",
+        "fiduciali",
+        "originali",
+        "nota",
+        "ispezioni",
+        "ispezioni_cartacee",
+        "indirizzo",
+    ):
         if key in all_data and isinstance(all_data[key], dict):
             s = all_data[key].get("status", "?")
             style = "green" if s == "completed" else "red"
@@ -1409,23 +1577,48 @@ def workflow(
 
 # Maps CSV 'command' column values to (client_method_name, required_fields, extra_field_mapping)
 _BATCH_DISPATCHERS = {
-    "search": ("search", ("provincia", "comune", "foglio", "particella"), {"tipo_catasto": "tipo_catasto", "subalterno": "subalterno", "sezione": "sezione"}),
-    "intestati": ("intestati", ("provincia", "comune", "foglio", "particella", "tipo_catasto"), {"subalterno": "subalterno", "sezione": "sezione"}),
+    "search": (
+        "search",
+        ("provincia", "comune", "foglio", "particella"),
+        {"tipo_catasto": "tipo_catasto", "subalterno": "subalterno", "sezione": "sezione"},
+    ),
+    "intestati": (
+        "intestati",
+        ("provincia", "comune", "foglio", "particella", "tipo_catasto"),
+        {"subalterno": "subalterno", "sezione": "sezione"},
+    ),
     "soggetto": ("soggetto", ("codice_fiscale",), {"tipo_catasto": "tipo_catasto", "provincia": "provincia"}),
     "azienda": ("persona_giuridica", ("identificativo",), {"tipo_catasto": "tipo_catasto", "provincia": "provincia"}),
-    "elenco": ("elenco_immobili", ("provincia", "comune"), {"tipo_catasto": "tipo_catasto", "foglio": "foglio", "sezione": "sezione"}),
+    "elenco": (
+        "elenco_immobili",
+        ("provincia", "comune"),
+        {"tipo_catasto": "tipo_catasto", "foglio": "foglio", "sezione": "sezione"},
+    ),
     "indirizzo": ("generic_search", ("provincia", "comune", "indirizzo"), {"tipo_catasto": "tipo_catasto"}),
     "partita": ("generic_search", ("provincia", "comune", "partita"), {"tipo_catasto": "tipo_catasto"}),
-    "nota": ("generic_search", ("provincia", "numero_nota"), {"anno_nota": "anno_nota", "tipo_catasto": "tipo_catasto"}),
+    "nota": (
+        "generic_search",
+        ("provincia", "numero_nota"),
+        {"anno_nota": "anno_nota", "tipo_catasto": "tipo_catasto"},
+    ),
     "mappa": ("generic_search", ("provincia", "comune", "foglio"), {"tipo_catasto": "tipo_catasto"}),
-    "ispezioni": ("generic_search", ("provincia", "comune"), {"tipo_catasto": "tipo_catasto", "foglio": "foglio", "particella": "particella"}),
+    "ispezioni": (
+        "generic_search",
+        ("provincia", "comune"),
+        {"tipo_catasto": "tipo_catasto", "foglio": "foglio", "particella": "particella"},
+    ),
 }
 
 
 @query_app.command()
 def batch(
     input_file: str = typer.Option(..., "--input", "-I", help="CSV file with query rows"),
-    command: str = typer.Option("search", "--command", "-c", help="Query type: search, intestati, soggetto, azienda, elenco, indirizzo, partita, nota, mappa, ispezioni (or 'auto' to read from CSV 'command' column)"),
+    command: str = typer.Option(
+        "search",
+        "--command",
+        "-c",
+        help="Query type: search, intestati, soggetto, azienda, elenco, indirizzo, partita, nota, mappa, ispezioni (or 'auto' to read from CSV 'command' column)",
+    ),
     wait: bool = typer.Option(False, "--wait", "-w", help="Wait for each result before submitting the next"),
     output_dir: Optional[str] = typer.Option(None, "--output-dir", "-O", help="Directory — writes one JSON per row"),
     output: Optional[str] = typer.Option(None, "--output", "-o", help="Single output file (all results merged)"),
@@ -1574,14 +1767,14 @@ def batch(
             else:
                 err_count += 1
         else:
-            all_results.append({"row": i, "command": cmd, "label": label, "request_ids": request_ids, "status": "queued"})
+            all_results.append(
+                {"row": i, "command": cmd, "label": label, "request_ids": request_ids, "status": "queued"}
+            )
             ok_count += 1
 
     console.rule("[bold green]Batch complete[/bold green]")
     console.print(
-        f"  Total: [cyan]{len(rows)}[/cyan]  "
-        f"OK: [green]{ok_count}[/green]  "
-        f"Errors: [red]{err_count}[/red]"
+        f"  Total: [cyan]{len(rows)}[/cyan]  " f"OK: [green]{ok_count}[/green]  " f"Errors: [red]{err_count}[/red]"
     )
 
     if output:
@@ -1678,9 +1871,7 @@ def wait_cmd(
     console.print(f"[dim]Waiting for {request_id}...[/dim]")
 
     try:
-        result = asyncio.run(
-            client.wait_for_result(request_id, poll_interval=interval, poll_timeout=timeout)
-        )
+        result = asyncio.run(client.wait_for_result(request_id, poll_interval=interval, poll_timeout=timeout))
     except TimeoutError as e:
         console.print(f"[bold red]Error:[/bold red] {e}")
         raise typer.Exit(1) from None
@@ -1856,9 +2047,7 @@ def history(
 
     for i, r in enumerate(items, 1 + offset):
         success = r.get("success")
-        success_str = (
-            "[green]yes[/green]" if success else "[red]no[/red]" if success is not None else "[dim]-[/dim]"
-        )
+        success_str = "[green]yes[/green]" if success else "[red]no[/red]" if success is not None else "[dim]-[/dim]"
         table.add_row(
             str(i),
             r.get("request_id", "-"),

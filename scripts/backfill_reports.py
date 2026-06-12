@@ -24,16 +24,16 @@ RENAME_MAP_PATH = REPORTS_DIR / "rename_map.json"
 
 # Map new-name prefix → (document_type, tipo_catasto)
 _TYPE_MAP = {
-    "vs_att":           ("visura_soggetto",        "E"),
-    "vs_sto":           ("visura_soggetto",        "E"),
-    "vs_sin":           ("visura_soggetto",        "E"),
-    "vi_att_fab":       ("visura_fabbricati",      "F"),
-    "vi_att_ter":       ("visura_terreni",         "T"),
-    "vi_sto":           ("visura_storica",         "F"),
-    "elenco_fab":       ("elenco_immobili",        "F"),
+    "vs_att": ("visura_soggetto", "E"),
+    "vs_sto": ("visura_soggetto", "E"),
+    "vs_sin": ("visura_soggetto", "E"),
+    "vi_att_fab": ("visura_fabbricati", "F"),
+    "vi_att_ter": ("visura_terreni", "T"),
+    "vi_sto": ("visura_storica", "F"),
+    "elenco_fab": ("elenco_immobili", "F"),
     "planimetria_elab": ("elaborato_planimetrico", "F"),
-    "planimetria":      ("planimetria",            "F"),
-    "epa":              ("epa",                    "F"),
+    "planimetria": ("planimetria", "F"),
+    "epa": ("epa", "F"),
 }
 
 # Immobile pattern: <tipo>_<PROV>[_SEZ]_FG<n>_PT<n>[_SUB...].<ext>
@@ -42,7 +42,7 @@ _TYPE_MAP = {
 _RE_IMMOBILE = re.compile(
     r"^(?P<tipo>[a-z_]+)"
     r"_(?P<prov>[A-Z]{2})"
-    r"(?:_(?P<sez>[A-Z]+(?:[A-Z0-9]*)))?"   # optional sezione (alpha only, before FG)
+    r"(?:_(?P<sez>[A-Z]+(?:[A-Z0-9]*)))?"  # optional sezione (alpha only, before FG)
     r"_FG(?P<foglio>\d+)"
     r"_PT(?P<particella>\d+)"
     r"(?P<sub>(?:_SUB[\d_]+)?)?"
@@ -116,7 +116,7 @@ def _re_soggetto_match(stem: str) -> dict | None:
     # Fallback: anything after the tipo_ prefix is the soggetto identifier
     for tipo_key in _TYPE_MAP:
         if stem.startswith(tipo_key + "_"):
-            rest = stem[len(tipo_key) + 1:]
+            rest = stem[len(tipo_key) + 1 :]
             return {"cognome": rest, "nome": "", "cf": "", "prov": ""}
     return None
 
@@ -137,9 +137,7 @@ async def run(dry_run: bool = False):
 
     # Pre-fetch existing file_paths to avoid duplicates
     async with session_factory() as session:
-        existing = set(
-            (await session.execute(select(VisuraDocumentDB.file_path))).scalars().all()
-        )
+        existing = set((await session.execute(select(VisuraDocumentDB.file_path))).scalars().all())
         existing.discard(None)
 
     inserted = 0
@@ -171,8 +169,16 @@ async def run(dry_run: bool = False):
             xml_data = _parse_visura_xml(abs_path)
             if xml_data:
                 # Override with parsed values (more accurate than filename heuristics)
-                for key in ("provincia", "comune", "foglio", "particella", "subalterno",
-                            "sezione_urbana", "tipo_catasto", "document_type"):
+                for key in (
+                    "provincia",
+                    "comune",
+                    "foglio",
+                    "particella",
+                    "subalterno",
+                    "sezione_urbana",
+                    "tipo_catasto",
+                    "document_type",
+                ):
                     if xml_data.get(key):
                         fields[key] = xml_data[key]
                 fields["xml_content"] = xml_data.get("xml_content", "")
@@ -188,8 +194,7 @@ async def run(dry_run: bool = False):
             indirizzo = xml_data.get("indirizzo") or ""
             if immobile or classamento:
                 dati_immobile_json = json.dumps(
-                    {"immobile": immobile, "classamento": classamento, "indirizzo": indirizzo},
-                    ensure_ascii=False
+                    {"immobile": immobile, "classamento": classamento, "indirizzo": indirizzo}, ensure_ascii=False
                 )
 
         row = VisuraDocumentDB(
@@ -214,8 +219,10 @@ async def run(dry_run: bool = False):
 
         action = "DRY-RUN" if dry_run else "INSERT "
         print(f"  {action}  {old_name:45s} → {new_name}")
-        print(f"           type={row.document_type} prov={row.provincia} "
-              f"FG={row.foglio} PT={row.particella} sub={row.subalterno}")
+        print(
+            f"           type={row.document_type} prov={row.provincia} "
+            f"FG={row.foglio} PT={row.particella} sub={row.subalterno}"
+        )
 
         if not dry_run:
             async with session_factory() as session:

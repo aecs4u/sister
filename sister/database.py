@@ -96,9 +96,11 @@ async def init_db() -> None:
     writable = is_db_writable()
     async with engine.begin() as conn:
         if writable:
+
             def _create_sister_tables(sync_conn):
                 for table in _SISTER_TABLES:
                     table.create(sync_conn, checkfirst=True)
+
             await conn.run_sync(_create_sister_tables)
             await conn.execute(text("PRAGMA journal_mode=WAL"))
         await conn.execute(text("PRAGMA foreign_keys=ON"))
@@ -266,15 +268,19 @@ def _parse_page_visits(response_id: str, data: Optional[dict]) -> list[PageVisit
                 ts = datetime.fromisoformat(item["timestamp"])
             except (ValueError, TypeError):
                 pass
-        rows.append(PageVisitDB(
-            response_id=response_id,
-            step=item.get("step", ""),
-            url=item.get("url"),
-            screenshot_url=item.get("screenshot_url"),
-            form_elements_json=json.dumps(item.get("form_elements", []), default=str) if item.get("form_elements") else None,
-            errors_json=json.dumps(item.get("errors", []), default=str) if item.get("errors") else None,
-            timestamp=ts,
-        ))
+        rows.append(
+            PageVisitDB(
+                response_id=response_id,
+                step=item.get("step", ""),
+                url=item.get("url"),
+                screenshot_url=item.get("screenshot_url"),
+                form_elements_json=(
+                    json.dumps(item.get("form_elements", []), default=str) if item.get("form_elements") else None
+                ),
+                errors_json=json.dumps(item.get("errors", []), default=str) if item.get("errors") else None,
+                timestamp=ts,
+            )
+        )
     return rows
 
 
@@ -414,8 +420,6 @@ async def get_result_record(request_id: str) -> Optional[dict]:
         }
 
 
-
-
 async def get_documents_for_response(request_id: str, foglio: str = None, particella: str = None) -> list[dict]:
     """Fetch visura_documents linked to a response_id OR matching foglio/particella."""
     session_factory = _get_session_factory()
@@ -423,10 +427,9 @@ async def get_documents_for_response(request_id: str, foglio: str = None, partic
         # Match by response_id OR by property identifiers
         conditions = [VisuraDocumentDB.response_id == request_id]
         if foglio and particella:
-            conditions.append(
-                (VisuraDocumentDB.foglio == foglio) & (VisuraDocumentDB.particella == particella)
-            )
+            conditions.append((VisuraDocumentDB.foglio == foglio) & (VisuraDocumentDB.particella == particella))
         from sqlalchemy import or_
+
         stmt = select(VisuraDocumentDB).where(or_(*conditions)).order_by(VisuraDocumentDB.created_at.desc())
         result = await session.execute(stmt)
         rows = result.scalars().all()
@@ -451,7 +454,11 @@ async def get_documents_for_response(request_id: str, foglio: str = None, partic
             "visura_subtype": row.visura_subtype,
             "situazione_al": row.situazione_al,
             "intestati": json.loads(row.intestati_json) if row.intestati_json else [],
-            "dati_immobile": _dati.get("immobile", {}) if (_dati := json.loads(row.dati_immobile_json) if row.dati_immobile_json else {}) else {},
+            "dati_immobile": (
+                _dati.get("immobile", {})
+                if (_dati := json.loads(row.dati_immobile_json) if row.dati_immobile_json else {})
+                else {}
+            ),
             "classamento": _dati.get("classamento", []),
             "indirizzo": _dati.get("indirizzo", ""),
             "xml_content": row.xml_content or "",
@@ -508,9 +515,7 @@ async def get_indexed_filenames() -> set[str]:
     """Return the set of filenames already indexed (basename only)."""
     session_factory = _get_session_factory()
     async with session_factory() as session:
-        result = await session.execute(
-            select(VisuraDocumentDB.filename).where(VisuraDocumentDB.filename.isnot(None))
-        )
+        result = await session.execute(select(VisuraDocumentDB.filename).where(VisuraDocumentDB.filename.isnot(None)))
         return {row.filename for row in result}
 
 
@@ -519,8 +524,9 @@ async def get_indexed_file_metadata() -> dict[str, dict]:
     session_factory = _get_session_factory()
     async with session_factory() as session:
         result = await session.execute(
-            select(VisuraDocumentDB.file_path, VisuraDocumentDB.id, VisuraDocumentDB.oggetto)
-            .where(VisuraDocumentDB.file_path.isnot(None))
+            select(VisuraDocumentDB.file_path, VisuraDocumentDB.id, VisuraDocumentDB.oggetto).where(
+                VisuraDocumentDB.file_path.isnot(None)
+            )
         )
         return {row.file_path: {"id": row.id, "oggetto": row.oggetto or ""} for row in result}
 
@@ -529,37 +535,35 @@ async def get_all_documents(limit: int = 100, offset: int = 0) -> list[dict]:
     """Fetch all visura_documents (for browse page)."""
     session_factory = _get_session_factory()
     async with session_factory() as session:
-        stmt = (
-            select(VisuraDocumentDB)
-            .order_by(VisuraDocumentDB.created_at.desc())
-            .limit(limit).offset(offset)
-        )
+        stmt = select(VisuraDocumentDB).order_by(VisuraDocumentDB.created_at.desc()).limit(limit).offset(offset)
         result = await session.execute(stmt)
         rows = result.scalars().all()
     docs = []
     for row in rows:
-        docs.append({
-            "id": row.id,
-            "response_id": row.response_id,
-            "document_type": row.document_type,
-            "file_format": row.file_format,
-            "filename": row.filename,
-            "file_size": row.file_size,
-            "sezione_urbana": row.sezione_urbana,
-            "oggetto": row.oggetto,
-            "richiesta_del": row.richiesta_del,
-            "provincia": row.provincia,
-            "comune": row.comune,
-            "foglio": row.foglio,
-            "particella": row.particella,
-            "subalterno": row.subalterno,
-            "tipo_catasto": row.tipo_catasto,
-            "visura_subtype": row.visura_subtype,
-            "situazione_al": row.situazione_al,
-            "intestati_count": len(json.loads(row.intestati_json)) if row.intestati_json else 0,
-            "intestati_json": row.intestati_json,
-            "created_at": row.created_at.isoformat() if row.created_at else None,
-        })
+        docs.append(
+            {
+                "id": row.id,
+                "response_id": row.response_id,
+                "document_type": row.document_type,
+                "file_format": row.file_format,
+                "filename": row.filename,
+                "file_size": row.file_size,
+                "sezione_urbana": row.sezione_urbana,
+                "oggetto": row.oggetto,
+                "richiesta_del": row.richiesta_del,
+                "provincia": row.provincia,
+                "comune": row.comune,
+                "foglio": row.foglio,
+                "particella": row.particella,
+                "subalterno": row.subalterno,
+                "tipo_catasto": row.tipo_catasto,
+                "visura_subtype": row.visura_subtype,
+                "situazione_al": row.situazione_al,
+                "intestati_count": len(json.loads(row.intestati_json)) if row.intestati_json else 0,
+                "intestati_json": row.intestati_json,
+                "created_at": row.created_at.isoformat() if row.created_at else None,
+            }
+        )
     return docs
 
 
@@ -580,9 +584,8 @@ async def find_responses(
     """Search stored responses by cadastral coordinates."""
     session_factory = _get_session_factory()
     async with session_factory() as session:
-        stmt = (
-            select(VisuraRequestDB, VisuraResponseDB)
-            .outerjoin(VisuraResponseDB, VisuraRequestDB.request_id == VisuraResponseDB.request_id)
+        stmt = select(VisuraRequestDB, VisuraResponseDB).outerjoin(
+            VisuraResponseDB, VisuraRequestDB.request_id == VisuraResponseDB.request_id
         )
         if provincia:
             stmt = stmt.where(VisuraRequestDB.provincia == provincia)
@@ -621,9 +624,6 @@ async def find_responses(
         ]
 
 
-
-
-
 def _single_result_status(success: Optional[bool]) -> str:
     if success is True:
         return "completed"
@@ -657,7 +657,12 @@ async def find_result_rows(
         single_rows: list[dict] = []
         if source in (None, "single"):
             where_clause, params = _build_single_where(
-                provincia, comune, foglio, particella, tipo_catasto, status,
+                provincia,
+                comune,
+                foglio,
+                particella,
+                tipo_catasto,
+                status,
             )
             sql = """
                 SELECT
@@ -681,29 +686,31 @@ async def find_result_rows(
                 sql += f" WHERE {where_clause}"
             for row in conn.execute(sql, params).fetchall():
                 success = bool(row["success"]) if row["success"] is not None else None
-                single_rows.append({
-                    "request_id": row["request_id"],
-                    "request_type": row["request_type"],
-                    "source": "single",
-                    "tipo_catasto": row["tipo_catasto"],
-                    "provincia": row["provincia"],
-                    "comune": row["comune"],
-                    "foglio": row["foglio"],
-                    "particella": row["particella"],
-                    "sezione": row["sezione"],
-                    "subalterno": row["subalterno"],
-                    "requested_at": row["requested_at"],
-                    "success": success,
-                    "status": _single_result_status(success),
-                    "data": None,
-                    "error": row["error"],
-                    "responded_at": row["responded_at"],
-                })
+                single_rows.append(
+                    {
+                        "request_id": row["request_id"],
+                        "request_type": row["request_type"],
+                        "source": "single",
+                        "tipo_catasto": row["tipo_catasto"],
+                        "provincia": row["provincia"],
+                        "comune": row["comune"],
+                        "foglio": row["foglio"],
+                        "particella": row["particella"],
+                        "sezione": row["sezione"],
+                        "subalterno": row["subalterno"],
+                        "requested_at": row["requested_at"],
+                        "success": success,
+                        "status": _single_result_status(success),
+                        "data": None,
+                        "error": row["error"],
+                        "responded_at": row["responded_at"],
+                    }
+                )
 
     # workflow_runs no longer live in sister's DB — owned by opendata
     rows = list(single_rows)
     rows.sort(key=lambda row: row.get("requested_at") or "", reverse=True)
-    return rows[offset:offset + limit]
+    return rows[offset : offset + limit]
 
 
 async def cleanup_old_responses(ttl_seconds: int) -> int:
@@ -725,9 +732,7 @@ async def cleanup_old_responses(ttl_seconds: int) -> int:
         if deleted:
             orphan_stmt = select(VisuraRequestDB).where(
                 VisuraRequestDB.created_at < cutoff,
-                ~VisuraRequestDB.request_id.in_(
-                    select(VisuraResponseDB.request_id)
-                ),
+                ~VisuraRequestDB.request_id.in_(select(VisuraResponseDB.request_id)),
             )
             orphan_result = await session.execute(orphan_stmt)
             for req in orphan_result.scalars().all():
@@ -742,21 +747,25 @@ async def count_responses() -> dict:
     """Return basic stats about stored data."""
     session_factory = _get_session_factory()
     async with session_factory() as session:
-        total_requests = (await session.execute(
-            select(text("count(*)")).select_from(VisuraRequestDB)
-        )).scalar() or 0
+        total_requests = (await session.execute(select(text("count(*)")).select_from(VisuraRequestDB))).scalar() or 0
 
-        total_responses = (await session.execute(
-            select(text("count(*)")).select_from(VisuraResponseDB)
-        )).scalar() or 0
+        total_responses = (await session.execute(select(text("count(*)")).select_from(VisuraResponseDB))).scalar() or 0
 
-        successful = (await session.execute(
-            select(text("count(*)")).select_from(VisuraResponseDB).where(VisuraResponseDB.success == True)  # noqa: E712
-        )).scalar() or 0
+        successful = (
+            await session.execute(
+                select(text("count(*)"))
+                .select_from(VisuraResponseDB)
+                .where(VisuraResponseDB.success == True)  # noqa: E712
+            )
+        ).scalar() or 0
 
-        failed = (await session.execute(
-            select(text("count(*)")).select_from(VisuraResponseDB).where(VisuraResponseDB.success == False)  # noqa: E712
-        )).scalar() or 0
+        failed = (
+            await session.execute(
+                select(text("count(*)"))
+                .select_from(VisuraResponseDB)
+                .where(VisuraResponseDB.success == False)  # noqa: E712
+            )
+        ).scalar() or 0
 
         return {
             "total_requests": total_requests,
@@ -802,8 +811,6 @@ def _build_single_where(
     return (" AND ".join(conditions), params)
 
 
-
-
 async def count_total_result_rows(
     provincia: Optional[str] = None,
     comune: Optional[str] = None,
@@ -826,7 +833,12 @@ async def count_total_result_rows(
     with sqlite3.connect(DB_PATH) as conn:
         if source in (None, "single"):
             where_clause, params = _build_single_where(
-                provincia, comune, foglio, particella, tipo_catasto, status,
+                provincia,
+                comune,
+                foglio,
+                particella,
+                tipo_catasto,
+                status,
             )
             sql = """
                 SELECT count(*) FROM visura_requests AS req
@@ -863,6 +875,7 @@ async def count_result_rows(
         source = None
 
     with sqlite3.connect(DB_PATH) as conn:
+
         def _count_single(where_clause: str, params: list) -> int:
             sql = """
                 SELECT count(*) FROM visura_requests AS req
@@ -877,9 +890,15 @@ async def count_result_rows(
         if source in (None, "single"):
             base_where, base_params = _build_single_where(provincia, comune, foglio, particella, tipo_catasto)
             s_total = _count_single(base_where, base_params)
-            s_ok = _count_single(*_build_single_where(provincia, comune, foglio, particella, tipo_catasto, status="completed"))
-            s_fail = _count_single(*_build_single_where(provincia, comune, foglio, particella, tipo_catasto, status="failed"))
-            s_pending = _count_single(*_build_single_where(provincia, comune, foglio, particella, tipo_catasto, status="pending"))
+            s_ok = _count_single(
+                *_build_single_where(provincia, comune, foglio, particella, tipo_catasto, status="completed")
+            )
+            s_fail = _count_single(
+                *_build_single_where(provincia, comune, foglio, particella, tipo_catasto, status="failed")
+            )
+            s_pending = _count_single(
+                *_build_single_where(provincia, comune, foglio, particella, tipo_catasto, status="pending")
+            )
 
     return {
         "total_requests": s_total,

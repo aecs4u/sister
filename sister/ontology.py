@@ -18,7 +18,6 @@ from typing import Any, Literal, Optional, Union
 
 from pydantic import BaseModel, Field
 
-
 # ---------------------------------------------------------------------------
 # Tipo catasto literals
 # ---------------------------------------------------------------------------

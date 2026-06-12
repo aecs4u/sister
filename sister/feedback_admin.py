@@ -1,4 +1,5 @@
 """Admin endpoints for configuring and sending feedback invitation emails."""
+
 from __future__ import annotations
 
 import os

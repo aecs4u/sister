@@ -19,7 +19,6 @@ from sister.workflows import (
     _step_key,
 )
 
-
 # ---------------------------------------------------------------------------
 # WorkflowInput validation
 # ---------------------------------------------------------------------------
@@ -28,16 +27,22 @@ from sister.workflows import (
 class TestWorkflowInput:
     def test_valid_due_diligence(self):
         wf = WorkflowInput(
-            preset="due-diligence", provincia="Roma", comune="ROMA",
-            foglio="100", particella="50",
+            preset="due-diligence",
+            provincia="Roma",
+            comune="ROMA",
+            foglio="100",
+            particella="50",
         )
         assert wf.preset == "due-diligence"
         assert wf.include_paid_steps is False
 
     def test_preset_normalized(self):
         wf = WorkflowInput(
-            preset="Due-Diligence", provincia="Roma", comune="ROMA",
-            foglio="100", particella="50",
+            preset="Due-Diligence",
+            provincia="Roma",
+            comune="ROMA",
+            foglio="100",
+            particella="50",
         )
         assert wf.preset == "due-diligence"
 
@@ -52,17 +57,29 @@ class TestWorkflowInput:
 
     def test_include_paid_steps_flag(self):
         wf = WorkflowInput(
-            preset="due-diligence", provincia="Roma", comune="ROMA",
-            foglio="100", particella="50",
-            include_paid_steps=True, auto_confirm=True,
+            preset="due-diligence",
+            provincia="Roma",
+            comune="ROMA",
+            foglio="100",
+            particella="50",
+            include_paid_steps=True,
+            auto_confirm=True,
         )
         assert wf.include_paid_steps is True
         assert wf.auto_confirm is True
 
     def test_all_presets_defined(self):
         expected = {
-            "due-diligence", "patrimonio", "fondiario", "aziendale", "storico", "indirizzo", "cross-reference",
-            "full-due-diligence", "full-patrimonio", "full-aziendale",
+            "due-diligence",
+            "patrimonio",
+            "fondiario",
+            "aziendale",
+            "storico",
+            "indirizzo",
+            "cross-reference",
+            "full-due-diligence",
+            "full-patrimonio",
+            "full-aziendale",
         }
         assert set(WORKFLOW_PRESETS.keys()) == expected
 
@@ -99,15 +116,21 @@ class TestWorkflowInput:
     def test_depth_filtering(self):
         """Verify that paid steps are at deep or full depth."""
         from sister.models import STEP_METADATA, _DEPTH_ORDER
+
         for step_name, meta in STEP_METADATA.items():
             if meta["paid"]:
-                assert _DEPTH_ORDER[meta["depth"]] >= _DEPTH_ORDER["deep"], \
-                    f"Paid step '{step_name}' should be depth>=deep, got {meta['depth']}"
+                assert (
+                    _DEPTH_ORDER[meta["depth"]] >= _DEPTH_ORDER["deep"]
+                ), f"Paid step '{step_name}' should be depth>=deep, got {meta['depth']}"
 
     def test_depth_validation(self):
         wf = WorkflowInput(
-            preset="due-diligence", provincia="Roma", comune="ROMA",
-            foglio="1", particella="1", depth="light",
+            preset="due-diligence",
+            provincia="Roma",
+            comune="ROMA",
+            foglio="1",
+            particella="1",
+            depth="light",
         )
         assert wf.depth == "light"
 
@@ -126,8 +149,13 @@ class TestNormalizeProperty:
         row = {"Provincia": "Roma", "Comune": "ROMA", "Foglio": "100", "Particella": "50", "Sub": "3"}
         result = _normalize_property(row)
         assert result == {
-            "provincia": "Roma", "comune": "ROMA", "foglio": "100",
-            "particella": "50", "subalterno": "3", "tipo_catasto": None, "sezione": None,
+            "provincia": "Roma",
+            "comune": "ROMA",
+            "foglio": "100",
+            "particella": "50",
+            "subalterno": "3",
+            "tipo_catasto": None,
+            "sezione": None,
         }
 
     def test_missing_foglio_returns_none(self):
@@ -202,35 +230,47 @@ class TestBuildAggregate:
 
     def test_collects_immobili(self):
         steps = [
-            {"step": "search", "status": "completed", "data": {
-                "immobili": [
-                    {"Foglio": "1", "Particella": "10", "Sub": ""},
-                    {"Foglio": "1", "Particella": "20", "Sub": "3"},
-                ],
-            }},
+            {
+                "step": "search",
+                "status": "completed",
+                "data": {
+                    "immobili": [
+                        {"Foglio": "1", "Particella": "10", "Sub": ""},
+                        {"Foglio": "1", "Particella": "20", "Sub": "3"},
+                    ],
+                },
+            },
         ]
         result = _build_aggregate(steps)
         assert len(result["properties"]) == 2
 
     def test_deduplicates_immobili(self):
         steps = [
-            {"step": "search", "status": "completed", "data": {
-                "immobili": [
-                    {"Foglio": "1", "Particella": "10", "Sub": ""},
-                    {"Foglio": "1", "Particella": "10", "Sub": ""},
-                ],
-            }},
+            {
+                "step": "search",
+                "status": "completed",
+                "data": {
+                    "immobili": [
+                        {"Foglio": "1", "Particella": "10", "Sub": ""},
+                        {"Foglio": "1", "Particella": "10", "Sub": ""},
+                    ],
+                },
+            },
         ]
         result = _build_aggregate(steps)
         assert len(result["properties"]) == 1
 
     def test_collects_intestati(self):
         steps = [
-            {"step": "intestati", "status": "completed", "data": {
-                "intestati": [
-                    {"Codice fiscale": "ABC123", "Nominativo": "Mario Rossi"},
-                ],
-            }},
+            {
+                "step": "intestati",
+                "status": "completed",
+                "data": {
+                    "intestati": [
+                        {"Codice fiscale": "ABC123", "Nominativo": "Mario Rossi"},
+                    ],
+                },
+            },
         ]
         result = _build_aggregate(steps)
         assert len(result["owners"]) == 1
@@ -247,57 +287,73 @@ class TestBuildAggregate:
 
     def test_risk_flag_missing_cf(self):
         steps = [
-            {"step": "intestati", "status": "completed", "data": {
-                "intestati": [
-                    {"Nominativo": "Mario Rossi"},  # no CF
-                ],
-            }},
+            {
+                "step": "intestati",
+                "status": "completed",
+                "data": {
+                    "intestati": [
+                        {"Nominativo": "Mario Rossi"},  # no CF
+                    ],
+                },
+            },
         ]
         result = _build_aggregate(steps)
         assert any(f["type"] == "missing_cf" for f in result["risk_flags"])
 
     def test_risk_flag_multiple_owners(self):
         steps = [
-            {"step": "drill_intestati", "status": "completed", "data": {
-                "drill_results": [
-                    {
-                        "property": {"foglio": "1", "particella": "10", "subalterno": ""},
-                        "intestati": [
-                            {"Codice fiscale": "AAA", "Nominativo": "A"},
-                            {"Codice fiscale": "BBB", "Nominativo": "B"},
-                        ],
-                        "status": "completed",
-                    },
-                ],
-            }},
+            {
+                "step": "drill_intestati",
+                "status": "completed",
+                "data": {
+                    "drill_results": [
+                        {
+                            "property": {"foglio": "1", "particella": "10", "subalterno": ""},
+                            "intestati": [
+                                {"Codice fiscale": "AAA", "Nominativo": "A"},
+                                {"Codice fiscale": "BBB", "Nominativo": "B"},
+                            ],
+                            "status": "completed",
+                        },
+                    ],
+                },
+            },
         ]
         result = _build_aggregate(steps)
         assert any(f["type"] == "multiple_owners" for f in result["risk_flags"])
 
     def test_aggregate_includes_addresses(self):
         steps = [
-            {"step": "indirizzo_reverse", "status": "completed", "data": {
-                "addresses": [
-                    {"property": {"foglio": "1", "particella": "10"}, "addresses": ["VIA ROMA 1"]},
-                ],
-            }},
+            {
+                "step": "indirizzo_reverse",
+                "status": "completed",
+                "data": {
+                    "addresses": [
+                        {"property": {"foglio": "1", "particella": "10"}, "addresses": ["VIA ROMA 1"]},
+                    ],
+                },
+            },
         ]
         result = _build_aggregate(steps)
         assert len(result["addresses"]) == 1
 
     def test_aggregate_collects_owner_portfolios(self):
         steps = [
-            {"step": "cross_property_intestati", "status": "completed", "data": {
-                "owner_portfolios": [
-                    {
-                        "codice_fiscale": "ABC123",
-                        "immobili": [
-                            {"Foglio": "5", "Particella": "20", "Sub": ""},
-                        ],
-                        "status": "completed",
-                    },
-                ],
-            }},
+            {
+                "step": "cross_property_intestati",
+                "status": "completed",
+                "data": {
+                    "owner_portfolios": [
+                        {
+                            "codice_fiscale": "ABC123",
+                            "immobili": [
+                                {"Foglio": "5", "Particella": "20", "Sub": ""},
+                            ],
+                            "status": "completed",
+                        },
+                    ],
+                },
+            },
         ]
         result = _build_aggregate(steps)
         assert len(result["properties"]) == 1
@@ -305,15 +361,19 @@ class TestBuildAggregate:
 
     def test_drill_down_results(self):
         steps = [
-            {"step": "drill_intestati", "status": "completed", "data": {
-                "drill_results": [
-                    {
-                        "property": {"foglio": "1", "particella": "10", "subalterno": "3"},
-                        "intestati": [{"Codice fiscale": "XYZ789", "Nominativo": "Luigi Bianchi"}],
-                        "status": "completed",
-                    },
-                ],
-            }},
+            {
+                "step": "drill_intestati",
+                "status": "completed",
+                "data": {
+                    "drill_results": [
+                        {
+                            "property": {"foglio": "1", "particella": "10", "subalterno": "3"},
+                            "intestati": [{"Codice fiscale": "XYZ789", "Nominativo": "Luigi Bianchi"}],
+                            "status": "completed",
+                        },
+                    ],
+                },
+            },
         ]
         result = _build_aggregate(steps)
         assert len(result["properties"]) == 1
@@ -338,6 +398,7 @@ class TestStepExecutorRegistry:
 
     def test_executor_count(self):
         from sister.workflows import _STEP_EXECUTORS
+
         # 18 browser + 3 analytical + 4 multi-hop = 25
         assert len(_STEP_EXECUTORS) >= 25
 
@@ -388,6 +449,7 @@ class TestTimelineBuild:
     def test_empty_results(self):
         import asyncio
         from sister.workflows import _exec_timeline_build
+
         result = asyncio.run(_exec_timeline_build(None, {}, []))
         assert result["total_events"] == 0
         assert result["timeline"] == []
@@ -396,13 +458,18 @@ class TestTimelineBuild:
     def test_extracts_dated_events(self):
         import asyncio
         from sister.workflows import _exec_timeline_build
+
         steps = [
-            {"step": "nota", "status": "completed", "data": {
-                "risultati": [
-                    {"Data": "15/03/2020", "Tipo": "Compravendita", "Nota": "123"},
-                    {"Data": "20/06/2018", "Tipo": "Donazione", "Nota": "456"},
-                ],
-            }},
+            {
+                "step": "nota",
+                "status": "completed",
+                "data": {
+                    "risultati": [
+                        {"Data": "15/03/2020", "Tipo": "Compravendita", "Nota": "123"},
+                        {"Data": "20/06/2018", "Tipo": "Donazione", "Nota": "456"},
+                    ],
+                },
+            },
         ]
         result = asyncio.run(_exec_timeline_build(None, {}, steps))
         assert result["total_events"] == 2
@@ -414,13 +481,18 @@ class TestTimelineBuild:
     def test_detects_gaps(self):
         import asyncio
         from sister.workflows import _exec_timeline_build
+
         steps = [
-            {"step": "originali", "status": "completed", "data": {
-                "risultati": [
-                    {"Data": "01/01/2010", "Tipo": "Registrazione"},
-                    {"Data": "01/01/2020", "Tipo": "Aggiornamento"},
-                ],
-            }},
+            {
+                "step": "originali",
+                "status": "completed",
+                "data": {
+                    "risultati": [
+                        {"Data": "01/01/2010", "Tipo": "Registrazione"},
+                        {"Data": "01/01/2020", "Tipo": "Aggiornamento"},
+                    ],
+                },
+            },
         ]
         result = asyncio.run(_exec_timeline_build(None, {}, steps))
         assert result["total_gaps"] >= 1
@@ -429,6 +501,7 @@ class TestTimelineBuild:
     def test_skips_non_completed(self):
         import asyncio
         from sister.workflows import _exec_timeline_build
+
         steps = [
             {"step": "nota", "status": "error", "data": None, "error": "fail"},
         ]
@@ -442,6 +515,7 @@ class TestRiskScore:
     def test_empty_results(self):
         import asyncio
         from sister.workflows import _exec_risk_score
+
         result = asyncio.run(_exec_risk_score(None, {}, []))
         assert result["total_flags"] == 0
         assert result["total_properties"] == 0
@@ -450,12 +524,17 @@ class TestRiskScore:
     def test_flags_missing_cf(self):
         import asyncio
         from sister.workflows import _exec_risk_score
+
         steps = [
-            {"step": "intestati", "status": "completed", "data": {
-                "intestati": [
-                    {"Nominativo": "Mario Rossi"},  # no CF
-                ],
-            }},
+            {
+                "step": "intestati",
+                "status": "completed",
+                "data": {
+                    "intestati": [
+                        {"Nominativo": "Mario Rossi"},  # no CF
+                    ],
+                },
+            },
         ]
         result = asyncio.run(_exec_risk_score(None, {}, steps))
         assert any(f["type"] == "missing_cf" for f in result["risk_flags"])
@@ -463,19 +542,24 @@ class TestRiskScore:
     def test_flags_multiple_owners(self):
         import asyncio
         from sister.workflows import _exec_risk_score
+
         steps = [
-            {"step": "drill_intestati", "status": "completed", "data": {
-                "drill_results": [
-                    {
-                        "property": {"foglio": "1", "particella": "10", "subalterno": ""},
-                        "intestati": [
-                            {"Codice fiscale": "AAABBB80C01H501A"},
-                            {"Codice fiscale": "CCCDDD90E02H501B"},
-                        ],
-                        "status": "completed",
-                    },
-                ],
-            }},
+            {
+                "step": "drill_intestati",
+                "status": "completed",
+                "data": {
+                    "drill_results": [
+                        {
+                            "property": {"foglio": "1", "particella": "10", "subalterno": ""},
+                            "intestati": [
+                                {"Codice fiscale": "AAABBB80C01H501A"},
+                                {"Codice fiscale": "CCCDDD90E02H501B"},
+                            ],
+                            "status": "completed",
+                        },
+                    ],
+                },
+            },
         ]
         result = asyncio.run(_exec_risk_score(None, {}, steps))
         assert any(f["type"] == "multiple_owners" for f in result["risk_flags"])
@@ -483,13 +567,18 @@ class TestRiskScore:
     def test_flags_ownership_mismatch(self):
         import asyncio
         from sister.workflows import _exec_risk_score
+
         steps = [
             {"step": "soggetto", "status": "completed", "data": {"immobili": []}},
-            {"step": "intestati", "status": "completed", "data": {
-                "intestati": [
-                    {"Codice fiscale": "AAABBB80C01H501A"},  # not in soggetto source
-                ],
-            }},
+            {
+                "step": "intestati",
+                "status": "completed",
+                "data": {
+                    "intestati": [
+                        {"Codice fiscale": "AAABBB80C01H501A"},  # not in soggetto source
+                    ],
+                },
+            },
         ]
         params = {"codice_fiscale": "XXXYYYZZZ00A00A"}
         result = asyncio.run(_exec_risk_score(None, params, steps))
@@ -498,13 +587,18 @@ class TestRiskScore:
     def test_geographic_concentration(self):
         import asyncio
         from sister.workflows import _exec_risk_score
+
         steps = [
-            {"step": "search", "status": "completed", "data": {
-                "immobili": [
-                    {"Foglio": str(i), "Particella": str(i), "Sub": "", "Provincia": "Roma", "Comune": "ROMA"}
-                    for i in range(60)
-                ],
-            }},
+            {
+                "step": "search",
+                "status": "completed",
+                "data": {
+                    "immobili": [
+                        {"Foglio": str(i), "Particella": str(i), "Sub": "", "Provincia": "Roma", "Comune": "ROMA"}
+                        for i in range(60)
+                    ],
+                },
+            },
         ]
         result = asyncio.run(_exec_risk_score(None, {}, steps))
         assert any(f["type"] == "high_property_count" for f in result["risk_flags"])
@@ -513,12 +607,17 @@ class TestRiskScore:
     def test_severity_counts(self):
         import asyncio
         from sister.workflows import _exec_risk_score
+
         steps = [
-            {"step": "intestati", "status": "completed", "data": {
-                "intestati": [
-                    {"Nominativo": "No CF Person"},
-                ],
-            }},
+            {
+                "step": "intestati",
+                "status": "completed",
+                "data": {
+                    "intestati": [
+                        {"Nominativo": "No CF Person"},
+                    ],
+                },
+            },
         ]
         result = asyncio.run(_exec_risk_score(None, {}, steps))
         assert "severity_counts" in result
@@ -527,11 +626,20 @@ class TestRiskScore:
     def test_timeline_gaps_propagated(self):
         import asyncio
         from sister.workflows import _exec_risk_score
+
         steps = [
-            {"step": "timeline_build", "status": "completed", "data": {
-                "gaps": [{"from_date": "01/01/2010", "to_date": "01/01/2020", "gap_years": 10}],
-                "timeline": [], "total_events": 0, "dated_events": 0, "undated_events": 0, "total_gaps": 1,
-            }},
+            {
+                "step": "timeline_build",
+                "status": "completed",
+                "data": {
+                    "gaps": [{"from_date": "01/01/2010", "to_date": "01/01/2020", "gap_years": 10}],
+                    "timeline": [],
+                    "total_events": 0,
+                    "dated_events": 0,
+                    "undated_events": 0,
+                    "total_gaps": 1,
+                },
+            },
         ]
         result = asyncio.run(_exec_risk_score(None, {}, steps))
         assert any(f["type"] == "timeline_gap" for f in result["risk_flags"])
@@ -542,18 +650,21 @@ class TestWhenClauses:
 
     def test_mappa_skipped_without_foglio(self):
         from sister.models import STEP_METADATA
+
         meta = STEP_METADATA["mappa"]
         assert not meta["when"]([], {"foglio": None})
         assert meta["when"]([], {"foglio": "100"})
 
     def test_nota_skipped_without_numero_nota(self):
         from sister.models import STEP_METADATA
+
         meta = STEP_METADATA["nota"]
         assert not meta["when"]([], {"numero_nota": None})
         assert meta["when"]([], {"numero_nota": "12345"})
 
     def test_timeline_build_skipped_without_document_steps(self):
         from sister.models import STEP_METADATA
+
         meta = STEP_METADATA["timeline_build"]
         # No completed document steps → skip
         empty_results = [{"step": "search", "status": "completed", "data": {}}]
@@ -564,6 +675,7 @@ class TestWhenClauses:
 
     def test_owner_expand_skipped_without_intestati(self):
         from sister.models import STEP_METADATA
+
         meta = STEP_METADATA["owner_expand"]
         empty = [{"step": "search", "status": "completed", "data": {"immobili": []}}]
         assert not meta["when"](empty, {})
@@ -572,6 +684,7 @@ class TestWhenClauses:
 
     def test_risk_score_has_no_when(self):
         from sister.models import STEP_METADATA
+
         assert "when" not in STEP_METADATA["risk_score"]
 
 
@@ -581,9 +694,18 @@ class TestAggregateWithNewSteps:
     def test_timeline_propagated_to_aggregate(self):
         events = [{"source_step": "nota", "date": "01/01/2020", "details": {}}]
         steps = [
-            {"step": "timeline_build", "status": "completed", "data": {
-                "timeline": events, "total_events": 1, "dated_events": 1, "undated_events": 0, "gaps": [], "total_gaps": 0,
-            }},
+            {
+                "step": "timeline_build",
+                "status": "completed",
+                "data": {
+                    "timeline": events,
+                    "total_events": 1,
+                    "dated_events": 1,
+                    "undated_events": 0,
+                    "gaps": [],
+                    "total_gaps": 0,
+                },
+            },
         ]
         result = _build_aggregate(steps)
         assert result["timeline"] == events
@@ -591,11 +713,18 @@ class TestAggregateWithNewSteps:
     def test_risk_scores_merged_to_aggregate(self):
         flags = [{"type": "missing_cf", "severity": "medium", "owner": "Test"}]
         steps = [
-            {"step": "risk_score", "status": "completed", "data": {
-                "risk_flags": flags, "total_flags": 1,
-                "severity_counts": {"medium": 1}, "total_properties": 0, "total_owners": 0,
-                "geographic_concentration": [],
-            }},
+            {
+                "step": "risk_score",
+                "status": "completed",
+                "data": {
+                    "risk_flags": flags,
+                    "total_flags": 1,
+                    "severity_counts": {"medium": 1},
+                    "total_properties": 0,
+                    "total_owners": 0,
+                    "geographic_concentration": [],
+                },
+            },
         ]
         result = _build_aggregate(steps)
         assert any(f["type"] == "missing_cf" for f in result["risk_flags"])
@@ -603,13 +732,19 @@ class TestAggregateWithNewSteps:
 
     def test_owner_expand_properties_in_aggregate(self):
         steps = [
-            {"step": "owner_expand", "status": "completed", "data": {
-                "owner_entities": [{"codice_fiscale": "ABC", "status": "completed"}],
-                "discovered_properties": [
-                    {"provincia": "Roma", "comune": "ROMA", "foglio": "99", "particella": "1", "subalterno": None},
-                ],
-                "total_discovered": 1, "total_owners": 1, "truncated": False,
-            }},
+            {
+                "step": "owner_expand",
+                "status": "completed",
+                "data": {
+                    "owner_entities": [{"codice_fiscale": "ABC", "status": "completed"}],
+                    "discovered_properties": [
+                        {"provincia": "Roma", "comune": "ROMA", "foglio": "99", "particella": "1", "subalterno": None},
+                    ],
+                    "total_discovered": 1,
+                    "total_owners": 1,
+                    "truncated": False,
+                },
+            },
         ]
         result = _build_aggregate(steps)
         assert len(result["properties"]) == 1
@@ -626,19 +761,25 @@ class TestPropertyRank:
     def test_empty_results(self):
         import asyncio
         from sister.workflows import _exec_property_rank
+
         result = asyncio.run(_exec_property_rank(None, {}, []))
         assert result["total"] == 0
 
     def test_scores_same_location_higher(self):
         import asyncio
         from sister.workflows import _exec_property_rank
+
         steps = [
-            {"step": "search", "status": "completed", "data": {
-                "immobili": [
-                    {"Foglio": "1", "Particella": "10", "Sub": "", "Provincia": "Roma", "Comune": "ROMA"},
-                    {"Foglio": "2", "Particella": "20", "Sub": "", "Provincia": "Milano", "Comune": "MILANO"},
-                ],
-            }},
+            {
+                "step": "search",
+                "status": "completed",
+                "data": {
+                    "immobili": [
+                        {"Foglio": "1", "Particella": "10", "Sub": "", "Provincia": "Roma", "Comune": "ROMA"},
+                        {"Foglio": "2", "Particella": "20", "Sub": "", "Provincia": "Milano", "Comune": "MILANO"},
+                    ],
+                },
+            },
         ]
         result = asyncio.run(_exec_property_rank(None, {"provincia": "Roma", "comune": "ROMA"}, steps))
         ranked = result["ranked_properties"]
@@ -650,14 +791,28 @@ class TestPropertyRank:
     def test_multi_path_discovery_bonus(self):
         import asyncio
         from sister.workflows import _exec_property_rank
+
         steps = [
-            {"step": "search", "status": "completed", "data": {
-                "immobili": [{"Foglio": "1", "Particella": "10", "Sub": "", "Provincia": "X", "Comune": "Y"}],
-            }},
-            {"step": "owner_expand", "status": "completed", "data": {
-                "discovered_properties": [{"provincia": "X", "comune": "Y", "foglio": "1", "particella": "10", "subalterno": None}],
-                "owner_entities": [], "total_owners": 0, "total_discovered": 1, "truncated": False,
-            }},
+            {
+                "step": "search",
+                "status": "completed",
+                "data": {
+                    "immobili": [{"Foglio": "1", "Particella": "10", "Sub": "", "Provincia": "X", "Comune": "Y"}],
+                },
+            },
+            {
+                "step": "owner_expand",
+                "status": "completed",
+                "data": {
+                    "discovered_properties": [
+                        {"provincia": "X", "comune": "Y", "foglio": "1", "particella": "10", "subalterno": None}
+                    ],
+                    "owner_entities": [],
+                    "total_owners": 0,
+                    "total_discovered": 1,
+                    "truncated": False,
+                },
+            },
         ]
         result = asyncio.run(_exec_property_rank(None, {}, steps))
         # The property found via two paths should get a bonus
@@ -668,13 +823,18 @@ class TestPropertyRank:
     def test_above_threshold_count(self):
         import asyncio
         from sister.workflows import _exec_property_rank
+
         steps = [
-            {"step": "search", "status": "completed", "data": {
-                "immobili": [
-                    {"Foglio": str(i), "Particella": str(i), "Sub": "", "Provincia": "X", "Comune": "Y"}
-                    for i in range(5)
-                ],
-            }},
+            {
+                "step": "search",
+                "status": "completed",
+                "data": {
+                    "immobili": [
+                        {"Foglio": str(i), "Particella": str(i), "Sub": "", "Provincia": "X", "Comune": "Y"}
+                        for i in range(5)
+                    ],
+                },
+            },
         ]
         result = asyncio.run(_exec_property_rank(None, {"min_property_score": 50}, steps))
         assert result["above_threshold"] == 0  # base score 10 < threshold 50
@@ -686,19 +846,32 @@ class TestPortfolioDrillIntestati:
     def test_skips_without_rank(self):
         import asyncio
         from sister.workflows import _exec_portfolio_drill_intestati
+
         result = asyncio.run(_exec_portfolio_drill_intestati(None, {}, []))
         assert result["skipped"]
 
     def test_skips_below_threshold(self):
         import asyncio
         from sister.workflows import _exec_portfolio_drill_intestati
+
         steps = [
-            {"step": "property_rank", "status": "completed", "data": {
-                "ranked_properties": [
-                    {"provincia": "X", "comune": "Y", "foglio": "1", "particella": "1",
-                     "subalterno": None, "_score": 5, "_key": "X:Y:1:1:"},
-                ],
-            }},
+            {
+                "step": "property_rank",
+                "status": "completed",
+                "data": {
+                    "ranked_properties": [
+                        {
+                            "provincia": "X",
+                            "comune": "Y",
+                            "foglio": "1",
+                            "particella": "1",
+                            "subalterno": None,
+                            "_score": 5,
+                            "_key": "X:Y:1:1:",
+                        },
+                    ],
+                },
+            },
         ]
         result = asyncio.run(_exec_portfolio_drill_intestati(None, {"min_property_score": 30}, steps))
         assert result["skipped"]
@@ -710,10 +883,24 @@ class TestPortfolioIpotecaria:
     def test_skips_without_auto_confirm(self):
         import asyncio
         from sister.workflows import _exec_portfolio_ipotecaria
+
         steps = [
-            {"step": "property_rank", "status": "completed", "data": {
-                "ranked_properties": [{"_score": 50, "_key": "X:Y:1:1:", "provincia": "X", "comune": "Y", "foglio": "1", "particella": "1"}],
-            }},
+            {
+                "step": "property_rank",
+                "status": "completed",
+                "data": {
+                    "ranked_properties": [
+                        {
+                            "_score": 50,
+                            "_key": "X:Y:1:1:",
+                            "provincia": "X",
+                            "comune": "Y",
+                            "foglio": "1",
+                            "particella": "1",
+                        }
+                    ],
+                },
+            },
         ]
         result = asyncio.run(_exec_portfolio_ipotecaria(None, {"auto_confirm": False}, steps))
         assert result["skipped"]
@@ -721,13 +908,25 @@ class TestPortfolioIpotecaria:
     def test_respects_max_paid_steps(self):
         import asyncio
         from sister.workflows import _exec_portfolio_ipotecaria
+
         steps = [
-            {"step": "property_rank", "status": "completed", "data": {
-                "ranked_properties": [
-                    {"_score": 50, "_key": f"X:Y:{i}:{i}:", "provincia": "X", "comune": "Y", "foglio": str(i), "particella": str(i)}
-                    for i in range(10)
-                ],
-            }},
+            {
+                "step": "property_rank",
+                "status": "completed",
+                "data": {
+                    "ranked_properties": [
+                        {
+                            "_score": 50,
+                            "_key": f"X:Y:{i}:{i}:",
+                            "provincia": "X",
+                            "comune": "Y",
+                            "foglio": str(i),
+                            "particella": str(i),
+                        }
+                        for i in range(10)
+                    ],
+                },
+            },
         ]
         # Already used 3 of 3 paid steps
         params = {"auto_confirm": True, "max_paid_steps": 3, "_paid_step_count": 3, "min_property_score": 30}
@@ -759,9 +958,14 @@ class TestMultiHopPresets:
 
     def test_full_presets_valid_input(self):
         wf = WorkflowInput(
-            preset="full-due-diligence", provincia="Roma", comune="ROMA",
-            foglio="1", particella="1", depth="full",
-            max_paid_steps=5, max_owners=15,
+            preset="full-due-diligence",
+            provincia="Roma",
+            comune="ROMA",
+            foglio="1",
+            particella="1",
+            depth="full",
+            max_paid_steps=5,
+            max_owners=15,
         )
         assert wf.depth == "full"
         assert wf.max_paid_steps == 5
@@ -777,15 +981,20 @@ class TestBudgetControls:
             WorkflowInput(preset="due-diligence", provincia="X", max_fanout=101)
 
     def test_max_paid_steps_range(self):
-        wf = WorkflowInput(preset="due-diligence", provincia="X", comune="X", foglio="1", particella="1", max_paid_steps=0)
+        wf = WorkflowInput(
+            preset="due-diligence", provincia="X", comune="X", foglio="1", particella="1", max_paid_steps=0
+        )
         assert wf.max_paid_steps == 0
 
     def test_full_depth_accepted(self):
-        wf = WorkflowInput(preset="full-due-diligence", provincia="X", comune="X", foglio="1", particella="1", depth="full")
+        wf = WorkflowInput(
+            preset="full-due-diligence", provincia="X", comune="X", foglio="1", particella="1", depth="full"
+        )
         assert wf.depth == "full"
 
     def test_executor_count_with_multi_hop(self):
         from sister.workflows import _STEP_EXECUTORS
+
         assert len(_STEP_EXECUTORS) >= 25
 
 
@@ -797,11 +1006,24 @@ class TestWorkflowCLI:
         from sister.cli import app
 
         runner = CliRunner()
-        result = runner.invoke(app, [
-            "query", "workflow", "--preset", "due-diligence",
-            "-P", "Roma", "-C", "ROMA", "-F", "100", "-p", "50",
-            "--dry-run",
-        ])
+        result = runner.invoke(
+            app,
+            [
+                "query",
+                "workflow",
+                "--preset",
+                "due-diligence",
+                "-P",
+                "Roma",
+                "-C",
+                "ROMA",
+                "-F",
+                "100",
+                "-p",
+                "50",
+                "--dry-run",
+            ],
+        )
         assert result.exit_code == 0
         assert "DRY RUN" in result.output
         assert "due-diligence" in result.output
@@ -811,9 +1033,15 @@ class TestWorkflowCLI:
         from sister.cli import app
 
         runner = CliRunner()
-        result = runner.invoke(app, [
-            "query", "workflow", "--preset", "nonexistent",
-        ])
+        result = runner.invoke(
+            app,
+            [
+                "query",
+                "workflow",
+                "--preset",
+                "nonexistent",
+            ],
+        )
         assert result.exit_code == 1
         assert "Unknown preset" in result.output
 
@@ -835,10 +1063,19 @@ class TestWorkflowCLI:
 
         monkeypatch.setattr(VisuraClient, "workflow", mock_workflow)
         runner = CliRunner()
-        result = runner.invoke(app, [
-            "query", "workflow", "--preset", "fondiario",
-            "-P", "Roma", "-C", "ROMA",
-        ])
+        result = runner.invoke(
+            app,
+            [
+                "query",
+                "workflow",
+                "--preset",
+                "fondiario",
+                "-P",
+                "Roma",
+                "-C",
+                "ROMA",
+            ],
+        )
         assert result.exit_code == 0
         assert called_with.get("preset") == "fondiario"
 
@@ -860,17 +1097,37 @@ class TestWorkflowCLI:
 
         monkeypatch.setattr(VisuraClient, "workflow", mock_workflow)
         runner = CliRunner()
-        result = runner.invoke(app, [
-            "query", "workflow", "--preset", "full-due-diligence",
-            "-P", "Roma", "-C", "ROMA", "-F", "1", "-p", "1",
-            "--depth", "full",
-            "--max-owners", "15",
-            "--max-properties-per-owner", "25",
-            "--max-history", "8",
-            "--max-paid", "5",
-            "--max-steps", "200",
-            "--include-paid", "--yes",
-        ])
+        result = runner.invoke(
+            app,
+            [
+                "query",
+                "workflow",
+                "--preset",
+                "full-due-diligence",
+                "-P",
+                "Roma",
+                "-C",
+                "ROMA",
+                "-F",
+                "1",
+                "-p",
+                "1",
+                "--depth",
+                "full",
+                "--max-owners",
+                "15",
+                "--max-properties-per-owner",
+                "25",
+                "--max-history",
+                "8",
+                "--max-paid",
+                "5",
+                "--max-steps",
+                "200",
+                "--include-paid",
+                "--yes",
+            ],
+        )
         assert result.exit_code == 0
         assert called_with.get("preset") == "full-due-diligence"
         assert called_with.get("depth") == "full"

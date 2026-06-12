@@ -104,7 +104,8 @@ class BrowserManager:
         try:
             if not self._auth.config.cdp_endpoint:
                 from aecs4u_auth.browser import manager as _auth_manager
-                if hasattr(_auth_manager, '_CHROMIUM_ARGS'):
+
+                if hasattr(_auth_manager, "_CHROMIUM_ARGS"):
                     if "--start-maximized" not in _auth_manager._CHROMIUM_ARGS:
                         _auth_manager._CHROMIUM_ARGS.append("--start-maximized")
 
@@ -244,13 +245,18 @@ class BrowserManager:
                 page = await self._get_authenticated_page()
                 result = await run_visura_soggetto(page, request.codice_fiscale)
             return VisuraResponse(
-                request_id=request.request_id, success=True,
-                tipo_catasto=request.tipo_catasto, data=result,
+                request_id=request.request_id,
+                success=True,
+                tipo_catasto=request.tipo_catasto,
+                data=result,
             )
         except Exception as e:
             return VisuraResponse(
-                request_id=request.request_id, success=False,
-                tipo_catasto=request.tipo_catasto, data=None, error=str(e),
+                request_id=request.request_id,
+                success=False,
+                tipo_catasto=request.tipo_catasto,
+                data=None,
+                error=str(e),
             )
 
     async def esegui_visura_persona_giuridica(self, request: VisuraPersonaGiuridicaRequest) -> VisuraResponse:
@@ -258,18 +264,24 @@ class BrowserManager:
             async with self._page_lock:
                 page = await self._get_authenticated_page()
                 result = await run_visura_persona_giuridica(
-                    page, request.identificativo,
+                    page,
+                    request.identificativo,
                     tipo_catasto=request.tipo_catasto,
                     provincia=request.provincia,
                 )
             return VisuraResponse(
-                request_id=request.request_id, success=True,
-                tipo_catasto=request.tipo_catasto, data=result,
+                request_id=request.request_id,
+                success=True,
+                tipo_catasto=request.tipo_catasto,
+                data=result,
             )
         except Exception as e:
             return VisuraResponse(
-                request_id=request.request_id, success=False,
-                tipo_catasto=request.tipo_catasto, data=None, error=str(e),
+                request_id=request.request_id,
+                success=False,
+                tipo_catasto=request.tipo_catasto,
+                data=None,
+                error=str(e),
             )
 
     async def esegui_elenco_immobili(self, request: ElencoImmobiliRequest) -> VisuraResponse:
@@ -284,13 +296,18 @@ class BrowserManager:
                     sezione=getattr(request, "sezione", None),
                 )
             return VisuraResponse(
-                request_id=request.request_id, success=True,
-                tipo_catasto=request.tipo_catasto, data=result,
+                request_id=request.request_id,
+                success=True,
+                tipo_catasto=request.tipo_catasto,
+                data=result,
             )
         except Exception as e:
             return VisuraResponse(
-                request_id=request.request_id, success=False,
-                tipo_catasto=request.tipo_catasto, data=None, error=str(e),
+                request_id=request.request_id,
+                success=False,
+                tipo_catasto=request.tipo_catasto,
+                data=None,
+                error=str(e),
             )
 
     async def esegui_generic(self, request: GenericSisterRequest) -> VisuraResponse:
@@ -302,8 +319,10 @@ class BrowserManager:
                 if search_type == "visura_immobile":
                     result = await run_visura_immobile(
                         page,
-                        provincia=request.provincia, comune=request.comune,
-                        foglio=request.foglio, particella=request.particella,
+                        provincia=request.provincia,
+                        comune=request.comune,
+                        foglio=request.foglio,
+                        particella=request.particella,
                         tipo_catasto=request.tipo_catasto,
                         subalterno=request.params.get("subalterno") if request.params else None,
                         sezione=request.params.get("sezione") if request.params else None,
@@ -313,8 +332,10 @@ class BrowserManager:
                     result = await dispatcher(
                         page,
                         tipo_catasto=request.tipo_catasto,
-                        provincia=request.provincia, comune=request.comune,
-                        foglio=request.foglio, particella=request.particella,
+                        provincia=request.provincia,
+                        comune=request.comune,
+                        foglio=request.foglio,
+                        particella=request.particella,
                         **(request.params or {}),
                     )
                 elif search_type in _NOARGS_DISPATCHERS:
@@ -322,19 +343,26 @@ class BrowserManager:
                     result = await dispatcher(page)
                 else:
                     return VisuraResponse(
-                        request_id=request.request_id, success=False,
-                        tipo_catasto=request.tipo_catasto, data=None,
+                        request_id=request.request_id,
+                        success=False,
+                        tipo_catasto=request.tipo_catasto,
+                        data=None,
                         error=f"Tipo di ricerca sconosciuto: {search_type}",
                     )
 
             return VisuraResponse(
-                request_id=request.request_id, success=True,
-                tipo_catasto=request.tipo_catasto, data=result,
+                request_id=request.request_id,
+                success=True,
+                tipo_catasto=request.tipo_catasto,
+                data=result,
             )
         except Exception as e:
             return VisuraResponse(
-                request_id=request.request_id, success=False,
-                tipo_catasto=request.tipo_catasto, data=None, error=str(e),
+                request_id=request.request_id,
+                success=False,
+                tipo_catasto=request.tipo_catasto,
+                data=None,
+                error=str(e),
             )
 
     async def esegui_ispezione_ipotecaria(self, request: IspezioneIpotecariaRequest) -> VisuraResponse:
@@ -344,21 +372,28 @@ class BrowserManager:
                 result = await run_ispezione_ipotecaria(
                     page,
                     tipo_catasto=request.tipo_catasto,
-                    provincia=request.provincia, comune=request.comune,
-                    foglio=request.foglio, particella=request.particella,
+                    provincia=request.provincia,
+                    comune=request.comune,
+                    foglio=request.foglio,
+                    particella=request.particella,
                     tipo_ricerca=request.tipo_ricerca,
                     subalterno=getattr(request, "subalterno", None),
                     sezione=getattr(request, "sezione", None),
                     auto_confirm=getattr(request, "auto_confirm", False),
                 )
             return VisuraResponse(
-                request_id=request.request_id, success=True,
-                tipo_catasto=request.tipo_catasto, data=result,
+                request_id=request.request_id,
+                success=True,
+                tipo_catasto=request.tipo_catasto,
+                data=result,
             )
         except Exception as e:
             return VisuraResponse(
-                request_id=request.request_id, success=False,
-                tipo_catasto=request.tipo_catasto, data=None, error=str(e),
+                request_id=request.request_id,
+                success=False,
+                tipo_catasto=request.tipo_catasto,
+                data=None,
+                error=str(e),
             )
 
     async def esegui_extract_sezioni(self, tipo_catasto: str, max_province: int = 0) -> list:
@@ -368,6 +403,7 @@ class BrowserManager:
 
     async def download_richieste_documents(self) -> list[dict]:
         from .utils import _download_richieste_documents, PageLogger
+
         async with self._page_lock:
             page = await self._get_authenticated_page()
             page_logger = PageLogger("download_richieste")

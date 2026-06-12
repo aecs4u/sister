@@ -342,12 +342,7 @@ def _count(conn: sqlite3.Connection, table: str) -> int:
 def _tables_exist(db_path: Path) -> bool:
     """Check whether the core sister tables already exist."""
     with sqlite3.connect(db_path) as conn:
-        tables = {
-            row[0]
-            for row in conn.execute(
-                "SELECT name FROM sqlite_master WHERE type='table'"
-            ).fetchall()
-        }
+        tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
     return "visura_requests" in tables and "visura_responses" in tables
 
 

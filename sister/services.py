@@ -128,7 +128,8 @@ class VisuraService:
         self._auth_failed_message = f"Authentication failed after {max_retries} attempts: {last_error}"
         logger.error(
             "Browser authentication failed after %d attempts: %s — queries will not work",
-            max_retries, last_error,
+            max_retries,
+            last_error,
         )
 
     async def _try_close_stale_session(self):
@@ -255,9 +256,18 @@ class VisuraService:
                     logger.error("Errore nel processare richieste: %s", e)
                     await asyncio.sleep(5)
                 finally:
-                    if isinstance(request, (VisuraRequest, VisuraIntestatiRequest, VisuraSoggettoRequest,
-                                            VisuraPersonaGiuridicaRequest, ElencoImmobiliRequest,
-                                            GenericSisterRequest, IspezioneIpotecariaRequest)):
+                    if isinstance(
+                        request,
+                        (
+                            VisuraRequest,
+                            VisuraIntestatiRequest,
+                            VisuraSoggettoRequest,
+                            VisuraPersonaGiuridicaRequest,
+                            ElencoImmobiliRequest,
+                            GenericSisterRequest,
+                            IspezioneIpotecariaRequest,
+                        ),
+                    ):
                         self.pending_request_ids.discard(request.request_id)
                     self.request_queue.task_done()
 
@@ -384,8 +394,17 @@ class VisuraService:
     @staticmethod
     def _request_cache_params(request_type: str, request) -> dict:
         params = {"tipo_catasto": getattr(request, "tipo_catasto", "")}
-        for attr in ("provincia", "comune", "foglio", "particella", "sezione", "subalterno",
-                      "codice_fiscale", "identificativo", "search_type"):
+        for attr in (
+            "provincia",
+            "comune",
+            "foglio",
+            "particella",
+            "sezione",
+            "subalterno",
+            "codice_fiscale",
+            "identificativo",
+            "search_type",
+        ):
             val = getattr(request, attr, None)
             if val:
                 params[attr] = val
@@ -495,8 +514,12 @@ class VisuraService:
             self._ensure_capacity(required_slots=1)
             await self._persist_single_request(request_type, request)
             self._enqueue_request_nowait(request)
-        logger.info("Richiesta %s %s aggiunta alla coda (posizione: %d)",
-                     request_type, request.request_id, self.request_queue.qsize())
+        logger.info(
+            "Richiesta %s %s aggiunta alla coda (posizione: %d)",
+            request_type,
+            request.request_id,
+            self.request_queue.qsize(),
+        )
         return SubmitResult(request_id=request.request_id)
 
     async def add_request(self, request: VisuraRequest, force: bool = False) -> str | SubmitResult:
@@ -508,16 +531,22 @@ class VisuraService:
     async def add_soggetto_request(self, request: VisuraSoggettoRequest, force: bool = False) -> str | SubmitResult:
         return await self._add_single("soggetto", request, force=force)
 
-    async def add_persona_giuridica_request(self, request: VisuraPersonaGiuridicaRequest, force: bool = False) -> str | SubmitResult:
+    async def add_persona_giuridica_request(
+        self, request: VisuraPersonaGiuridicaRequest, force: bool = False
+    ) -> str | SubmitResult:
         return await self._add_single("persona_giuridica", request, force=force)
 
     async def add_generic_request(self, request: GenericSisterRequest, force: bool = False) -> str | SubmitResult:
         return await self._add_single(request.search_type, request, force=force)
 
-    async def add_ispezione_ipotecaria_request(self, request: IspezioneIpotecariaRequest, force: bool = False) -> str | SubmitResult:
+    async def add_ispezione_ipotecaria_request(
+        self, request: IspezioneIpotecariaRequest, force: bool = False
+    ) -> str | SubmitResult:
         return await self._add_single(f"ipotecaria_{request.tipo_ricerca}", request, force=force)
 
-    async def add_elenco_immobili_request(self, request: ElencoImmobiliRequest, force: bool = False) -> str | SubmitResult:
+    async def add_elenco_immobili_request(
+        self, request: ElencoImmobiliRequest, force: bool = False
+    ) -> str | SubmitResult:
         return await self._add_single("elenco_immobili", request, force=force)
 
     async def add_requests_batch(self, requests: list[VisuraRequest], force: bool = False) -> list[str | SubmitResult]:

@@ -8,7 +8,6 @@ import pytest
 
 from sister.client import VisuraAPIError, VisuraClient
 
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
@@ -167,8 +166,13 @@ async def test_search_sends_correct_payload(client):
     _inject_transport(client, handler)
 
     result = await client.search(
-        provincia="Trieste", comune="TRIESTE", foglio="9", particella="166",
-        tipo_catasto="t", sezione="A", subalterno="3",
+        provincia="Trieste",
+        comune="TRIESTE",
+        foglio="9",
+        particella="166",
+        tipo_catasto="t",
+        sezione="A",
+        subalterno="3",
     )
 
     assert captured["method"] == "POST"
@@ -212,8 +216,12 @@ async def test_intestati_sends_correct_payload(client):
     _inject_transport(client, handler)
 
     result = await client.intestati(
-        provincia="Trieste", comune="TRIESTE", foglio="9", particella="166",
-        tipo_catasto="f", subalterno="3",
+        provincia="Trieste",
+        comune="TRIESTE",
+        foglio="9",
+        particella="166",
+        tipo_catasto="f",
+        subalterno="3",
     )
 
     assert captured["body"]["tipo_catasto"] == "F"

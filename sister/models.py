@@ -255,9 +255,7 @@ class ElencoImmobiliInput(BaseModel):
 
     provincia: str = Field(..., min_length=1, description="Nome della provincia")
     comune: str = Field(..., min_length=1, description="Nome del comune")
-    tipo_catasto: Optional[str] = Field(
-        None, pattern=r"^[TF]$", description="'T' = Terreni, 'F' = Fabbricati"
-    )
+    tipo_catasto: Optional[str] = Field(None, pattern=r"^[TF]$", description="'T' = Terreni, 'F' = Fabbricati")
     foglio: Optional[str] = Field(None, description="Foglio (opzionale, filtra per foglio)")
     sezione: Optional[str] = Field(None, description="Sezione (opzionale)")
 
@@ -332,14 +330,10 @@ class IspezioneIpotecariaRequest:
 class IspezioneIpotecariaInput(BaseModel):
     """API input for Ispezione Ipotecaria (paid inspection)."""
 
-    tipo_ricerca: str = Field(
-        ..., description="Search type: immobile, persona_fisica, persona_giuridica, nota"
-    )
+    tipo_ricerca: str = Field(..., description="Search type: immobile, persona_fisica, persona_giuridica, nota")
     provincia: str = Field(..., min_length=1, description="Province name")
     comune: Optional[str] = Field(None, description="Municipality name")
-    tipo_catasto: Optional[str] = Field(
-        None, pattern=r"^[TF]$", description="'T' = Terreni, 'F' = Fabbricati"
-    )
+    tipo_catasto: Optional[str] = Field(None, pattern=r"^[TF]$", description="'T' = Terreni, 'F' = Fabbricati")
     codice_fiscale: Optional[str] = Field(None, description="Codice fiscale (for persona_fisica)")
     identificativo: Optional[str] = Field(None, description="P.IVA or company name (for persona_giuridica)")
     foglio: Optional[str] = Field(None, description="Sheet number (for immobile)")

@@ -12,7 +12,6 @@ from sister.models import (
     VisuraResponse,
 )
 
-
 # ---------------------------------------------------------------------------
 # VisuraInput
 # ---------------------------------------------------------------------------
@@ -25,9 +24,7 @@ class TestVisuraInput:
         assert v.tipo_catasto is None
 
     def test_valid_with_tipo_catasto(self):
-        v = VisuraInput(
-            provincia="Roma", comune="ROMA", foglio="1", particella="1", tipo_catasto="f"
-        )
+        v = VisuraInput(provincia="Roma", comune="ROMA", foglio="1", particella="1", tipo_catasto="f")
         assert v.tipo_catasto == "F"
 
     def test_tipo_catasto_normalised_to_upper(self):
@@ -36,9 +33,7 @@ class TestVisuraInput:
 
     def test_invalid_tipo_catasto_rejected(self):
         with pytest.raises(ValidationError):
-            VisuraInput(
-                provincia="X", comune="X", foglio="1", particella="1", tipo_catasto="X"
-            )
+            VisuraInput(provincia="X", comune="X", foglio="1", particella="1", tipo_catasto="X")
 
     def test_empty_provincia_rejected(self):
         with pytest.raises(ValidationError):
@@ -100,8 +95,12 @@ class TestVisuraIntestatiInput:
 
     def test_tipo_catasto_normalised(self):
         v = VisuraIntestatiInput(
-            provincia="X", comune="X", foglio="1", particella="1",
-            tipo_catasto="f", subalterno="1",
+            provincia="X",
+            comune="X",
+            foglio="1",
+            particella="1",
+            tipo_catasto="f",
+            subalterno="1",
         )
         assert v.tipo_catasto == "F"
 
@@ -110,8 +109,12 @@ class TestVisuraIntestatiInput:
             # Whitespace-only subalterno should normalise to None,
             # then fail the F-requires-subalterno validator
             VisuraIntestatiInput(
-                provincia="X", comune="X", foglio="1", particella="1",
-                tipo_catasto="F", subalterno="   ",
+                provincia="X",
+                comune="X",
+                foglio="1",
+                particella="1",
+                tipo_catasto="F",
+                subalterno="   ",
             )
 
 
@@ -146,15 +149,23 @@ class TestSezioniExtractionRequest:
 class TestVisuraRequest:
     def test_default_timestamp(self):
         r = VisuraRequest(
-            request_id="req_T_1", tipo_catasto="T",
-            provincia="X", comune="X", foglio="1", particella="1",
+            request_id="req_T_1",
+            tipo_catasto="T",
+            provincia="X",
+            comune="X",
+            foglio="1",
+            particella="1",
         )
         assert r.timestamp is not None
 
     def test_optional_fields_default_none(self):
         r = VisuraRequest(
-            request_id="req_T_2", tipo_catasto="T",
-            provincia="X", comune="X", foglio="1", particella="1",
+            request_id="req_T_2",
+            tipo_catasto="T",
+            provincia="X",
+            comune="X",
+            foglio="1",
+            particella="1",
         )
         assert r.sezione is None
         assert r.subalterno is None
@@ -163,7 +174,9 @@ class TestVisuraRequest:
 class TestVisuraResponse:
     def test_success_response(self):
         r = VisuraResponse(
-            request_id="req_F_1", success=True, tipo_catasto="F",
+            request_id="req_F_1",
+            success=True,
+            tipo_catasto="F",
             data={"immobili": []},
         )
         assert r.success is True
@@ -172,7 +185,9 @@ class TestVisuraResponse:
 
     def test_error_response(self):
         r = VisuraResponse(
-            request_id="req_F_2", success=False, tipo_catasto="F",
+            request_id="req_F_2",
+            success=False,
+            tipo_catasto="F",
             error="something broke",
         )
         assert r.success is False

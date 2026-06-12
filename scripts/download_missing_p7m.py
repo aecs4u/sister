@@ -88,6 +88,7 @@ def _parse_pdf(path: Path) -> dict | None:
 
 # ── Query builders ───────────────────────────────────────────────────────────
 
+
 def collect_queries(docs_dir: Path) -> list[dict]:
     """Scan PDFs without companion P7M and build a deduplicated query list."""
     sogg_seen: set[tuple] = set()
@@ -113,16 +114,18 @@ def collect_queries(docs_dir: Path) -> list[dict]:
             if key in sogg_seen:
                 continue
             sogg_seen.add(key)
-            queries.append({
-                "endpoint": "/visura/soggetto",
-                "payload": {
-                    "codice_fiscale": cf,
-                    "tipo_catasto": "E",
-                    "provincia": info["provincia"] or None,
-                },
-                "label": f"{info['name']} ({cf}) [{info['provincia']}]",
-                "source_pdf": pdf.name,
-            })
+            queries.append(
+                {
+                    "endpoint": "/visura/soggetto",
+                    "payload": {
+                        "codice_fiscale": cf,
+                        "tipo_catasto": "E",
+                        "provincia": info["provincia"] or None,
+                    },
+                    "label": f"{info['name']} ({cf}) [{info['provincia']}]",
+                    "source_pdf": pdf.name,
+                }
+            )
 
         elif info["tipo"] == "immobile":
             key = (info["foglio"], info["particella"], info.get("subalterno", ""))
@@ -131,24 +134,27 @@ def collect_queries(docs_dir: Path) -> list[dict]:
             imm_seen.add(key)
             sub = info.get("subalterno") or None
             sub_label = f" SUB{sub}" if sub else ""
-            queries.append({
-                "endpoint": "/visura",
-                "payload": {
-                    "provincia": info["provincia"],
-                    "comune": info["comune"],
-                    "foglio": info["foglio"],
-                    "particella": info["particella"],
-                    "subalterno": sub,
-                    "tipo_catasto": info["tipo_catasto"],
-                },
-                "label": f"{info['provincia']} FG{info['foglio']} PT{info['particella']}{sub_label}",
-                "source_pdf": pdf.name,
-            })
+            queries.append(
+                {
+                    "endpoint": "/visura",
+                    "payload": {
+                        "provincia": info["provincia"],
+                        "comune": info["comune"],
+                        "foglio": info["foglio"],
+                        "particella": info["particella"],
+                        "subalterno": sub,
+                        "tipo_catasto": info["tipo_catasto"],
+                    },
+                    "label": f"{info['provincia']} FG{info['foglio']} PT{info['particella']}{sub_label}",
+                    "source_pdf": pdf.name,
+                }
+            )
 
     return queries
 
 
 # ── HTTP helpers ─────────────────────────────────────────────────────────────
+
 
 def submit(client: httpx.Client, endpoint: str, payload: dict) -> str | None:
     resp = client.post(f"{SISTER_URL}{endpoint}", json=payload, timeout=30)
@@ -169,6 +175,7 @@ def poll(client: httpx.Client, request_id: str) -> dict:
 
 
 # ── Main ─────────────────────────────────────────────────────────────────────
+
 
 def main():
     if not DOCS_DIR.exists():

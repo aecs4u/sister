@@ -19,7 +19,9 @@ import httpx
 
 SISTER_URL = os.getenv("VISURA_API_URL", "http://localhost:8025")
 OPENDATA_DIR = "/mnt/mobile/data/aecs4u.it/opendata/data"
-OUTPUT_PATH = Path(__file__).parent.parent / "outputs" / f"batch_opendata_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+OUTPUT_PATH = (
+    Path(__file__).parent.parent / "outputs" / f"batch_opendata_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+)
 POLL_INTERVAL = 5
 TIMEOUT = 300
 
@@ -30,6 +32,7 @@ log = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Parameter parsing helpers
 # ---------------------------------------------------------------------------
+
 
 def _parse_provincia(raw: str | None) -> str | None:
     """'BOLOGNA Territorio-BO' → 'BOLOGNA', 'NAZIONALE-IT' → None."""
@@ -65,6 +68,7 @@ def _to_str(v) -> str | None:
 # ---------------------------------------------------------------------------
 # File → API call mapping
 # ---------------------------------------------------------------------------
+
 
 def _build_request(endpoint: str, parametri: dict) -> tuple[str, dict] | None:
     """Return (api_path, payload) or None if endpoint is not supported."""
@@ -147,13 +151,15 @@ def load_requests(opendata_dir: str) -> list[dict]:
                 continue
             seen.add(key)
 
-            requests.append({
-                "opendata_id": opendata_id,
-                "endpoint": endpoint,
-                "api_path": api_path,
-                "payload": payload,
-                "source_file": Path(filepath).name,
-            })
+            requests.append(
+                {
+                    "opendata_id": opendata_id,
+                    "endpoint": endpoint,
+                    "api_path": api_path,
+                    "payload": payload,
+                    "source_file": Path(filepath).name,
+                }
+            )
 
     return requests
 
@@ -161,6 +167,7 @@ def load_requests(opendata_dir: str) -> list[dict]:
 # ---------------------------------------------------------------------------
 # Submit and poll
 # ---------------------------------------------------------------------------
+
 
 def _poll(client: httpx.Client, request_id: str) -> dict:
     deadline = time.time() + TIMEOUT
@@ -221,6 +228,7 @@ def run(opendata_dir: str) -> None:
 
 if __name__ == "__main__":
     import argparse
+
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--opendata-dir", default=OPENDATA_DIR)
     args = parser.parse_args()

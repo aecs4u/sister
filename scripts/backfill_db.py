@@ -52,6 +52,7 @@ def _parse_request_id(request_id: str) -> tuple[str, str]:
 async def _ensure_request(session_factory, request_id: str, tipo_catasto: str, request_type: str) -> None:
     """Insert a minimal visura_requests row if it doesn't exist."""
     from sqlalchemy import text
+
     async with session_factory() as session:
         existing = await session.execute(
             text("SELECT request_id FROM visura_requests WHERE request_id = :rid"),
@@ -122,7 +123,9 @@ async def backfill(outputs_dir: str) -> None:
             intestati_count = len(data.get("intestati", []))
             log.info(
                 "  OK  %-60s  immobili=%-3d  intestati=%-3d",
-                request_id, immobili_count, intestati_count,
+                request_id,
+                immobili_count,
+                intestati_count,
             )
             imported += 1
         except Exception as e:
@@ -134,6 +137,7 @@ async def backfill(outputs_dir: str) -> None:
 
 if __name__ == "__main__":
     import argparse
+
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--outputs-dir", default=OUTPUTS_DIR, help="Path to outputs directory")
     args = parser.parse_args()

@@ -11,7 +11,6 @@ import pytest
 
 import sister.database as database
 
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
@@ -41,10 +40,9 @@ async def _fresh_db(tmp_path, monkeypatch):
 @pytest.mark.asyncio
 async def test_init_db_creates_tables():
     import aiosqlite
+
     async with aiosqlite.connect(database.DB_PATH) as db:
-        cursor = await db.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
-        )
+        cursor = await db.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
         tables = [row[0] for row in await cursor.fetchall()]
 
     assert "visura_requests" in tables
@@ -71,12 +69,11 @@ async def test_save_request_persists_row():
     )
 
     import aiosqlite
+
     db = await aiosqlite.connect(database.DB_PATH)
     db.row_factory = aiosqlite.Row
     try:
-        cursor = await db.execute(
-            "SELECT * FROM visura_requests WHERE request_id = ?", ("req_T_abc",)
-        )
+        cursor = await db.execute("SELECT * FROM visura_requests WHERE request_id = ?", ("req_T_abc",))
         row = await cursor.fetchone()
     finally:
         await db.close()
@@ -101,6 +98,7 @@ async def test_save_request_with_optional_fields():
     )
 
     import aiosqlite
+
     db = await aiosqlite.connect(database.DB_PATH)
     db.row_factory = aiosqlite.Row
     try:
@@ -133,6 +131,7 @@ async def test_save_requests_batch_persists_all():
     await database.save_requests_batch(rows)
 
     import aiosqlite
+
     db = await aiosqlite.connect(database.DB_PATH)
     db.row_factory = aiosqlite.Row
     try:
@@ -149,6 +148,7 @@ async def test_save_requests_batch_empty_is_noop():
     await database.save_requests_batch([])
 
     import aiosqlite
+
     db = await aiosqlite.connect(database.DB_PATH)
     db.row_factory = aiosqlite.Row
     try:
@@ -296,9 +296,7 @@ async def test_save_response_upserts_on_duplicate():
         particella="166",
     )
 
-    await database.save_response(
-        request_id="req_F_upsert", success=False, tipo_catasto="F", error="first"
-    )
+    await database.save_response(request_id="req_F_upsert", success=False, tipo_catasto="F", error="first")
     await database.save_response(
         request_id="req_F_upsert",
         success=True,
@@ -333,9 +331,7 @@ async def _seed_search_data():
             foglio=fog,
             particella=par,
         )
-        await database.save_response(
-            request_id=rid, success=True, tipo_catasto=tc, data={"id": rid}
-        )
+        await database.save_response(request_id=rid, success=True, tipo_catasto=tc, data={"id": rid})
 
 
 @pytest.mark.asyncio
@@ -404,9 +400,7 @@ async def test_cleanup_old_responses_removes_expired():
         foglio="1",
         particella="1",
     )
-    await database.save_response(
-        request_id="req_old", success=True, tipo_catasto="T", data={}
-    )
+    await database.save_response(request_id="req_old", success=True, tipo_catasto="T", data={})
 
     # Use negative TTL so everything is considered "old"
     deleted = await database.cleanup_old_responses(ttl_seconds=-1)
@@ -427,9 +421,7 @@ async def test_cleanup_old_responses_preserves_recent():
         foglio="1",
         particella="1",
     )
-    await database.save_response(
-        request_id="req_fresh", success=True, tipo_catasto="T", data={}
-    )
+    await database.save_response(request_id="req_fresh", success=True, tipo_catasto="T", data={})
 
     # High TTL — nothing should be deleted
     deleted = await database.cleanup_old_responses(ttl_seconds=999999)

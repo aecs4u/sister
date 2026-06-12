@@ -36,9 +36,7 @@ class VisuraRequestDB(SQLModel, table=True):
 
     response: Optional["VisuraResponseDB"] = Relationship(back_populates="request")
 
-    __table_args__ = (
-        Index("idx_requests_lookup", "provincia", "comune", "foglio", "particella", "tipo_catasto"),
-    )
+    __table_args__ = (Index("idx_requests_lookup", "provincia", "comune", "foglio", "particella", "tipo_catasto"),)
 
 
 class VisuraResponseDB(SQLModel, table=True):
@@ -52,10 +50,18 @@ class VisuraResponseDB(SQLModel, table=True):
     created_at: datetime = Field(default_factory=datetime.now)
 
     request: Optional["VisuraRequestDB"] = Relationship(back_populates="response")
-    immobili: list["ImmobileDB"] = Relationship(back_populates="response", sa_relationship_kwargs={"cascade": "all, delete-orphan"})
-    intestati: list["IntestatoDB"] = Relationship(back_populates="response", sa_relationship_kwargs={"cascade": "all, delete-orphan"})
-    page_visits: list["PageVisitDB"] = Relationship(back_populates="response", sa_relationship_kwargs={"cascade": "all, delete-orphan"})
-    documents: list["VisuraDocumentDB"] = Relationship(back_populates="response", sa_relationship_kwargs={"cascade": "all, delete-orphan"})
+    immobili: list["ImmobileDB"] = Relationship(
+        back_populates="response", sa_relationship_kwargs={"cascade": "all, delete-orphan"}
+    )
+    intestati: list["IntestatoDB"] = Relationship(
+        back_populates="response", sa_relationship_kwargs={"cascade": "all, delete-orphan"}
+    )
+    page_visits: list["PageVisitDB"] = Relationship(
+        back_populates="response", sa_relationship_kwargs={"cascade": "all, delete-orphan"}
+    )
+    documents: list["VisuraDocumentDB"] = Relationship(
+        back_populates="response", sa_relationship_kwargs={"cascade": "all, delete-orphan"}
+    )
 
 
 class ImmobileDB(SQLModel, table=True):
@@ -142,6 +148,7 @@ IMMOBILE_FIELD_MAP = {
     "Comune": "comune_result",
 }
 
+
 class PageVisitDB(SQLModel, table=True):
     """Browser page visit metadata captured during automation."""
 
@@ -192,25 +199,40 @@ class VisuraDocumentDB(SQLModel, table=True):
 
     response: Optional["VisuraResponseDB"] = Relationship(back_populates="documents")
 
-    __table_args__ = (
-        Index("idx_documents_lookup", "provincia", "comune", "foglio", "particella"),
-    )
+    __table_args__ = (Index("idx_documents_lookup", "provincia", "comune", "foglio", "particella"),)
 
 
 class FeedbackConfig(SQLModel, table=True):
     __tablename__ = "feedback_config"
 
     id: int = Field(default=1, primary_key=True)
-    cc_emails: list[str] = Field(default_factory=list, sa_column=sa.Column(sa.JSON, nullable=False, server_default="[]"))
-    bcc_emails: list[str] = Field(default_factory=list, sa_column=sa.Column(sa.JSON, nullable=False, server_default="[]"))
-    invitation_subject: str = Field(default="Il tuo feedback è importante", sa_column=sa.Column(sa.Text, nullable=False, server_default="Il tuo feedback è importante"))
+    cc_emails: list[str] = Field(
+        default_factory=list, sa_column=sa.Column(sa.JSON, nullable=False, server_default="[]")
+    )
+    bcc_emails: list[str] = Field(
+        default_factory=list, sa_column=sa.Column(sa.JSON, nullable=False, server_default="[]")
+    )
+    invitation_subject: str = Field(
+        default="Il tuo feedback è importante",
+        sa_column=sa.Column(sa.Text, nullable=False, server_default="Il tuo feedback è importante"),
+    )
     invitation_intro: str = Field(default="", sa_column=sa.Column(sa.Text, nullable=False, server_default=""))
-    invitation_bullets: list[str] = Field(default_factory=list, sa_column=sa.Column(sa.JSON, nullable=False, server_default="[]"))
-    invitation_cta_text: str = Field(default="Lascia il tuo feedback →", sa_column=sa.Column(sa.Text, nullable=False, server_default="Lascia il tuo feedback →"))
+    invitation_bullets: list[str] = Field(
+        default_factory=list, sa_column=sa.Column(sa.JSON, nullable=False, server_default="[]")
+    )
+    invitation_cta_text: str = Field(
+        default="Lascia il tuo feedback →",
+        sa_column=sa.Column(sa.Text, nullable=False, server_default="Lascia il tuo feedback →"),
+    )
     invitation_privacy_note: str = Field(default="", sa_column=sa.Column(sa.Text, nullable=False, server_default=""))
     invitation_signature: str = Field(default="", sa_column=sa.Column(sa.Text, nullable=False, server_default=""))
-    invitation_unsub_text: str = Field(default="Non vuoi più ricevere queste email?", sa_column=sa.Column(sa.Text, nullable=False, server_default="Non vuoi più ricevere queste email?"))
-    invitation_unsub_link_text: str = Field(default="Disiscriviti qui", sa_column=sa.Column(sa.Text, nullable=False, server_default="Disiscriviti qui"))
+    invitation_unsub_text: str = Field(
+        default="Non vuoi più ricevere queste email?",
+        sa_column=sa.Column(sa.Text, nullable=False, server_default="Non vuoi più ricevere queste email?"),
+    )
+    invitation_unsub_link_text: str = Field(
+        default="Disiscriviti qui", sa_column=sa.Column(sa.Text, nullable=False, server_default="Disiscriviti qui")
+    )
     grace_period_days: int = Field(default=30, sa_column=sa.Column(sa.Integer, nullable=False, server_default="30"))
 
 
