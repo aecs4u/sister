@@ -23,6 +23,8 @@ from sqlmodel import select
 from .db_models import (
     IMMOBILE_FIELD_MAP,
     INTESTATO_FIELD_MAP,
+    FeedbackConfig,
+    FeedbackUnsubscribe,
     ImmobileDB,
     IntestatoDB,
     PageVisitDB,
@@ -44,6 +46,8 @@ _SISTER_TABLES = [
     IntestatoDB.__table__,
     PageVisitDB.__table__,
     VisuraDocumentDB.__table__,
+    FeedbackConfig.__table__,
+    FeedbackUnsubscribe.__table__,
 ]
 
 logger = logging.getLogger("sister")

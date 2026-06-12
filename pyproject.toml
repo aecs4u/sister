@@ -27,7 +27,10 @@ classifiers = [
 
 dependencies = [
     "aecs4u-auth[browser]",
+    "aecs4u-email",
     "fastapi>=0.115.0",
+    "itsdangerous>=2.2.0",
+    "structlog>=26.0.0",
     "uvicorn>=0.32.0",
     "beautifulsoup4",
     "pydantic>=2.10.0",
@@ -66,6 +69,7 @@ sister = "sister.cli:run"
 
 [tool.uv.sources]
 aecs4u-auth = { git = "https://github.com/aecs4u/aecs4u-auth.git", branch = "main" }
+aecs4u-email = { git = "https://github.com/aecs4u/aecs4u-email.git", branch = "main" }
 aecs4u-theme = { git = "https://github.com/aecs4u/aecs4u-theme.git", branch = "main" }
 
 [tool.setuptools]

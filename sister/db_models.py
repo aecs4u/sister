@@ -8,9 +8,10 @@ Note: Do NOT use `from __future__ import annotations` here — it breaks
 SQLAlchemy's relationship resolution with SQLModel.
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Optional
 
+import sqlalchemy as sa
 from sqlalchemy import JSON as SA_JSON
 from sqlalchemy import Column, Index, Text
 from sqlmodel import Field, Relationship, SQLModel
@@ -193,6 +194,33 @@ class VisuraDocumentDB(SQLModel, table=True):
 
     __table_args__ = (
         Index("idx_documents_lookup", "provincia", "comune", "foglio", "particella"),
+    )
+
+
+class FeedbackConfig(SQLModel, table=True):
+    __tablename__ = "feedback_config"
+
+    id: int = Field(default=1, primary_key=True)
+    cc_emails: list[str] = Field(default_factory=list, sa_column=sa.Column(sa.JSON, nullable=False, server_default="[]"))
+    bcc_emails: list[str] = Field(default_factory=list, sa_column=sa.Column(sa.JSON, nullable=False, server_default="[]"))
+    invitation_subject: str = Field(default="Il tuo feedback è importante", sa_column=sa.Column(sa.Text, nullable=False, server_default="Il tuo feedback è importante"))
+    invitation_intro: str = Field(default="", sa_column=sa.Column(sa.Text, nullable=False, server_default=""))
+    invitation_bullets: list[str] = Field(default_factory=list, sa_column=sa.Column(sa.JSON, nullable=False, server_default="[]"))
+    invitation_cta_text: str = Field(default="Lascia il tuo feedback →", sa_column=sa.Column(sa.Text, nullable=False, server_default="Lascia il tuo feedback →"))
+    invitation_privacy_note: str = Field(default="", sa_column=sa.Column(sa.Text, nullable=False, server_default=""))
+    invitation_signature: str = Field(default="", sa_column=sa.Column(sa.Text, nullable=False, server_default=""))
+    invitation_unsub_text: str = Field(default="Non vuoi più ricevere queste email?", sa_column=sa.Column(sa.Text, nullable=False, server_default="Non vuoi più ricevere queste email?"))
+    invitation_unsub_link_text: str = Field(default="Disiscriviti qui", sa_column=sa.Column(sa.Text, nullable=False, server_default="Disiscriviti qui"))
+    grace_period_days: int = Field(default=30, sa_column=sa.Column(sa.Integer, nullable=False, server_default="30"))
+
+
+class FeedbackUnsubscribe(SQLModel, table=True):
+    __tablename__ = "feedback_unsubscribes"
+
+    email: str = Field(primary_key=True)
+    unsubscribed_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc),
+        sa_column=sa.Column(sa.DateTime(timezone=True), nullable=False),
     )
 
 

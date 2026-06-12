@@ -319,6 +319,13 @@ try:
     from .web import router as web_router
     app.include_router(web_router)
 
+    try:
+        from .feedback_admin import router as feedback_admin_router
+        app.include_router(feedback_admin_router)
+        logger.info("Feedback admin router registrato")
+    except ImportError as e:
+        logger.warning("Feedback admin router non disponibile: %s", e)
+
     logger.info("Web UI inizializzata")
 except ImportError:
     logger.warning("aecs4u-theme non disponibile: web UI disabilitata")
