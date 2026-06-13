@@ -1,0 +1,5 @@
+/* Page styles for templates/visura_soggetto_riepilogo.html. Extracted from an inline <style> block. */
+.hero-section { background: linear-gradient(135deg, #dc3545 0%, #c0392b 100%); color: white; padding: 2rem 0; margin-bottom: 2rem; }
+.detail-label { font-size: .75rem; text-transform: uppercase; letter-spacing: .05em; color: #6c757d; }
+.municipality-item { border-left: 3px solid #dc3545; background-color: #f8f9fa; padding: .5rem .75rem; border-radius: .25rem; margin-bottom: .35rem; }
+@media print { .no-print { display: none !important; } .hero-section { background: #f8f9fa !important; color: #333 !important; } }

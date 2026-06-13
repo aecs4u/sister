@@ -16,17 +16,7 @@
 {% block extra_css %}
 {{ super() }}
 {{ timeline_css() }}
-<style>
-.hero-section { background: linear-gradient(135deg, #28a745 0%, #20c997 100%); color: white; padding: 2rem 0; margin-bottom: 2rem; }
-.detail-label { font-size: .75rem; text-transform: uppercase; letter-spacing: .05em; color: #6c757d; }
-.income-box { background: linear-gradient(135deg, #28a745 0%, #20c997 100%); color: white; padding: 1rem; border-radius: .5rem; text-align: center; }
-.income-value { font-size: 1.75rem; font-weight: 700; }
-.cadastral-ref { font-family: monospace; background-color: #e9ecef; padding: .2rem .45rem; border-radius: .25rem; font-size: .9rem; }
-/* fallback owner-row for IntestazioneAttuale shown without history */
-.owner-row { border-left: 3px solid #28a745; background-color: #f8f9fa; padding: .75rem 1rem; border-radius: .25rem; margin-bottom: .5rem; }
-.share-badge { font-size: .85rem; font-weight: 600; }
-@media print { .no-print { display: none !important; } .hero-section { background: #f8f9fa !important; color: #333 !important; } }
-</style>
+<link rel="stylesheet" href="/static/css/pages/css/pages/visura_fabbricati_storica.css">
 {% endblock %}
 
 {% block content %}

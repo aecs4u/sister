@@ -6,78 +6,7 @@
 {% block extra_css %}
 {{ super() }}
 {{ doc_macros_css() }}
-<style>
-.hero-section { background: linear-gradient(135deg, #495057 0%, #212529 100%); color: white; padding: 2rem 0; margin-bottom: 2rem; }
-@media print {
-  .hero-section { background: #f8f9fa !important; color: #333 !important; }
-  .collapse { display: block !important; height: auto !important; }
-}
-
-/* Province block */
-.tree-province  { border: 1px solid #dee2e6; border-radius: .5rem; margin-bottom: 1.25rem; overflow: hidden; }
-.tree-prov-hdr  { display: flex; align-items: center; gap: .75rem; padding: .75rem 1rem; background: #343a40; color: #fff; cursor: pointer; user-select: none; }
-.tree-prov-hdr:hover { background: #23272b; }
-
-/* Foglio block */
-.tree-foglio   { margin: .5rem 1rem; }
-.tree-fog-hdr  { display: flex; align-items: center; gap: .5rem; padding: .35rem .75rem; background: #e9ecef; border-radius: .375rem .375rem 0 0; border: 1px solid #ced4da; border-bottom: none; cursor: pointer; user-select: none; }
-.tree-fog-hdr:hover { background: #dee2e6; }
-.tree-fog-body { border: 1px solid #ced4da; border-radius: 0 0 .375rem .375rem; }
-
-/* Particella row */
-.tree-particella { display: grid; grid-template-columns: 11rem 1fr; gap: .25rem .75rem; padding: .4rem .75rem; border-bottom: 1px solid #f1f3f5; align-items: start; }
-.tree-particella:last-child { border-bottom: none; }
-.tree-pt-label  { font-family: var(--bs-font-monospace); font-size: .85rem; font-weight: 600; display: flex; flex-wrap: wrap; align-items: center; gap: .3rem; padding-top: .1rem; }
-.tree-pt-meta   { font-size: .72rem; font-weight: 400; font-family: var(--bs-body-font-family); color: #6c757d; }
-
-/* Subalterno rows */
-.tree-subs      { display: flex; flex-direction: column; gap: .3rem; }
-.tree-sub       { display: flex; align-items: flex-start; gap: .5rem; }
-.tree-sub-label { font-size: .75rem; color: #6c757d; white-space: nowrap; padding-top: .2rem; min-width: 4rem; font-family: var(--bs-font-monospace); }
-.tree-doc-chips { display: flex; flex-wrap: wrap; gap: .3rem; }
-
-/* Document chips */
-.tree-doc-chip  { display: inline-flex; align-items: center; gap: .3rem; padding: .15rem .5rem; font-size: .78rem; border-radius: .3rem; text-decoration: none; white-space: nowrap; max-width: 28rem; overflow: hidden; text-overflow: ellipsis; }
-.tree-doc-chip:hover { opacity: .85; }
-.chip-fab  { background: #d1e7dd; color: #0a3622; border: 1px solid #a3cfbb; }
-.chip-ter  { background: #fff3cd; color: #664d03; border: 1px solid #ffe69c; }
-.chip-sogg { background: #cff4fc; color: #055160; border: 1px solid #9eeaf9; }
-.chip-sto  { background: #e2e3e5; color: #2b2d2f; border: 1px solid #c4c8cb; }
-.chip-epa  { background: #e0cffc; color: #2c0b5b; border: 1px solid #c29ffa; }
-.chip-plan { background: #f8d7da; color: #58151c; border: 1px solid #f1aeb5; }
-.chip-eln  { background: #d2f4ea; color: #0a3622; border: 1px solid #a3cfbb; }
-.chip-other{ background: #f8f9fa; color: #495057; border: 1px solid #dee2e6; }
-
-/* Soggetti section */
-.tree-sogg-row   { display: grid; grid-template-columns: 1fr auto; gap: .5rem; padding: .4rem .75rem; border-bottom: 1px solid #f1f3f5; align-items: start; }
-.tree-sogg-row:last-child { border-bottom: none; }
-.tree-sogg-cf    { font-family: var(--bs-font-monospace); font-size: .75rem; color: #6c757d; }
-
-/* Province jump chips */
-.prov-jump { display: flex; flex-wrap: wrap; gap: .4rem; margin-bottom: 1.25rem; }
-.prov-jump a { font-size: .8rem; }
-
-.chevron-icon { transition: transform .2s; }
-[aria-expanded="false"] .chevron-icon { transform: rotate(-90deg); }
-.badge-count { font-size: .65rem; font-weight: 400; opacity: .85; }
-
-/* Particella with nested subalternos */
-.tree-particella-nested { padding: .4rem .75rem; border-bottom: 1px solid #f1f3f5; }
-.tree-particella-nested:last-child { border-bottom: none; }
-.tree-pt-hdr  { display: flex; align-items: center; gap: .5rem; cursor: pointer; padding: .05rem 0; }
-
-/* Folder tree list with ├─ / └─ connectors */
-ul.tree-list { list-style: none; padding: 0; margin: .2rem 0 .15rem 1.5rem; }
-ul.tree-list > li { position: relative; padding: .18rem 0 .18rem 1.1rem; }
-ul.tree-list > li::before {   /* vertical bar */
-    content: ''; position: absolute; left: .2rem; top: 0; bottom: 0; width: 1px; background: #ced4da;
-}
-ul.tree-list > li:last-child::before { bottom: calc(100% - .75rem); }  /* cut at elbow for └─ */
-ul.tree-list > li::after {    /* horizontal arm */
-    content: ''; position: absolute; left: .2rem; top: .75rem; width: .7rem; height: 1px; background: #ced4da;
-}
-.tree-item-row { display: flex; align-items: center; gap: .5rem; }
-</style>
+<link rel="stylesheet" href="/static/css/pages/css/pages/documents_map.css">
 {% endblock %}
 
 {% macro _chip(d) %}

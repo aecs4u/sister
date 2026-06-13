@@ -4,27 +4,7 @@
 
 {% block extra_css %}
 {{ super() }}
-<style>
-.hero-section { background: linear-gradient(135deg, #343a40 0%, #1a1d20 100%); color: white; padding: 2rem 0; margin-bottom: 2rem; }
-.state-badge { font-size: 1rem; padding: .45rem .9rem; border-radius: 2rem; display: inline-flex; align-items: center; gap: .4rem; }
-.state-indicator { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
-.state-ready    .state-indicator { background: #28a745; box-shadow: 0 0 6px #28a745; animation: pulse-green 2s infinite; }
-.state-connecting .state-indicator { background: #ffc107; box-shadow: 0 0 6px #ffc107; animation: pulse-amber 1s infinite; }
-.state-idle       .state-indicator { background: #6c757d; }
-.state-unavailable .state-indicator, .state-failed .state-indicator { background: #dc3545; }
-@keyframes pulse-green  { 0%,100%{opacity:1} 50%{opacity:.5} }
-@keyframes pulse-amber  { 0%,100%{opacity:1} 50%{opacity:.3} }
-
-.stat-card { border: none; border-radius: .6rem; box-shadow: 0 1px 4px rgba(0,0,0,.08); }
-.stat-label { font-size: .78rem; text-transform: uppercase; letter-spacing: .04em; color: #6c757d; }
-.stat-value { font-size: 1.6rem; font-weight: 700; line-height: 1; }
-.log-box { background: #0d1117; color: #c9d1d9; font-family: monospace; font-size: .82rem;
-           border-radius: .4rem; padding: .75rem 1rem; min-height: 4rem; max-height: 14rem; overflow-y: auto; }
-.log-box .log-ts { color: #8b949e; margin-right: .5rem; }
-.log-box .log-ok { color: #3fb950; }
-.log-box .log-warn { color: #d29922; }
-.log-box .log-err { color: #f85149; }
-</style>
+<link rel="stylesheet" href="/static/css/pages/css/pages/browser_control.css">
 {% endblock %}
 
 {% block content %}

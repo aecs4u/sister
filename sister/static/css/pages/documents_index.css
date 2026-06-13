@@ -1,0 +1,6 @@
+/* Page styles for templates/documents_index.html. Extracted from an inline <style> block. */
+.hero-section { background: linear-gradient(135deg, #495057 0%, #212529 100%); color: white; padding: 2rem 0; margin-bottom: 2rem; }
+@media print {
+  .hero-section { background: #f8f9fa !important; color: #333 !important; }
+  .collapse { display: block !important; height: auto !important; }
+}

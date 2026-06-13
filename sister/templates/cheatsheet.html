@@ -3,18 +3,7 @@
 
 {% block extra_css %}
 {{ super() }}
-<style>
-.cs-hero { background: linear-gradient(135deg, #198754 0%, #146c43 100%); color: white; padding: 2rem 0; margin-bottom: 2rem; }
-.cs-card { border: 0; box-shadow: 0 1px 4px rgba(0,0,0,.08); margin-bottom: 1.25rem; }
-.cs-card .card-header { font-weight: 600; font-size: .9rem; padding: .5rem .85rem; }
-.cs-card table { font-size: .83rem; margin-bottom: 0; }
-.flow-code { background: #212529; color: #f8f9fa; border-radius: .4rem; padding: .75rem 1rem; font-family: var(--bs-font-monospace); font-size: .8rem; line-height: 1.7; }
-.flow-code .arrow { color: #6ea8fe; }
-.checklist li { padding: .25rem 0; }
-.checklist li::marker { content: "☐  "; }
-.alert-2026 { background: #fff3cd; border-left: 4px solid #ffc107; font-size: .85rem; }
-@media print { .cs-hero { background: #f8f9fa !important; color: #333 !important; } }
-</style>
+<link rel="stylesheet" href="/static/css/pages/css/pages/cheatsheet.css">
 {% endblock %}
 
 {% block content %}

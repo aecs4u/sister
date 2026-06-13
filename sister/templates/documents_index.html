@@ -8,13 +8,7 @@
 {{ super() }}
 {{ shared_section_css() }}
 {{ doc_macros_css() }}
-<style>
-.hero-section { background: linear-gradient(135deg, #495057 0%, #212529 100%); color: white; padding: 2rem 0; margin-bottom: 2rem; }
-@media print {
-  .hero-section { background: #f8f9fa !important; color: #333 !important; }
-  .collapse { display: block !important; height: auto !important; }
-}
-</style>
+<link rel="stylesheet" href="/static/css/pages/css/pages/documents_index.css">
 {% endblock %}
 
 {% block content %}

@@ -1,0 +1,10 @@
+/* Page styles for templates/guide.html. Extracted from an inline <style> block. */
+.guide-hero { background: linear-gradient(135deg, #0d6efd 0%, #0a58ca 100%); color: white; padding: 2rem 0; margin-bottom: 2rem; }
+.guide-section { margin-bottom: 2.5rem; }
+.guide-section h2 { font-size: 1.25rem; font-weight: 700; border-bottom: 2px solid #0d6efd; padding-bottom: .4rem; margin-bottom: 1rem; color: #0d6efd; }
+.guide-section h3 { font-size: 1rem; font-weight: 600; margin-top: 1.25rem; margin-bottom: .5rem; }
+.step-badge { display: inline-flex; align-items: center; justify-content: center; width: 1.6rem; height: 1.6rem; border-radius: 50%; background: #0d6efd; color: white; font-size: .75rem; font-weight: 700; flex-shrink: 0; }
+.flow-step { display: flex; align-items: flex-start; gap: .75rem; padding: .4rem 0; }
+.flow-step:not(:last-child) { border-bottom: 1px solid #f0f0f0; }
+.alert-2026 { background: #fff3cd; border-left: 4px solid #ffc107; }
+@media print { .guide-hero { background: #f8f9fa !important; color: #333 !important; } }
