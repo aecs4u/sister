@@ -59,3 +59,4 @@ docker-compose.override.yaml
 /data/
 /logs
 /outputs
+deploy-config.yaml

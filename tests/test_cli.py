@@ -4,11 +4,8 @@ Uses Typer's CliRunner to invoke commands without a real server.
 API calls are mocked via monkeypatch on the VisuraClient methods.
 """
 
-import asyncio
 import json
-from pathlib import Path
 
-import pytest
 from typer.testing import CliRunner
 
 from sister.cli import app

@@ -7,8 +7,9 @@ Create Date: 2026-06-08
 
 from typing import Sequence, Union
 
-from alembic import op
 import sqlalchemy as sa
+
+from alembic import op
 
 revision: str = "20260608_add_visura_subtype"
 down_revision: Union[str, None] = ("b3d8f2a41c01", "20260530_drop_workflow")

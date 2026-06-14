@@ -1477,8 +1477,8 @@ def _parse_visura_pdf(file_path: str) -> dict | None:
     tipo, visura_subtype, tipo_catasto, provincia, comune, foglio, particella,
     subalterno, sezione_urbana, indirizzo, situazione_al.
     """
-    import subprocess
     import re as _re
+    import subprocess
 
     try:
         text = subprocess.check_output(["pdftotext", file_path, "-"], stderr=subprocess.DEVNULL, text=True, timeout=15)
@@ -1563,7 +1563,9 @@ def _parse_visura_pdf(file_path: str) -> dict | None:
 async def _save_documents_to_db(documents: list[dict]) -> None:
     """Persist downloaded documents to the visura_documents table, skipping duplicates."""
     import json
+
     from sqlalchemy import text
+
     from .database import _get_session_factory, is_db_writable
     from .db_models import VisuraDocumentDB
 

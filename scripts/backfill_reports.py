@@ -122,10 +122,11 @@ def _re_soggetto_match(stem: str) -> dict | None:
 
 
 async def run(dry_run: bool = False):
-    from sister.database import init_db, _get_session_factory
-    from sister.utils import _parse_visura_xml
-    from sister.db_models import VisuraDocumentDB
     from sqlalchemy import select
+
+    from sister.database import _get_session_factory, init_db
+    from sister.db_models import VisuraDocumentDB
+    from sister.utils import _parse_visura_xml
 
     os.environ.setdefault("SISTER_DB_PATH", "/data/aecs4u.it/sister/data/sister.sqlite")
 

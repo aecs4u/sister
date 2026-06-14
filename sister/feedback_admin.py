@@ -6,7 +6,7 @@ import os
 import secrets
 from datetime import datetime, timezone
 from email.utils import formataddr
-from typing import Annotated, Optional
+from typing import Optional
 
 import structlog
 from aecs4u_email import send_email

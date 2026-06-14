@@ -5,8 +5,9 @@ Revises: 20260608_add_visura_subtype
 Create Date: 2026-06-11
 """
 
-from alembic import op
 import sqlalchemy as sa
+
+from alembic import op
 
 revision: str = "20260611_add_feedback_config"
 down_revision: str = "20260608_add_visura_subtype"

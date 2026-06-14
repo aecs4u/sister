@@ -41,7 +41,6 @@ console = Console()
 
 async def main():
     from aecs4u_auth.browser import BrowserConfig, BrowserManager
-
     from utils import run_visura
 
     # --- Configuration ---

@@ -2,7 +2,6 @@
 
 import asyncio
 import logging
-import os
 from contextlib import suppress
 from datetime import datetime
 from typing import Optional
@@ -402,7 +401,7 @@ class BrowserManager:
             return await extract_all_sezioni(page, tipo_catasto=tipo_catasto, max_province=max_province)
 
     async def download_richieste_documents(self) -> list[dict]:
-        from .utils import _download_richieste_documents, PageLogger
+        from .utils import PageLogger, _download_richieste_documents
 
         async with self._page_lock:
             page = await self._get_authenticated_page()

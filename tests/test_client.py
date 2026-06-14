@@ -1,7 +1,6 @@
 """Tests for the VisuraClient async HTTP client (client.py)."""
 
 import json
-from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest

@@ -14,7 +14,6 @@ import re
 import subprocess
 import sys
 import time
-from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
 
@@ -220,7 +219,7 @@ def main():
     errors = len(results) - completed
     print(f"\nDone: {completed} completed, {errors} errors/timeouts")
     print(f"Output: {OUTPUT_PATH}")
-    print(f"\nRun 'Aggiorna' in /web/documents to index the new P7M files.")
+    print("\nRun 'Aggiorna' in /web/documents to index the new P7M files.")
 
 
 if __name__ == "__main__":

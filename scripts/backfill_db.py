@@ -17,7 +17,7 @@ from pathlib import Path
 # Allow running from repo root
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from sister.database import init_db, save_response, _get_session_factory
+from sister.database import _get_session_factory, init_db, save_response
 from sister.db_models import VisuraRequestDB
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")

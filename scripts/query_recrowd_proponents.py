@@ -3,7 +3,6 @@
 
 import json
 import sqlite3
-import sys
 import time
 from datetime import datetime
 from pathlib import Path

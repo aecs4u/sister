@@ -4,8 +4,6 @@ Uses a temporary SQLite file for isolation (in-memory won't work because
 init_db() calls os.makedirs on the parent directory).
 """
 
-import os
-import tempfile
 
 import pytest
 

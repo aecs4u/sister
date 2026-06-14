@@ -12,7 +12,7 @@ The "batch" mode is a toggle on any form group, not a separate group.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional
 
 
@@ -575,7 +575,8 @@ SINGLE_STEP_GROUPS: list[FormGroup] = [
 # Workflow (multi-step) form groups
 # ---------------------------------------------------------------------------
 
-_PRESET_HIDDEN = lambda preset_name: EndpointParam(
+def _PRESET_HIDDEN(preset_name):
+    return EndpointParam(
     name="preset",
     label="",
     placeholder="",

@@ -315,7 +315,7 @@ async def richiedi_visura_soggetto(request: VisuraSoggettoInput, service: Visura
             provincia=request.provincia,
         )
 
-        result = await service.add_soggetto_request(soggetto_request, force=force)
+        await service.add_soggetto_request(soggetto_request, force=force)
 
         return JSONResponse(
             {
@@ -355,7 +355,7 @@ async def richiedi_visura_persona_giuridica(
             provincia=request.provincia,
         )
 
-        result = await service.add_persona_giuridica_request(pnf_request, force=force)
+        await service.add_persona_giuridica_request(pnf_request, force=force)
 
         return JSONResponse(
             {
@@ -395,7 +395,7 @@ async def richiedi_elenco_immobili(request: ElencoImmobiliInput, service: Visura
             sezione=request.sezione,
         )
 
-        result = await service.add_elenco_immobili_request(eimm_request, force=force)
+        await service.add_elenco_immobili_request(eimm_request, force=force)
 
         return JSONResponse(
             {

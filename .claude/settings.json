@@ -6,7 +6,22 @@
       "Bash(uv sync:*)",
       "Bash(git:*)",
       "Bash(lsof:*)",
-      "Bash(curl:*)"
+      "Bash(curl:*)",
+      "Read(//mnt/developer/git/aecs4u.it/aecs4u-auth/.github/workflows/**)",
+      "Read(//mnt/developer/git/aecs4u.it/classaction/.github/workflows/**)",
+      "Read(//mnt/developer/git/aecs4u.it/classaction/alembic/versions/**)",
+      "Read(//mnt/developer/git/aecs4u.it/aecs4u-assistant/**)",
+      "Read(//mnt/developer/git/aecs4u.it/lighthouse/lighthouse/cli/**)"
+    ],
+    "additionalDirectories": [
+      "/mnt/developer/git/aecs4u.it/advisor/.github/workflows",
+      "/mnt/developer/git/aecs4u.it/classaction/alembic/versions",
+      "/mnt/developer/git/aecs4u.it/reclaim-it",
+      "/mnt/developer/git/aecs4u.it/pomata",
+      "/mnt/developer/git/aecs4u.it/aecs4u-assistant",
+      "/mnt/developer/git/aecs4u.it/lighthouse/lighthouse/cli",
+      "/mnt/developer/git/aecs4u.it/lighthouse",
+      "/mnt/developer/git/aecs4u.it/classaction/classaction/routers"
     ]
   }
 }

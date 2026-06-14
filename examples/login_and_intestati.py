@@ -47,7 +47,6 @@ SUBALTERNO = "3"  # Specifico fabbricato
 
 async def main():
     from aecs4u_auth.browser import BrowserConfig, BrowserManager
-
     from utils import run_visura, run_visura_immobile
 
     os.environ.setdefault("ADE_AUTH_METHOD", "cie")
