@@ -10,6 +10,7 @@ import logging
 import os
 import re
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Optional
 from urllib.parse import urlencode
 
@@ -38,6 +39,7 @@ _OPENDATA_API_URL = os.getenv("OPENDATA_API_URL", "http://localhost:8024")
 # Defaults to the parent of the DB data folder (the project data root).
 def _files_base() -> "Path":
     from pathlib import Path
+
     from .database import DB_PATH
 
     data_root = Path(DB_PATH).parent.parent
@@ -218,7 +220,8 @@ def _build_property_map(docs: list[dict]) -> dict:
       ``immobili``: provincia → foglio → particella → subalterno → docs
       ``soggetti``: list of {cf, label, docs} for unlinked soggetto documents
     """
-    import json, re
+    import json
+    import re
 
     _SOGGETTO_TYPE = "visura_soggetto"
 
@@ -559,6 +562,7 @@ def _build_document_tree(docs: list[dict]) -> list[dict]:
 def _dossiers_base() -> "Path":
     """Filesystem root holding dossier JSON files (multi/single-step query responses)."""
     from pathlib import Path
+
     from .database import DB_PATH
 
     data_root = Path(DB_PATH).parent.parent
@@ -2003,7 +2007,7 @@ async def web_files_redirect(request: Request, path: str = ""):
 async def web_documents_export_named(request: Request, user=Depends(_require_auth)):
     """Copy all documents to documents/named/ using the display name stored in oggetto."""
     import shutil
-    from pathlib import Path
+
     from .database import get_all_documents
 
     base = _files_base()
@@ -2042,9 +2046,10 @@ async def web_documents_export_named(request: Request, user=Depends(_require_aut
 
 
 @router.get("/web/documents/{doc_id}/view")
-async def web_document_view(request: Request, doc_id: int, user=Depends(_require_auth)):
+async def web_document_view_by_id(request: Request, doc_id: int, user=Depends(_require_auth)):
     """Serve the document file inline (for in-browser PDF viewing)."""
     from pathlib import Path
+
     from fastapi import HTTPException
     from fastapi.responses import Response
 
@@ -2065,6 +2070,7 @@ async def web_document_view(request: Request, doc_id: int, user=Depends(_require
 async def web_document_download(request: Request, doc_id: int, user=Depends(_require_auth)):
     """Download the original file backing a DB-indexed document."""
     from pathlib import Path
+
     from fastapi import HTTPException
 
     doc = await get_document_by_id(doc_id)
@@ -2080,9 +2086,9 @@ async def web_document_download(request: Request, doc_id: int, user=Depends(_req
 async def web_documents_rescan(request: Request, user=Depends(_require_auth)):
     """Scan the documents directory for files not yet indexed in the DB and register them."""
     import asyncio
-    from pathlib import Path
+
     from .database import get_indexed_file_paths, get_indexed_filenames
-    from .utils import _parse_visura_xml, _parse_visura_pdf, _save_documents_to_db
+    from .utils import _parse_visura_pdf, _parse_visura_xml, _save_documents_to_db
 
     base = _files_base()
     if not base.exists():
@@ -2192,7 +2198,6 @@ async def web_documents(
         template: force a viewer template, e.g. ``?template=result_detail`` for
             the exhaustive field-by-field view.
     """
-    from pathlib import Path
 
     theme = _get_theme(request)
 
@@ -2329,7 +2334,6 @@ async def web_documents(
 
 def _safe_dossier_path(path: str) -> "Path":
     """Resolve a dossier-relative path, guarding against traversal. Raises 403/404."""
-    from pathlib import Path
     from fastapi import HTTPException
 
     base = _dossiers_base()
@@ -2607,9 +2611,11 @@ async def web_browser_launch_chrome(request: Request, user=Depends(_require_auth
     """Launch Google Chrome with CDP if not already running, then start the browser session."""
     import asyncio
     import os
-    import httpx
     from urllib.parse import urlparse
-    from .main import visura_service, _chrome_cdp_cmd
+
+    import httpx
+
+    from .main import _chrome_cdp_cmd, visura_service
 
     cdp_endpoint = os.getenv("BROWSER_CDP_ENDPOINT", "http://localhost:9222")
     launched = False

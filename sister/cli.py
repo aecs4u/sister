@@ -1053,7 +1053,7 @@ def ipotecaria_elenchi(
 
 # -- Workflow presets ---------------------------------------------------------
 
-from .models import WORKFLOW_PRESETS as _PRESETS
+from .models import WORKFLOW_PRESETS as _PRESETS  # noqa: E402
 
 
 def _run_step(client, label, coro):
@@ -1237,7 +1237,7 @@ def workflow(
                     if "total" in data:
                         console.print(f"    total: [cyan]{data['total']}[/cyan]")
                     if data.get("truncated"):
-                        console.print(f"    [yellow]Results truncated (max 20 drill-down properties)[/yellow]")
+                        console.print("    [yellow]Results truncated (max 20 drill-down properties)[/yellow]")
 
         # Summary
         summary = result.get("summary", {})
@@ -1273,21 +1273,21 @@ def workflow(
             console.print(f"  → indirizzo '{indirizzo_str}' {provincia}/{comune}")
         if foglio and particella:
             console.print(f"  → search {provincia}/{comune} F.{foglio} P.{particella}")
-            console.print(f"  → intestati (for each sub-unit)")
+            console.print("  → intestati (for each sub-unit)")
         if with_elenco:
             console.print(f"  → elenco immobili {provincia}/{comune}")
         if with_mappa:
             console.print(f"  → mappa F.{foglio}")
         if with_ispezioni:
-            console.print(f"  → ispezioni")
+            console.print("  → ispezioni")
         if with_fiduciali:
-            console.print(f"  → fiduciali")
+            console.print("  → fiduciali")
         if with_originali:
-            console.print(f"  → originali")
+            console.print("  → originali")
         if with_nota:
-            console.print(f"  → nota")
+            console.print("  → nota")
         if with_ispezioni_cart:
-            console.print(f"  → ispezioni cartacee")
+            console.print("  → ispezioni cartacee")
         return
 
     # -- Phase: soggetto / azienda (if starting from person/company) ----------
@@ -2122,7 +2122,9 @@ def health():
 def db_init():
     """Initialize database and run all migrations."""
     import os
+
     from alembic.config import Config
+
     from alembic import command
 
     ini_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "alembic.ini")
@@ -2135,7 +2137,9 @@ def db_init():
 def db_migrate():
     """Run pending Alembic migrations."""
     import os
+
     from alembic.config import Config
+
     from alembic import command
 
     ini_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "alembic.ini")
@@ -2148,7 +2152,9 @@ def db_migrate():
 def db_status():
     """Show current database migration revision."""
     import os
+
     from alembic.config import Config
+
     from alembic import command
 
     ini_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "alembic.ini")

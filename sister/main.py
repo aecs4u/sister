@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Optional
 
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, Header, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from rich.logging import RichHandler
@@ -250,7 +250,7 @@ app = FastAPI(title="SISTER - Cadastral Data Service", lifespan=lifespan)
 # Theme, static files, and web UI
 # ---------------------------------------------------------------------------
 try:
-    from aecs4u_theme import ThemeConfig, setup_theme, setup_theme_from_env
+    from aecs4u_theme import ThemeConfig, setup_theme, setup_theme_from_env  # noqa: F401
 
     _sister_dir = Path(__file__).parent
     _templates_dir = _sister_dir / "templates"

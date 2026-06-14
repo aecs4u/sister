@@ -10,14 +10,14 @@ Tests cover:
 
 import pytest
 from pydantic import ValidationError
-
-from sister.models import WORKFLOW_PRESETS, WorkflowInput
 from sister.workflows import (
     _build_aggregate,
     _deduplicate_properties,
     _normalize_property,
     _step_key,
 )
+
+from sister.models import WORKFLOW_PRESETS, WorkflowInput
 
 # ---------------------------------------------------------------------------
 # WorkflowInput validation
@@ -115,7 +115,7 @@ class TestWorkflowInput:
 
     def test_depth_filtering(self):
         """Verify that paid steps are at deep or full depth."""
-        from sister.models import STEP_METADATA, _DEPTH_ORDER
+        from sister.models import _DEPTH_ORDER, STEP_METADATA
 
         for step_name, meta in STEP_METADATA.items():
             if meta["paid"]:
@@ -357,7 +357,7 @@ class TestBuildAggregate:
         ]
         result = _build_aggregate(steps)
         assert len(result["properties"]) == 1
-        assert any(l["owner_key"] == "ABC123" for l in result["links"])
+        assert any(link["owner_key"] == "ABC123" for link in result["links"])
 
     def test_drill_down_results(self):
         steps = [
@@ -448,6 +448,7 @@ class TestTimelineBuild:
 
     def test_empty_results(self):
         import asyncio
+
         from sister.workflows import _exec_timeline_build
 
         result = asyncio.run(_exec_timeline_build(None, {}, []))
@@ -457,6 +458,7 @@ class TestTimelineBuild:
 
     def test_extracts_dated_events(self):
         import asyncio
+
         from sister.workflows import _exec_timeline_build
 
         steps = [
@@ -480,6 +482,7 @@ class TestTimelineBuild:
 
     def test_detects_gaps(self):
         import asyncio
+
         from sister.workflows import _exec_timeline_build
 
         steps = [
@@ -500,6 +503,7 @@ class TestTimelineBuild:
 
     def test_skips_non_completed(self):
         import asyncio
+
         from sister.workflows import _exec_timeline_build
 
         steps = [
@@ -514,6 +518,7 @@ class TestRiskScore:
 
     def test_empty_results(self):
         import asyncio
+
         from sister.workflows import _exec_risk_score
 
         result = asyncio.run(_exec_risk_score(None, {}, []))
@@ -523,6 +528,7 @@ class TestRiskScore:
 
     def test_flags_missing_cf(self):
         import asyncio
+
         from sister.workflows import _exec_risk_score
 
         steps = [
@@ -541,6 +547,7 @@ class TestRiskScore:
 
     def test_flags_multiple_owners(self):
         import asyncio
+
         from sister.workflows import _exec_risk_score
 
         steps = [
@@ -566,6 +573,7 @@ class TestRiskScore:
 
     def test_flags_ownership_mismatch(self):
         import asyncio
+
         from sister.workflows import _exec_risk_score
 
         steps = [
@@ -586,6 +594,7 @@ class TestRiskScore:
 
     def test_geographic_concentration(self):
         import asyncio
+
         from sister.workflows import _exec_risk_score
 
         steps = [
@@ -606,6 +615,7 @@ class TestRiskScore:
 
     def test_severity_counts(self):
         import asyncio
+
         from sister.workflows import _exec_risk_score
 
         steps = [
@@ -625,6 +635,7 @@ class TestRiskScore:
 
     def test_timeline_gaps_propagated(self):
         import asyncio
+
         from sister.workflows import _exec_risk_score
 
         steps = [
@@ -760,6 +771,7 @@ class TestPropertyRank:
 
     def test_empty_results(self):
         import asyncio
+
         from sister.workflows import _exec_property_rank
 
         result = asyncio.run(_exec_property_rank(None, {}, []))
@@ -767,6 +779,7 @@ class TestPropertyRank:
 
     def test_scores_same_location_higher(self):
         import asyncio
+
         from sister.workflows import _exec_property_rank
 
         steps = [
@@ -790,6 +803,7 @@ class TestPropertyRank:
 
     def test_multi_path_discovery_bonus(self):
         import asyncio
+
         from sister.workflows import _exec_property_rank
 
         steps = [
@@ -822,6 +836,7 @@ class TestPropertyRank:
 
     def test_above_threshold_count(self):
         import asyncio
+
         from sister.workflows import _exec_property_rank
 
         steps = [
@@ -845,6 +860,7 @@ class TestPortfolioDrillIntestati:
 
     def test_skips_without_rank(self):
         import asyncio
+
         from sister.workflows import _exec_portfolio_drill_intestati
 
         result = asyncio.run(_exec_portfolio_drill_intestati(None, {}, []))
@@ -852,6 +868,7 @@ class TestPortfolioDrillIntestati:
 
     def test_skips_below_threshold(self):
         import asyncio
+
         from sister.workflows import _exec_portfolio_drill_intestati
 
         steps = [
@@ -882,6 +899,7 @@ class TestPortfolioIpotecaria:
 
     def test_skips_without_auto_confirm(self):
         import asyncio
+
         from sister.workflows import _exec_portfolio_ipotecaria
 
         steps = [
@@ -907,6 +925,7 @@ class TestPortfolioIpotecaria:
 
     def test_respects_max_paid_steps(self):
         import asyncio
+
         from sister.workflows import _exec_portfolio_ipotecaria
 
         steps = [
@@ -1003,6 +1022,7 @@ class TestWorkflowCLI:
 
     def test_dry_run_with_preset(self):
         from typer.testing import CliRunner
+
         from sister.cli import app
 
         runner = CliRunner()
@@ -1030,6 +1050,7 @@ class TestWorkflowCLI:
 
     def test_unknown_preset_exits_1(self):
         from typer.testing import CliRunner
+
         from sister.cli import app
 
         runner = CliRunner()
@@ -1048,6 +1069,7 @@ class TestWorkflowCLI:
     def test_preset_calls_server(self, monkeypatch):
         """Verify preset workflow calls client.workflow()."""
         from typer.testing import CliRunner
+
         from sister.cli import app
         from sister.client import VisuraClient
 
@@ -1082,6 +1104,7 @@ class TestWorkflowCLI:
     def test_preset_forwards_budget_controls(self, monkeypatch):
         """Verify budget flags are forwarded to client.workflow()."""
         from typer.testing import CliRunner
+
         from sister.cli import app
         from sister.client import VisuraClient
 
