@@ -575,15 +575,17 @@ SINGLE_STEP_GROUPS: list[FormGroup] = [
 # Workflow (multi-step) form groups
 # ---------------------------------------------------------------------------
 
+
 def _PRESET_HIDDEN(preset_name):
     return EndpointParam(
-    name="preset",
-    label="",
-    placeholder="",
-    input_type="hidden",
-    required=True,
-    example=preset_name,
-)
+        name="preset",
+        label="",
+        placeholder="",
+        input_type="hidden",
+        required=True,
+        example=preset_name,
+    )
+
 
 _WORKFLOW_DEPTH = EndpointParam(
     name="depth",
