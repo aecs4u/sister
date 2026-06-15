@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "sister"
-version = "0.2.0"
+version = "0.3.0"
 description = "SISTER — Servizio API e CLI per l'estrazione automatizzata di dati catastali dal portale SISTER dell'Agenzia delle Entrate"
 readme = "README.md"
 license = {text = "AGPL-3.0-only"}
