@@ -1,455 +1,354 @@
 {% extends "_base.html" %}
+{% from "_macros.html" import status_badge, catasto_badge, param_label, jump_nav,
+                                section_icon, section_border, income_boxes,
+                                doc_accordion, render_workflow_steps %}
 {% block page_title %}Result {{ request_id[:20] }}{% endblock %}
 
 {% block extra_css %}
 {{ super() }}
 <link href="https://cdn.jsdelivr.net/npm/tabulator-tables@6.3.1/dist/css/tabulator_bootstrap5.min.css" rel="stylesheet">
 <link rel="stylesheet" href="{{ static_url_path|default('/static/aecs4u-theme') }}/css/data-table.css">
+<style>
+/* Section jump nav */
+.section-nav { background: #f8f9fa; border-radius: .375rem; }
+.section-nav a.nav-link { font-size: .85rem; padding: .25rem .6rem; color: #495057; border-radius: .25rem; }
+.section-nav a.nav-link:hover { background: #e9ecef; color: #212529; }
+
+/* Colored left-border per section type */
+.result-section               { border-left: 4px solid #dee2e6; }
+.result-section.section-immobili  { border-left-color: #28a745; }
+.result-section.section-intestati { border-left-color: #17a2b8; }
+.result-section.section-docs      { border-left-color: #ffc107; }
+.result-section.section-steps     { border-left-color: #6f42c1; }
+.result-section.section-object    { border-left-color: #0d6efd; }
+
+/* Income / rendita highlight box */
+.income-box { background: linear-gradient(135deg, #28a745 0%, #20c997 100%);
+              color: white; padding: .75rem 1rem; border-radius: .375rem; display: inline-block; }
+.income-box .income-label { font-size: .75rem; opacity: .85; }
+.income-box .income-value { font-size: 1.25rem; font-weight: 700; }
+</style>
 {% endblock %}
 
-{# --- Recursive renderer for nested dicts/lists (shared partial) --- #}
-{% from "_nested.html" import render_nested %}
-
-{# --- Workflow status badge --- #}
-{% macro workflow_status_badge(status) %}
-    {% set normalized = (status or '')|lower %}
-    <span class="badge bg-{% if normalized in ('completed', 'success', 'succeeded', 'ok') %}success{% elif normalized in ('failed', 'error') %}danger{% elif normalized == 'partial' %}warning text-dark{% elif normalized in ('running', 'pending') %}info text-dark{% else %}secondary{% endif %}">
-        {{ (status or '-')|replace('_', ' ')|title }}
-    </span>
-{% endmacro %}
-
-{# --- Workflow steps accordion --- #}
-{% macro render_workflow_steps(steps, section_id) %}
-    {% if steps %}
-    <div class="accordion accordion-flush" id="workflow-steps-{{ section_id }}">
-        {% for step in steps %}
-        {% set step_name = step.get('step') or step.get('step_key') or step.get('name') or ('Step ' ~ loop.index) %}
-        {% set step_status = step.get('status') or step.get('state') or '-' %}
-        {% set collapse_id = 'workflow-step-' ~ section_id ~ '-' ~ loop.index %}
-        <div class="accordion-item">
-            <h2 class="accordion-header">
-                <button class="accordion-button {% if not loop.first %}collapsed{% endif %} py-2" type="button"
-                        data-bs-toggle="collapse" data-bs-target="#{{ collapse_id }}"
-                        aria-expanded="{{ 'true' if loop.first else 'false' }}" aria-controls="{{ collapse_id }}">
-                    <span class="badge bg-light text-dark me-2">{{ loop.index }}</span>
-                    <span class="workflow-step-title me-2"><code>{{ step_name }}</code></span>
-                    {{ workflow_status_badge(step_status) }}
-                </button>
-            </h2>
-            <div id="{{ collapse_id }}" class="accordion-collapse collapse {% if loop.first %}show{% endif %}"
-                 data-bs-parent="#workflow-steps-{{ section_id }}">
-                <div class="accordion-body">
-                    {% set metadata_keys = ['step', 'step_key', 'name', 'status', 'state', 'started_at', 'finished_at', 'duration_seconds', 'duration_ms', 'request_id', 'success'] %}
-                    {% set primary_keys = ['data', 'result', 'output', 'aggregate', 'summary', 'error'] %}
-                    <div class="workflow-step-section">
-                        <table class="table table-sm table-bordered mb-0 workflow-step-meta">
-                            <tbody>
-                                {% for key in metadata_keys %}
-                                    {% if step.get(key) is not none %}
-                                    <tr>
-                                        <th>{{ key }}</th>
-                                        <td>
-                                            {% if key in ('status', 'state') %}
-                                                {{ workflow_status_badge(step.get(key)) }}
-                                            {% else %}
-                                                {{ render_nested(step.get(key), 1) }}
-                                            {% endif %}
-                                        </td>
-                                    </tr>
-                                    {% endif %}
-                                {% endfor %}
-                                {% for key, child in step.items() %}
-                                    {% if key not in metadata_keys and key not in primary_keys and not (child is mapping) and not (child is sequence and child is not string) %}
-                                    <tr>
-                                        <th>{{ key }}</th>
-                                        <td>{{ render_nested(child, 1) }}</td>
-                                    </tr>
-                                    {% endif %}
-                                {% endfor %}
-                            </tbody>
-                        </table>
-                    </div>
-                    {% if step.get('error') is not none %}
-                    <div class="alert alert-danger mt-3 mb-0">
-                        <strong>Error</strong>
-                        <div class="mt-2">{{ render_nested(step.get('error'), 1) }}</div>
-                    </div>
-                    {% endif %}
-                    {% for key in ['data', 'result', 'output', 'aggregate', 'summary'] %}
-                        {% if step.get(key) is not none %}
-                        <div class="workflow-step-section">
-                            <h6 class="text-uppercase text-muted small mb-2">{{ key|replace('_', ' ') }}</h6>
-                            {{ render_nested(step.get(key), 1) }}
-                        </div>
-                        {% endif %}
-                    {% endfor %}
-                    {% for key, child in step.items() %}
-                        {% if key not in metadata_keys and key not in primary_keys and (child is mapping or (child is sequence and child is not string)) %}
-                        <div class="workflow-step-section">
-                            <h6 class="text-uppercase text-muted small mb-2">{{ key|replace('_', ' ') }}</h6>
-                            {{ render_nested(child, 1) }}
-                        </div>
-                        {% endif %}
-                    {% endfor %}
-                </div>
-            </div>
-        </div>
-        {% endfor %}
+{# ── Local macro: request parameters card body ─────────────────────────────── #}
+{% macro request_params_card(result) %}
+<div class="row g-4">
+  <div class="col-lg-6">
+    <div class="mb-3">
+      <div class="detail-label">Request ID</div>
+      <div class="detail-value d-flex align-items-center gap-2">
+        <code class="user-select-all" id="req-id-text">{{ result.request_id }}</code>
+        <button class="btn btn-sm btn-outline-secondary copy-btn" type="button"
+                id="btn-copy-request-id" title="Copy to clipboard">
+          <i class="fas fa-copy"></i>
+        </button>
+      </div>
     </div>
-    {% else %}
-    <span class="nested-empty">Empty</span>
+    <div class="row g-3">
+      <div class="col-6">{{ param_label('Request Type', result.request_type or '-') }}</div>
+      <div class="col-6">
+        <div class="detail-label">Catasto</div>
+        <div class="detail-value">{{ catasto_badge(result.tipo_catasto) }}</div>
+      </div>
+      <div class="col-6">{{ param_label('Requested', result.requested_at_display or '-') }}</div>
+      <div class="col-6">{{ param_label('Responded', result.responded_at_display or '-') }}</div>
+    </div>
+  </div>
+  <div class="col-lg-6">
+    <div class="row g-3">
+      <div class="col-6">{{ param_label('Provincia', result.provincia or '-') }}</div>
+      <div class="col-6">{{ param_label('Comune', result.comune or '-') }}</div>
+      <div class="col-6">{{ param_label('Foglio / Particella', (result.foglio or '-') ~ ' / ' ~ (result.particella or '-')) }}</div>
+      <div class="col-6">{{ param_label('Sezione / Subalterno', (result.sezione or '-') ~ ' / ' ~ (result.subalterno or '-')) }}</div>
+    </div>
+    {% if result.error %}
+    <div class="alert alert-danger mt-3 mb-0">
+      <i class="fas fa-exclamation-triangle me-2"></i>{{ result.error }}
+    </div>
     {% endif %}
+  </div>
+</div>
 {% endmacro %}
 
 {% block content %}
 <div class="container-fluid py-4">
-    <nav class="mb-3" aria-label="breadcrumb">
-        <ol class="breadcrumb">
-            <li class="breadcrumb-item"><a href="/web/results">Results</a></li>
-            <li class="breadcrumb-item active" title="{{ request_id }}">{{ request_id[:30] }}{% if request_id|length > 30 %}&hellip;{% endif %}</li>
-        </ol>
-    </nav>
 
-    {% if result %}
-    <!-- Metadata -->
-    <div class="card border-0 shadow-sm mb-4">
-        <div class="card-header d-flex justify-content-between align-items-center">
-            <h4 class="mb-0"><i class="fas fa-info-circle text-primary me-2"></i>Request Details</h4>
-            <span class="badge bg-{% if result.status == 'completed' %}success{% elif result.status in ('failed', 'error') %}danger{% elif result.status == 'partial' %}warning text-dark{% elif result.status == 'running' %}info text-dark{% else %}secondary{% endif %} fs-6">
-                {% if result.status == 'completed' %}Completed{% elif result.status in ('failed', 'error') %}Failed{% elif result.status == 'partial' %}Partial{% elif result.status == 'running' %}Running{% elif result.status == 'pending' %}Pending{% else %}{{ result.status|title }}{% endif %}
-            </span>
-        </div>
-        <div class="card-body">
-            <div class="row g-4">
-                <div class="col-lg-6">
-                    <div class="mb-3">
-                        <div class="detail-label">Request ID</div>
-                        <div class="detail-value d-flex align-items-center gap-2">
-                            <code class="user-select-all" id="req-id-text">{{ result.request_id }}</code>
-                            <button class="btn btn-sm btn-outline-secondary copy-btn" type="button"
-                                    id="btn-copy-request-id"
-                                    title="Copy to clipboard">
-                                <i class="fas fa-copy"></i>
-                            </button>
-                        </div>
-                    </div>
-                    <div class="row g-3">
-                        <div class="col-6">
-                            <div class="detail-label">Request Type</div>
-                            <div class="detail-value">
-                                <span class="badge bg-secondary">{{ result.request_type or '-' }}</span>
-                            </div>
-                        </div>
-                        <div class="col-6">
-                            <div class="detail-label">Catasto</div>
-                            <div class="detail-value">{{ result.tipo_catasto or '-' }}</div>
-                        </div>
-                        <div class="col-6">
-                            <div class="detail-label">Requested</div>
-                            <div class="detail-value">{{ result.requested_at_display or '-' }}</div>
-                        </div>
-                        <div class="col-6">
-                            <div class="detail-label">Responded</div>
-                            <div class="detail-value">{{ result.responded_at_display or '-' }}</div>
-                        </div>
-                    </div>
-                </div>
-                <div class="col-lg-6">
-                    <div class="row g-3">
-                        <div class="col-6">
-                            <div class="detail-label">Provincia</div>
-                            <div class="detail-value">{{ result.provincia or '-' }}</div>
-                        </div>
-                        <div class="col-6">
-                            <div class="detail-label">Comune</div>
-                            <div class="detail-value">{{ result.comune or '-' }}</div>
-                        </div>
-                        <div class="col-6">
-                            <div class="detail-label">Foglio / Particella</div>
-                            <div class="detail-value">{{ result.foglio or '-' }} / {{ result.particella or '-' }}</div>
-                        </div>
-                        <div class="col-6">
-                            <div class="detail-label">Sezione / Subalterno</div>
-                            <div class="detail-value">{{ result.sezione or '-' }} / {{ result.subalterno or '-' }}</div>
-                        </div>
-                    </div>
-                    {% if result.error %}
-                    <div class="alert alert-danger mt-3 mb-0">
-                        <i class="fas fa-exclamation-triangle me-2"></i>{{ result.error }}
-                    </div>
-                    {% endif %}
-                </div>
-            </div>
-        </div>
+  {# Breadcrumb #}
+  <nav class="mb-3" aria-label="breadcrumb">
+    <ol class="breadcrumb">
+      <li class="breadcrumb-item"><a href="/web/results">Results</a></li>
+      <li class="breadcrumb-item active" title="{{ request_id }}">
+        {{ request_id[:30] }}{% if request_id|length > 30 %}&hellip;{% endif %}
+      </li>
+    </ol>
+  </nav>
+
+  {% if result %}
+
+  {# ── Request Details card ──────────────────────────────────────────────── #}
+  <div class="card border-0 shadow-sm mb-4">
+    <div class="card-header d-flex justify-content-between align-items-center">
+      <h4 class="mb-0"><i class="fas fa-info-circle text-primary me-2"></i>Request Details</h4>
+      {{ status_badge(result.status, large=True) }}
+    </div>
+    <div class="card-body">
+      {{ request_params_card(result) }}
+    </div>
+  </div>
+
+  {% if result.status == 'pending' %}
+  <div class="alert alert-info border-0 shadow-sm">
+    <i class="fas fa-hourglass-half me-2"></i>
+    This request exists but no response has been stored yet. Check back later.
+  </div>
+
+  {% elif result.data %}
+
+  {# ── Jump navigation ───────────────────────────────────────────────────── #}
+  {{ jump_nav(result.sections) }}
+
+  {# ── Data sections ─────────────────────────────────────────────────────── #}
+  {% for section in result.sections %}
+  <div id="section-{{ section.dom_id }}"
+       class="card border-0 shadow-sm mb-4 result-section {{ section_border(section.name, section.kind) }}">
+    <div class="card-header">
+      <h5 class="mb-0">
+        <i class="fas {{ section_icon(section.name, section.kind) }} me-2"></i>{{ section.title }}
+        {% if section.count is defined %}<span class="text-muted">({{ section.count }})</span>{% endif %}
+      </h5>
     </div>
 
-    {% if result.status == 'pending' %}
-    <div class="alert alert-info border-0 shadow-sm">
-        <i class="fas fa-hourglass-half me-2"></i>
-        This request exists but no response has been stored yet. Check back later.
+    {% if section.kind == 'flat_table' %}
+    <div class="card-body p-0">
+      <div id="tabulator-{{ section.dom_id }}" class="tabulator-table"></div>
     </div>
-    {% elif result.data %}
 
-    {# --- Data sections --- #}
-    {% for section in result.sections %}
-        <div class="card border-0 shadow-sm mb-4">
-            <div class="card-header">
-                <h5 class="mb-0">
-                    <i class="fas {% if section.name == 'immobili' %}fa-home text-success{% elif section.name == 'intestati' %}fa-users text-info{% elif section.name in ('steps', 'persisted_steps') %}fa-project-diagram text-primary{% elif section.name == 'aggregate' %}fa-layer-group text-success{% elif section.name == 'summary' %}fa-clipboard-check text-warning{% elif section.name == 'downloaded_pdfs' %}fa-file-alt text-danger{% else %}fa-table text-secondary{% endif %} me-2"></i>{{ section.title }}
-                    {% if section.count is defined %}<span class="text-muted">({{ section.count }})</span>{% endif %}
-                </h5>
-            </div>
-            {% if section.kind == 'flat_table' %}
-            <div class="card-body p-0">
-                <div id="tabulator-{{ section.dom_id }}" class="tabulator-table"></div>
-            </div>
-            {% elif section.kind == 'workflow_steps' %}
-            <div class="card-body p-0">
-                {{ render_workflow_steps(section.value, section.dom_id) }}
-            </div>
-            {% elif section.kind == 'downloaded_docs' %}
-            <div class="card-body p-0">
-                <div class="accordion accordion-flush" id="inline-docs-{{ section.dom_id }}">
-                    {% for doc in section.docs %}
-                    <div class="accordion-item">
-                        <h2 class="accordion-header">
-                            <button class="accordion-button collapsed py-2" type="button"
-                                    data-bs-toggle="collapse" data-bs-target="#inline-doc-{{ section.dom_id }}-{{ loop.index }}">
-                                <span class="badge bg-{% if doc.file_format == 'XML' %}success{% elif doc.file_format == 'P7M' %}warning text-dark{% else %}primary{% endif %} me-2">{{ doc.file_format }}</span>
-                                <strong class="me-2">{{ doc.oggetto or doc.filename }}</strong>
-                                {% if doc.intestati_rows %}<span class="badge bg-info me-2">{{ doc.intestati_rows|length }} intestati</span>{% endif %}
-                                {% if doc.file_size %}<span class="text-muted small">{{ (doc.file_size / 1024)|round(1) }}KB</span>{% endif %}
-                            </button>
-                        </h2>
-                        <div id="inline-doc-{{ section.dom_id }}-{{ loop.index }}" class="accordion-collapse collapse"
-                             data-bs-parent="#inline-docs-{{ section.dom_id }}">
-                            <div class="accordion-body p-3">
-                                <table class="table table-sm mb-3 doc-meta">
-                                    <tbody>
-                                        {% for label, val in doc.meta %}
-                                        <tr>
-                                            <th class="bg-light">{{ label }}</th>
-                                            <td>{% if label == 'Filename' %}<code>{{ val }}</code>{% else %}{{ val }}{% endif %}</td>
-                                        </tr>
-                                        {% endfor %}
-                                    </tbody>
-                                </table>
+    {% elif section.kind == 'workflow_steps' %}
+    <div class="card-body p-0">
+      {{ render_workflow_steps(section.value, section.dom_id) }}
+    </div>
 
-                                {% if doc.intestati_rows %}
-                                <h6 class="mt-3"><i class="fas fa-users text-info me-1"></i>Intestati ({{ doc.intestati_rows|length }})</h6>
-                                <div id="tabulator-inline-intestati-{{ section.dom_id }}-{{ loop.index }}"></div>
-                                {% endif %}
+    {% elif section.kind == 'downloaded_docs' %}
+    <div class="card-body p-0">
+      {{ doc_accordion(section.docs,
+                       'inline-docs-' ~ section.dom_id,
+                       'tabulator-inline-intestati-' ~ section.dom_id) }}
+    </div>
 
-                                {% if doc.xml_parsed %}
-                                <h6 class="mt-3"><i class="fas fa-file-code text-secondary me-1"></i>XML Content</h6>
-                                {{ render_nested(doc.xml_parsed) }}
-                                {% endif %}
-                            </div>
-                        </div>
-                    </div>
-                    {% endfor %}
-                </div>
-            </div>
-            {% elif section.kind == 'nested_table' %}
-            <div class="card-body p-0">
-                {{ render_nested(section.value) }}
-            </div>
-            {% elif section.kind == 'object' %}
-            <div class="card-body p-0">
-                <table class="table table-sm mb-0">
-                    <tbody>
-                        {% for key, val in section["items"] %}
-                        <tr>
-                            <th class="w-25 bg-light">{{ key }}</th>
-                            <td>{% if val is mapping or (val is sequence and val is not string) %}{{ render_nested(val) }}{% else %}{{ val if val not in (None, '') else '-' }}{% endif %}</td>
-                        </tr>
-                        {% endfor %}
-                    </tbody>
-                </table>
-            </div>
-            {% elif section.kind == 'list' %}
-            <div class="card-body">
-                <ul class="mb-0">
-                    {% for item in section["items"] %}
-                    <li>{{ item }}</li>
-                    {% endfor %}
-                </ul>
-            </div>
-            {% elif section.kind == 'value' %}
-            <div class="card-body">
-                <p class="mb-0">{{ section.value if section.value not in (None, '') else '-' }}</p>
-            </div>
-            {% endif %}
-        </div>
-    {% endfor %}
+    {% elif section.kind == 'nested_table' %}
+    <div class="card-body p-0">
+      {% from "_nested.html" import render_nested %}
+      {{ render_nested(section.value) }}
+    </div>
 
-    {# --- Downloaded Documents --- #}
-    {% if result.documents %}
-    <div class="card border-0 shadow-sm mb-4">
-        <div class="card-header">
-            <h5 class="mb-0"><i class="fas fa-file-alt text-danger me-2"></i>Downloaded Documents ({{ result.documents|length }})</h5>
-        </div>
-        <div class="card-body p-0">
-            <div class="accordion accordion-flush" id="docs-accordion">
-                {% for doc in result.documents %}
-                <div class="accordion-item">
-                    <h2 class="accordion-header">
-                        <button class="accordion-button collapsed py-2" type="button"
-                                data-bs-toggle="collapse" data-bs-target="#doc-{{ doc.id }}">
-                            <span class="badge bg-{% if doc.file_format == 'XML' %}success{% elif doc.file_format == 'P7M' %}warning text-dark{% else %}primary{% endif %} me-2">{{ doc.file_format }}</span>
-                            <strong>{{ doc.document_type or 'visura' }}</strong>
-                            <span class="text-muted ms-2">
-                                F.{{ doc.foglio or '?' }} P.{{ doc.particella or '?' }}
-                                {% if doc.subalterno %}Sub.{{ doc.subalterno }}{% endif %}
-                            </span>
-                            {% if doc.intestati %}<span class="badge bg-info ms-2">{{ doc.intestati|length }} intestati</span>{% endif %}
-                            {% if doc.file_size %}<span class="text-muted ms-2 small">{{ (doc.file_size / 1024)|round(1) }}KB</span>{% endif %}
-                        </button>
-                    </h2>
-                    <div id="doc-{{ doc.id }}" class="accordion-collapse collapse" data-bs-parent="#docs-accordion">
-                        <div class="accordion-body p-3">
-                            <table class="table table-sm mb-3 doc-meta">
-                                <tbody>
-                                    {% for label, val in doc.meta %}
-                                    <tr>
-                                        <th class="bg-light">{{ label }}</th>
-                                        <td>{% if label == 'Filename' %}<code>{{ val }}</code>{% else %}{{ val }}{% endif %}</td>
-                                    </tr>
-                                    {% endfor %}
-                                </tbody>
-                            </table>
+    {% elif section.kind == 'object' %}
+    <div class="card-body p-0">
+      {{ income_boxes(section["items"]) }}
+      <table class="table table-sm mb-0">
+        <tbody>
+          {% for key, val in section["items"] %}
+          <tr>
+            <th class="w-25 bg-light">{{ key }}</th>
+            <td>
+              {% from "_nested.html" import render_nested %}
+              {% if val is mapping or (val is sequence and val is not string) %}
+                {{ render_nested(val) }}
+              {% else %}
+                {{ val if val not in (None, '') else '-' }}
+              {% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
 
-                            {% if doc.file_path %}
-                            <p class="mb-3">
-                                {% if doc.file_format == 'PDF' %}
-                                <a href="/web/documents/{{ doc.id }}/view" target="_blank" class="btn btn-sm btn-outline-secondary me-2">
-                                    <i class="fas fa-eye me-1"></i>Visualizza PDF
-                                </a>
-                                {% endif %}
-                                <a href="/web/documents/{{ doc.id }}/download" class="btn btn-sm btn-outline-primary">
-                                    <i class="fas fa-download me-1"></i>Download {{ doc.file_format }}
-                                </a>
-                            </p>
-                            {% endif %}
+    {% elif section.kind == 'list' %}
+    <div class="card-body">
+      <ul class="mb-0">
+        {% for item in section["items"] %}
+        <li>{{ item }}</li>
+        {% endfor %}
+      </ul>
+    </div>
 
-                            {% if doc.intestati_rows %}
-                            <h6 class="mt-3"><i class="fas fa-users text-info me-1"></i>Intestati ({{ doc.intestati_rows|length }})</h6>
-                            <div id="tabulator-doc-intestati-{{ doc.id }}"></div>
-                            {% endif %}
-
-                            {% if doc.indirizzo %}
-                            <p class="mt-2 mb-0"><i class="fas fa-map-marker-alt text-primary me-1"></i><strong>Indirizzo:</strong> {{ doc.indirizzo }}</p>
-                            {% endif %}
-
-                            {% if doc.dati_immobile %}
-                            <h6 class="mt-3"><i class="fas fa-home text-success me-1"></i>Dati Immobile</h6>
-                            <table class="table table-sm table-bordered">
-                                <tbody>
-                                    {% for key, value in doc.dati_immobile.items() %}
-                                    {% if value and value is string %}
-                                    <tr>
-                                        <th class="bg-light w-25">{{ key }}</th>
-                                        <td>{{ value }}</td>
-                                    </tr>
-                                    {% endif %}
-                                    {% endfor %}
-                                </tbody>
-                            </table>
-                            {% endif %}
-
-                            {% if doc.classamento_rows %}
-                            <h6 class="mt-3"><i class="fas fa-clipboard-list text-warning me-1"></i>Classamento ({{ doc.classamento_rows|length }})</h6>
-                            <div id="tabulator-doc-classamento-{{ doc.id }}"></div>
-                            {% endif %}
-
-                            {% if doc.xml_parsed %}
-                            <h6 class="mt-3"><i class="fas fa-file-code text-secondary me-1"></i>XML Content</h6>
-                            {{ render_nested(doc.xml_parsed) }}
-                            {% endif %}
-                        </div>
-                    </div>
-                </div>
-                {% endfor %}
-            </div>
-        </div>
+    {% elif section.kind == 'value' %}
+    <div class="card-body">
+      <p class="mb-0">{{ section.value if section.value not in (None, '') else '-' }}</p>
     </div>
     {% endif %}
+  </div>
+  {% endfor %}
 
-    {# --- Page Visits --- #}
-    {% if result.page_visit_rows %}
-    <div class="card border-0 shadow-sm mb-4">
-        <div class="card-header">
-            <h5 class="mb-0"><i class="fas fa-route text-warning me-2"></i>Page Visits ({{ result.page_visit_rows|length }})</h5>
-        </div>
-        <div class="card-body p-0">
-            <div id="tabulator-page-visits"></div>
-        </div>
+  {# ── Downloaded Documents (DB-backed) ─────────────────────────────────── #}
+  {% if result.documents %}
+  <div class="card border-0 shadow-sm mb-4 result-section section-docs">
+    <div class="card-header">
+      <h5 class="mb-0">
+        <i class="fas fa-file-alt text-danger me-2"></i>
+        Downloaded Documents ({{ result.documents|length }})
+      </h5>
     </div>
-    {% endif %}
-
-    {# --- DB-backed Immobili --- #}
-    {% if result.db_properties %}
-    <div class="card border-0 shadow-sm mb-4">
-        <div class="card-header">
-            <h5 class="mb-0">
-                <i class="fas fa-home text-success me-2"></i>Immobili
-                <span class="text-muted">({{ result.db_properties|length }})</span>
-                <span class="badge bg-light text-secondary border ms-2 small fw-normal">DB</span>
-            </h5>
-        </div>
-        <div class="card-body p-0">
-            <div id="tabulator-db-properties"></div>
-        </div>
+    <div class="card-body p-0">
+      {{ doc_accordion(result.documents,
+                       'docs',
+                       'tabulator-doc-intestati',
+                       'tabulator-doc-classamento') }}
     </div>
-    {% endif %}
+  </div>
+  {% endif %}
 
-    {# --- DB-backed Intestati --- #}
-    {% if result.db_owners %}
-    <div class="card border-0 shadow-sm mb-4">
-        <div class="card-header">
-            <h5 class="mb-0">
-                <i class="fas fa-users text-info me-2"></i>Intestati
-                <span class="text-muted">({{ result.db_owners|length }})</span>
-                <span class="badge bg-light text-secondary border ms-2 small fw-normal">DB</span>
-            </h5>
-        </div>
-        <div class="card-body p-0">
-            <div id="tabulator-db-owners"></div>
-        </div>
+  {# ── Page Visits ───────────────────────────────────────────────────────── #}
+  {% if result.page_visit_rows %}
+  <div class="card border-0 shadow-sm mb-4">
+    <div class="card-header">
+      <h5 class="mb-0">
+        <i class="fas fa-route text-warning me-2"></i>
+        Page Visits ({{ result.page_visit_rows|length }})
+      </h5>
     </div>
-    {% endif %}
+    <div class="card-body p-0">
+      <div id="tabulator-page-visits"></div>
+    </div>
+  </div>
+  {% endif %}
 
-    <!-- Raw JSON -->
-    <div class="card border-0 shadow-sm">
-        <div class="card-header d-flex justify-content-between align-items-center">
-            <h5 class="mb-0">
-                <i class="fas fa-code text-muted me-2"></i>Raw JSON
-            </h5>
-            <div class="d-flex gap-2">
-                <button class="btn btn-sm btn-outline-secondary" type="button" id="btn-copy-json" title="Copy JSON">
-                    <i class="fas fa-copy me-1"></i>Copy
-                </button>
-                <button class="btn btn-sm btn-outline-secondary" type="button"
-                        data-bs-toggle="collapse" data-bs-target="#raw-json">
-                    <i class="fas fa-eye me-1"></i>Toggle
-                </button>
+  {# ── DB-backed Immobili ────────────────────────────────────────────────── #}
+  {% if result.db_properties %}
+  {%- set props_with_sub = result.db_properties | selectattr('subunit') | list %}
+  <div class="card border-0 shadow-sm mb-4 result-section section-immobili">
+    <div class="card-header d-flex justify-content-between align-items-center">
+      <h5 class="mb-0">
+        <i class="fas fa-home text-success me-2"></i>Immobili
+        <span class="text-muted">({{ result.db_properties|length }})</span>
+        <span class="badge bg-light text-secondary border ms-2 small fw-normal">DB</span>
+      </h5>
+      <div class="d-flex align-items-center gap-3">
+        <span id="prop-filter-chip" class="badge bg-info text-dark d-none" style="font-size:.75rem">
+          <i class="fas fa-filter me-1"></i><span id="prop-filter-label"></span>
+          <i class="fas fa-times-circle ms-1" id="prop-filter-clear" style="cursor:pointer" title="Rimuovi filtro"></i>
+        </span>
+        <div class="form-check form-switch mb-0">
+          <input class="form-check-input" type="checkbox" role="switch" id="toggle-group-props">
+          <label class="form-check-label small text-muted" for="toggle-group-props">Raggruppa</label>
+        </div>
+        {% if props_with_sub %}
+        <button class="btn btn-sm btn-outline-primary" id="btn-queue-subunit"
+                data-bs-toggle="modal" data-bs-target="#modal-queue-subunit"
+                title="Accoda visure individuali per ogni subalterno">
+          <i class="fas fa-layer-group me-1"></i>Visure sub. ({{ props_with_sub|length }})
+        </button>
+        {% endif %}
+      </div>
+    </div>
+    <div class="card-body p-0">
+      <div id="tabulator-db-properties"></div>
+    </div>
+  </div>
+
+  {# Modal: queue per-subunit visuras #}
+  {% if props_with_sub %}
+  <div class="modal fade" id="modal-queue-subunit" tabindex="-1"
+       aria-labelledby="modal-queue-subunit-label" aria-hidden="true">
+    <div class="modal-dialog">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h5 class="modal-title" id="modal-queue-subunit-label">
+            <i class="fas fa-layer-group me-2 text-primary"></i>Accoda visure per subalterni
+          </h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+        </div>
+        <div class="modal-body">
+          <p id="queue-count-msg" class="mb-3 text-muted small"></p>
+          <div id="queue-progress-wrap" class="d-none mb-3">
+            <div class="progress mb-1" style="height: 6px;">
+              <div id="queue-progress-bar"
+                   class="progress-bar progress-bar-striped progress-bar-animated bg-primary"
+                   role="progressbar" style="width: 0%"></div>
             </div>
+            <p id="queue-progress-msg" class="small text-muted mb-0"></p>
+          </div>
+          <div id="queue-result-wrap" class="d-none">
+            <div id="queue-result-msg"></div>
+          </div>
         </div>
-        <div class="collapse" id="raw-json">
-            <div class="card-body">
-                <pre class="bg-dark text-light p-3 rounded mb-0" style="max-height: 500px; overflow-y: auto;" id="raw-json-content">{{ result.data | tojson(indent=2) }}</pre>
-            </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary btn-sm"
+                  data-bs-dismiss="modal" id="btn-modal-close">Annulla</button>
+          <button type="button" class="btn btn-primary btn-sm" id="btn-queue-confirm">
+            <i class="fas fa-play me-1"></i>Accoda tutte
+          </button>
         </div>
+      </div>
     </div>
-    {% endif %}
+  </div>
+  {% endif %}
+  {% endif %}{# /db_properties #}
 
-    {% else %}
-    <div class="alert alert-warning">
-        <i class="fas fa-exclamation-triangle me-2"></i>
-        Request not found for ID <code>{{ request_id }}</code>.
+  {# ── DB-backed Intestati ───────────────────────────────────────────────── #}
+  {% if result.db_owners %}
+  <div class="card border-0 shadow-sm mb-4 result-section section-intestati">
+    <div class="card-header d-flex justify-content-between align-items-center">
+      <h5 class="mb-0">
+        <i class="fas fa-users text-info me-2"></i>Intestati
+        <span class="text-muted">({{ result.db_owners|length }})</span>
+        <span class="badge bg-light text-secondary border ms-2 small fw-normal">DB</span>
+      </h5>
+      <div class="d-flex align-items-center gap-3">
+        <span id="owners-filter-chip" class="badge bg-info text-dark d-none" style="font-size:.75rem">
+          <i class="fas fa-filter me-1"></i><span id="owners-filter-label"></span>
+          <i class="fas fa-times-circle ms-1" id="owners-filter-clear" style="cursor:pointer" title="Rimuovi filtro"></i>
+        </span>
+        <div id="toggle-timeline-wrap" class="form-check form-switch mb-0 d-none">
+          <input class="form-check-input" type="checkbox" role="switch" id="toggle-owners-timeline">
+          <label class="form-check-label small text-muted" for="toggle-owners-timeline">Evoluzione</label>
+        </div>
+        <div class="form-check form-switch mb-0">
+          <input class="form-check-input" type="checkbox" role="switch" id="toggle-cumulate-owners">
+          <label class="form-check-label small text-muted" for="toggle-cumulate-owners">Cumula identici</label>
+        </div>
+      </div>
     </div>
-    <a href="/web/results" class="btn btn-primary">Back to Results</a>
-    {% endif %}
+    <div class="card-body p-0">
+      <div id="owners-timeline" class="d-none border-bottom"></div>
+      <div id="tabulator-db-owners"></div>
+    </div>
+  </div>
+  {% endif %}
+
+  {# ── Raw JSON ──────────────────────────────────────────────────────────── #}
+  <div class="card border-0 shadow-sm">
+    <div class="card-header d-flex justify-content-between align-items-center">
+      <h5 class="mb-0"><i class="fas fa-code text-muted me-2"></i>Raw JSON</h5>
+      <div class="d-flex gap-2">
+        <button class="btn btn-sm btn-outline-secondary" type="button"
+                id="btn-copy-json" title="Copy JSON">
+          <i class="fas fa-copy me-1"></i>Copy
+        </button>
+        <button class="btn btn-sm btn-outline-secondary" type="button"
+                data-bs-toggle="collapse" data-bs-target="#raw-json">
+          <i class="fas fa-eye me-1"></i>Toggle
+        </button>
+      </div>
+    </div>
+    <div class="collapse" id="raw-json">
+      <div class="card-body">
+        <pre class="bg-dark text-light p-3 rounded mb-0"
+             style="max-height: 500px; overflow-y: auto;"
+             id="raw-json-content">{{ result.data | tojson(indent=2) }}</pre>
+      </div>
+    </div>
+  </div>
+  {% endif %}{# /result.data #}
+
+  {% else %}
+  <div class="alert alert-warning">
+    <i class="fas fa-exclamation-triangle me-2"></i>
+    Request not found for ID <code>{{ request_id }}</code>.
+  </div>
+  <a href="/web/results" class="btn btn-primary">Back to Results</a>
+  {% endif %}{# /result #}
+
 </div>
 {% endblock %}
 
@@ -496,11 +395,17 @@
         maxHeight: "500px",
     };
 
+    // Minimum column width fitted to header title length.
+    function headerMinWidth(title) {
+        return Math.max(60, Math.ceil(title.length * 8.5) + 32);
+    }
+
     function makeColumns(keys) {
         return keys.map(function(key) {
             return {
                 title: key,
                 field: key,
+                minWidth: headerMinWidth(key),
                 headerFilter: "input",
                 headerFilterPlaceholder: "filter...",
                 sorter: "string",
@@ -521,16 +426,22 @@
     }
 
     // Data section tables (flat_table kind)
+    var _sectionTabs = {};
     {% if result and result.sections %}
     {% for section in result.sections %}
     {% if section.kind == 'flat_table' %}
     (function() {
         var el = document.getElementById("tabulator-{{ section.dom_id }}");
         if (!el) return;
-        new Tabulator(el, Object.assign({}, commonOpts, {
+        var tab = new Tabulator(el, Object.assign({}, commonOpts, {
             data: {{ section.rows | tojson }},
             columns: makeColumns({{ section.columns | tojson }}),
         }));
+        _sectionTabs["{{ section.dom_id }}"] = tab;
+        {% if section.parent_section is defined and section.join_key is defined %}
+        tab._parentName = {{ section.parent_section | tojson }};
+        tab._joinKey    = {{ section.join_key | tojson }};
+        {% endif %}
     })();
     {% elif section.kind == 'downloaded_docs' %}
     {% for doc in section.docs %}
@@ -541,7 +452,6 @@
         new Tabulator(el, Object.assign({}, commonOpts, {
             data: {{ doc.intestati_rows | tojson }},
             columns: makeColumns(["Nominativo", "Codice Fiscale", "Quota", "Diritto"]),
-            pagination: false,
         }));
     })();
     {% endif %}
@@ -550,28 +460,66 @@
     {% endfor %}
     {% endif %}
 
-    // Document intestati & classamento tables (normalized server-side)
+    // Wire parent → child cross-filter for split sections.
+    (function() {
+        var domIdByName = {};
+        {% if result and result.sections %}
+        {% for section in result.sections %}
+        domIdByName[{{ section.name | tojson }}] = {{ section.dom_id | tojson }};
+        {% endfor %}
+        {% endif %}
+
+        Object.values(_sectionTabs).forEach(function(childTab) {
+            if (!childTab._parentName || !childTab._joinKey) return;
+            var parentDomId = domIdByName[childTab._parentName];
+            if (!parentDomId) return;
+            var parentTab = _sectionTabs[parentDomId];
+            if (!parentTab) return;
+
+            var jk = childTab._joinKey;
+            var _activeRow = null;
+
+            parentTab.on("rowClick", function(e, row) {
+                var jv = row.getData()[jk];
+                if (jv === undefined || jv === null || jv === "") return;
+                if (_activeRow === row) {
+                    childTab.clearFilter();
+                    try { _activeRow.getElement().classList.remove('table-active'); } catch(ex){}
+                    _activeRow = null;
+                    return;
+                }
+                if (_activeRow) {
+                    try { _activeRow.getElement().classList.remove('table-active'); } catch(ex){}
+                }
+                _activeRow = row;
+                row.getElement().classList.add('table-active');
+                childTab.setFilter(jk, "=", jv);
+                var childEl = childTab.element;
+                if (childEl) childEl.scrollIntoView({behavior: 'smooth', block: 'nearest'});
+            });
+        });
+    })();
+
+    // Document intestati & classamento tables (DB-backed, loop-index-based IDs)
     {% if result and result.documents %}
     {% for doc in result.documents %}
     {% if doc.intestati_rows %}
     (function() {
-        var el = document.getElementById("tabulator-doc-intestati-{{ doc.id }}");
+        var el = document.getElementById("tabulator-doc-intestati-{{ loop.index }}");
         if (!el) return;
         new Tabulator(el, Object.assign({}, commonOpts, {
             data: {{ doc.intestati_rows | tojson }},
             columns: makeColumns(["Nominativo", "Codice Fiscale", "Quota", "Diritto", "Periodo"]),
-            pagination: false,
         }));
     })();
     {% endif %}
     {% if doc.classamento_rows %}
     (function() {
-        var el = document.getElementById("tabulator-doc-classamento-{{ doc.id }}");
+        var el = document.getElementById("tabulator-doc-classamento-{{ loop.index }}");
         if (!el) return;
         new Tabulator(el, Object.assign({}, commonOpts, {
             data: {{ doc.classamento_rows | tojson }},
             columns: makeColumns(["Zona Censuaria", "Categoria", "Classe", "Rendita (EUR)"]),
-            pagination: false,
         }));
     })();
     {% endif %}
@@ -585,12 +533,11 @@
         if (!el) return;
         var data = {{ result.db_properties | tojson }};
         if (!data.length) return;
-        // Determine which column groups are populated
         var hasFabbricati = data.some(function(r){ return r.category || r.cadastral_class || r.income || r.consistency || r.census_zone; });
-        var hasTerreni = data.some(function(r){ return r.quality || r.area || r.dominical_income || r.agricultural_income; });
-        var hasSubject = data.some(function(r){ return r.subject_name || r.subject_fiscal_code; });
+        var hasTerreni    = data.some(function(r){ return r.quality || r.area || r.dominical_income || r.agricultural_income; });
+        var hasSubject    = data.some(function(r){ return r.subject_name || r.subject_fiscal_code; });
         var cols = [
-            {title: "Tipo", field: "property_type", width: 90, hozAlign: "center",
+            {title: "Tipo", field: "property_type", minWidth: headerMinWidth("Tipo"), hozAlign: "center",
              formatter: function(cell) {
                 var v = cell.getValue();
                 var badge = document.createElement("span");
@@ -598,44 +545,96 @@
                 badge.textContent = v === "building" ? "Fabbricato" : v === "land" ? "Terreno" : v || "-";
                 return badge;
              }},
-            {title: "Provincia", field: "province", headerFilter: "input", headerFilterPlaceholder: "filter..."},
-            {title: "Comune", field: "municipality", headerFilter: "input", headerFilterPlaceholder: "filter..."},
-            {title: "Foglio", field: "sheet", width: 80, hozAlign: "center", headerFilter: "input", headerFilterPlaceholder: "filter..."},
-            {title: "Particella", field: "parcel", width: 90, hozAlign: "center", headerFilter: "input", headerFilterPlaceholder: "filter..."},
-            {title: "Sub", field: "subunit", width: 70, hozAlign: "center"},
-            {title: "Sez.", field: "section", width: 70, hozAlign: "center"},
-            {title: "Indirizzo", field: "address", headerFilter: "input", headerFilterPlaceholder: "filter..."},
-            {title: "Partita", field: "partita", width: 90},
+            {title: "Provincia",  field: "province",      minWidth: headerMinWidth("Provincia"),  headerFilter: "input", headerFilterPlaceholder: "filter..."},
+            {title: "Comune",     field: "municipality",  minWidth: headerMinWidth("Comune"),     headerFilter: "input", headerFilterPlaceholder: "filter..."},
+            {title: "Foglio",     field: "sheet",         minWidth: headerMinWidth("Foglio"),     hozAlign: "center", headerFilter: "input", headerFilterPlaceholder: "filter..."},
+            {title: "Particella", field: "parcel",        minWidth: headerMinWidth("Particella"), hozAlign: "center", headerFilter: "input", headerFilterPlaceholder: "filter..."},
+            {title: "Sub",        field: "subunit",       minWidth: headerMinWidth("Sub"),        hozAlign: "center"},
+            {title: "Sez.",       field: "section",       minWidth: headerMinWidth("Sez."),       hozAlign: "center"},
+            {title: "Indirizzo",  field: "address",       minWidth: headerMinWidth("Indirizzo"),  headerFilter: "input", headerFilterPlaceholder: "filter..."},
+            {title: "Partita",    field: "partita",       minWidth: headerMinWidth("Partita")},
         ];
         if (hasFabbricati) {
             cols = cols.concat([
-                {title: "Categoria", field: "category", width: 100, headerFilter: "input", headerFilterPlaceholder: "filter..."},
-                {title: "Classe", field: "cadastral_class", width: 80, hozAlign: "center"},
-                {title: "Consistenza", field: "consistency", width: 110},
-                {title: "Rendita", field: "income", width: 110},
-                {title: "Zona cens.", field: "census_zone", width: 110},
+                {title: "Categoria",   field: "category",        minWidth: headerMinWidth("Categoria"),   headerFilter: "input", headerFilterPlaceholder: "filter..."},
+                {title: "Classe",      field: "cadastral_class", minWidth: headerMinWidth("Classe"),      hozAlign: "center"},
+                {title: "Consistenza", field: "consistency",     minWidth: headerMinWidth("Consistenza")},
+                {title: "Rendita",     field: "income",          minWidth: headerMinWidth("Rendita")},
+                {title: "Zona cens.",  field: "census_zone",     minWidth: headerMinWidth("Zona cens.")},
             ]);
         }
         if (hasTerreni) {
             cols = cols.concat([
-                {title: "Qualità", field: "quality", headerFilter: "input", headerFilterPlaceholder: "filter..."},
-                {title: "Superficie", field: "area", width: 100},
-                {title: "Red. Dominicale", field: "dominical_income", width: 140},
-                {title: "Red. Agrario", field: "agricultural_income", width: 130},
+                {title: "Qualità",         field: "quality",              minWidth: headerMinWidth("Qualità"),         headerFilter: "input", headerFilterPlaceholder: "filter..."},
+                {title: "Superficie",      field: "area",                 minWidth: headerMinWidth("Superficie")},
+                {title: "Red. Dominicale", field: "dominical_income",     minWidth: headerMinWidth("Red. Dominicale")},
+                {title: "Red. Agrario",    field: "agricultural_income",  minWidth: headerMinWidth("Red. Agrario")},
             ]);
         }
         if (hasSubject) {
             cols = cols.concat([
-                {title: "Soggetto", field: "subject_name", headerFilter: "input", headerFilterPlaceholder: "filter..."},
-                {title: "C.F. / P.IVA", field: "subject_fiscal_code", headerFilter: "input", headerFilterPlaceholder: "filter..."},
+                {title: "Soggetto",    field: "subject_name",         minWidth: headerMinWidth("Soggetto"),    headerFilter: "input", headerFilterPlaceholder: "filter..."},
+                {title: "C.F. / P.IVA", field: "subject_fiscal_code", minWidth: headerMinWidth("C.F. / P.IVA"), headerFilter: "input", headerFilterPlaceholder: "filter..."},
             ]);
         }
-        // Null → "-" for all cells
         cols = cols.map(function(c) {
             if (!c.formatter) c.formatter = function(cell) { var v = cell.getValue(); return (v == null || v === "") ? "-" : String(v); };
             return c;
         });
-        new Tabulator(el, Object.assign({}, commonOpts, {data: data, columns: cols}));
+        var tabProps = new Tabulator(el, Object.assign({}, commonOpts, {data: data, columns: cols}));
+        window._tabProps = tabProps;
+
+        if (hasSubject) {
+            var _propXRow = null;
+            var _propChip  = document.getElementById('prop-filter-chip');
+            var _propLabel = document.getElementById('prop-filter-label');
+            var _propClear = document.getElementById('prop-filter-clear');
+
+            function clearOwnerXFilter() {
+                if (_propXRow) { try { _propXRow.getElement().classList.remove('table-active'); } catch(e){} _propXRow = null; }
+                if (window._tabOwners) window._tabOwners.setHeaderFilterValue("fiscal_code", "");
+                if (_propChip) _propChip.classList.add('d-none');
+            }
+            if (_propClear) _propClear.addEventListener('click', clearOwnerXFilter);
+
+            tabProps.on("rowClick", function(e, row) {
+                var fc = row.getData().subject_fiscal_code;
+                if (!fc) return;
+                if (_propXRow === row) { clearOwnerXFilter(); return; }
+                clearOwnerXFilter();
+                _propXRow = row;
+                row.getElement().classList.add('table-active');
+                if (window._tabOwners) window._tabOwners.setHeaderFilterValue("fiscal_code", fc);
+                if (_propChip && _propLabel) { _propLabel.textContent = fc; _propChip.classList.remove('d-none'); }
+            });
+        }
+
+        var hasMixed = data.some(function(r){ return r.property_type === 'building'; }) &&
+                       data.some(function(r){ return r.property_type === 'land'; });
+        var groupField = hasMixed ? "property_type" : (hasFabbricati ? "cadastral_class" : "quality");
+
+        var toggleProps = document.getElementById('toggle-group-props');
+        if (toggleProps) {
+            toggleProps.addEventListener('change', function() {
+                if (this.checked) {
+                    tabProps.setGroupBy(groupField);
+                    tabProps.setGroupHeader(function(value, count, groupData) {
+                        var total = 0;
+                        groupData.forEach(function(r) {
+                            var m = (r.income || '').replace(/[^0-9,]/g, '');
+                            if (m) total += parseFloat(m.replace(',', '.')) || 0;
+                        });
+                        var label = (value !== null && value !== '') ? value : '(—)';
+                        return label +
+                            ' <span class="text-muted fw-normal small">· ' + count + ' immobili' +
+                            (total > 0 ? ' · €' + total.toFixed(0).replace(/\B(?=(\d{3})+(?!\d))/g, '.') : '') +
+                            '</span>';
+                    });
+                } else {
+                    tabProps.setGroupBy([]);
+                }
+            });
+        }
     })();
     {% endif %}
 
@@ -644,32 +643,299 @@
     (function() {
         var el = document.getElementById("tabulator-db-owners");
         if (!el) return;
-        var data = {{ result.db_owners | tojson }};
-        if (!data.length) return;
-        var hasDates = data.some(function(r){ return r.start_date || r.end_date; });
-        var cols = [
-            {title: "Nominativo", field: "nominativo", headerFilter: "input", headerFilterPlaceholder: "filter..."},
-            {title: "Codice Fiscale", field: "fiscal_code", headerFilter: "input", headerFilterPlaceholder: "filter..."},
-            {title: "Titolarità", field: "right_type", width: 130, headerFilter: "input", headerFilterPlaceholder: "filter..."},
-            {title: "Quota", field: "ownership_share", width: 100, hozAlign: "center"},
-            {title: "Cod. Diritto", field: "right_code", width: 110},
-            {title: "Diritto", field: "right_description", headerFilter: "input", headerFilterPlaceholder: "filter..."},
-        ];
-        if (hasDates) {
-            cols = cols.concat([
-                {title: "Inizio", field: "start_date", width: 110},
-                {title: "Fine", field: "end_date", width: 110},
-            ]);
+        var rawData = {{ result.db_owners | tojson }};
+        if (!rawData.length) return;
+        var hasDates = rawData.some(function(r){ return r.start_date || r.end_date; });
+
+        var _ownerXRow = null;
+        var _ownersChip  = document.getElementById('owners-filter-chip');
+        var _ownersLabel = document.getElementById('owners-filter-label');
+        var _ownersClear = document.getElementById('owners-filter-clear');
+
+        function clearPropXFilter() {
+            if (_ownerXRow) { try { _ownerXRow.getElement().classList.remove('table-active'); } catch(e){} _ownerXRow = null; }
+            if (window._tabProps) window._tabProps.setHeaderFilterValue("subject_fiscal_code", "");
+            if (_ownersChip) _ownersChip.classList.add('d-none');
         }
-        cols = cols.map(function(c) {
-            if (!c.formatter) c.formatter = function(cell) { var v = cell.getValue(); return (v == null || v === "") ? "-" : String(v); };
-            return c;
-        });
-        new Tabulator(el, Object.assign({}, commonOpts, {data: data, columns: cols, pagination: false}));
+        if (_ownersClear) _ownersClear.addEventListener('click', clearPropXFilter);
+
+        function baseCols() {
+            var cols = [
+                {title: "Nominativo",     field: "nominativo",      minWidth: headerMinWidth("Nominativo"),     headerFilter: "input", headerFilterPlaceholder: "filter..."},
+                {title: "Codice Fiscale", field: "fiscal_code",     minWidth: headerMinWidth("Codice Fiscale"), headerFilter: "input", headerFilterPlaceholder: "filter..."},
+                {title: "Titolarità",     field: "right_type",      minWidth: headerMinWidth("Titolarità"),     headerFilter: "input", headerFilterPlaceholder: "filter..."},
+                {title: "Quota",          field: "ownership_share", minWidth: headerMinWidth("Quota"),          hozAlign: "center"},
+                {title: "Cod. Diritto",   field: "right_code",      minWidth: headerMinWidth("Cod. Diritto")},
+                {title: "Diritto",        field: "right_description", minWidth: headerMinWidth("Diritto"),      headerFilter: "input", headerFilterPlaceholder: "filter..."},
+            ];
+            if (hasDates) {
+                cols = cols.concat([
+                    {title: "Inizio", field: "start_date", minWidth: headerMinWidth("Inizio")},
+                    {title: "Fine",   field: "end_date",   minWidth: headerMinWidth("Fine")},
+                ]);
+            }
+            return cols.map(function(c) {
+                if (!c.formatter) c.formatter = function(cell) { var v = cell.getValue(); return (v == null || v === "") ? "-" : String(v); };
+                return c;
+            });
+        }
+
+        function cumulateData() {
+            var seen = {};
+            rawData.forEach(function(r) {
+                var k = [r.nominativo || '', r.fiscal_code || '', r.right_type || '', r.ownership_share || ''].join('\x00');
+                if (!seen[k]) { seen[k] = Object.assign({}, r, {_count: 0}); }
+                seen[k]._count++;
+            });
+            return Object.values(seen).sort(function(a, b) { return b._count - a._count; });
+        }
+
+        var countCol = {
+            title: "N", field: "_count",
+            minWidth: headerMinWidth("N"), hozAlign: "center", sorter: "number",
+            formatter: function(cell) {
+                var v = cell.getValue() || 1;
+                return '<span class="badge ' + (v > 1 ? 'bg-warning text-dark' : 'bg-light text-muted border') + '">' + v + '</span>';
+            }
+        };
+
+        var tabOwners;
+        function buildOwners(cumulate) {
+            clearPropXFilter();
+            var tableData = cumulate ? cumulateData() : rawData;
+            var cols = cumulate ? [countCol].concat(baseCols()) : baseCols();
+            if (tabOwners) { tabOwners.destroy(); }
+            tabOwners = new Tabulator(el, Object.assign({}, commonOpts, {data: tableData, columns: cols}));
+            window._tabOwners = tabOwners;
+            if (!cumulate) {
+                tabOwners.on("rowClick", function(e, row) {
+                    var fc = row.getData().fiscal_code;
+                    if (!fc || !window._tabProps) return;
+                    if (_ownerXRow === row) { clearPropXFilter(); return; }
+                    clearPropXFilter();
+                    _ownerXRow = row;
+                    row.getElement().classList.add('table-active');
+                    window._tabProps.setHeaderFilterValue("subject_fiscal_code", fc);
+                    if (_ownersChip && _ownersLabel) { _ownersLabel.textContent = fc; _ownersChip.classList.remove('d-none'); }
+                });
+            }
+        }
+
+        buildOwners(false);
+
+        var toggleOwners = document.getElementById('toggle-cumulate-owners');
+        if (toggleOwners) {
+            toggleOwners.addEventListener('change', function() { buildOwners(this.checked); });
+        }
+
+        if (hasDates) {
+            var tlWrap = document.getElementById('toggle-timeline-wrap');
+            var tlDiv  = document.getElementById('owners-timeline');
+            if (tlWrap) tlWrap.classList.remove('d-none');
+
+            function _parseDate(s) {
+                if (!s) return null;
+                var m = s.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+                if (m) return new Date(+m[3], +m[2] - 1, +m[1]);
+                var p = Date.parse(s);
+                return isNaN(p) ? null : new Date(p);
+            }
+
+            function buildTimeline() {
+                if (!tlDiv) return;
+                var today = new Date();
+                var datedRows = rawData.filter(function(r) { return r.start_date || r.end_date; });
+                if (!datedRows.length) {
+                    tlDiv.innerHTML = '<div class="p-3 text-muted small">Nessuna data disponibile</div>';
+                    return;
+                }
+                var minDate = null, maxDate = new Date(today);
+                datedRows.forEach(function(r) {
+                    var sd = _parseDate(r.start_date), ed = _parseDate(r.end_date);
+                    if (sd && (!minDate || sd < minDate)) minDate = sd;
+                    if (ed && ed > maxDate) maxDate = ed;
+                });
+                if (!minDate) minDate = new Date(today.getFullYear() - 20, 0, 1);
+                var span = maxDate - minDate || 1;
+                function pct(d) { return Math.max(0, Math.min(100, ((d - minDate) / span) * 100)); }
+
+                var groups = {}, gOrder = [];
+                datedRows.forEach(function(r) {
+                    var g = r.right_type || 'Altro';
+                    if (!groups[g]) { groups[g] = []; gOrder.push(g); }
+                    groups[g].push(r);
+                });
+
+                var palette = ['#0d6efd','#198754','#dc3545','#fd7e14','#6610f2','#20c997','#6c757d'];
+                var colorMap = {};
+                gOrder.forEach(function(g, i) { colorMap[g] = palette[i % palette.length]; });
+
+                var sy = minDate.getFullYear(), ey = maxDate.getFullYear();
+                var totalYears = ey - sy + 1;
+                var step = totalYears > 25 ? 5 : totalYears > 12 ? 2 : 1;
+                var ticks = [];
+                for (var y = sy; y <= ey; y++) {
+                    if ((y - sy) % step === 0) ticks.push({year: y, p: pct(new Date(y, 0, 1))});
+                }
+
+                var LW = '32%';
+                var html = '<div class="p-3">';
+                html += '<div class="d-flex align-items-center mb-2"><div style="width:' + LW + '"></div>';
+                html += '<div class="position-relative flex-grow-1" style="height:16px">';
+                ticks.forEach(function(t) {
+                    html += '<span class="position-absolute text-muted" style="font-size:0.7rem;left:' + t.p.toFixed(1) + '%;transform:translateX(-50%)">' + t.year + '</span>';
+                });
+                html += '</div></div>';
+
+                gOrder.forEach(function(g) {
+                    var color = colorMap[g];
+                    html += '<div class="mb-3"><div class="small fw-semibold text-muted mb-1" style="padding-left:' + LW + '">' + g + '</div>';
+                    var sorted = groups[g].slice().sort(function(a, b) {
+                        var da = _parseDate(a.start_date) || new Date(0);
+                        var db = _parseDate(b.start_date) || new Date(0);
+                        return da - db;
+                    });
+                    sorted.forEach(function(r) {
+                        var sd = _parseDate(r.start_date);
+                        var ed = _parseDate(r.end_date) || today;
+                        var left = sd ? pct(sd) : 0;
+                        var right = pct(ed);
+                        var w = Math.max(0.3, right - left);
+                        var isCurrent = !r.end_date;
+                        var label = (r.nominativo || '—') + (r.ownership_share ? ' (' + r.ownership_share + ')' : '');
+                        var tip = (r.start_date || '?') + ' → ' + (r.end_date || 'in corso') + '\n' + label;
+                        html += '<div class="d-flex align-items-center mb-1">';
+                        html += '<div class="text-end pe-2 small text-truncate" style="width:' + LW + ';min-width:' + LW + '" title="' + label.replace(/"/g,'&quot;') + '">' + label + '</div>';
+                        html += '<div class="position-relative flex-grow-1" style="height:16px;background:#f0f0f0;border-radius:3px">';
+                        html += '<div title="' + tip.replace(/"/g,'&quot;') + '" style="position:absolute;left:' + left.toFixed(2) + '%;width:' + w.toFixed(2) + '%;height:100%;';
+                        html += 'background:' + color + (isCurrent ? '' : 'aa') + ';border-radius:3px';
+                        if (isCurrent) html += ';box-shadow:0 0 0 1px ' + color;
+                        html += '"></div>';
+                        ticks.forEach(function(t) {
+                            if (t.p > left && t.p < right) {
+                                html += '<div style="position:absolute;left:' + t.p.toFixed(1) + '%;top:0;width:1px;height:100%;background:rgba(255,255,255,.4)"></div>';
+                            }
+                        });
+                        html += '</div></div>';
+                    });
+                    html += '</div>';
+                });
+
+                html += '<div class="d-flex gap-3 mt-2 flex-wrap">';
+                gOrder.forEach(function(g) {
+                    html += '<span class="small"><span style="display:inline-block;width:12px;height:12px;background:' + colorMap[g] + ';border-radius:2px;vertical-align:middle;margin-right:4px"></span>' + g + '</span>';
+                });
+                html += '<span class="small text-muted ms-3"><span style="display:inline-block;width:12px;height:12px;background:#ccc;border-radius:2px;vertical-align:middle;margin-right:4px;opacity:.6"></span>cessato</span>';
+                html += '</div></div>';
+                tlDiv.innerHTML = html;
+            }
+
+            var toggleTimeline = document.getElementById('toggle-owners-timeline');
+            if (toggleTimeline && tlDiv) {
+                toggleTimeline.addEventListener('change', function() {
+                    if (this.checked) { tlDiv.classList.remove('d-none'); buildTimeline(); }
+                    else { tlDiv.classList.add('d-none'); }
+                });
+            }
+        }
     })();
     {% endif %}
 
-    // Page visits table (normalized server-side)
+    // Batch queue per-subunit visuras
+    {% if result and result.db_properties %}
+    (function() {
+        var dbProperties = {{ result.db_properties | tojson }};
+        var seen = {};
+        var subunitRequests = [];
+        dbProperties.forEach(function(row) {
+            if (!row.subunit) return;
+            var key = [row.province, row.municipality, row.sheet, row.parcel, row.subunit, row.cadastre_type || 'F'].join('|');
+            if (seen[key]) return;
+            seen[key] = true;
+            subunitRequests.push({
+                province: row.province, municipality: row.municipality,
+                sheet: row.sheet, parcel: row.parcel,
+                subunit: row.subunit, cadastre_type: row.cadastre_type || 'F'
+            });
+        });
+        if (!subunitRequests.length) return;
+
+        var countMsg     = document.getElementById('queue-count-msg');
+        var progressWrap = document.getElementById('queue-progress-wrap');
+        var progressBar  = document.getElementById('queue-progress-bar');
+        var progressMsg  = document.getElementById('queue-progress-msg');
+        var resultWrap   = document.getElementById('queue-result-wrap');
+        var resultMsg    = document.getElementById('queue-result-msg');
+        var btnConfirm   = document.getElementById('btn-queue-confirm');
+        var btnClose     = document.getElementById('btn-modal-close');
+        if (!btnConfirm) return;
+
+        var firstReq = subunitRequests[0];
+        var coordLabel = 'F.' + (firstReq.sheet || '?') + ' P.' + (firstReq.parcel || '?') + ' ' + (firstReq.cadastre_type || '') + ' — ' + (firstReq.municipality || '');
+
+        document.getElementById('modal-queue-subunit').addEventListener('show.bs.modal', function() {
+            countMsg.textContent = subunitRequests.length + ' subalterni da accodare (' + coordLabel + ')';
+            progressWrap.classList.add('d-none');
+            resultWrap.classList.add('d-none');
+            progressBar.style.width = '0%';
+            progressBar.classList.add('progress-bar-animated');
+            btnConfirm.disabled = false;
+            btnConfirm.innerHTML = '<i class="fas fa-play me-1"></i>Accoda tutte';
+            btnClose.textContent = 'Annulla';
+            btnClose.disabled = false;
+        });
+
+        btnConfirm.addEventListener('click', async function() {
+            btnConfirm.disabled = true;
+            btnClose.disabled = true;
+            progressWrap.classList.remove('d-none');
+            resultWrap.classList.add('d-none');
+
+            var queued = 0, cached = 0, failed = [];
+            var total = subunitRequests.length;
+
+            for (var i = 0; i < total; i++) {
+                var req = subunitRequests[i];
+                progressBar.style.width = Math.round(((i + 1) / total) * 100) + '%';
+                progressMsg.textContent = (i + 1) + ' / ' + total + ' — sub. ' + req.subunit;
+                try {
+                    var resp = await fetch('/visura', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify(req)
+                    });
+                    if (!resp.ok) { failed.push(req.subunit); continue; }
+                    var json = await resp.json();
+                    if ((json.status || '') === 'cached') { cached++; } else { queued++; }
+                } catch (e) {
+                    failed.push(req.subunit);
+                }
+                if (i < total - 1) await new Promise(function(r) { setTimeout(r, 80); });
+            }
+
+            progressBar.classList.remove('progress-bar-animated');
+            progressBar.style.width = '100%';
+            progressMsg.textContent = 'Completato.';
+
+            var parts = [];
+            if (queued)        parts.push('<span class="badge bg-success me-1">' + queued + ' accodate</span>');
+            if (cached)        parts.push('<span class="badge bg-secondary me-1">' + cached + ' già in cache</span>');
+            if (failed.length) parts.push('<span class="badge bg-danger me-1">' + failed.length + ' errori</span>');
+            resultWrap.classList.remove('d-none');
+            resultMsg.innerHTML = '<div class="d-flex flex-wrap gap-1 mb-2">' + parts.join('') + '</div>';
+            if (queued) {
+                resultMsg.innerHTML += '<p class="small text-muted mb-0">Le visure sono in coda. <a href="/web/results">Visualizza risultati</a></p>';
+            }
+            if (failed.length) {
+                resultMsg.innerHTML += '<p class="small text-danger mb-0 mt-1">Falliti: sub. ' + failed.join(', ') + '</p>';
+            }
+            btnClose.textContent = 'Chiudi';
+            btnClose.disabled = false;
+        });
+    })();
+    {% endif %}
+
+    // Page visits table
     {% if result and result.page_visit_rows %}
     (function() {
         var el = document.getElementById("tabulator-page-visits");
@@ -677,24 +943,21 @@
         new Tabulator(el, Object.assign({}, commonOpts, {
             data: {{ result.page_visit_rows | tojson }},
             columns: [
-                {title: "Step", field: "Step", headerFilter: "input", sorter: "string", width: 150},
-                {title: "URL", field: "URL", headerFilter: "input", sorter: "string",
+                {title: "Step",      field: "Step",      minWidth: headerMinWidth("Step"),      headerFilter: "input", sorter: "string"},
+                {title: "URL",       field: "URL",       minWidth: headerMinWidth("URL"),       headerFilter: "input", sorter: "string",
                  formatter: function(cell) {
                      var v = cell.getValue();
                      if (v && v !== "-") {
                          var link = document.createElement("a");
-                         link.href = v;
-                         link.target = "_blank";
-                         link.rel = "noopener";
+                         link.href = v; link.target = "_blank"; link.rel = "noopener";
                          link.textContent = v.replace(/https?:\/\/[^/]+/, "");
                          return link;
                      }
                      return "-";
                  }},
-                {title: "Timestamp", field: "Timestamp", headerFilter: "input", sorter: "string", width: 180},
-                {title: "Errors", field: "Errors", headerFilter: "input", sorter: "string"},
+                {title: "Timestamp", field: "Timestamp", minWidth: headerMinWidth("Timestamp"), headerFilter: "input", sorter: "string"},
+                {title: "Errors",    field: "Errors",    minWidth: headerMinWidth("Errors"),    headerFilter: "input", sorter: "string"},
             ],
-            pagination: false,
         }));
     })();
     {% endif %}

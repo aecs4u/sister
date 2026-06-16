@@ -1,0 +1,315 @@
+{# ── SISTER shared template macros ─────────────────────────────────────────
+   Import here so all macros in this file can call render_nested directly.   #}
+{% from "_nested.html" import render_nested %}
+
+{# ────────────────────────────────────────────────────────────────────────────
+   BADGE MACROS
+   ──────────────────────────────────────────────────────────────────────────── #}
+
+{# Request / workflow status badge.
+   large=True adds fs-6 for use in card headers. #}
+{% macro status_badge(status, large=False) %}
+{% set s = (status or '')|lower %}
+{% if s in ('completed','success','succeeded','ok') %}
+  {% set cls, label = 'bg-success', 'Completed' %}
+{% elif s in ('failed','error') %}
+  {% set cls, label = 'bg-danger', 'Failed' %}
+{% elif s == 'partial' %}
+  {% set cls, label = 'bg-warning text-dark', 'Partial' %}
+{% elif s == 'running' %}
+  {% set cls, label = 'bg-info text-dark', 'Running' %}
+{% elif s == 'pending' %}
+  {% set cls, label = 'bg-secondary', 'Pending' %}
+{% else %}
+  {% set cls = 'bg-secondary' %}
+  {% set label = (status or '-')|replace('_',' ')|title %}
+{% endif %}
+<span class="badge {{ cls }}{% if large %} fs-6{% endif %}">{{ label }}</span>
+{% endmacro %}
+
+{# Catasto type (F / T / E / mixed) badge. #}
+{% macro catasto_badge(tipo) %}
+{% if tipo == 'F' %}<span class="badge bg-success">F</span>
+{% elif tipo == 'T' %}<span class="badge bg-warning text-dark">T</span>
+{% elif tipo == 'E' %}<span class="badge bg-info text-dark">E</span>
+{% elif tipo %}<span class="badge bg-secondary">{{ tipo }}</span>
+{% else %}<span class="text-muted">-</span>{% endif %}
+{% endmacro %}
+
+{# Source badge: single vs workflow. #}
+{% macro source_badge(source) %}
+{% if source == 'workflow' %}<span class="badge bg-primary">Workflow</span>
+{% else %}<span class="badge bg-secondary">Single</span>{% endif %}
+{% endmacro %}
+
+{# Request type badge (request_type field). #}
+{% macro request_type_badge(request_type, source) %}
+<span class="badge {% if source == 'workflow' %}bg-primary-subtle text-primary-emphasis{% else %}bg-secondary{% endif %}">
+  {{ request_type or '-' }}
+</span>
+{% endmacro %}
+
+{# ────────────────────────────────────────────────────────────────────────────
+   PARAMETER / LABEL MACROS
+   ──────────────────────────────────────────────────────────────────────────── #}
+
+{# A detail-label + detail-value pair widget.
+   mono=True wraps value in <code>.
+   icon (optional) FA class prefix, e.g. "fa-map-marker-alt". #}
+{% macro param_label(label, value, mono=False, icon=None) %}
+<div>
+  <div class="detail-label">{% if icon %}<i class="fas {{ icon }} me-1 text-muted"></i>{% endif %}{{ label }}</div>
+  <div class="detail-value">
+    {% if mono %}<code>{{ value or '-' }}</code>
+    {% else %}{{ value or '-' }}{% endif %}
+  </div>
+</div>
+{% endmacro %}
+
+{# ────────────────────────────────────────────────────────────────────────────
+   STATS CARD (results index)
+   ──────────────────────────────────────────────────────────────────────────── #}
+
+{# Clickable stat card used in the results dashboard row. #}
+{% macro stats_card(icon, color, value, label, url) %}
+<a href="{{ url }}" class="stats-card-link">
+  <div class="card border-0 shadow-sm h-100">
+    <div class="card-body text-center py-3">
+      <i class="fas {{ icon }} fa-lg text-{{ color }} mb-1"></i>
+      <h4 class="mb-0">{{ value }}</h4>
+      <small class="text-muted">{{ label }}</small>
+    </div>
+  </div>
+</a>
+{% endmacro %}
+
+{# ────────────────────────────────────────────────────────────────────────────
+   SECTION HELPERS
+   ──────────────────────────────────────────────────────────────────────────── #}
+
+{# Returns the FA icon class + color class for a result section.
+   Usage: <i class="fas {{ section_icon(s.name, s.kind) }} me-2"></i> #}
+{% macro section_icon(name, kind) %}{% if name in ('immobili','db_properties') %}fa-home text-success{% elif name in ('intestati','db_owners','intestati_da_documenti','intestati_aggregati') %}fa-users text-info{% elif name in ('steps','persisted_steps') %}fa-project-diagram text-primary{% elif name == 'aggregate' %}fa-layer-group text-success{% elif name == 'summary' %}fa-clipboard-check text-warning{% elif name == 'downloaded_pdfs' %}fa-file-alt text-danger{% elif kind == 'object' %}fa-info-circle text-primary{% elif kind == 'value' %}fa-tag text-secondary{% else %}fa-table text-secondary{% endif %}{% endmacro %}
+
+{# Returns the left-border CSS class for a result section card. #}
+{% macro section_border(name, kind) %}{% if name in ('immobili','db_properties') %}section-immobili{% elif name in ('intestati','db_owners','intestati_da_documenti','intestati_aggregati') %}section-intestati{% elif name == 'downloaded_pdfs' %}section-docs{% elif name in ('steps','persisted_steps') %}section-steps{% elif kind == 'object' %}section-object{% endif %}{% endmacro %}
+
+{# Jump navigation pill bar for result-detail sections.
+   Hidden when there is only one section. #}
+{% macro jump_nav(sections) %}
+{% if sections|length > 1 %}
+<div class="card border-0 shadow-sm mb-3 section-nav no-print">
+  <nav class="d-flex flex-wrap gap-1 align-items-center p-2" aria-label="Section navigation">
+    {% for s in sections %}
+    <a class="nav-link" href="#section-{{ s.dom_id }}">
+      <i class="fas {{ section_icon(s.name, s.kind) }} me-1"></i>{{ s.title }}
+      {% if s.count is defined %}<span class="badge rounded-pill bg-secondary ms-1" style="font-size:.7rem">{{ s.count }}</span>{% endif %}
+    </a>
+    {% endfor %}
+  </nav>
+</div>
+{% endif %}
+{% endmacro %}
+
+{# Income / rendita highlight boxes for object-kind sections.
+   Scans items (list of (key, value) tuples) for known rendita keys. #}
+{% macro income_boxes(items) %}
+{% set _keys = ['rendita','rendita catastale','reddito dominicale','reddito agrario'] %}
+{% set _found = [] %}
+{% for k, v in items %}{% if k|lower in _keys and v and v not in ('-','N/A') %}{% if _found.append((k,v)) %}{% endif %}{% endif %}{% endfor %}
+{% if _found %}
+<div class="d-flex flex-wrap gap-3 p-3 border-bottom">
+  {% for k, v in _found %}
+  <div class="income-box">
+    <div class="income-label">{{ k }}</div>
+    <div class="income-value">{{ v }}</div>
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+{% endmacro %}
+
+{# ────────────────────────────────────────────────────────────────────────────
+   DOCUMENT ACCORDION
+   Used for both inline (kind=downloaded_docs) and DB (result.documents) docs.
+
+   Parameters:
+     docs              — iterable of doc dicts
+     accordion_id      — unique HTML ID prefix for the accordion wrapper
+     intestati_prefix  — prefix for intestati Tabulator div IDs
+                         final ID = "{intestati_prefix}-{loop.index}"
+     classamento_prefix — prefix for classamento Tabulator div IDs (optional)
+   ──────────────────────────────────────────────────────────────────────────── #}
+{% macro doc_accordion(docs, accordion_id, intestati_prefix, classamento_prefix=None) %}
+<div class="accordion accordion-flush" id="{{ accordion_id }}-wrap">
+  {% for doc in docs %}
+  {% set _int = doc.intestati_rows or doc.intestati %}
+  <div class="accordion-item">
+    <h2 class="accordion-header">
+      <button class="accordion-button collapsed py-2" type="button"
+              data-bs-toggle="collapse"
+              data-bs-target="#{{ accordion_id }}-{{ loop.index }}"
+              aria-expanded="false"
+              aria-controls="{{ accordion_id }}-{{ loop.index }}">
+        <span class="badge bg-{% if doc.file_format == 'XML' %}success{% elif doc.file_format == 'P7M' %}warning text-dark{% else %}primary{% endif %} me-2">
+          {{ doc.file_format or '?' }}
+        </span>
+        <strong class="me-2">{{ doc.oggetto or doc.document_type or doc.filename or 'Document' }}</strong>
+        {% if doc.foglio or doc.particella %}
+        <span class="text-muted me-2 small">F.{{ doc.foglio or '?' }} P.{{ doc.particella or '?' }}{% if doc.subalterno %} Sub.{{ doc.subalterno }}{% endif %}</span>
+        {% endif %}
+        {% if _int %}<span class="badge bg-info me-2">{{ _int|length }} intestati</span>{% endif %}
+        {% if doc.file_size %}<span class="text-muted small">{{ (doc.file_size / 1024)|round(1) }}KB</span>{% endif %}
+      </button>
+    </h2>
+    <div id="{{ accordion_id }}-{{ loop.index }}"
+         class="accordion-collapse collapse"
+         data-bs-parent="#{{ accordion_id }}-wrap">
+      <div class="accordion-body p-3">
+        {% if doc.meta %}
+        <table class="table table-sm mb-3 doc-meta">
+          <tbody>
+            {% for label, val in doc.meta %}
+            <tr>
+              <th class="bg-light">{{ label }}</th>
+              <td>{% if label == 'Filename' %}<code>{{ val }}</code>{% else %}{{ val }}{% endif %}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+        {% endif %}
+
+        {% if doc.file_path %}
+        <p class="mb-3">
+          {% if doc.file_format == 'PDF' %}
+          <a href="/web/documents/{{ doc.id }}/view" target="_blank" class="btn btn-sm btn-outline-secondary me-2">
+            <i class="fas fa-eye me-1"></i>Visualizza PDF
+          </a>
+          {% endif %}
+          <a href="/web/documents/{{ doc.id }}/download" class="btn btn-sm btn-outline-primary">
+            <i class="fas fa-download me-1"></i>Download {{ doc.file_format }}
+          </a>
+        </p>
+        {% endif %}
+
+        {% if doc.intestati_rows %}
+        <h6 class="mt-3"><i class="fas fa-users text-info me-1"></i>Intestati ({{ doc.intestati_rows|length }})</h6>
+        <div id="{{ intestati_prefix }}-{{ loop.index }}"></div>
+        {% endif %}
+
+        {% if doc.indirizzo %}
+        <p class="mt-2 mb-0">
+          <i class="fas fa-map-marker-alt text-primary me-1"></i>
+          <strong>Indirizzo:</strong> {{ doc.indirizzo }}
+        </p>
+        {% endif %}
+
+        {% if doc.dati_immobile %}
+        <h6 class="mt-3"><i class="fas fa-home text-success me-1"></i>Dati Immobile</h6>
+        <table class="table table-sm table-bordered">
+          <tbody>
+            {% for key, value in doc.dati_immobile.items() %}
+            {% if value and value is string %}
+            <tr><th class="bg-light w-25">{{ key }}</th><td>{{ value }}</td></tr>
+            {% endif %}
+            {% endfor %}
+          </tbody>
+        </table>
+        {% endif %}
+
+        {% if doc.classamento_rows and classamento_prefix %}
+        <h6 class="mt-3"><i class="fas fa-clipboard-list text-warning me-1"></i>Classamento ({{ doc.classamento_rows|length }})</h6>
+        <div id="{{ classamento_prefix }}-{{ loop.index }}"></div>
+        {% endif %}
+
+        {% if doc.xml_parsed %}
+        <h6 class="mt-3"><i class="fas fa-file-code text-secondary me-1"></i>XML Content</h6>
+        {{ render_nested(doc.xml_parsed) }}
+        {% endif %}
+      </div>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+{% endmacro %}
+
+{# ────────────────────────────────────────────────────────────────────────────
+   WORKFLOW STEPS ACCORDION
+   ──────────────────────────────────────────────────────────────────────────── #}
+{% macro render_workflow_steps(steps, section_id) %}
+{% if steps %}
+<div class="accordion accordion-flush" id="workflow-steps-{{ section_id }}">
+  {% for step in steps %}
+  {% set step_name   = step.get('step') or step.get('step_key') or step.get('name') or ('Step ' ~ loop.index) %}
+  {% set step_status = step.get('status') or step.get('state') or '-' %}
+  {% set collapse_id = 'workflow-step-' ~ section_id ~ '-' ~ loop.index %}
+  {% set metadata_keys = ['step','step_key','name','status','state','started_at','finished_at','duration_seconds','duration_ms','request_id','success'] %}
+  {% set primary_keys  = ['data','result','output','aggregate','summary','error'] %}
+  <div class="accordion-item">
+    <h2 class="accordion-header">
+      <button class="accordion-button {% if not loop.first %}collapsed{% endif %} py-2" type="button"
+              data-bs-toggle="collapse" data-bs-target="#{{ collapse_id }}"
+              aria-expanded="{{ 'true' if loop.first else 'false' }}"
+              aria-controls="{{ collapse_id }}">
+        <span class="badge bg-light text-dark me-2">{{ loop.index }}</span>
+        <span class="workflow-step-title me-2"><code>{{ step_name }}</code></span>
+        {{ status_badge(step_status) }}
+      </button>
+    </h2>
+    <div id="{{ collapse_id }}"
+         class="accordion-collapse collapse {% if loop.first %}show{% endif %}"
+         data-bs-parent="#workflow-steps-{{ section_id }}">
+      <div class="accordion-body">
+        <div class="workflow-step-section">
+          <table class="table table-sm table-bordered mb-0 workflow-step-meta">
+            <tbody>
+              {% for key in metadata_keys %}
+                {% if step.get(key) is not none %}
+                <tr>
+                  <th>{{ key }}</th>
+                  <td>
+                    {% if key in ('status','state') %}{{ status_badge(step.get(key)) }}
+                    {% else %}{{ render_nested(step.get(key), 1) }}{% endif %}
+                  </td>
+                </tr>
+                {% endif %}
+              {% endfor %}
+              {% for key, child in step.items() %}
+                {% if key not in metadata_keys and key not in primary_keys and not (child is mapping) and not (child is sequence and child is not string) %}
+                <tr><th>{{ key }}</th><td>{{ render_nested(child, 1) }}</td></tr>
+                {% endif %}
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+        {% if step.get('error') is not none %}
+        <div class="alert alert-danger mt-3 mb-0">
+          <strong>Error</strong>
+          <div class="mt-2">{{ render_nested(step.get('error'), 1) }}</div>
+        </div>
+        {% endif %}
+        {% for key in ['data','result','output','aggregate','summary'] %}
+          {% if step.get(key) is not none %}
+          <div class="workflow-step-section">
+            <h6 class="text-uppercase text-muted small mb-2">{{ key|replace('_',' ') }}</h6>
+            {{ render_nested(step.get(key), 1) }}
+          </div>
+          {% endif %}
+        {% endfor %}
+        {% for key, child in step.items() %}
+          {% if key not in metadata_keys and key not in primary_keys and (child is mapping or (child is sequence and child is not string)) %}
+          <div class="workflow-step-section">
+            <h6 class="text-uppercase text-muted small mb-2">{{ key|replace('_',' ') }}</h6>
+            {{ render_nested(child, 1) }}
+          </div>
+          {% endif %}
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+{% else %}
+<span class="nested-empty">Empty</span>
+{% endif %}
+{% endmacro %}

@@ -52,6 +52,11 @@ outputs/
 original_file.pdf
 .codex
 
+# Playwright MCP screenshots and session data
+.playwright-mcp/
+*.jpeg
+*.png
+
 # Docker
 docker-compose.override.yaml
 # Local runtime / build (do not commit)

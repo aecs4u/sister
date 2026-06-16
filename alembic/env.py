@@ -20,9 +20,9 @@ from sister.cadastral import (  # noqa: F401, E402
     CadastralLegalEntitySearchParameter,
     CadastralLegalEntitySearchProperty,
     CadastralLocationParameters,
+    CadastralPropertyProperty,
     CadastralProspectOwner,
     CadastralProspectProperty,
-    CadastralPropertyProperty,
     CadastralQuery,
 )
 from sister.db_models import (  # noqa: F401, E402
@@ -31,6 +31,7 @@ from sister.db_models import (  # noqa: F401, E402
     DocumentMetadata,
     FeedbackConfig,
     FeedbackUnsubscribe,
+    GeographicPlace,
     OwnershipRight,
     PageVisit,
     VisuraDocument,

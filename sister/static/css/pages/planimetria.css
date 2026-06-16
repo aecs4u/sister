@@ -1,0 +1,9 @@
+#plan-map { height: calc(100vh - 200px); min-height: 500px; }
+.plan-sidebar { background: #f8f9fa; border-left: 1px solid #dee2e6; overflow-y: auto; }
+.layer-btn { font-size: .78rem; padding: .2rem .5rem; }
+.legend-dot { display: inline-block; width: 12px; height: 12px; border-radius: 2px; vertical-align: middle; margin-right: 4px; }
+.feature-popup table { font-size: .8rem; }
+.feature-popup td { padding: 1px 4px; }
+.feature-popup th { background: #e9ecef; padding: 1px 4px; }
+#plan-cad { height: calc(100vh - 200px); min-height: 500px; background: #f0f0f0; overflow: hidden; cursor: grab; position: relative; }
+#plan-cad.dragging { cursor: grabbing; }

@@ -27,9 +27,9 @@ from .cadastral import (
     CadastralLegalEntitySearchParameter,
     CadastralLegalEntitySearchProperty,
     CadastralLocationParameters,
+    CadastralPropertyProperty,
     CadastralProspectOwner,
     CadastralProspectProperty,
-    CadastralPropertyProperty,
     CadastralQuery,
 )
 from .db_models import (
@@ -37,11 +37,13 @@ from .db_models import (
     OWNER_SUBJECT_FIELD_MAP,
     PROPERTY_FIELD_MAP,
     PROPERTY_LOCATION_FIELD_MAP,
+    PROPERTY_SUBJECT_FIELD_MAP,
     CadastralLocation,
     CadastralSubject,
     DocumentMetadata,
     FeedbackConfig,
     FeedbackUnsubscribe,
+    GeographicPlace,
     OwnershipRight,
     PageVisit,
     VisuraDocument,
@@ -74,6 +76,7 @@ from .visura_xml_models import (
 # not define or create the schema.
 _SISTER_TABLES = [
     CadastralLocation.__table__,  # no FK deps — must be first
+    GeographicPlace.__table__,
     CadastralSubject.__table__,
     OwnershipRight.__table__,
     VisuraRequest.__table__,
@@ -253,6 +256,28 @@ async def get_or_create_location(
     return loc.id
 
 
+async def get_or_create_place(
+    session: AsyncSession,
+    province: str = "",
+    municipality: str = "",
+    municipality_code: str = "",
+) -> Optional[int]:
+    """Get existing GeographicPlace or create one; return its id."""
+    stmt = select(GeographicPlace).where(
+        GeographicPlace.province == province,
+        GeographicPlace.municipality == municipality,
+        GeographicPlace.municipality_code == municipality_code,
+    )
+    result = await session.execute(stmt)
+    existing = result.scalar_one_or_none()
+    if existing is not None:
+        return existing.id
+    place = GeographicPlace(province=province, municipality=municipality, municipality_code=municipality_code)
+    session.add(place)
+    await session.flush()
+    return place.id
+
+
 async def get_or_create_subject(
     session: AsyncSession,
     fiscal_code: Optional[str] = None,
@@ -261,6 +286,8 @@ async def get_or_create_subject(
     first_name: Optional[str] = None,
     gender: Optional[str] = None,
     date_of_birth: Optional[str] = None,
+    birth_place_id: Optional[int] = None,
+    birth_municipality_code: Optional[str] = None,
     subject_type: Optional[str] = None,
 ) -> int:
     """Get existing CadastralSubject by fiscal_code (when present) or create one; return its id."""
@@ -276,6 +303,8 @@ async def get_or_create_subject(
         first_name=first_name,
         gender=gender,
         date_of_birth=date_of_birth,
+        birth_place_id=birth_place_id,
+        birth_municipality_code=birth_municipality_code,
         subject_type=subject_type,
     )
     session.add(subj)
@@ -296,6 +325,12 @@ async def get_or_create_right(
 
     Matches NULL fields explicitly (SQLite does not deduplicate NULLs via UNIQUE constraints).
     """
+    right_type = right_type or ""
+    right_code = right_code or ""
+    right_description = right_description or ""
+    ownership_share = ownership_share or ""
+    start_date = start_date or ""
+    end_date = end_date or ""
     conditions = []
     for col, val in [
         (OwnershipRight.right_type, right_type),
@@ -305,7 +340,7 @@ async def get_or_create_right(
         (OwnershipRight.start_date, start_date),
         (OwnershipRight.end_date, end_date),
     ]:
-        conditions.append(col.is_(None) if val is None else col == val)
+        conditions.append(col == val)
     result = await session.execute(select(OwnershipRight).where(*conditions))
     existing = result.scalar_one_or_none()
     if existing is not None:
@@ -397,11 +432,11 @@ async def save_requests_batch(requests: list[dict]) -> None:
 
 def _parse_property_rows(
     response_id: str, tipo_catasto: str, data: Optional[dict]
-) -> list[tuple[dict[str, Any], dict[str, str]]]:
+) -> list[tuple[dict[str, Any], dict[str, str], dict[str, Any]]]:
     """Parse properties from response JSON.
 
-    Returns (property_fields, location_fields) pairs.  Location fields are
-    resolved to a CadastralLocation id by the caller (save_response).
+    Returns (property_fields, location_fields, subject_fields) tuples. Location
+    and subject fields are resolved to normalized ids by the caller.
     """
     if not data or not isinstance(data, dict):
         return []
@@ -423,13 +458,17 @@ def _parse_property_rows(
             "subunit": "",
             "section": "",
         }
+        subject_fields: dict[str, Any] = {}
         for html_key, db_col in PROPERTY_FIELD_MAP.items():
             if html_key in item:
                 prop_fields[db_col] = str(item[html_key]).strip() or None
         for html_key, loc_col in PROPERTY_LOCATION_FIELD_MAP.items():
             if html_key in item:
                 loc_fields[loc_col] = str(item[html_key]).strip()
-        rows.append((prop_fields, loc_fields))
+        for html_key, subject_col in PROPERTY_SUBJECT_FIELD_MAP.items():
+            if html_key in item:
+                subject_fields[subject_col] = str(item[html_key]).strip() or None
+        rows.append((prop_fields, loc_fields, subject_fields))
     return rows
 
 
@@ -518,12 +557,13 @@ async def save_response(
             req_loc = await session.get(CadastralLocation, req_row.location_id)
 
         # Populate structured tables from JSON
-        for prop_fields, loc_fields in _parse_property_rows(request_id, tipo_catasto, data):
+        for prop_fields, loc_fields, subject_fields in _parse_property_rows(request_id, tipo_catasto, data):
             if req_loc:
                 loc_fields["province"] = loc_fields["province"] or req_loc.province
                 loc_fields["municipality"] = loc_fields["municipality"] or req_loc.municipality
             location_id = await get_or_create_location(session, **loc_fields)
-            session.add(VisuraProperty(**prop_fields, location_id=location_id))
+            subject_id = await get_or_create_subject(session, **subject_fields) if subject_fields else None
+            session.add(VisuraProperty(**prop_fields, location_id=location_id, subject_id=subject_id))
         for subject_fields, right_fields in _parse_owners(request_id, data):
             subject_id = await get_or_create_subject(session, **subject_fields) if subject_fields else None
             right_id = await get_or_create_right(session, **right_fields) if right_fields else None

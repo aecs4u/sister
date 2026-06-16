@@ -1,4 +1,5 @@
 {% extends "_base.html" %}
+{% from "_macros.html" import status_badge, source_badge, catasto_badge, request_type_badge, stats_card %}
 {% block page_title %}Results{% endblock %}
 
 {% block extra_css %}
@@ -9,202 +10,174 @@
 
 {% block content %}
 <div class="container-fluid py-4">
-    <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-4">
-        <h1 class="mb-0"><i class="fas fa-database text-primary me-2"></i>Results</h1>
-        <div class="d-flex align-items-center gap-3">
-            {% if current_count %}
-            <span class="text-muted small">Showing {{ offset + 1 }}&ndash;{{ offset + current_count }} of {{ total_count }} result{% if total_count != 1 %}s{% endif %}</span>
+
+  {# ── Page header ─────────────────────────────────────────────────────────── #}
+  <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-4">
+    <h1 class="mb-0"><i class="fas fa-database text-primary me-2"></i>Results</h1>
+    <div class="d-flex align-items-center gap-3">
+      {% if current_count %}
+      <span class="text-muted small">
+        Showing {{ offset + 1 }}&ndash;{{ offset + current_count }} of {{ total_count }}
+        result{% if total_count != 1 %}s{% endif %}
+      </span>
+      {% endif %}
+      <form method="post" action="/web/results/refresh" class="d-inline" id="import-outputs-form">
+        <button type="submit" class="btn btn-outline-primary btn-sm">
+          <i class="fas fa-file-import me-1"></i>Import Outputs
+        </button>
+      </form>
+    </div>
+  </div>
+
+  {# ── Dashboard stats ──────────────────────────────────────────────────────── #}
+  <div class="row g-3 mb-4">
+    <div class="col-lg col-md-4 col-6">
+      {{ stats_card('fa-paper-plane', 'primary', stats.total_requests, 'Total', stats_urls.total) }}
+    </div>
+    <div class="col-lg col-md-4 col-6">
+      {{ stats_card('fa-check-circle', 'success', stats.successful, 'Successful', stats_urls.completed) }}
+    </div>
+    <div class="col-lg col-md-4 col-6">
+      {{ stats_card('fa-adjust', 'warning', stats.partial or 0, 'Partial', stats_urls.partial) }}
+    </div>
+    <div class="col-lg col-md-4 col-6">
+      {{ stats_card('fa-times-circle', 'danger', stats.failed, 'Failed', stats_urls.failed) }}
+    </div>
+    <div class="col-lg col-md-4 col-6">
+      {{ stats_card('fa-hourglass-half', 'warning', stats.pending, 'Pending', stats_urls.pending) }}
+    </div>
+  </div>
+
+  {# ── Filter bar ───────────────────────────────────────────────────────────── #}
+  <div class="card border-0 shadow-sm mb-4">
+    <div class="card-body py-3">
+      <form class="row g-2 align-items-end" method="get" action="/web/results">
+
+        {# Text filters #}
+        {% set text_filters = [
+          ('provincia', 'Provincia', 'e.g. Trieste', 'col-lg col-md-4 col-6'),
+          ('comune',    'Comune',    'e.g. TRIESTE',  'col-lg col-md-4 col-6'),
+        ] %}
+        {% for name, label, placeholder, col in text_filters %}
+        <div class="{{ col }}">
+          <label for="filter-{{ name }}" class="form-label form-label-sm mb-1">{{ label }}</label>
+          <input type="text" class="form-control form-control-sm" name="{{ name }}"
+                 id="filter-{{ name }}" placeholder="{{ placeholder }}"
+                 value="{{ request.query_params.get(name, '') }}">
+        </div>
+        {% endfor %}
+
+        <div class="col-lg-1 col-md-2 col-6">
+          <label for="filter-foglio" class="form-label form-label-sm mb-1">Foglio</label>
+          <input type="text" class="form-control form-control-sm" name="foglio"
+                 id="filter-foglio" placeholder="9" value="{{ foglio or '' }}">
+        </div>
+        <div class="col-lg-1 col-md-2 col-6">
+          <label for="filter-particella" class="form-label form-label-sm mb-1">Particella</label>
+          <input type="text" class="form-control form-control-sm" name="particella"
+                 id="filter-particella" placeholder="166" value="{{ particella or '' }}">
+        </div>
+
+        {# Select filters #}
+        <div class="col-lg-2 col-md-3 col-6">
+          <label for="filter-tipo-catasto" class="form-label form-label-sm mb-1">Catasto</label>
+          <select class="form-select form-select-sm" name="tipo_catasto" id="filter-tipo-catasto">
+            <option value="">All types</option>
+            <option value="T" {% if tipo_catasto == 'T' %}selected{% endif %}>Terreni (T)</option>
+            <option value="F" {% if tipo_catasto == 'F' %}selected{% endif %}>Fabbricati (F)</option>
+            <option value="E" {% if tipo_catasto == 'E' %}selected{% endif %}>Entrambi (E)</option>
+          </select>
+        </div>
+        <div class="col-lg-2 col-md-3 col-6">
+          <label for="filter-source" class="form-label form-label-sm mb-1">Source</label>
+          <select class="form-select form-select-sm" name="source" id="filter-source">
+            <option value="">All sources</option>
+            <option value="single"   {% if source == 'single'   %}selected{% endif %}>Single</option>
+            <option value="workflow" {% if source == 'workflow' %}selected{% endif %}>Workflow</option>
+          </select>
+        </div>
+        <div class="col-lg-2 col-md-3 col-6">
+          <label for="filter-status" class="form-label form-label-sm mb-1">Status</label>
+          <select class="form-select form-select-sm" name="status" id="filter-status">
+            <option value="">All statuses</option>
+            {% for val, lbl in [('completed','Completed'),('partial','Partial'),('failed','Failed'),('error','Error'),('running','Running'),('pending','Pending')] %}
+            <option value="{{ val }}" {% if status == val %}selected{% endif %}>{{ lbl }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="col-lg-1 col-md-2 col-6">
+          <label for="filter-limit" class="form-label form-label-sm mb-1">Rows</label>
+          <select class="form-select form-select-sm" name="limit" id="filter-limit">
+            {% if limit not in (10, 25, 50, 100, 200) %}
+            <option value="{{ limit }}" selected>{{ limit }}</option>
             {% endif %}
-            <form method="post" action="/web/results/refresh" class="d-inline" id="import-outputs-form">
-                <button type="submit" class="btn btn-outline-primary btn-sm">
-                    <i class="fas fa-file-import me-1"></i>Import Outputs
-                </button>
-            </form>
+            {% for n in [10, 25, 50, 100, 200] %}
+            <option value="{{ n }}" {% if limit == n %}selected{% endif %}>{{ n }}</option>
+            {% endfor %}
+          </select>
         </div>
-    </div>
 
-    <!-- Stats cards -->
-    <div class="row g-3 mb-4">
-        <div class="col-lg col-md-4 col-6">
-            <a href="{{ stats_urls.total }}" class="stats-card-link">
-            <div class="card border-0 shadow-sm h-100">
-                <div class="card-body text-center py-3">
-                    <i class="fas fa-paper-plane fa-lg text-primary mb-1"></i>
-                    <h4 class="mb-0">{{ stats.total_requests }}</h4>
-                    <small class="text-muted">Total</small>
-                </div>
-            </div>
-            </a>
+        <div class="col-lg-auto col-md-3 col-6 d-flex gap-2">
+          <button type="submit" class="btn btn-primary btn-sm">
+            <i class="fas fa-filter me-1"></i>Filter
+          </button>
+          {% if provincia or comune or foglio or particella or tipo_catasto or source or status %}
+          <a href="/web/results" class="btn btn-outline-secondary btn-sm">
+            <i class="fas fa-times me-1"></i>Clear
+          </a>
+          {% endif %}
         </div>
-        <div class="col-lg col-md-4 col-6">
-            <a href="{{ stats_urls.completed }}" class="stats-card-link">
-            <div class="card border-0 shadow-sm h-100">
-                <div class="card-body text-center py-3">
-                    <i class="fas fa-check-circle fa-lg text-success mb-1"></i>
-                    <h4 class="mb-0">{{ stats.successful }}</h4>
-                    <small class="text-muted">Successful</small>
-                </div>
-            </div>
-            </a>
-        </div>
-        <div class="col-lg col-md-4 col-6">
-            <a href="{{ stats_urls.partial }}" class="stats-card-link">
-            <div class="card border-0 shadow-sm h-100">
-                <div class="card-body text-center py-3">
-                    <i class="fas fa-adjust fa-lg text-warning mb-1"></i>
-                    <h4 class="mb-0">{{ stats.partial or 0 }}</h4>
-                    <small class="text-muted">Partial</small>
-                </div>
-            </div>
-            </a>
-        </div>
-        <div class="col-lg col-md-4 col-6">
-            <a href="{{ stats_urls.failed }}" class="stats-card-link">
-            <div class="card border-0 shadow-sm h-100">
-                <div class="card-body text-center py-3">
-                    <i class="fas fa-times-circle fa-lg text-danger mb-1"></i>
-                    <h4 class="mb-0">{{ stats.failed }}</h4>
-                    <small class="text-muted">Failed</small>
-                </div>
-            </div>
-            </a>
-        </div>
-        <div class="col-lg col-md-4 col-6">
-            <a href="{{ stats_urls.pending }}" class="stats-card-link">
-            <div class="card border-0 shadow-sm h-100">
-                <div class="card-body text-center py-3">
-                    <i class="fas fa-hourglass-half fa-lg text-warning mb-1"></i>
-                    <h4 class="mb-0">{{ stats.pending }}</h4>
-                    <small class="text-muted">Pending</small>
-                </div>
-            </div>
-            </a>
-        </div>
-    </div>
+      </form>
 
-    <!-- Filter bar -->
-    <div class="card border-0 shadow-sm mb-4">
-        <div class="card-body py-3">
-            <form class="row g-2 align-items-end" method="get" action="/web/results">
-                <div class="col-lg col-md-4 col-6">
-                    <label for="filter-provincia" class="form-label form-label-sm mb-1">Provincia</label>
-                    <input type="text" class="form-control form-control-sm" name="provincia"
-                           id="filter-provincia" placeholder="e.g. Trieste" value="{{ provincia or '' }}">
-                </div>
-                <div class="col-lg col-md-4 col-6">
-                    <label for="filter-comune" class="form-label form-label-sm mb-1">Comune</label>
-                    <input type="text" class="form-control form-control-sm" name="comune"
-                           id="filter-comune" placeholder="e.g. TRIESTE" value="{{ comune or '' }}">
-                </div>
-                <div class="col-lg-1 col-md-2 col-6">
-                    <label for="filter-foglio" class="form-label form-label-sm mb-1">Foglio</label>
-                    <input type="text" class="form-control form-control-sm" name="foglio"
-                           id="filter-foglio" placeholder="9" value="{{ foglio or '' }}">
-                </div>
-                <div class="col-lg-1 col-md-2 col-6">
-                    <label for="filter-particella" class="form-label form-label-sm mb-1">Particella</label>
-                    <input type="text" class="form-control form-control-sm" name="particella"
-                           id="filter-particella" placeholder="166" value="{{ particella or '' }}">
-                </div>
-                <div class="col-lg-2 col-md-3 col-6">
-                    <label for="filter-tipo-catasto" class="form-label form-label-sm mb-1">Catasto</label>
-                    <select class="form-select form-select-sm" name="tipo_catasto" id="filter-tipo-catasto">
-                        <option value="">All types</option>
-                        <option value="T" {% if tipo_catasto == 'T' %}selected{% endif %}>Terreni (T)</option>
-                        <option value="F" {% if tipo_catasto == 'F' %}selected{% endif %}>Fabbricati (F)</option>
-                        <option value="E" {% if tipo_catasto == 'E' %}selected{% endif %}>Entrambi (E)</option>
-                    </select>
-                </div>
-                <div class="col-lg-2 col-md-3 col-6">
-                    <label for="filter-source" class="form-label form-label-sm mb-1">Source</label>
-                    <select class="form-select form-select-sm" name="source" id="filter-source">
-                        <option value="">All sources</option>
-                        <option value="single" {% if source == 'single' %}selected{% endif %}>Single</option>
-                        <option value="workflow" {% if source == 'workflow' %}selected{% endif %}>Workflow</option>
-                    </select>
-                </div>
-                <div class="col-lg-2 col-md-3 col-6">
-                    <label for="filter-status" class="form-label form-label-sm mb-1">Status</label>
-                    <select class="form-select form-select-sm" name="status" id="filter-status">
-                        <option value="">All statuses</option>
-                        <option value="completed" {% if status == 'completed' %}selected{% endif %}>Completed</option>
-                        <option value="partial" {% if status == 'partial' %}selected{% endif %}>Partial</option>
-                        <option value="failed" {% if status == 'failed' %}selected{% endif %}>Failed</option>
-                        <option value="error" {% if status == 'error' %}selected{% endif %}>Error</option>
-                        <option value="running" {% if status == 'running' %}selected{% endif %}>Running</option>
-                        <option value="pending" {% if status == 'pending' %}selected{% endif %}>Pending</option>
-                    </select>
-                </div>
-                <div class="col-lg-1 col-md-2 col-6">
-                    <label for="filter-limit" class="form-label form-label-sm mb-1">Rows</label>
-                    <select class="form-select form-select-sm" name="limit" id="filter-limit">
-                        {% if limit not in (10, 25, 50, 100, 200) %}
-                        <option value="{{ limit }}" selected>{{ limit }}</option>
-                        {% endif %}
-                        <option value="10" {% if limit == 10 %}selected{% endif %}>10</option>
-                        <option value="25" {% if limit == 25 %}selected{% endif %}>25</option>
-                        <option value="50" {% if limit == 50 %}selected{% endif %}>50</option>
-                        <option value="100" {% if limit == 100 %}selected{% endif %}>100</option>
-                        <option value="200" {% if limit == 200 %}selected{% endif %}>200</option>
-                    </select>
-                </div>
-                <div class="col-lg-auto col-md-3 col-6 d-flex gap-2">
-                    <button type="submit" class="btn btn-primary btn-sm">
-                        <i class="fas fa-filter me-1"></i>Filter
-                    </button>
-                    {% if provincia or comune or foglio or particella or tipo_catasto or source or status %}
-                    <a href="/web/results" class="btn btn-outline-secondary btn-sm">
-                        <i class="fas fa-times me-1"></i>Clear
-                    </a>
-                    {% endif %}
-                </div>
-            </form>
-            {% if active_filters %}
-            <div class="d-flex flex-wrap align-items-center gap-2 mt-3">
-                <span class="small text-muted">Active filters</span>
-                {% for filter in active_filters %}
-                <span class="badge rounded-pill text-bg-light border filter-chip">
-                    <span>{{ filter.label }}: {{ filter.value }}</span>
-                    <a href="{{ filter.remove_url }}" class="btn-close" aria-label="Remove {{ filter.label }} filter"></a>
-                </span>
-                {% endfor %}
-                <a href="/web/results" class="small text-decoration-none">Clear all</a>
-            </div>
-            {% endif %}
-        </div>
+      {# Active filter chips #}
+      {% if active_filters %}
+      <div class="d-flex flex-wrap align-items-center gap-2 mt-3">
+        <span class="small text-muted">Active filters</span>
+        {% for filter in active_filters %}
+        <span class="badge rounded-pill text-bg-light border filter-chip">
+          <span>{{ filter.label }}: {{ filter.value }}</span>
+          <a href="{{ filter.remove_url }}" class="btn-close" aria-label="Remove {{ filter.label }} filter"></a>
+        </span>
+        {% endfor %}
+        <a href="/web/results" class="small text-decoration-none">Clear all</a>
+      </div>
+      {% endif %}
     </div>
+  </div>
 
-    <!-- Results table -->
-    {% if results %}
-    <div class="card border-0 shadow-sm mb-4">
-        <div class="card-body p-0">
-            <div id="tabulator-results"></div>
-        </div>
+  {# ── Results table ─────────────────────────────────────────────────────────── #}
+  {% if results %}
+  <div class="card border-0 shadow-sm mb-4">
+    <div class="card-body p-0">
+      <div id="tabulator-results"></div>
     </div>
+  </div>
 
-    <!-- Pagination -->
-    {% if prev_url or next_url %}
-    <nav>
-        <ul class="pagination justify-content-center">
-            <li class="page-item{% if not prev_url %} disabled{% endif %}">
-                <a class="page-link" href="{{ prev_url or '#' }}">&laquo; Previous</a>
-            </li>
-            <li class="page-item disabled">
-                <span class="page-link">Page {{ (offset // limit) + 1 }}</span>
-            </li>
-            <li class="page-item{% if not next_url %} disabled{% endif %}">
-                <a class="page-link" href="{{ next_url or '#' }}">Next &raquo;</a>
-            </li>
-        </ul>
-    </nav>
-    {% endif %}
-    {% else %}
-    <div class="text-center py-5">
-        <i class="fas fa-inbox fa-3x text-muted mb-3"></i>
-        <p class="text-muted">No results found.</p>
-        <a href="/web/forms" class="btn btn-primary">Submit a Query</a>
-    </div>
-    {% endif %}
+  {# Pagination #}
+  {% if prev_url or next_url %}
+  <nav>
+    <ul class="pagination justify-content-center">
+      <li class="page-item{% if not prev_url %} disabled{% endif %}">
+        <a class="page-link" href="{{ prev_url or '#' }}">&laquo; Previous</a>
+      </li>
+      <li class="page-item disabled">
+        <span class="page-link">Page {{ (offset // limit) + 1 }}</span>
+      </li>
+      <li class="page-item{% if not next_url %} disabled{% endif %}">
+        <a class="page-link" href="{{ next_url or '#' }}">Next &raquo;</a>
+      </li>
+    </ul>
+  </nav>
+  {% endif %}
+
+  {% else %}
+  <div class="text-center py-5">
+    <i class="fas fa-inbox fa-3x text-muted mb-3"></i>
+    <p class="text-muted">No results found.</p>
+    <a href="/web/forms" class="btn btn-primary">Submit a Query</a>
+  </div>
+  {% endif %}
+
 </div>
 {% endblock %}
 
@@ -248,6 +221,8 @@
             "foglio": {{ (r.foglio or '-') | tojson }},
             "particella": {{ (r.particella or '-') | tojson }},
             "status": {{ r.status | tojson }},
+            "property_count": {{ (r.property_count or 0) | tojson }},
+            "owner_count": {{ (r.owner_count or 0) | tojson }},
             "requested_at": {{ (r.requested_at_display or '-') | tojson }},
             "responded_at": {{ (r.responded_at_display or '') | tojson }},
         },
@@ -267,85 +242,103 @@
             if (d.request_id) window.location.href = base + encodeURIComponent(d.request_id);
         },
         columns: [
-            {title: "#", field: "row_num", sorter: "number", width: 55, headerSort: true, hozAlign: "center"},
-            {title: "Request ID", field: "request_id_short", headerFilter: "input", headerFilterPlaceholder: "filter...",
+            {title: "#", field: "row_num", sorter: "number", width: 55, hozAlign: "center"},
+            {title: "Request ID", field: "request_id_short",
+             headerFilter: "input", headerFilterPlaceholder: "filter...",
              formatter: function(cell) {
                  var d = cell.getRow().getData();
                  var base = d.source === "workflow" ? "/web/workflows/" : "/web/results/";
-                 var url = base + encodeURIComponent(d.request_id);
                  var link = document.createElement("a");
                  var code = document.createElement("code");
-                 link.href = url;
+                 link.href = base + encodeURIComponent(d.request_id);
                  link.title = d.request_id;
                  code.textContent = d.request_id_short + "...";
                  link.appendChild(code);
                  return link;
              }, cellClick: function(e) { e.stopPropagation(); }},
-            {title: "Source", field: "source", width: 95, hozAlign: "center", headerFilter: "list",
+            {title: "Source", field: "source", width: 95, hozAlign: "center",
+             headerFilter: "list",
              headerFilterParams: {values: {"": "All", "single": "Single", "workflow": "Workflow"}},
              formatter: function(cell) {
                  var v = cell.getValue();
                  var link = document.createElement("a");
                  var span = document.createElement("span");
                  link.href = filterUrl("source", v || "single");
-                 link.title = "Filter by source";
                  span.className = v === "workflow" ? "badge bg-primary" : "badge bg-secondary";
                  span.textContent = v === "workflow" ? "Workflow" : "Single";
                  link.appendChild(span);
                  return link;
              }, cellClick: function(e) { e.stopPropagation(); }},
-            {title: "Type", field: "request_type", headerFilter: "input", headerFilterPlaceholder: "filter...",
+            {title: "Type", field: "request_type",
+             headerFilter: "input", headerFilterPlaceholder: "filter...",
              formatter: function(cell) {
                  var d = cell.getRow().getData();
                  var span = document.createElement("span");
-                 span.className = d.source === "workflow" ? "badge bg-primary-subtle text-primary-emphasis" : "badge bg-secondary";
+                 span.className = d.source === "workflow"
+                     ? "badge bg-primary-subtle text-primary-emphasis"
+                     : "badge bg-secondary";
                  span.textContent = cell.getValue() || "-";
                  return span;
              }},
-            {title: "Cat.", field: "tipo_catasto", headerFilter: "input", headerFilterPlaceholder: "filter...", width: 70, hozAlign: "center"},
-            {title: "Provincia", field: "provincia", headerFilter: "input", headerFilterPlaceholder: "filter..."},
-            {title: "Comune", field: "comune", headerFilter: "input", headerFilterPlaceholder: "filter..."},
-            {title: "F.", field: "foglio", headerFilter: "input", headerFilterPlaceholder: "filter...", width: 65, hozAlign: "center"},
-            {title: "P.", field: "particella", headerFilter: "input", headerFilterPlaceholder: "filter...", width: 65, hozAlign: "center"},
-            {title: "Status", field: "status", headerFilter: "list", headerFilterParams: {values: {"": "All", "completed": "Completed", "partial": "Partial", "failed": "Failed", "error": "Error", "pending": "Pending", "running": "Running"}}, width: 115, hozAlign: "center",
+            {title: "Cat.", field: "tipo_catasto",
+             headerFilter: "input", headerFilterPlaceholder: "filter...", width: 70, hozAlign: "center"},
+            {title: "Provincia", field: "provincia",
+             headerFilter: "input", headerFilterPlaceholder: "filter..."},
+            {title: "Comune", field: "comune",
+             headerFilter: "input", headerFilterPlaceholder: "filter..."},
+            {title: "F.", field: "foglio",
+             headerFilter: "input", headerFilterPlaceholder: "filter...", width: 65, hozAlign: "center"},
+            {title: "P.", field: "particella",
+             headerFilter: "input", headerFilterPlaceholder: "filter...", width: 65, hozAlign: "center"},
+            {title: "Imm.", field: "property_count", sorter: "number", width: 70, hozAlign: "center",
+             headerTooltip: "Immobili (DB)",
+             formatter: function(cell) {
+                 var v = cell.getValue();
+                 if (!v) return '<span class="text-muted">—</span>';
+                 var badge = document.createElement("span");
+                 badge.className = "badge bg-success-subtle text-success-emphasis";
+                 badge.textContent = v;
+                 return badge;
+             }},
+            {title: "Int.", field: "owner_count", sorter: "number", width: 70, hozAlign: "center",
+             headerTooltip: "Intestati (DB)",
+             formatter: function(cell) {
+                 var v = cell.getValue();
+                 if (!v) return '<span class="text-muted">—</span>';
+                 var badge = document.createElement("span");
+                 badge.className = "badge bg-info-subtle text-info-emphasis";
+                 badge.textContent = v;
+                 return badge;
+             }},
+            {title: "Status", field: "status", width: 115, hozAlign: "center",
+             headerFilter: "list",
+             headerFilterParams: {values: {"":"All","completed":"Completed","partial":"Partial","failed":"Failed","error":"Error","pending":"Pending","running":"Running"}},
              formatter: function(cell) {
                  var v = cell.getValue();
                  var link = document.createElement("a");
                  var span = document.createElement("span");
                  link.href = filterUrl("status", v || "pending");
-                 link.title = "Filter by status";
-                 if (v === "completed") {
-                     span.className = "badge bg-success";
-                     span.textContent = "Completed";
-                 } else if (v === "failed" || v === "error") {
-                     span.className = "badge bg-danger";
-                     span.textContent = "Failed";
-                 } else if (v === "partial") {
-                     span.className = "badge bg-warning text-dark";
-                     span.textContent = "Partial";
-                 } else if (v === "running") {
-                     span.className = "badge bg-info text-dark";
-                     span.textContent = "Running";
-                 } else {
-                     span.className = "badge bg-secondary";
-                     span.textContent = "Pending";
-                 }
+                 var map = {completed:["bg-success","Completed"],failed:["bg-danger","Failed"],error:["bg-danger","Failed"],partial:["bg-warning text-dark","Partial"],running:["bg-info text-dark","Running"]};
+                 var m = map[v] || ["bg-secondary","Pending"];
+                 span.className = "badge " + m[0];
+                 span.textContent = m[1];
                  link.appendChild(span);
                  return link;
              }, cellClick: function(e) { e.stopPropagation(); }},
-            {title: "Date", field: "requested_at", sorter: "string", headerFilter: "input", headerFilterPlaceholder: "filter...",
+            {title: "Date", field: "requested_at", sorter: "string",
+             headerFilter: "input", headerFilterPlaceholder: "filter...",
              formatter: function(cell) {
                  var d = cell.getRow().getData();
                  var wrap = document.createElement("div");
-                 var requested = document.createElement("small");
-                 requested.textContent = d.requested_at || "-";
-                 wrap.appendChild(requested);
+                 var req = document.createElement("small");
+                 req.textContent = d.requested_at || "-";
+                 wrap.appendChild(req);
                  if (d.responded_at) {
                      wrap.appendChild(document.createElement("br"));
-                     var responded = document.createElement("small");
-                     responded.className = "text-muted";
-                     responded.textContent = "Resp. " + d.responded_at;
-                     wrap.appendChild(responded);
+                     var resp = document.createElement("small");
+                     resp.className = "text-muted";
+                     resp.textContent = "Resp. " + d.responded_at;
+                     wrap.appendChild(resp);
                  }
                  return wrap;
              }},

@@ -55,7 +55,7 @@ router = APIRouter(tags=["Web UI"])
 
 # Document types that render in a dedicated visura template (so "Apri" is meaningful);
 # others only offer the exhaustive view + download.
-_VIEWABLE_DOC_TYPES = {"visura_fabbricati", "visura_storica", "visura_terreni", "visura_soggetto"}
+_VIEWABLE_DOC_TYPES = {"visura_fabbricati", "visura_storica", "visura_terreni", "visura_soggetto", "planimetria"}
 
 # document_types that are "visure" (excludes visura_soggetto, which lives under Soggetto).
 _VISURA_TYPES = {"visura", "visura_fabbricati", "visura_terreni", "visura_storica"}
@@ -1059,6 +1059,8 @@ def _parse_xml_to_dict(xml_str: str) -> dict:
 
         parser = etree.XMLParser(recover=True)
         root = etree.fromstring(xml_str.encode("utf-8", errors="replace"), parser)
+        if root is None:
+            return {}
     except Exception:
         return {}
 
@@ -1192,6 +1194,40 @@ def _build_result_sections(data: Optional[dict]) -> list[dict]:
                     )
                 elif key == "downloaded_pdfs":
                     docs = _normalize_downloaded_pdfs(value)
+
+                    # Aggregate intestati_rows from all documents into a top-level
+                    # flat_table so the owner data is immediately visible without
+                    # expanding every accordion item.
+                    _agg: list[dict] = []
+                    for _doc in docs:
+                        _doc_label = _doc.get("oggetto") or _doc.get("filename") or "-"
+                        for _row in (_doc.get("intestati_rows") or []):
+                            _agg.append({"Subalterno": _doc_label, **_row})
+                    if _agg:
+                        _pri = ["Subalterno", "Nominativo", "Codice Fiscale", "Quota", "Diritto"]
+                        _seen_c: set[str] = set()
+                        _agg_cols: list[str] = []
+                        for _c in _pri:
+                            if _c not in _seen_c:
+                                _seen_c.add(_c)
+                                _agg_cols.append(_c)
+                        for _r in _agg:
+                            for _c in _r:
+                                if _c not in _seen_c:
+                                    _seen_c.add(_c)
+                                    _agg_cols.append(_c)
+                        sections.append(
+                            {
+                                "name": "intestati_da_documenti",
+                                "dom_id": next_dom_id("intestati_da_documenti"),
+                                "title": f"Intestati ({len(_agg)})",
+                                "kind": "flat_table",
+                                "columns": _agg_cols,
+                                "rows": [{_c: _r.get(_c, "") for _c in _agg_cols} for _r in _agg],
+                                "count": len(_agg),
+                            }
+                        )
+
                     sections.append(
                         {
                             "name": key,
@@ -1225,16 +1261,119 @@ def _build_result_sections(data: Optional[dict]) -> list[dict]:
                         }
                     )
                 else:
-                    sections.append(
-                        {
-                            "name": key,
-                            "dom_id": dom_id,
-                            "title": title,
-                            "kind": "nested_table",
-                            "value": value,
-                            "count": len(value),
-                        }
-                    )
+                    # Mixed rows: inline dict subfields, count lists → flat_table.
+                    # Additionally, each list-of-dict field becomes its own child flat_table.
+                    _col_order: list[str] = []
+                    _col_set: set[str] = set()
+                    # Identify a scalar "join key" (id / index field) for child tables.
+                    _join_key: str | None = None
+                    _list_dict_fields: list[str] = []  # list-of-dict fields to expand
+
+                    def _add_col(name: str) -> None:
+                        if name not in _col_set:
+                            _col_set.add(name)
+                            _col_order.append(name)
+
+                    for _item in value:
+                        for _k, _v in _item.items():
+                            if not _k:
+                                continue
+                            if _is_scalar(_v):
+                                _add_col(_k)
+                                if _join_key is None and _k.lower() in ("id", "index", "result_index", "idx", "numero"):
+                                    _join_key = _k
+                            elif isinstance(_v, dict):
+                                for _sk in _v:
+                                    if _sk:
+                                        _add_col(_sk)
+                            elif isinstance(_v, list):
+                                _add_col(f"{_k}_n")
+                                if _v and isinstance(_v[0], dict) and _k not in _list_dict_fields:
+                                    _list_dict_fields.append(_k)
+
+                    if _col_order:
+                        _flat_rows = []
+                        for _i, _item in enumerate(value):
+                            _flat: dict = {}
+                            for _k, _v in _item.items():
+                                if not _k:
+                                    continue
+                                if _is_scalar(_v):
+                                    _flat[_k] = "" if _v is None else _v
+                                elif isinstance(_v, dict):
+                                    for _sk, _sv in _v.items():
+                                        if _sk:
+                                            _flat[_sk] = (
+                                                "" if _sv is None
+                                                else _sv if _is_scalar(_sv)
+                                                else str(_sv)
+                                            )
+                                elif isinstance(_v, list):
+                                    _flat[f"{_k}_n"] = len(_v)
+                            _flat_rows.append({_c: _flat.get(_c, "") for _c in _col_order})
+                        sections.append(
+                            {
+                                "name": key,
+                                "dom_id": dom_id,
+                                "title": title,
+                                "kind": "flat_table",
+                                "columns": _col_order,
+                                "rows": _flat_rows,
+                                "count": len(_flat_rows),
+                            }
+                        )
+
+                        # Child sections: one flat_table per list-of-dict field.
+                        for _lf in _list_dict_fields:
+                            _jk = _join_key or "_idx"
+                            _cc_order: list[str] = [_jk]
+                            _cc_set: set[str] = {_jk}
+                            for _i, _item in enumerate(value):
+                                for _child in (_item.get(_lf) or []):
+                                    if isinstance(_child, dict):
+                                        for _ck in _child:
+                                            if _ck and _ck not in _cc_set:
+                                                _cc_set.add(_ck)
+                                                _cc_order.append(_ck)
+                            _child_rows: list[dict] = []
+                            for _i, _item in enumerate(value):
+                                _jv = _item.get(_join_key, _i) if _join_key else _i
+                                for _child in (_item.get(_lf) or []):
+                                    if isinstance(_child, dict):
+                                        _crow: dict = {_jk: _jv}
+                                        for _ck, _cv in _child.items():
+                                            if _ck:
+                                                _crow[_ck] = (
+                                                    "" if _cv is None
+                                                    else _cv if _is_scalar(_cv)
+                                                    else str(_cv)
+                                                )
+                                        _child_rows.append({_c: _crow.get(_c, "") for _c in _cc_order})
+                            if _child_rows:
+                                sections.append(
+                                    {
+                                        "name": f"{key}_{_lf}",
+                                        "dom_id": next_dom_id(f"{key}_{_lf}"),
+                                        "title": f"{title} · {_titleize_key(_lf)}",
+                                        "kind": "flat_table",
+                                        "columns": _cc_order,
+                                        "rows": _child_rows,
+                                        "count": len(_child_rows),
+                                        "parent_section": key,
+                                        "join_key": _jk,
+                                    }
+                                )
+                    else:
+                        sections.append(
+                            {
+                                "name": key,
+                                "dom_id": dom_id,
+                                "title": title,
+                                "kind": "nested_table",
+                                "value": value,
+                                "count": len(value),
+                            }
+                        )
             else:
                 sections.append(
                     {
@@ -1295,7 +1434,12 @@ async def dashboard_redirect():
     return RedirectResponse(url="/web/")
 
 
-@router.get("/", response_class=HTMLResponse)
+@router.get("/", include_in_schema=False)
+async def root_redirect():
+    return RedirectResponse(url="/web/")
+
+
+@router.get("/landing", response_class=HTMLResponse)
 async def landing(request: Request):
     """Public landing page."""
     theme = _get_theme(request)
@@ -2082,6 +2226,519 @@ async def web_document_download(request: Request, doc_id: int, user=Depends(_req
     return FileResponse(str(p), filename=doc.get("filename") or p.name)
 
 
+def _extract_planimetria_zip(file_path: str) -> bytes | None:
+    """Extract the inner ZIP payload from a CAdES-signed P7M file.
+
+    Uses ``openssl smime`` to strip the CMS signature layer.
+    Returns raw ZIP bytes, or None if extraction fails.
+    """
+    import subprocess
+    import tempfile
+
+    with tempfile.NamedTemporaryFile(suffix=".bin", delete=False) as tmp:
+        tmp_path = tmp.name
+    try:
+        r = subprocess.run(
+            ["openssl", "smime", "-verify", "-noverify",
+             "-in", file_path, "-inform", "DER", "-out", tmp_path],
+            capture_output=True, timeout=15,
+        )
+        if r.returncode != 0:
+            return None
+        with open(tmp_path, "rb") as f:
+            data = f.read()
+        if not data.startswith(b"PK\x03\x04"):
+            return None
+        return data
+    except Exception:
+        return None
+    finally:
+        import os
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+
+
+def _read_planimetria_geojson(file_path: str) -> dict | None:
+    """Extract metadata from a planimetria P7M ZIP.
+
+    Returns a dict for ALL extractable planimetria P7M files, regardless of
+    the inner format.  ``geojson`` is populated only when the ZIP contains a
+    .geojson file; otherwise it is None and ``fmt`` describes the actual format.
+
+    Return keys::
+
+        geojson      – FeatureCollection dict, or None
+        crs_text     – raw CRS description text
+        epsg         – parsed EPSG code (int) or None
+        proj4        – proj4 string for the CRS
+        files        – list of filenames inside the ZIP
+        fmt          – 'geojson' | 'dxf' | 'cxf' | 'cmf' | 'unknown'
+
+    Returns None only if the P7M cannot be extracted (not a ZIP at all).
+    """
+    import io
+    import json
+    import re
+    import zipfile
+
+    zip_bytes = _extract_planimetria_zip(file_path)
+    if zip_bytes is None:
+        return None
+
+    try:
+        with zipfile.ZipFile(io.BytesIO(zip_bytes)) as z:
+            names = z.namelist()
+            crs_name = next((n for n in names if "_SistemaDiRappresentazione" in n), None)
+            crs_text = z.read(crs_name).decode("utf-8", errors="replace") if crs_name else ""
+
+            geojson_name = next((n for n in names if n.lower().endswith(".geojson")), None)
+            gj = json.loads(z.read(geojson_name)) if geojson_name else None
+    except Exception:
+        return None
+
+    # Detect inner format
+    exts = [n.rsplit(".", 1)[-1].lower() for n in names if "." in n and "_Sistema" not in n]
+    if "geojson" in exts:
+        fmt = "geojson"
+    elif "dxf" in exts:
+        fmt = "dxf"
+    elif any(e in exts for e in ("cxf", "cxg")):
+        fmt = "cxf"
+    elif any(e in exts for e in ("cmf", "cmb")):
+        fmt = "cmf"
+    else:
+        fmt = "unknown"
+
+    # Parse EPSG from the CRS description file
+    epsg: int | None = None
+    m = re.search(r"EPSG[:\s]*(\d{4,5})", crs_text)
+    if m:
+        epsg = int(m.group(1))
+
+    _PROJ4 = {
+        7791: "+proj=utm +zone=32 +ellps=GRS80 +units=m +no_defs",
+        7792: "+proj=utm +zone=33 +ellps=GRS80 +units=m +no_defs",
+        32632: "+proj=utm +zone=32 +datum=WGS84 +units=m +no_defs",
+        32633: "+proj=utm +zone=33 +datum=WGS84 +units=m +no_defs",
+    }
+    proj4 = _PROJ4.get(epsg or 0, "+proj=utm +zone=32 +ellps=GRS80 +units=m +no_defs")
+
+    return {
+        "geojson": gj,
+        "crs_text": crs_text,
+        "epsg": epsg,
+        "proj4": proj4,
+        "files": [n for n in names if "_SistemaDiRappresentazione" not in n],
+        "fmt": fmt,
+    }
+
+
+def _classify_cad_label(label: str) -> str:
+    lbl = label.strip().upper()
+    if lbl in ("ACQUA", "ACQUE") or lbl.startswith("ACQUA"):
+        return "acqua"
+    if lbl in ("STRADA", "STRADE") or lbl.startswith("STRADA"):
+        return "strada"
+    if lbl in ("FABBRICATI", "FABBRIC"):
+        return "fabbricato"
+    if lbl == "LINEEVARIE":
+        return "lineevarie"
+    if lbl in ("SIMBOLI", "TESTI", "FIDUCIALI", "CENTROIDI", "RILIEVI"):
+        return "simboli"
+    if lbl == "CONFINE":
+        return "confine"
+    if lbl and lbl[0].isdigit():
+        return "particella"
+    return "confine"
+
+
+def _parse_cxf_entities(content: str) -> list[dict]:
+    lines = [l.strip() for l in content.replace("\r", "").split("\n")]
+    entities: list[dict] = []
+    i = 0
+    while i < len(lines):
+        if lines[i] != "BORDO":
+            i += 1
+            continue
+        i += 1
+        label = lines[i] if i < len(lines) else ""
+        i += 7  # skip past label, dim, angle, posX, posY, pintX, pintY to n.isole
+        n_holes = int(lines[i]) if i < len(lines) else 0
+        i += 1
+        n_total = int(lines[i]) if i < len(lines) else 0  # total verts: outer + all holes
+        i += 1
+        hole_verts = []
+        for _ in range(n_holes):
+            hole_verts.append(int(lines[i]))
+            i += 1
+        # read all n_total coordinate pairs then split outer/holes
+        all_coords = []
+        for _ in range(n_total):
+            x = float(lines[i]); i += 1
+            y = float(lines[i]); i += 1
+            all_coords.append([x, y])
+        n_outer = n_total - sum(hole_verts)
+        coords = all_coords[:n_outer]
+        holes = []
+        pos = n_outer
+        for nv in hole_verts:
+            holes.append(all_coords[pos : pos + nv])
+            pos += nv
+        entities.append({
+            "type": _classify_cad_label(label),
+            "label": label.strip(),
+            "coords": coords,
+            "holes": holes,
+        })
+    return entities
+
+
+def _parse_cmf_entities(content: bytes) -> list[dict]:
+    from lxml import etree
+
+    root = etree.fromstring(content)
+    entities: list[dict] = []
+    for bordo in root.findall(".//BORDO"):
+        label = bordo.get("codbo", "")
+        gbordo = bordo.find("GBORDO")
+        if gbordo is None:
+            continue
+        n_total = int(gbordo.get("n.vert", 0))  # total verts: outer + all holes
+        hole_verts = [int(v.text) for v in gbordo.findall("VERTISOLA")]
+        coord_el = gbordo.find("COORD")
+        if coord_el is None:
+            continue
+        all_coords = []
+        for pair in (coord_el.text or "").split():
+            xy = pair.split(",")
+            if len(xy) == 2:
+                all_coords.append([float(xy[0]), float(xy[1])])
+        n_outer = n_total - sum(hole_verts)
+        coords = all_coords[:n_outer]
+        holes = []
+        pos = n_outer
+        for nv in hole_verts:
+            holes.append(all_coords[pos : pos + nv])
+            pos += nv
+        entities.append({
+            "type": _classify_cad_label(label),
+            "label": label.strip(),
+            "coords": coords,
+            "holes": holes,
+        })
+    return entities
+
+
+def _parse_dxf_entities(dxf_bytes: bytes) -> list[dict]:
+    """Parse DXF R12 (AC1009) POLYLINE entities by scanning raw group code pairs."""
+    _LAYER_TYPE = {
+        "FABBRICATI": "fabbricato",
+        "PARTICELLE": "particella",
+        "STRADE": "strada",
+        "ACQUE": "acqua",
+        "CONFINE": "confine",
+        "LINEEVARIE": "lineevarie",
+        "SIMBOLI": "simboli",
+        "TESTI": "simboli",
+        "FIDUCIALI": "simboli",
+        "CENTROIDI": "simboli",
+        "RILIEVI": "simboli",
+    }
+    try:
+        content = dxf_bytes.decode("latin-1")
+    except Exception:
+        return []
+
+    # Parse as (group_code, value) pairs — lines alternate code / value
+    raw = [l.strip() for l in content.replace("\r", "").split("\n") if l.strip()]
+    pairs: list[tuple[str, str]] = []
+    i = 0
+    while i + 1 < len(raw):
+        pairs.append((raw[i], raw[i + 1]))
+        i += 2
+
+    entities: list[dict] = []
+    in_entities = False
+    current: dict | None = None
+    current_x: float = 0.0
+    in_vertex = False
+
+    for code, value in pairs:
+        if code == "2" and value == "ENTITIES":
+            in_entities = True
+            continue
+        if code == "0" and value == "ENDSEC":
+            if in_entities:
+                if current and current["coords"]:
+                    entities.append(current)
+                in_entities = False
+                current = None
+            continue
+
+        if not in_entities:
+            continue
+
+        if code == "0":
+            if value == "POLYLINE":
+                if current and current["coords"]:
+                    entities.append(current)
+                current = {"type": "confine", "label": "0", "coords": [], "holes": []}
+                in_vertex = False
+            elif value == "VERTEX":
+                in_vertex = True
+            elif value in ("SEQEND", "LINE", "TEXT", "INSERT", "BLOCK", "ENDBLK"):
+                in_vertex = False
+                if value in ("SEQEND",) and current and current["coords"]:
+                    pass  # coords already accumulated
+        elif current is not None:
+            if code == "8":  # layer
+                if not in_vertex:
+                    layer = value.upper()
+                    current["label"] = layer
+                    current["type"] = _LAYER_TYPE.get(layer, _classify_cad_label(layer))
+            elif code == "10":  # X coordinate
+                try:
+                    current_x = float(value)
+                except ValueError:
+                    pass
+            elif code == "20":  # Y coordinate
+                try:
+                    if in_vertex:
+                        current["coords"].append([current_x, float(value)])
+                except ValueError:
+                    pass
+
+    if current and current["coords"]:
+        entities.append(current)
+
+    return entities
+
+
+def _build_plan_data(file_path: str) -> dict | None:
+    """Parse a planimetria P7M to a JSON-serialisable entity list, with disk cache.
+
+    Cache is stored at ``{file_path}.plan.json`` and is only written once.
+    Returns None if the file cannot be extracted or is in an unsupported format.
+    """
+    import json as _json
+
+    cache_path = file_path + ".plan.json"
+    if os.path.exists(cache_path):
+        try:
+            with open(cache_path) as f:
+                return _json.load(f)
+        except Exception:
+            pass  # corrupt cache — re-parse
+
+    zip_bytes = _extract_planimetria_zip(file_path)
+    if zip_bytes is None:
+        return None
+
+    import io as _io
+    import zipfile as _zf
+
+    try:
+        with _zf.ZipFile(_io.BytesIO(zip_bytes)) as z:
+            names = z.namelist()
+            lower_names = {n.lower(): n for n in names}
+
+            geojson_name = next((n for n in names if n.lower().endswith(".geojson")), None)
+            cxf_name = next((n for n in names if n.lower().endswith(".cxf")), None)
+            cmf_name = next((n for n in names if n.lower().endswith(".cmf")), None)
+            dxf_name = next((n for n in names if n.lower().endswith(".dxf")), None)
+
+            if geojson_name:
+                return None  # GeoJSON is handled by the existing geojson route
+
+            if cxf_name:
+                content = z.read(cxf_name).decode("latin-1")
+                entities = _parse_cxf_entities(content)
+                fmt = "cxf"
+            elif cmf_name:
+                content = z.read(cmf_name)
+                entities = _parse_cmf_entities(content)
+                fmt = "cmf"
+            elif dxf_name:
+                content = z.read(dxf_name)
+                entities = _parse_dxf_entities(content)
+                fmt = "dxf"
+            else:
+                return None
+    except Exception:
+        return None
+
+    if not entities:
+        return None
+
+    # Compute bounding box across all entities
+    all_x = [p[0] for e in entities for p in e["coords"]]
+    all_y = [p[1] for e in entities for p in e["coords"]]
+    bbox = {"minx": min(all_x), "miny": min(all_y), "maxx": max(all_x), "maxy": max(all_y)}
+
+    result = {"format": fmt, "entities": entities, "bbox": bbox}
+    try:
+        with open(cache_path, "w") as f:
+            _json.dump(result, f, separators=(",", ":"))
+    except Exception:
+        pass
+    return result
+
+
+@router.get("/web/documents/{doc_id}/plan")
+async def web_document_plan(doc_id: int, request: Request, user=Depends(_require_auth)):
+    """Return parsed cadastral entity data for CXF/CMF/DXF planimetrie."""
+    from fastapi import HTTPException
+    from fastapi.responses import JSONResponse
+
+    doc = await get_document_by_id(doc_id)
+    if doc is None or not doc.get("file_path"):
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    import asyncio as _asyncio
+
+    result = await _asyncio.get_event_loop().run_in_executor(None, _build_plan_data, doc["file_path"])
+    if result is None:
+        raise HTTPException(status_code=422, detail="Plan data not available for this document")
+    return JSONResponse(result)
+
+
+@router.get("/web/documents/{doc_id}/geojson")
+async def web_document_geojson(doc_id: int, request: Request, user=Depends(_require_auth)):
+    """Return the GeoJSON payload extracted from a planimetria P7M document."""
+    from fastapi import HTTPException
+    from fastapi.responses import JSONResponse
+
+    doc = await get_document_by_id(doc_id)
+    if doc is None or not doc.get("file_path"):
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    result = _read_planimetria_geojson(doc["file_path"])
+    if result is None or result.get("geojson") is None:
+        raise HTTPException(status_code=422, detail="Not a planimetria GeoJSON document")
+
+    return JSONResponse({
+        "geojson": result["geojson"],
+        "epsg": result["epsg"],
+        "proj4": result["proj4"],
+        "crs_text": result["crs_text"],
+    })
+
+
+async def _backfill_document_metadata(base: Path, parsed_by_stem: dict) -> None:
+    """Backfill document_metadata for existing visura_documents that lack it.
+
+    Also repairs stale file_path values: pre-migration rows stored paths with an
+    'outputs/documents/' prefix that no longer exists; the canonical location is
+    under SISTER_FILES_BASE (= base).
+    """
+    import asyncio
+
+    from sqlalchemy import text
+
+    from .database import _get_session_factory, get_or_create_location, is_db_writable
+    from .db_models import DocumentMetadata, VisuraDocument
+    from .utils import _parse_visura_xml
+
+    if not is_db_writable():
+        return
+
+    session_factory = _get_session_factory()
+
+    # Step 1: collect all docs with a file_path but missing document_metadata.
+    async with session_factory() as session:
+        rows = (
+            await session.execute(
+                text(
+                    "SELECT vd.id, vd.file_path, vd.filename, vd.document_type"
+                    " FROM visura_documents vd"
+                    " LEFT JOIN document_metadata dm ON vd.id = dm.id"
+                    " WHERE vd.file_path IS NOT NULL AND dm.id IS NULL"
+                )
+            )
+        ).fetchall()
+
+    if not rows:
+        return
+
+    # Step 2: build a filename → absolute path map from disk to fix stale paths.
+    name_to_path: dict[str, Path] = {}
+    for fpath in base.rglob("*"):
+        if fpath.is_file():
+            name_to_path[fpath.name] = fpath
+
+    fixed = 0
+    backfilled = 0
+
+    for doc_id, stored_path, filename, doc_type in rows:
+        actual: Path | None = None
+
+        # First try the stored path as-is.
+        if stored_path and Path(stored_path).is_file():
+            actual = Path(stored_path)
+        elif filename and filename in name_to_path:
+            actual = name_to_path[filename]
+
+        if actual is None:
+            logger.debug("Backfill: file not found for doc %d (%s)", doc_id, filename)
+            continue
+
+        # Fix stale path if necessary.
+        correct_path = str(actual)
+        if stored_path != correct_path:
+            async with session_factory() as session:
+                await session.execute(
+                    text("UPDATE visura_documents SET file_path = :p WHERE id = :id"),
+                    {"p": correct_path, "id": doc_id},
+                )
+                await session.commit()
+            fixed += 1
+
+        # Parse the file to extract metadata.
+        stem = actual.stem
+        parsed = parsed_by_stem.get(stem)
+        if parsed is None and actual.suffix.lower() in (".p7m", ".xml"):
+            parsed = await asyncio.to_thread(_parse_visura_xml, str(actual))
+            if parsed:
+                parsed_by_stem[stem] = parsed
+
+        if not parsed:
+            parsed = {}
+
+        foglio = parsed.get("foglio", "")
+        particella = parsed.get("particella", "")
+        xml_content = parsed.get("xml_content")
+
+        if not (xml_content or foglio or particella):
+            continue
+
+        async with session_factory() as session:
+            location_id = await get_or_create_location(
+                session,
+                cadastre_type=parsed.get("tipo_catasto") or "",
+                province=parsed.get("provincia") or "",
+                municipality=parsed.get("comune") or "",
+                sheet=foglio,
+                parcel=particella,
+                subunit=parsed.get("subalterno") or "",
+                section=parsed.get("sezione_urbana") or "",
+            )
+            meta = DocumentMetadata(
+                id=doc_id,
+                location_id=location_id,
+                view_subtype=parsed.get("visura_subtype") or None,
+                reference_date=parsed.get("situazione_al") or None,
+                content=xml_content,
+            )
+            session.add(meta)
+            await session.commit()
+        backfilled += 1
+
+    if fixed or backfilled:
+        logger.info("Rescan backfill: %d path(s) fixed, %d metadata row(s) created", fixed, backfilled)
+
+
 @router.post("/web/documents/rescan", response_class=HTMLResponse)
 async def web_documents_rescan(request: Request, user=Depends(_require_auth)):
     """Scan the documents directory for files not yet indexed in the DB and register them."""
@@ -2179,6 +2836,11 @@ async def web_documents_rescan(request: Request, user=Depends(_require_auth)):
         await _save_documents_to_db(new_docs)
         logger.info("Rescan: %d nuovi documenti indicizzati", len(new_docs))
 
+    # Backfill document_metadata for existing docs that are missing it.
+    # Also fix stale file_path values (old path had 'outputs/documents/' prefix
+    # which no longer exists; actual files are under SISTER_FILES_BASE).
+    await _backfill_document_metadata(base, parsed_by_stem)
+
     return RedirectResponse("/web/documents", status_code=303)
 
 
@@ -2209,6 +2871,33 @@ async def web_documents(
         doc = await get_document_by_id(int(path))
         if doc is None:
             return theme.render("result_detail.html", request, user=user, result=None, request_id=path, not_found=True)
+        # Planimetria P7M: render interactive GeoJSON map viewer when possible.
+        if (
+            not template
+            and (doc.get("document_type") or "") in ("planimetria", "elaborato_planimetrico")
+            and (doc.get("file_format") or "").upper() == "P7M"
+            and doc.get("file_path")
+        ):
+            fp = Path(doc["file_path"])
+            if fp.is_file():
+                gj_result = _read_planimetria_geojson(str(fp))
+                if gj_result is not None:
+                    return theme.render(
+                        "planimetria.html",
+                        request,
+                        user=user,
+                        doc=doc,
+                        doc_id=int(path),
+                        epsg=gj_result["epsg"],
+                        proj4=gj_result["proj4"],
+                        crs_text=gj_result["crs_text"],
+                        n_features=len((gj_result.get("geojson") or {}).get("features", [])),
+                        has_geojson=gj_result.get("geojson") is not None,
+                        fmt=gj_result.get("fmt", "unknown"),
+                        zip_files=gj_result.get("files", []),
+                    )
+                # P7M not extractable — fall through to direct download
+                return FileResponse(str(fp), filename=fp.name, media_type="application/octet-stream")
         return _render_doc_from_db(doc, request, theme, user, force_template=template or None)
 
     # Root with no explicit path → hierarchical document index (unless browsing files)

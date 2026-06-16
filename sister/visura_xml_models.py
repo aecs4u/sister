@@ -134,6 +134,24 @@ class BuildingIdentifier(SQLModel, table=True):
             "(building_unit_id IS NOT NULL) + (current_state_id IS NOT NULL) + (history_document_id IS NOT NULL) = 1",
             name="ck_building_identifier_one_parent",
         ),
+        sa.Index(
+            "uq_building_identifier_building_unit_id",
+            "building_unit_id",
+            unique=True,
+            sqlite_where=sa.text("building_unit_id IS NOT NULL"),
+        ),
+        sa.Index(
+            "uq_building_identifier_current_state_id",
+            "current_state_id",
+            unique=True,
+            sqlite_where=sa.text("current_state_id IS NOT NULL"),
+        ),
+        sa.Index(
+            "uq_building_identifier_history_document_id",
+            "history_document_id",
+            unique=True,
+            sqlite_where=sa.text("history_document_id IS NOT NULL"),
+        ),
     )
 
     names: ClassVar[dict] = {
@@ -180,6 +198,24 @@ class BuildingClassification(SQLModel, table=True):
             "(building_unit_id IS NOT NULL) + (current_state_id IS NOT NULL) + (history_document_id IS NOT NULL) = 1",
             name="ck_building_classification_one_parent",
         ),
+        sa.Index(
+            "uq_building_classification_building_unit_id",
+            "building_unit_id",
+            unique=True,
+            sqlite_where=sa.text("building_unit_id IS NOT NULL"),
+        ),
+        sa.Index(
+            "uq_building_classification_current_state_id",
+            "current_state_id",
+            unique=True,
+            sqlite_where=sa.text("current_state_id IS NOT NULL"),
+        ),
+        sa.Index(
+            "uq_building_classification_history_document_id",
+            "history_document_id",
+            unique=True,
+            sqlite_where=sa.text("history_document_id IS NOT NULL"),
+        ),
     )
 
     names: ClassVar[dict] = {
@@ -216,6 +252,18 @@ class BuildingSurface(SQLModel, table=True):
         sa.CheckConstraint(
             "(building_unit_id IS NOT NULL) + (current_state_id IS NOT NULL) = 1",
             name="ck_building_surface_one_parent",
+        ),
+        sa.Index(
+            "uq_building_surface_building_unit_id",
+            "building_unit_id",
+            unique=True,
+            sqlite_where=sa.text("building_unit_id IS NOT NULL"),
+        ),
+        sa.Index(
+            "uq_building_surface_current_state_id",
+            "current_state_id",
+            unique=True,
+            sqlite_where=sa.text("current_state_id IS NOT NULL"),
         ),
     )
 
@@ -272,7 +320,7 @@ class RelatedParcel(SQLModel, table=True):
     }
 
     location_names: ClassVar[dict] = {
-        "SezCensuaria": "census_section",
+        "SezCensuaria": "section",
         "Foglio": "sheet",
         "ParticellaNum": "parcel",
         "TipoCatasto": "cadastre_type",
@@ -400,7 +448,7 @@ class PropertyOwner(SQLModel, table=True):
     """Individual owner (Intestato) within an ownership mutation.
 
     DirittiReali child attributes are inlined (right_*).
-    Nominativo and CF are element content, inlined as full_name and fiscal_code.
+    Nominativo and CF are element content, inlined as display_name and fiscal_code.
     """
 
     __tablename__ = "property_owners"
@@ -420,7 +468,7 @@ class PropertyOwner(SQLModel, table=True):
     }
 
     subject_names: ClassVar[dict] = {
-        "Nominativo": "full_name",
+        "Nominativo": "display_name",
         "CF": "fiscal_code",
     }
 

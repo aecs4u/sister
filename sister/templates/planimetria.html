@@ -1,0 +1,110 @@
+{% extends "_base.html" %}
+{% block page_title %}Planimetria {{ doc.filename or doc_id }}{% endblock %}
+
+{% block extra_css %}
+{{ super() }}
+{% if has_geojson %}<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">{% endif %}
+<link rel="stylesheet" href="/static/css/pages/planimetria.css">
+{% endblock %}
+
+{% block content %}
+<div class="container-fluid py-3">
+  <nav class="mb-3" aria-label="breadcrumb">
+    <ol class="breadcrumb">
+      <li class="breadcrumb-item"><a href="/web/documents">Documenti</a></li>
+      <li class="breadcrumb-item active">{{ doc.filename or ('Doc ' ~ doc_id) }}</li>
+    </ol>
+  </nav>
+
+  <div class="card border-0 shadow-sm mb-3">
+    <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
+      <h5 class="mb-0">
+        <i class="fas fa-ruler-combined text-secondary me-2"></i>
+        Planimetria — {{ doc.filename or ('Doc ' ~ doc_id) }}
+      </h5>
+      <div class="d-flex gap-2 align-items-center flex-wrap">
+        {% if has_geojson %}
+        <span class="badge bg-light text-dark border" id="badge-count">{{ n_features }} elementi</span>
+        {% else %}
+        <span class="badge bg-secondary text-white" id="badge-count">{{ fmt | upper }}</span>
+        {% endif %}
+        {% if epsg %}<span class="badge bg-info text-dark">EPSG:{{ epsg }}</span>{% endif %}
+        {% if has_geojson %}
+        <div class="btn-group btn-group-sm" id="basemap-switch">
+          <button class="btn btn-outline-secondary layer-btn active" data-layer="osm">OSM</button>
+          <button class="btn btn-outline-secondary layer-btn" data-layer="satellite">Satellite</button>
+          <button class="btn btn-outline-secondary layer-btn" data-layer="none">Nessuno</button>
+        </div>
+        {% endif %}
+        <button class="btn btn-sm btn-outline-primary" id="btn-fit">
+          <i class="fas fa-expand-arrows-alt me-1"></i>Adatta
+        </button>
+        <a href="/web/documents/{{ doc_id }}/download" class="btn btn-sm btn-outline-secondary">
+          <i class="fas fa-download me-1"></i>P7M
+        </a>
+      </div>
+    </div>
+    <div class="card-body p-0">
+      {% if has_geojson %}
+      <div class="row g-0">
+        <div class="col">
+          <div id="plan-map"></div>
+          <div id="plan-status" class="text-muted small px-3 py-1 border-top">Caricamento…</div>
+        </div>
+        <div class="col-auto plan-sidebar" style="width: 260px" id="plan-sidebar">
+          <div class="p-3">
+            <h6 class="text-uppercase text-muted small mb-2">Livelli</h6>
+            <div id="layer-legend" class="mb-3 d-flex flex-column gap-1"></div>
+            <h6 class="text-uppercase text-muted small mb-2">Selezione</h6>
+            <div id="feature-info" class="text-muted small">Click su un elemento</div>
+            {% if crs_text %}
+            <hr>
+            <h6 class="text-uppercase text-muted small mb-2">Sistema di Riferimento</h6>
+            <pre class="small text-muted" style="font-size:.7rem;white-space:pre-wrap">{{ crs_text[:400] }}</pre>
+            {% endif %}
+          </div>
+        </div>
+      </div>
+      {% else %}
+      <div class="row g-0">
+        <div class="col">
+          <div id="plan-cad">
+            <div id="plan-cad-inner" style="position:absolute;top:0;left:0;width:100%;height:100%;">
+              <svg id="plan-svg" width="100%" height="100%" style="display:block"></svg>
+            </div>
+          </div>
+          <div id="plan-status" class="text-muted small px-3 py-1 border-top">Caricamento…</div>
+        </div>
+        <div class="col-auto plan-sidebar" style="width: 260px" id="plan-sidebar">
+          <div class="p-3">
+            <h6 class="text-uppercase text-muted small mb-2">Livelli</h6>
+            <div id="cad-layer-legend" class="mb-3 d-flex flex-column gap-1"></div>
+            <h6 class="text-uppercase text-muted small mb-2">Selezione</h6>
+            <div id="cad-feature-info" class="text-muted small">Click su un elemento</div>
+            {% if crs_text %}
+            <hr>
+            <h6 class="text-uppercase text-muted small mb-2">Sistema di Riferimento</h6>
+            <pre class="small text-muted" style="font-size:.7rem;white-space:pre-wrap">{{ crs_text[:400] }}</pre>
+            {% endif %}
+          </div>
+        </div>
+      </div>
+      {% endif %}
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+{{ super() }}
+<script id="plan-config" type="application/json">
+{"doc_id": {{ doc_id }}, "proj4": {{ proj4 | tojson }}, "epsg": {{ epsg | tojson }}}
+</script>
+{% if has_geojson %}
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/proj4js/2.11.0/proj4.js"></script>
+<script src="/static/js/planimetria_geojson.js"></script>
+{% else %}
+<script src="/static/js/planimetria_cad.js"></script>
+{% endif %}
+{% endblock %}

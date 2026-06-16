@@ -49,6 +49,21 @@ class CadastralLocation(SQLModel, table=True):
     )
 
 
+class GeographicPlace(SQLModel, table=True):
+    """Normalised geographic place for non-cadastral locations such as birth places."""
+
+    __tablename__ = "geographic_places"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    province: str = Field(default="")
+    municipality: str = Field(default="")
+    municipality_code: str = Field(default="")
+
+    __table_args__ = (
+        UniqueConstraint("province", "municipality", "municipality_code", name="uq_geographic_place"),
+    )
+
+
 class CadastralSubject(SQLModel, table=True):
     """Normalised person/legal-entity identity shared by owners, XML subjects, and legal-entity searches."""
 
@@ -61,11 +76,11 @@ class CadastralSubject(SQLModel, table=True):
     first_name: Optional[str] = None
     gender: Optional[str] = Field(default=None, max_length=1)
     date_of_birth: Optional[str] = None
-    birth_location_id: Optional[int] = Field(default=None, foreign_key="cadastral_locations.id", index=True)
+    birth_place_id: Optional[int] = Field(default=None, foreign_key="geographic_places.id", index=True)
     birth_municipality_code: Optional[str] = None
     subject_type: Optional[str] = None  # person | legal_entity | unknown
 
-    birth_location: Optional["CadastralLocation"] = Relationship()
+    birth_place: Optional["GeographicPlace"] = Relationship()
 
     __table_args__ = (
         # Partial unique index: deduplicate subjects by fiscal code when present.
@@ -80,12 +95,12 @@ class OwnershipRight(SQLModel, table=True):
     __tablename__ = "ownership_rights"
 
     id: Optional[int] = Field(default=None, primary_key=True)
-    right_type: Optional[str] = None
-    right_code: Optional[str] = None
-    right_description: Optional[str] = None
-    ownership_share: Optional[str] = None
-    start_date: Optional[str] = None
-    end_date: Optional[str] = None
+    right_type: str = Field(default="")
+    right_code: str = Field(default="")
+    right_description: str = Field(default="")
+    ownership_share: str = Field(default="")
+    start_date: str = Field(default="")
+    end_date: str = Field(default="")
 
     __table_args__ = (
         UniqueConstraint(

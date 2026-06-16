@@ -303,8 +303,14 @@ class TestBuildResultSections:
             ]
         }
         sections = web._build_result_sections(data)
-        assert len(sections) == 1
-        s = sections[0]
+        # Intestati aggregation emits an extra flat_table section before downloaded_docs
+        assert len(sections) == 2
+        agg = sections[0]
+        assert agg["kind"] == "flat_table"
+        assert agg["name"] == "intestati_da_documenti"
+        assert agg["count"] == 1
+        assert agg["rows"][0]["Nominativo"] == "TEST"
+        s = sections[1]
         assert s["kind"] == "downloaded_docs"
         assert s["count"] == 1
         doc = s["docs"][0]
@@ -318,11 +324,46 @@ class TestBuildResultSections:
         assert len(sections) == 1
         assert sections[0]["kind"] == "workflow_steps"
 
-    def test_nested_table_for_mixed_depth(self):
-        data = {"results": [{"immobile": {"Foglio": "1"}, "intestati": []}]}
+    def test_mixed_rows_flattened_to_flat_table(self):
+        # Mixed rows (dict subfield + list-of-dict) produce a main flat_table
+        # plus a child flat_table per list-of-dict field.
+        data = {
+            "results": [
+                {
+                    "result_index": 1,
+                    "immobile": {"Foglio": "1", "Categoria": "A/2"},
+                    "intestati": [{"Nominativo": "Rossi", "Quota": "1/2"}, {"Nominativo": "Bianchi", "Quota": "1/2"}],
+                },
+                {
+                    "result_index": 2,
+                    "immobile": {"Foglio": "2", "Categoria": "C/6"},
+                    "intestati": [{"Nominativo": "Verdi", "Quota": "1/1"}],
+                },
+            ]
+        }
         sections = web._build_result_sections(data)
-        assert len(sections) == 1
-        assert sections[0]["kind"] == "nested_table"
+        # Expect two sections: main + child "intestati"
+        assert len(sections) == 2
+        main = sections[0]
+        assert main["kind"] == "flat_table"
+        assert main["name"] == "results"
+        assert "Foglio" in main["columns"]
+        assert "Categoria" in main["columns"]
+        assert "intestati_n" in main["columns"]
+        assert main["rows"][0]["intestati_n"] == 2
+        assert main["rows"][1]["intestati_n"] == 1
+
+        child = sections[1]
+        assert child["kind"] == "flat_table"
+        assert child["name"] == "results_intestati"
+        assert child["join_key"] == "result_index"
+        assert "result_index" in child["columns"]
+        assert "Nominativo" in child["columns"]
+        # 2 intestati for result 1 + 1 for result 2 = 3 rows total
+        assert child["count"] == 3
+        assert child["rows"][0]["result_index"] == 1
+        assert child["rows"][0]["Nominativo"] == "Rossi"
+        assert child["rows"][2]["result_index"] == 2
 
 
 # ---------------------------------------------------------------------------
