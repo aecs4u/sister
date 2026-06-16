@@ -42,10 +42,11 @@ async def test_init_db_creates_tables():
         cursor = await db.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
         tables = [row[0] for row in await cursor.fetchall()]
 
+    assert "cadastral_locations" in tables
     assert "visura_requests" in tables
     assert "visura_responses" in tables
-    assert "immobili" in tables
-    assert "intestati" in tables
+    assert "visura_properties" in tables
+    assert "visura_owners" in tables
 
 
 # ---------------------------------------------------------------------------
@@ -70,7 +71,12 @@ async def test_save_request_persists_row():
     db = await aiosqlite.connect(database.DB_PATH)
     db.row_factory = aiosqlite.Row
     try:
-        cursor = await db.execute("SELECT * FROM visura_requests WHERE request_id = ?", ("req_T_abc",))
+        cursor = await db.execute(
+            "SELECT req.request_id, loc.province AS provincia, loc.cadastre_type AS tipo_catasto"
+            " FROM visura_requests req LEFT JOIN cadastral_locations loc ON req.location_id = loc.id"
+            " WHERE req.request_id = ?",
+            ("req_T_abc",),
+        )
         row = await cursor.fetchone()
     finally:
         await db.close()
@@ -100,7 +106,9 @@ async def test_save_request_with_optional_fields():
     db.row_factory = aiosqlite.Row
     try:
         cursor = await db.execute(
-            "SELECT sezione, subalterno FROM visura_requests WHERE request_id = ?",
+            "SELECT loc.section AS sezione, loc.subunit AS subalterno"
+            " FROM visura_requests req LEFT JOIN cadastral_locations loc ON req.location_id = loc.id"
+            " WHERE req.request_id = ?",
             ("req_F_opt",),
         )
         row = await cursor.fetchone()

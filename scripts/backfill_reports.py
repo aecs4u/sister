@@ -124,8 +124,8 @@ def _re_soggetto_match(stem: str) -> dict | None:
 async def run(dry_run: bool = False):
     from sqlalchemy import select
 
-    from sister.database import _get_session_factory, init_db
-    from sister.db_models import VisuraDocumentDB
+    from sister.database import _get_session_factory, get_or_create_location, init_db
+    from sister.db_models import DocumentMetadata, VisuraDocument
     from sister.utils import _parse_visura_xml
 
     os.environ.setdefault("SISTER_DB_PATH", "/data/aecs4u.it/sister/data/sister.sqlite")
@@ -138,7 +138,7 @@ async def run(dry_run: bool = False):
 
     # Pre-fetch existing file_paths to avoid duplicates
     async with session_factory() as session:
-        existing = set((await session.execute(select(VisuraDocumentDB.file_path))).scalars().all())
+        existing = set((await session.execute(select(VisuraDocument.file_path))).scalars().all())
         existing.discard(None)
 
     inserted = 0
@@ -163,71 +163,59 @@ async def run(dry_run: bool = False):
         fields["file_size"] = file_path.stat().st_size
         fields["richiesta_del"] = datetime.fromtimestamp(file_path.stat().st_mtime).strftime("%Y-%m-%d")
 
-        # For P7M/XML: parse XML content
+        # For P7M/XML: parse XML content and override filename heuristics
         xml_data: dict | None = None
         ext = file_path.suffix.lower()
         if ext in (".p7m", ".xml"):
             xml_data = _parse_visura_xml(abs_path)
             if xml_data:
-                # Override with parsed values (more accurate than filename heuristics)
-                for key in (
-                    "provincia",
-                    "comune",
-                    "foglio",
-                    "particella",
-                    "subalterno",
-                    "sezione_urbana",
-                    "tipo_catasto",
-                    "document_type",
-                ):
+                for key in ("provincia", "comune", "foglio", "particella", "subalterno", "sezione_urbana",
+                            "tipo_catasto", "document_type"):
                     if xml_data.get(key):
                         fields[key] = xml_data[key]
                 fields["xml_content"] = xml_data.get("xml_content", "")
 
-        intestati_json = None
-        dati_immobile_json = None
-        if xml_data:
-            intestati = xml_data.get("intestati", [])
-            if intestati:
-                intestati_json = json.dumps(intestati, ensure_ascii=False)
-            immobile = xml_data.get("immobile") or {}
-            classamento = xml_data.get("classamento") or []
-            indirizzo = xml_data.get("indirizzo") or ""
-            if immobile or classamento:
-                dati_immobile_json = json.dumps(
-                    {"immobile": immobile, "classamento": classamento, "indirizzo": indirizzo}, ensure_ascii=False
-                )
-
-        row = VisuraDocumentDB(
+        doc = VisuraDocument(
             document_type=fields.get("document_type", "visura"),
             file_format=fields.get("file_format", ext.lstrip(".").upper()),
             filename=fields["filename"],
             file_path=fields["file_path"],
             file_size=fields.get("file_size"),
-            oggetto=fields.get("oggetto") or new_name,
-            richiesta_del=fields.get("richiesta_del"),
-            provincia=fields.get("provincia") or "",
-            comune=fields.get("comune") or "",
-            foglio=fields.get("foglio") or "",
-            particella=fields.get("particella") or "",
-            subalterno=fields.get("subalterno") or "",
-            sezione_urbana=fields.get("sezione_urbana") or "",
-            tipo_catasto=fields.get("tipo_catasto") or "",
-            intestati_json=intestati_json,
-            dati_immobile_json=dati_immobile_json,
-            xml_content=fields.get("xml_content") or None,
+            subject=fields.get("oggetto") or new_name,
+            requested_at=fields.get("richiesta_del"),
         )
 
         action = "DRY-RUN" if dry_run else "INSERT "
         print(f"  {action}  {old_name:45s} → {new_name}")
         print(
-            f"           type={row.document_type} prov={row.provincia} "
-            f"FG={row.foglio} PT={row.particella} sub={row.subalterno}"
+            f"           type={doc.document_type} prov={fields.get('provincia', '')} "
+            f"FG={fields.get('foglio', '')} PT={fields.get('particella', '')} sub={fields.get('subalterno', '')}"
         )
 
         if not dry_run:
             async with session_factory() as session:
-                session.add(row)
+                session.add(doc)
+                await session.flush()  # get doc.id
+
+                has_location = fields.get("foglio") or fields.get("xml_content")
+                if has_location:
+                    location_id = await get_or_create_location(
+                        session,
+                        cadastre_type=fields.get("tipo_catasto") or "",
+                        province=fields.get("provincia") or "",
+                        municipality=fields.get("comune") or "",
+                        sheet=fields.get("foglio") or "",
+                        parcel=fields.get("particella") or "",
+                        subunit=fields.get("subalterno") or "",
+                        section=fields.get("sezione_urbana") or "",
+                    )
+                    meta = DocumentMetadata(
+                        id=doc.id,
+                        location_id=location_id,
+                        content=fields.get("xml_content") or None,
+                    )
+                    session.add(meta)
+
                 await session.commit()
             inserted += 1
 

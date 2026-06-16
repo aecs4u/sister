@@ -18,7 +18,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from sister.database import _get_session_factory, init_db, save_response
-from sister.db_models import VisuraRequestDB
+from sister.db_models import VisuraRequest
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 log = logging.getLogger(__name__)
@@ -60,7 +60,7 @@ async def _ensure_request(session_factory, request_id: str, tipo_catasto: str, r
         )
         if existing.fetchone():
             return
-        req = VisuraRequestDB(
+        req = VisuraRequest(
             request_id=request_id,
             request_type=request_type,
             tipo_catasto=tipo_catasto,

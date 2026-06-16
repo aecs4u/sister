@@ -14,7 +14,7 @@ from typing import Any
 
 import sister.database as database
 from sister.database import compute_cache_key, init_db
-from sister.db_models import IMMOBILE_FIELD_MAP, INTESTATO_FIELD_MAP
+from sister.db_models import OWNER_RIGHT_FIELD_MAP, OWNER_SUBJECT_FIELD_MAP, PROPERTY_FIELD_MAP
 
 REQUEST_TYPE_BY_PREFIX = {
     "req": "visura",
@@ -194,24 +194,45 @@ def _infer_request_fields(payload: dict[str, Any]) -> dict[str, Any]:
     return fields
 
 
-def _parse_immobili(response_id: str, tipo_catasto: str, data: dict[str, Any]) -> list[dict[str, Any]]:
+def _parse_immobili(
+    response_id: str, tipo_catasto: str, data: dict[str, Any]
+) -> list[tuple[dict[str, Any], dict[str, str]]]:
+    """Returns (property_fields, location_fields) pairs."""
     rows = []
     immobili = data.get("immobili", [])
     if not isinstance(immobili, list):
         return rows
+    _CATASTO_TYPE = {"F": "building", "T": "land", "E": "entity"}
+    from sister.db_models import PROPERTY_LOCATION_FIELD_MAP
     for item in immobili:
         if not isinstance(item, dict):
             continue
-        row: dict[str, Any] = {"response_id": response_id, "tipo_catasto": tipo_catasto}
-        for html_key, db_col in IMMOBILE_FIELD_MAP.items():
+        prop: dict[str, Any] = {
+            "response_id": response_id,
+            "property_type": _CATASTO_TYPE.get(tipo_catasto),
+        }
+        loc: dict[str, str] = {
+            "cadastre_type": tipo_catasto,
+            "province": "",
+            "municipality": "",
+            "sheet": "",
+            "parcel": "",
+            "subunit": "",
+            "section": "",
+        }
+        for html_key, db_col in PROPERTY_FIELD_MAP.items():
             if html_key in item:
                 value = str(item[html_key]).strip()
-                row[db_col] = value or None
-        rows.append(row)
+                prop[db_col] = value or None
+        for html_key, loc_col in PROPERTY_LOCATION_FIELD_MAP.items():
+            if html_key in item:
+                loc[loc_col] = str(item[html_key]).strip()
+        rows.append((prop, loc))
     return rows
 
 
-def _parse_intestati(response_id: str, data: dict[str, Any]) -> list[dict[str, Any]]:
+def _parse_intestati(response_id: str, data: dict[str, Any]) -> list[tuple[dict[str, Any], dict[str, Any]]]:
+    """Parse intestati from response JSON into (subject_fields, right_fields) pairs."""
     rows = []
     intestati = data.get("intestati", [])
     if not isinstance(intestati, list):
@@ -219,16 +240,15 @@ def _parse_intestati(response_id: str, data: dict[str, Any]) -> list[dict[str, A
     for item in intestati:
         if not isinstance(item, dict):
             continue
-        row: dict[str, Any] = {"response_id": response_id}
-        for html_key, db_col in INTESTATO_FIELD_MAP.items():
-            if html_key not in item:
-                continue
-            value = str(item[html_key]).strip() or None
-            if db_col == "nominativo" and row.get("nominativo") and value:
-                row["nominativo"] = f"{row['nominativo']} {value}"
-            else:
-                row[db_col] = value
-        rows.append(row)
+        subject_fields: dict[str, Any] = {}
+        right_fields: dict[str, Any] = {}
+        for html_key, db_col in OWNER_SUBJECT_FIELD_MAP.items():
+            if html_key in item:
+                subject_fields[db_col] = str(item[html_key]).strip() or None
+        for html_key, db_col in OWNER_RIGHT_FIELD_MAP.items():
+            if html_key in item:
+                right_fields[db_col] = str(item[html_key]).strip() or None
+        rows.append((subject_fields, right_fields))
     return rows
 
 
@@ -278,6 +298,72 @@ def _insert_mapping(conn: sqlite3.Connection, table: str, row: dict[str, Any]) -
     )
 
 
+def _get_or_create_subject_sql(conn: sqlite3.Connection, **kwargs: Any) -> int | None:
+    """Get existing CadastralSubject by fiscal_code (when present) or create one; return its id."""
+    fiscal_code = kwargs.get("fiscal_code")
+    if fiscal_code:
+        row = conn.execute("SELECT id FROM cadastral_subjects WHERE fiscal_code=?", (fiscal_code,)).fetchone()
+        if row:
+            return row[0]
+    columns = list(kwargs)
+    placeholders = ", ".join("?" for _ in columns)
+    cursor = conn.execute(
+        f"INSERT INTO cadastral_subjects ({', '.join(columns)}) VALUES ({placeholders})",
+        [kwargs[c] for c in columns],
+    )
+    return cursor.lastrowid
+
+
+def _get_or_create_right_sql(conn: sqlite3.Connection, **kwargs: Any) -> int | None:
+    """Get existing OwnershipRight or create one; return its id."""
+    fields = ["right_type", "right_code", "right_description", "ownership_share", "start_date", "end_date"]
+    where_parts = []
+    params = []
+    for f in fields:
+        val = kwargs.get(f)
+        if val is None:
+            where_parts.append(f"{f} IS NULL")
+        else:
+            where_parts.append(f"{f}=?")
+            params.append(val)
+    row = conn.execute(f"SELECT id FROM ownership_rights WHERE {' AND '.join(where_parts)}", params).fetchone()
+    if row:
+        return row[0]
+    columns = [f for f in fields if kwargs.get(f) is not None]
+    if not columns:
+        return None
+    placeholders = ", ".join("?" for _ in columns)
+    cursor = conn.execute(
+        f"INSERT INTO ownership_rights ({', '.join(columns)}) VALUES ({placeholders})",
+        [kwargs[c] for c in columns],
+    )
+    return cursor.lastrowid
+
+
+def _get_or_create_location_sql(conn: sqlite3.Connection, **kwargs: str) -> int | None:
+    """Get existing or create new CadastralLocation row via raw sqlite3; return its id."""
+    cadastre_type = kwargs.get("cadastre_type") or ""
+    province = kwargs.get("province") or ""
+    municipality = kwargs.get("municipality") or ""
+    sheet = kwargs.get("sheet") or ""
+    parcel = kwargs.get("parcel") or ""
+    subunit = kwargs.get("subunit") or ""
+    section = kwargs.get("section") or ""
+    row = conn.execute(
+        "SELECT id FROM cadastral_locations WHERE cadastre_type=? AND province=? AND municipality=?"
+        " AND sheet=? AND parcel=? AND subunit=? AND section=?",
+        (cadastre_type, province, municipality, sheet, parcel, subunit, section),
+    ).fetchone()
+    if row:
+        return row[0]
+    cursor = conn.execute(
+        "INSERT INTO cadastral_locations (cadastre_type, province, municipality, sheet, parcel, subunit, section)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (cadastre_type, province, municipality, sheet, parcel, subunit, section),
+    )
+    return cursor.lastrowid
+
+
 def _upsert_response(conn: sqlite3.Connection, path: Path, payload: dict[str, Any]) -> None:
     data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
     fields = _infer_request_fields(payload)
@@ -285,36 +371,29 @@ def _upsert_response(conn: sqlite3.Connection, path: Path, payload: dict[str, An
     created_at = _created_at(path, payload)
 
     conn.execute("DELETE FROM page_visits WHERE response_id = ?", (request_id,))
-    conn.execute("DELETE FROM intestati WHERE response_id = ?", (request_id,))
-    conn.execute("DELETE FROM immobili WHERE response_id = ?", (request_id,))
+    conn.execute("DELETE FROM visura_owners WHERE response_id = ?", (request_id,))
+    conn.execute("DELETE FROM visura_properties WHERE response_id = ?", (request_id,))
     conn.execute("DELETE FROM visura_responses WHERE request_id = ?", (request_id,))
     conn.execute("DELETE FROM visura_requests WHERE request_id = ?", (request_id,))
 
+    location_id = _get_or_create_location_sql(
+        conn,
+        cadastre_type=fields["tipo_catasto"],
+        province=fields["provincia"],
+        municipality=fields["comune"],
+        sheet=fields["foglio"],
+        parcel=fields["particella"],
+        subunit=fields["subalterno"] or "",
+        section=fields["sezione"] or "",
+    )
     conn.execute(
-        """
-        INSERT INTO visura_requests (
-            request_id, request_type, tipo_catasto, provincia, comune, foglio,
-            particella, sezione, subalterno, cache_key, created_at
-        )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        (
-            fields["request_id"],
-            fields["request_type"],
-            fields["tipo_catasto"],
-            fields["provincia"] or "",
-            fields["comune"] or "",
-            fields["foglio"] or "",
-            fields["particella"] or "",
-            fields["sezione"] or None,
-            fields["subalterno"] or None,
-            fields["cache_key"],
-            created_at,
-        ),
+        "INSERT INTO visura_requests (request_id, request_type, location_id, cache_key, created_at)"
+        " VALUES (?, ?, ?, ?, ?)",
+        (fields["request_id"], fields["request_type"], location_id, fields["cache_key"], created_at),
     )
     conn.execute(
         """
-        INSERT INTO visura_responses (request_id, success, tipo_catasto, data, error, created_at)
+        INSERT INTO visura_responses (request_id, success, cadastre_type, data, error, created_at)
         VALUES (?, ?, ?, ?, ?, ?)
         """,
         (
@@ -327,10 +406,19 @@ def _upsert_response(conn: sqlite3.Connection, path: Path, payload: dict[str, An
         ),
     )
 
-    for row in _parse_immobili(request_id, fields["tipo_catasto"], data):
-        _insert_mapping(conn, "immobili", row)
-    for row in _parse_intestati(request_id, data):
-        _insert_mapping(conn, "intestati", row)
+    for prop_fields, loc_fields in _parse_immobili(request_id, fields["tipo_catasto"], data):
+        # Inherit request province/municipality for complete location
+        if not loc_fields["province"]:
+            loc_fields["province"] = fields["provincia"] or ""
+        if not loc_fields["municipality"]:
+            loc_fields["municipality"] = fields["comune"] or ""
+        prop_location_id = _get_or_create_location_sql(conn, **loc_fields)
+        prop_fields["location_id"] = prop_location_id
+        _insert_mapping(conn, "visura_properties", prop_fields)
+    for subject_fields, right_fields in _parse_intestati(request_id, data):
+        subject_id = _get_or_create_subject_sql(conn, **subject_fields) if subject_fields else None
+        right_id = _get_or_create_right_sql(conn, **right_fields) if right_fields else None
+        _insert_mapping(conn, "visura_owners", {"response_id": request_id, "subject_id": subject_id, "right_id": right_id})
     for row in _parse_page_visits(request_id, data):
         _insert_mapping(conn, "page_visits", row)
 
@@ -346,29 +434,83 @@ def _tables_exist(db_path: Path) -> bool:
     return "visura_requests" in tables and "visura_responses" in tables
 
 
-def populate(db_path: Path, source: Path, dry_run: bool) -> dict[str, int]:
-    payloads = list(_iter_response_payloads(source))
+def _load_manifest(path: Path) -> dict[str, dict]:
+    """Load the processed-file manifest; return empty dict if absent or unreadable."""
+    try:
+        return json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+    except Exception:
+        return {}
+
+
+def _save_manifest(path: Path, manifest: dict[str, dict]) -> None:
+    """Persist the manifest atomically via a temp-file rename."""
+    tmp = path.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(manifest, indent=2, ensure_ascii=False, default=str), encoding="utf-8")
+    tmp.replace(path)
+
+
+def _manifest_key(path: Path) -> str:
+    return str(path.resolve())
+
+
+def _is_known(path: Path, manifest: dict) -> bool:
+    entry = manifest.get(_manifest_key(path))
+    if not entry:
+        return False
+    stat = path.stat()
+    return entry.get("mtime") == stat.st_mtime and entry.get("size") == stat.st_size
+
+
+def populate(
+    db_path: Path,
+    source: Path,
+    dry_run: bool,
+    manifest_path: Path | None = None,
+) -> dict[str, int]:
+    manifest = _load_manifest(manifest_path) if manifest_path else {}
+
+    all_payloads = list(_iter_response_payloads(source))
+    new_payloads = [(path, payload) for path, payload in all_payloads if not _is_known(path, manifest)]
+
     if dry_run:
-        return {"files": len({path for path, _ in payloads}), "responses": len(payloads)}
+        return {
+            "files_total": len({path for path, _ in all_payloads}),
+            "files_new": len({path for path, _ in new_payloads}),
+            "responses_new": len(new_payloads),
+        }
 
     if not _tables_exist(db_path):
         database.DB_PATH = str(db_path)
         database._engine = None
         asyncio.run(init_db())
 
+    processed: set[Path] = set()
     with sqlite3.connect(db_path) as conn:
         conn.execute("PRAGMA foreign_keys=ON")
-        for path, payload in payloads:
+        for path, payload in new_payloads:
             _upsert_response(conn, path, payload)
+            processed.add(path)
+            if manifest_path:
+                stat = path.stat()
+                manifest[_manifest_key(path)] = {
+                    "mtime": stat.st_mtime,
+                    "size": stat.st_size,
+                    "processed_at": datetime.now().isoformat(),
+                }
         conn.commit()
         conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+
+    if manifest_path and processed:
+        _save_manifest(manifest_path, manifest)
+
+    with sqlite3.connect(db_path) as conn:
         return {
-            "files": len({path for path, _ in payloads}),
-            "responses": len(payloads),
+            "files_new": len(processed),
+            "files_skipped": len({p for p, _ in all_payloads}) - len(processed),
             "visura_requests": _count(conn, "visura_requests"),
             "visura_responses": _count(conn, "visura_responses"),
-            "immobili": _count(conn, "immobili"),
-            "intestati": _count(conn, "intestati"),
+            "visura_properties": _count(conn, "visura_properties"),
+            "visura_owners": _count(conn, "visura_owners"),
             "page_visits": _count(conn, "page_visits"),
         }
 
@@ -377,10 +519,11 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--db", type=Path, default=Path("data/sister.sqlite"), help="SQLite database path")
     parser.add_argument("--source", type=Path, default=Path("outputs"), help="Directory containing exported JSON files")
+    parser.add_argument("--manifest", type=Path, default=None, help="JSON file tracking processed files (skips re-processing)")
     parser.add_argument("--dry-run", action="store_true", help="Scan files without writing to the database")
     args = parser.parse_args()
 
-    stats = populate(args.db, args.source, args.dry_run)
+    stats = populate(args.db, args.source, args.dry_run, manifest_path=args.manifest)
     for key, value in stats.items():
         print(f"{key}: {value}")
 

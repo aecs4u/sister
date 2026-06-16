@@ -387,6 +387,38 @@
     </div>
     {% endif %}
 
+    {# --- DB-backed Immobili --- #}
+    {% if result.db_properties %}
+    <div class="card border-0 shadow-sm mb-4">
+        <div class="card-header">
+            <h5 class="mb-0">
+                <i class="fas fa-home text-success me-2"></i>Immobili
+                <span class="text-muted">({{ result.db_properties|length }})</span>
+                <span class="badge bg-light text-secondary border ms-2 small fw-normal">DB</span>
+            </h5>
+        </div>
+        <div class="card-body p-0">
+            <div id="tabulator-db-properties"></div>
+        </div>
+    </div>
+    {% endif %}
+
+    {# --- DB-backed Intestati --- #}
+    {% if result.db_owners %}
+    <div class="card border-0 shadow-sm mb-4">
+        <div class="card-header">
+            <h5 class="mb-0">
+                <i class="fas fa-users text-info me-2"></i>Intestati
+                <span class="text-muted">({{ result.db_owners|length }})</span>
+                <span class="badge bg-light text-secondary border ms-2 small fw-normal">DB</span>
+            </h5>
+        </div>
+        <div class="card-body p-0">
+            <div id="tabulator-db-owners"></div>
+        </div>
+    </div>
+    {% endif %}
+
     <!-- Raw JSON -->
     <div class="card border-0 shadow-sm">
         <div class="card-header d-flex justify-content-between align-items-center">
@@ -544,6 +576,97 @@
     })();
     {% endif %}
     {% endfor %}
+    {% endif %}
+
+    // DB-backed properties table
+    {% if result and result.db_properties %}
+    (function() {
+        var el = document.getElementById("tabulator-db-properties");
+        if (!el) return;
+        var data = {{ result.db_properties | tojson }};
+        if (!data.length) return;
+        // Determine which column groups are populated
+        var hasFabbricati = data.some(function(r){ return r.category || r.cadastral_class || r.income || r.consistency || r.census_zone; });
+        var hasTerreni = data.some(function(r){ return r.quality || r.area || r.dominical_income || r.agricultural_income; });
+        var hasSubject = data.some(function(r){ return r.subject_name || r.subject_fiscal_code; });
+        var cols = [
+            {title: "Tipo", field: "property_type", width: 90, hozAlign: "center",
+             formatter: function(cell) {
+                var v = cell.getValue();
+                var badge = document.createElement("span");
+                badge.className = v === "building" ? "badge bg-primary" : v === "land" ? "badge bg-success" : "badge bg-secondary";
+                badge.textContent = v === "building" ? "Fabbricato" : v === "land" ? "Terreno" : v || "-";
+                return badge;
+             }},
+            {title: "Provincia", field: "province", headerFilter: "input", headerFilterPlaceholder: "filter..."},
+            {title: "Comune", field: "municipality", headerFilter: "input", headerFilterPlaceholder: "filter..."},
+            {title: "Foglio", field: "sheet", width: 80, hozAlign: "center", headerFilter: "input", headerFilterPlaceholder: "filter..."},
+            {title: "Particella", field: "parcel", width: 90, hozAlign: "center", headerFilter: "input", headerFilterPlaceholder: "filter..."},
+            {title: "Sub", field: "subunit", width: 70, hozAlign: "center"},
+            {title: "Sez.", field: "section", width: 70, hozAlign: "center"},
+            {title: "Indirizzo", field: "address", headerFilter: "input", headerFilterPlaceholder: "filter..."},
+            {title: "Partita", field: "partita", width: 90},
+        ];
+        if (hasFabbricati) {
+            cols = cols.concat([
+                {title: "Categoria", field: "category", width: 100, headerFilter: "input", headerFilterPlaceholder: "filter..."},
+                {title: "Classe", field: "cadastral_class", width: 80, hozAlign: "center"},
+                {title: "Consistenza", field: "consistency", width: 110},
+                {title: "Rendita", field: "income", width: 110},
+                {title: "Zona cens.", field: "census_zone", width: 110},
+            ]);
+        }
+        if (hasTerreni) {
+            cols = cols.concat([
+                {title: "Qualità", field: "quality", headerFilter: "input", headerFilterPlaceholder: "filter..."},
+                {title: "Superficie", field: "area", width: 100},
+                {title: "Red. Dominicale", field: "dominical_income", width: 140},
+                {title: "Red. Agrario", field: "agricultural_income", width: 130},
+            ]);
+        }
+        if (hasSubject) {
+            cols = cols.concat([
+                {title: "Soggetto", field: "subject_name", headerFilter: "input", headerFilterPlaceholder: "filter..."},
+                {title: "C.F. / P.IVA", field: "subject_fiscal_code", headerFilter: "input", headerFilterPlaceholder: "filter..."},
+            ]);
+        }
+        // Null → "-" for all cells
+        cols = cols.map(function(c) {
+            if (!c.formatter) c.formatter = function(cell) { var v = cell.getValue(); return (v == null || v === "") ? "-" : String(v); };
+            return c;
+        });
+        new Tabulator(el, Object.assign({}, commonOpts, {data: data, columns: cols}));
+    })();
+    {% endif %}
+
+    // DB-backed owners table
+    {% if result and result.db_owners %}
+    (function() {
+        var el = document.getElementById("tabulator-db-owners");
+        if (!el) return;
+        var data = {{ result.db_owners | tojson }};
+        if (!data.length) return;
+        var hasDates = data.some(function(r){ return r.start_date || r.end_date; });
+        var cols = [
+            {title: "Nominativo", field: "nominativo", headerFilter: "input", headerFilterPlaceholder: "filter..."},
+            {title: "Codice Fiscale", field: "fiscal_code", headerFilter: "input", headerFilterPlaceholder: "filter..."},
+            {title: "Titolarità", field: "right_type", width: 130, headerFilter: "input", headerFilterPlaceholder: "filter..."},
+            {title: "Quota", field: "ownership_share", width: 100, hozAlign: "center"},
+            {title: "Cod. Diritto", field: "right_code", width: 110},
+            {title: "Diritto", field: "right_description", headerFilter: "input", headerFilterPlaceholder: "filter..."},
+        ];
+        if (hasDates) {
+            cols = cols.concat([
+                {title: "Inizio", field: "start_date", width: 110},
+                {title: "Fine", field: "end_date", width: 110},
+            ]);
+        }
+        cols = cols.map(function(c) {
+            if (!c.formatter) c.formatter = function(cell) { var v = cell.getValue(); return (v == null || v === "") ? "-" : String(v); };
+            return c;
+        });
+        new Tabulator(el, Object.assign({}, commonOpts, {data: data, columns: cols, pagination: false}));
+    })();
     {% endif %}
 
     // Page visits table (normalized server-side)

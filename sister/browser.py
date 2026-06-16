@@ -172,21 +172,21 @@ class BrowserManager:
                 try:
                     result = await run_visura(
                         page,
-                        request.provincia,
-                        request.comune,
-                        request.sezione,
-                        request.foglio,
-                        request.particella,
-                        request.tipo_catasto,
+                        request.province,
+                        request.municipality,
+                        request.section,
+                        request.sheet,
+                        request.parcel,
+                        request.cadastre_type,
                         extract_intestati=False,
-                        subalterno=request.subalterno,
-                        sezione_urbana=request.sezione_urbana,
+                        subalterno=request.subunit,
+                        sezione_urbana=request.urban_section,
                     )
                 except Exception as inner_e:
                     return VisuraResponse(
                         request_id=request.request_id,
                         success=False,
-                        tipo_catasto=request.tipo_catasto,
+                        cadastre_type=request.cadastre_type,
                         data=None,
                         error=str(inner_e),
                     )
@@ -194,14 +194,14 @@ class BrowserManager:
             return VisuraResponse(
                 request_id=request.request_id,
                 success=True,
-                tipo_catasto=request.tipo_catasto,
+                cadastre_type=request.cadastre_type,
                 data=result,
             )
         except (AuthenticationError, BrowserError) as e:
             return VisuraResponse(
                 request_id=request.request_id,
                 success=False,
-                tipo_catasto=request.tipo_catasto,
+                cadastre_type=request.cadastre_type,
                 data=None,
                 error=str(e),
             )
@@ -212,28 +212,28 @@ class BrowserManager:
                 page = await self._get_authenticated_page()
                 result = await run_visura(
                     page,
-                    request.provincia,
-                    request.comune,
-                    request.sezione,
-                    request.foglio,
-                    request.particella,
-                    request.tipo_catasto,
+                    request.province,
+                    request.municipality,
+                    request.section,
+                    request.sheet,
+                    request.parcel,
+                    request.cadastre_type,
                     extract_intestati=True,
-                    subalterno=request.subalterno,
-                    sezione_urbana=request.sezione_urbana,
+                    subalterno=request.subunit,
+                    sezione_urbana=request.urban_section,
                     target_index=getattr(request, "target_index", None),
                 )
             return VisuraResponse(
                 request_id=request.request_id,
                 success=True,
-                tipo_catasto=request.tipo_catasto,
+                cadastre_type=request.cadastre_type,
                 data=result,
             )
         except Exception as e:
             return VisuraResponse(
                 request_id=request.request_id,
                 success=False,
-                tipo_catasto=request.tipo_catasto,
+                cadastre_type=request.cadastre_type,
                 data=None,
                 error=str(e),
             )
@@ -242,18 +242,18 @@ class BrowserManager:
         try:
             async with self._page_lock:
                 page = await self._get_authenticated_page()
-                result = await run_visura_soggetto(page, request.codice_fiscale)
+                result = await run_visura_soggetto(page, request.fiscal_code)
             return VisuraResponse(
                 request_id=request.request_id,
                 success=True,
-                tipo_catasto=request.tipo_catasto,
+                cadastre_type=request.cadastre_type,
                 data=result,
             )
         except Exception as e:
             return VisuraResponse(
                 request_id=request.request_id,
                 success=False,
-                tipo_catasto=request.tipo_catasto,
+                cadastre_type=request.cadastre_type,
                 data=None,
                 error=str(e),
             )
@@ -264,21 +264,21 @@ class BrowserManager:
                 page = await self._get_authenticated_page()
                 result = await run_visura_persona_giuridica(
                     page,
-                    request.identificativo,
-                    tipo_catasto=request.tipo_catasto,
-                    provincia=request.provincia,
+                    request.identifier,
+                    tipo_catasto=request.cadastre_type,
+                    provincia=request.province,
                 )
             return VisuraResponse(
                 request_id=request.request_id,
                 success=True,
-                tipo_catasto=request.tipo_catasto,
+                cadastre_type=request.cadastre_type,
                 data=result,
             )
         except Exception as e:
             return VisuraResponse(
                 request_id=request.request_id,
                 success=False,
-                tipo_catasto=request.tipo_catasto,
+                cadastre_type=request.cadastre_type,
                 data=None,
                 error=str(e),
             )
@@ -289,22 +289,22 @@ class BrowserManager:
                 page = await self._get_authenticated_page()
                 result = await run_elenco_immobili(
                     page,
-                    tipo_catasto=request.tipo_catasto,
-                    provincia=request.provincia,
-                    comune=request.comune,
-                    sezione=getattr(request, "sezione", None),
+                    tipo_catasto=request.cadastre_type,
+                    provincia=request.province,
+                    comune=request.municipality,
+                    sezione=getattr(request, "section", None),
                 )
             return VisuraResponse(
                 request_id=request.request_id,
                 success=True,
-                tipo_catasto=request.tipo_catasto,
+                cadastre_type=request.cadastre_type,
                 data=result,
             )
         except Exception as e:
             return VisuraResponse(
                 request_id=request.request_id,
                 success=False,
-                tipo_catasto=request.tipo_catasto,
+                cadastre_type=request.cadastre_type,
                 data=None,
                 error=str(e),
             )
@@ -318,23 +318,23 @@ class BrowserManager:
                 if search_type == "visura_immobile":
                     result = await run_visura_immobile(
                         page,
-                        provincia=request.provincia,
-                        comune=request.comune,
-                        foglio=request.foglio,
-                        particella=request.particella,
-                        tipo_catasto=request.tipo_catasto,
-                        subalterno=request.params.get("subalterno") if request.params else None,
-                        sezione=request.params.get("sezione") if request.params else None,
+                        provincia=request.province,
+                        comune=request.municipality,
+                        foglio=request.params.get("sheet") or request.params.get("foglio") if request.params else None,
+                        particella=request.params.get("parcel") or request.params.get("particella") if request.params else None,
+                        tipo_catasto=request.cadastre_type,
+                        subalterno=request.params.get("subunit") or request.params.get("subalterno") if request.params else None,
+                        sezione=request.params.get("section") or request.params.get("sezione") if request.params else None,
                     )
                 elif search_type in _GENERIC_DISPATCHERS:
                     dispatcher = _GENERIC_DISPATCHERS[search_type]
                     result = await dispatcher(
                         page,
-                        tipo_catasto=request.tipo_catasto,
-                        provincia=request.provincia,
-                        comune=request.comune,
-                        foglio=request.foglio,
-                        particella=request.particella,
+                        tipo_catasto=request.cadastre_type,
+                        provincia=request.province,
+                        comune=request.municipality,
+                        foglio=request.params.get("sheet") or request.params.get("foglio") if request.params else None,
+                        particella=request.params.get("parcel") or request.params.get("particella") if request.params else None,
                         **(request.params or {}),
                     )
                 elif search_type in _NOARGS_DISPATCHERS:
@@ -344,7 +344,7 @@ class BrowserManager:
                     return VisuraResponse(
                         request_id=request.request_id,
                         success=False,
-                        tipo_catasto=request.tipo_catasto,
+                        cadastre_type=request.cadastre_type,
                         data=None,
                         error=f"Tipo di ricerca sconosciuto: {search_type}",
                     )
@@ -352,14 +352,14 @@ class BrowserManager:
             return VisuraResponse(
                 request_id=request.request_id,
                 success=True,
-                tipo_catasto=request.tipo_catasto,
+                cadastre_type=request.cadastre_type,
                 data=result,
             )
         except Exception as e:
             return VisuraResponse(
                 request_id=request.request_id,
                 success=False,
-                tipo_catasto=request.tipo_catasto,
+                cadastre_type=request.cadastre_type,
                 data=None,
                 error=str(e),
             )
@@ -370,27 +370,27 @@ class BrowserManager:
                 page = await self._get_authenticated_page()
                 result = await run_ispezione_ipotecaria(
                     page,
-                    tipo_catasto=request.tipo_catasto,
-                    provincia=request.provincia,
-                    comune=request.comune,
-                    foglio=request.foglio,
-                    particella=request.particella,
-                    tipo_ricerca=request.tipo_ricerca,
-                    subalterno=getattr(request, "subalterno", None),
-                    sezione=getattr(request, "sezione", None),
+                    tipo_catasto=request.cadastre_type,
+                    provincia=request.province,
+                    comune=request.municipality,
+                    foglio=request.sheet,
+                    particella=request.parcel,
+                    tipo_ricerca=request.search_type,
+                    subalterno=getattr(request, "subunit", None),
+                    sezione=getattr(request, "section", None),
                     auto_confirm=getattr(request, "auto_confirm", False),
                 )
             return VisuraResponse(
                 request_id=request.request_id,
                 success=True,
-                tipo_catasto=request.tipo_catasto,
+                cadastre_type=request.cadastre_type,
                 data=result,
             )
         except Exception as e:
             return VisuraResponse(
                 request_id=request.request_id,
                 success=False,
-                tipo_catasto=request.tipo_catasto,
+                cadastre_type=request.cadastre_type,
                 data=None,
                 error=str(e),
             )

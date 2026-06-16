@@ -28,6 +28,7 @@ classifiers = [
 dependencies = [
     "aecs4u-auth[browser]",
     "aecs4u-email",
+    "aecs4u-workflow",
     "fastapi>=0.115.0",
     "itsdangerous>=2.2.0",
     "structlog>=26.0.0",
@@ -71,6 +72,7 @@ sister = "sister.cli:run"
 aecs4u-auth = { git = "https://github.com/aecs4u/aecs4u-auth.git", branch = "main" }
 aecs4u-email = { git = "https://github.com/aecs4u/aecs4u-email.git", branch = "main" }
 aecs4u-theme = { git = "https://github.com/aecs4u/aecs4u-theme.git", branch = "main" }
+aecs4u-workflow = { git = "https://github.com/aecs4u/aecs4u-workflow.git", branch = "main" }
 
 [tool.setuptools]
 packages = ["sister"]

@@ -104,6 +104,10 @@ async def test_web_result_detail_renders_pending_request(monkeypatch):
         }
 
     monkeypatch.setattr(web, "get_result_record", _get_result_record)
+    async def _no_docs(*_, **__):
+        return []
+
+    monkeypatch.setattr(web, "get_documents_for_response", _no_docs)
 
     response = await web.web_result_detail(request, "req_pending", user=None)
 
@@ -562,7 +566,7 @@ async def test_web_workflow_detail_renders(monkeypatch):
 
     resp = await web.web_workflow_detail(request, "wf_detail_001", user=None)
     ctx = resp["context"]
-    assert resp["template"] == "sister/workflow_detail.html"
+    assert resp["template"] == "workflow_detail.html"
     result = ctx["result"]
     assert result["status"] == "completed"
     assert result["requested_at_display"] == "2026-04-12 12:00"
@@ -631,18 +635,20 @@ class TestCountTotalResultRows:
         assert result == 0
 
     @pytest.mark.asyncio
-    async def test_invalid_status_ignored(self, monkeypatch):
+    async def test_invalid_status_ignored(self, tmp_path, monkeypatch):
         from sister import database
 
-        # Invalid status should be normalized to None (no filter)
+        monkeypatch.setattr(database, "DB_PATH", str(tmp_path / "test.sqlite"))
+        # Invalid status should be normalized to None (no filter) — both return 0 on empty DB
         total_all = await database.count_total_result_rows()
         total_bogus = await database.count_total_result_rows(status="bogus_status")
         assert total_all == total_bogus
 
     @pytest.mark.asyncio
-    async def test_invalid_source_ignored(self, monkeypatch):
+    async def test_invalid_source_ignored(self, tmp_path, monkeypatch):
         from sister import database
 
+        monkeypatch.setattr(database, "DB_PATH", str(tmp_path / "test.sqlite"))
         total_all = await database.count_total_result_rows()
         total_bogus = await database.count_total_result_rows(source="bogus_source")
         assert total_all == total_bogus

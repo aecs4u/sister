@@ -48,7 +48,7 @@ def _submit_result_to_response(results: list, tipos_catasto: list, message: str)
                 cached_data.append(
                     {
                         "request_id": r.request_id,
-                        "tipo_catasto": r.response.tipo_catasto,
+                        "tipo_catasto": r.response.cadastre_type,
                         "status": "completed" if r.response.success else "error",
                         "data": r.response.data,
                         "error": r.response.error,
@@ -71,23 +71,23 @@ def _submit_result_to_response(results: list, tipos_catasto: list, message: str)
 async def richiedi_visura(request: VisuraInput, service: VisuraService, force: bool = False):
     """Richiede una visura catastale fornendo direttamente i dati catastali"""
     try:
-        sezione = None if request.sezione == "_" else request.sezione
+        section = None if request.section == "_" else request.section
 
-        tipos_catasto = [request.tipo_catasto] if request.tipo_catasto else ["T", "F"]
+        tipos_catasto = [request.cadastre_type] if request.cadastre_type else ["T", "F"]
         visura_requests = []
         for tipo_catasto in tipos_catasto:
             request_id = f"req_{tipo_catasto}_{uuid4().hex}"
             visura_requests.append(
                 VisuraRequest(
                     request_id=request_id,
-                    tipo_catasto=tipo_catasto,
-                    provincia=request.provincia,
-                    comune=request.comune,
-                    sezione=sezione,
-                    sezione_urbana=request.sezione_urbana,
-                    foglio=request.foglio,
-                    particella=request.particella,
-                    subalterno=request.subalterno,
+                    cadastre_type=tipo_catasto,
+                    province=request.province,
+                    municipality=request.municipality,
+                    section=section,
+                    urban_section=request.urban_section,
+                    sheet=request.sheet,
+                    parcel=request.parcel,
+                    subunit=request.subunit,
                 )
             )
         results = await service.add_requests_batch(visura_requests, force=force)
@@ -95,7 +95,7 @@ async def richiedi_visura(request: VisuraInput, service: VisuraService, force: b
         return _submit_result_to_response(
             results,
             tipos_catasto,
-            f"Richieste per {request.comune} F.{request.foglio} P.{request.particella}",
+            f"Richieste per {request.municipality} F.{request.sheet} P.{request.parcel}",
         )
 
     except HTTPException:
@@ -137,7 +137,7 @@ async def ottieni_visura(request_id: str, service: VisuraService):
         return JSONResponse(
             {
                 "request_id": request_id,
-                "tipo_catasto": response.tipo_catasto,
+                "tipo_catasto": response.cadastre_type,
                 "status": "completed" if response.success else "error",
                 "data": response.data,
                 "error": response.error,
@@ -155,21 +155,21 @@ async def ottieni_visura(request_id: str, service: VisuraService):
 async def richiedi_intestati_immobile(request: VisuraIntestatiInput, service: VisuraService, force: bool = False):
     """Richiede gli intestati per un immobile specifico."""
     try:
-        sezione = None if request.sezione == "_" else request.sezione
-        tipo_catasto = request.tipo_catasto or "T"
+        section = None if request.section == "_" else request.section
+        tipo_catasto = request.cadastre_type or "T"
 
         request_id = f"intestati_{tipo_catasto}_{uuid4().hex}"
 
         intestati_request = VisuraIntestatiRequest(
             request_id=request_id,
-            tipo_catasto=tipo_catasto,
-            provincia=request.provincia,
-            comune=request.comune,
-            foglio=request.foglio,
-            particella=request.particella,
-            subalterno=request.subalterno,
-            sezione=sezione,
-            sezione_urbana=request.sezione_urbana,
+            cadastre_type=tipo_catasto,
+            province=request.province,
+            municipality=request.municipality,
+            sheet=request.sheet,
+            parcel=request.parcel,
+            subunit=request.subunit,
+            section=section,
+            urban_section=request.urban_section,
         )
 
         result = await service.add_intestati_request(intestati_request, force=force)
@@ -191,9 +191,9 @@ async def richiedi_intestati_immobile(request: VisuraIntestatiInput, service: Vi
             {
                 "request_id": request_id,
                 "tipo_catasto": tipo_catasto,
-                "subalterno": request.subalterno,
+                "subalterno": request.subunit,
                 "status": "queued",
-                "message": f"Richiesta intestati aggiunta alla coda per {request.comune} F.{request.foglio} P.{request.particella}",
+                "message": f"Richiesta intestati aggiunta alla coda per {request.municipality} F.{request.sheet} P.{request.parcel}",
                 "queue_position": service.request_queue.qsize(),
             }
         )
@@ -272,11 +272,11 @@ async def extract_sezioni(request: SezioniExtractionRequest, service: VisuraServ
     try:
         logger.info(
             "Iniziando estrazione sezioni per tipo catasto: %s, max province: %s",
-            request.tipo_catasto,
-            request.max_province,
+            request.cadastre_type,
+            request.max_provinces,
         )
 
-        sezioni_data = await service.browser_manager.esegui_extract_sezioni(request.tipo_catasto, request.max_province)
+        sezioni_data = await service.browser_manager.esegui_extract_sezioni(request.cadastre_type, request.max_provinces)
 
         if not sezioni_data:
             return JSONResponse({"status": "no_data", "message": "Nessuna sezione estratta", "count": 0})
@@ -286,9 +286,9 @@ async def extract_sezioni(request: SezioniExtractionRequest, service: VisuraServ
         return JSONResponse(
             {
                 "status": "success",
-                "message": f"Estrazione completata per tipo catasto {request.tipo_catasto}",
+                "message": f"Estrazione completata per tipo catasto {request.cadastre_type}",
                 "total_extracted": len(sezioni_data),
-                "tipo_catasto": request.tipo_catasto,
+                "tipo_catasto": request.cadastre_type,
                 "sezioni": sezioni_data,
             }
         )
@@ -305,14 +305,14 @@ async def extract_sezioni(request: SezioniExtractionRequest, service: VisuraServ
 async def richiedi_visura_soggetto(request: VisuraSoggettoInput, service: VisuraService, force: bool = False):
     """Ricerca per soggetto (codice fiscale) — ambito nazionale o provinciale."""
     try:
-        tipo_catasto = request.tipo_catasto or "E"
+        tipo_catasto = request.cadastre_type or "E"
         request_id = f"soggetto_{tipo_catasto}_{uuid4().hex}"
 
         soggetto_request = VisuraSoggettoRequest(
             request_id=request_id,
-            codice_fiscale=request.codice_fiscale,
-            tipo_catasto=tipo_catasto,
-            provincia=request.provincia,
+            fiscal_code=request.fiscal_code,
+            cadastre_type=tipo_catasto,
+            province=request.province,
         )
 
         await service.add_soggetto_request(soggetto_request, force=force)
@@ -320,11 +320,11 @@ async def richiedi_visura_soggetto(request: VisuraSoggettoInput, service: Visura
         return JSONResponse(
             {
                 "request_id": request_id,
-                "codice_fiscale": request.codice_fiscale,
+                "codice_fiscale": request.fiscal_code,
                 "tipo_catasto": tipo_catasto,
-                "provincia": request.provincia or "NAZIONALE",
+                "provincia": request.province or "NAZIONALE",
                 "status": "queued",
-                "message": f"Ricerca soggetto {request.codice_fiscale} aggiunta alla coda",
+                "message": f"Ricerca soggetto {request.fiscal_code} aggiunta alla coda",
                 "queue_position": service.request_queue.qsize(),
             }
         )
@@ -345,14 +345,14 @@ async def richiedi_visura_persona_giuridica(
 ):
     """Ricerca per persona giuridica (P.IVA o denominazione)."""
     try:
-        tipo_catasto = request.tipo_catasto or "E"
+        tipo_catasto = request.cadastre_type or "E"
         request_id = f"pnf_{tipo_catasto}_{uuid4().hex}"
 
         pnf_request = VisuraPersonaGiuridicaRequest(
             request_id=request_id,
-            identificativo=request.identificativo,
-            tipo_catasto=tipo_catasto,
-            provincia=request.provincia,
+            identifier=request.identifier,
+            cadastre_type=tipo_catasto,
+            province=request.province,
         )
 
         await service.add_persona_giuridica_request(pnf_request, force=force)
@@ -360,11 +360,11 @@ async def richiedi_visura_persona_giuridica(
         return JSONResponse(
             {
                 "request_id": request_id,
-                "identificativo": request.identificativo,
+                "identificativo": request.identifier,
                 "tipo_catasto": tipo_catasto,
-                "provincia": request.provincia or "NAZIONALE",
+                "provincia": request.province or "NAZIONALE",
                 "status": "queued",
-                "message": f"Ricerca persona giuridica {request.identificativo} aggiunta alla coda",
+                "message": f"Ricerca persona giuridica {request.identifier} aggiunta alla coda",
                 "queue_position": service.request_queue.qsize(),
             }
         )
@@ -383,16 +383,16 @@ async def richiedi_visura_persona_giuridica(
 async def richiedi_elenco_immobili(request: ElencoImmobiliInput, service: VisuraService, force: bool = False):
     """Elenco immobili per un comune."""
     try:
-        tipo_catasto = request.tipo_catasto or "T"
+        tipo_catasto = request.cadastre_type or "T"
         request_id = f"eimm_{tipo_catasto}_{uuid4().hex}"
 
         eimm_request = ElencoImmobiliRequest(
             request_id=request_id,
-            provincia=request.provincia,
-            comune=request.comune,
-            tipo_catasto=tipo_catasto,
-            foglio=request.foglio,
-            sezione=request.sezione,
+            province=request.province,
+            municipality=request.municipality,
+            cadastre_type=tipo_catasto,
+            sheet=request.sheet,
+            section=request.section,
         )
 
         await service.add_elenco_immobili_request(eimm_request, force=force)
@@ -400,11 +400,11 @@ async def richiedi_elenco_immobili(request: ElencoImmobiliInput, service: Visura
         return JSONResponse(
             {
                 "request_id": request_id,
-                "provincia": request.provincia,
-                "comune": request.comune,
+                "provincia": request.province,
+                "comune": request.municipality,
                 "tipo_catasto": tipo_catasto,
                 "status": "queued",
-                "message": f"Elenco immobili per {request.comune} aggiunto alla coda",
+                "message": f"Elenco immobili per {request.municipality} aggiunto alla coda",
                 "queue_position": service.request_queue.qsize(),
             }
         )
@@ -439,21 +439,21 @@ async def download_documents(service: VisuraService):
 async def richiedi_ispezione_ipotecaria(request: IspezioneIpotecariaInput, service: VisuraService, force: bool = False):
     """Submit an Ispezione Ipotecaria (paid inspection) request."""
     try:
-        tipo_catasto = request.tipo_catasto or "T"
-        request_id = f"ipotecaria_{request.tipo_ricerca}_{uuid4().hex}"
+        tipo_catasto = request.cadastre_type or "T"
+        request_id = f"ipotecaria_{request.search_type}_{uuid4().hex}"
 
         ipotecaria_request = IspezioneIpotecariaRequest(
             request_id=request_id,
-            tipo_ricerca=request.tipo_ricerca,
-            provincia=request.provincia,
-            comune=request.comune,
-            tipo_catasto=tipo_catasto,
-            codice_fiscale=request.codice_fiscale,
-            identificativo=request.identificativo,
-            foglio=request.foglio,
-            particella=request.particella,
-            numero_nota=request.numero_nota,
-            anno_nota=request.anno_nota,
+            search_type=request.search_type,
+            province=request.province,
+            municipality=request.municipality,
+            cadastre_type=tipo_catasto,
+            fiscal_code=request.fiscal_code,
+            identifier=request.identifier,
+            sheet=request.sheet,
+            parcel=request.parcel,
+            note_number=request.note_number,
+            note_year=request.note_year,
             auto_confirm=request.auto_confirm,
         )
 
@@ -463,7 +463,7 @@ async def richiedi_ispezione_ipotecaria(request: IspezioneIpotecariaInput, servi
             return JSONResponse(
                 {
                     "request_id": result.request_id,
-                    "tipo_ricerca": request.tipo_ricerca,
+                    "tipo_ricerca": request.search_type,
                     "status": "cached",
                     "data": result.response.data,
                 }
@@ -472,12 +472,12 @@ async def richiedi_ispezione_ipotecaria(request: IspezioneIpotecariaInput, servi
         return JSONResponse(
             {
                 "request_id": request_id,
-                "tipo_ricerca": request.tipo_ricerca,
-                "provincia": request.provincia,
+                "tipo_ricerca": request.search_type,
+                "provincia": request.province,
                 "tipo_catasto": tipo_catasto,
                 "auto_confirm": request.auto_confirm,
                 "status": "queued",
-                "message": f"Ispezione ipotecaria ({request.tipo_ricerca}) aggiunta alla coda",
+                "message": f"Ispezione ipotecaria ({request.search_type}) aggiunta alla coda",
                 "queue_position": service.request_queue.qsize(),
             }
         )
@@ -509,9 +509,9 @@ async def richiedi_generic_sister(
         request = GenericSisterRequest(
             request_id=request_id,
             search_type=search_type,
-            provincia=provincia,
-            comune=comune,
-            tipo_catasto=tipo_catasto,
+            province=provincia,
+            municipality=comune,
+            cadastre_type=tipo_catasto,
             params=params or {},
         )
 

@@ -62,6 +62,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "aecs4u-workflow"
+version = "0.1.0"
+source = { git = "https://github.com/aecs4u/aecs4u-workflow.git?branch=main#2995cc86d6587c82b89419fd6d797164d6542d20" }
+dependencies = [
+    { name = "pydantic" },
+]
+
+[[package]]
 name = "aiosmtplib"
 version = "4.0.2"
 source = { registry = "https://pypi.org/simple" }
@@ -1472,12 +1480,13 @@ wheels = [
 
 [[package]]
 name = "sister"
-version = "0.2.0"
+version = "0.3.0"
 source = { editable = "." }
 dependencies = [
     { name = "aecs4u-auth", extra = ["browser"] },
     { name = "aecs4u-email" },
     { name = "aecs4u-theme" },
+    { name = "aecs4u-workflow" },
     { name = "aiosqlite" },
     { name = "alembic" },
     { name = "beautifulsoup4" },
@@ -1512,6 +1521,7 @@ requires-dist = [
     { name = "aecs4u-auth", extras = ["browser"], git = "https://github.com/aecs4u/aecs4u-auth.git?branch=main" },
     { name = "aecs4u-email", git = "https://github.com/aecs4u/aecs4u-email.git?branch=main" },
     { name = "aecs4u-theme", git = "https://github.com/aecs4u/aecs4u-theme.git?branch=main" },
+    { name = "aecs4u-workflow", git = "https://github.com/aecs4u/aecs4u-workflow.git?branch=main" },
     { name = "aiosqlite", specifier = ">=0.19.0" },
     { name = "alembic", specifier = ">=1.13.0" },
     { name = "beautifulsoup4" },

@@ -1561,13 +1561,12 @@ def _parse_visura_pdf(file_path: str) -> dict | None:
 
 
 async def _save_documents_to_db(documents: list[dict]) -> None:
-    """Persist downloaded documents to the visura_documents table, skipping duplicates."""
-    import json
+    """Persist downloaded documents to the visura_documents + document_metadata tables, skipping duplicates."""
 
     from sqlalchemy import text
 
-    from .database import _get_session_factory, is_db_writable
-    from .db_models import VisuraDocumentDB
+    from .database import _get_session_factory, get_or_create_location, is_db_writable
+    from .db_models import DocumentMetadata, VisuraDocument
 
     if not is_db_writable():
         return
@@ -1582,12 +1581,15 @@ async def _save_documents_to_db(documents: list[dict]) -> None:
             subalterno = parsed.get("subalterno", "")
             doc_type = parsed.get("tipo", "")
 
-            # Skip if duplicate exists (same property + document type)
+            # Skip if duplicate exists (same property + document type via location join)
             if foglio and particella:
                 existing = await session.execute(
                     text(
-                        "SELECT id FROM visura_documents "
-                        "WHERE foglio = :f AND particella = :p AND subalterno = :s AND document_type = :t LIMIT 1"
+                        "SELECT vd.id FROM visura_documents vd"
+                        " JOIN document_metadata m ON vd.id = m.id"
+                        " JOIN cadastral_locations loc ON m.location_id = loc.id"
+                        " WHERE loc.sheet = :f AND loc.parcel = :p AND loc.subunit = :s AND vd.document_type = :t"
+                        " LIMIT 1"
                     ),
                     {"f": foglio, "p": particella, "s": subalterno, "t": doc_type},
                 )
@@ -1598,41 +1600,39 @@ async def _save_documents_to_db(documents: list[dict]) -> None:
                     skipped += 1
                     continue
 
-            row = VisuraDocumentDB(
+            row = VisuraDocument(
                 document_type=doc_type,
                 file_format=doc.get("file_format", ""),
                 filename=doc.get("filename", ""),
                 file_path=doc.get("path"),
                 file_size=doc.get("file_size"),
-                oggetto=doc.get("oggetto"),
-                richiesta_del=doc.get("richiesta_del"),
-                provincia=parsed.get("provincia"),
-                comune=parsed.get("comune"),
-                foglio=foglio,
-                particella=particella,
-                subalterno=subalterno,
-                sezione_urbana=parsed.get("sezione_urbana"),
-                tipo_catasto=parsed.get("tipo_catasto"),
-                visura_subtype=parsed.get("visura_subtype") or None,
-                situazione_al=parsed.get("situazione_al") or None,
-                intestati_json=(
-                    json.dumps(parsed.get("intestati", []), ensure_ascii=False) if parsed.get("intestati") else None
-                ),
-                dati_immobile_json=(
-                    json.dumps(
-                        {
-                            "immobile": parsed.get("immobile", {}),
-                            "classamento": parsed.get("classamento", []),
-                            "indirizzo": parsed.get("indirizzo", ""),
-                        },
-                        ensure_ascii=False,
-                    )
-                    if parsed.get("immobile") or parsed.get("classamento")
-                    else None
-                ),
-                xml_content=parsed.get("xml_content"),
+                subject=doc.get("oggetto"),
+                requested_at=doc.get("richiesta_del"),
             )
             session.add(row)
+            await session.flush()  # get row.id before creating child
+
+            xml_content = parsed.get("xml_content")
+            if xml_content or foglio or particella:
+                location_id = await get_or_create_location(
+                    session,
+                    cadastre_type=parsed.get("tipo_catasto") or "",
+                    province=parsed.get("provincia") or "",
+                    municipality=parsed.get("comune") or "",
+                    sheet=foglio,
+                    parcel=particella,
+                    subunit=subalterno,
+                    section=parsed.get("sezione_urbana") or "",
+                )
+                meta = DocumentMetadata(
+                    id=row.id,
+                    location_id=location_id,
+                    view_subtype=parsed.get("visura_subtype") or None,
+                    reference_date=parsed.get("situazione_al") or None,
+                    content=xml_content,
+                )
+                session.add(meta)
+
             saved += 1
         await session.commit()
     log.info("Documenti: %d salvati, %d duplicati saltati", saved, skipped)

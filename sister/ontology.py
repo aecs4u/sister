@@ -322,12 +322,12 @@ DossierBatch = list[BatchItem]
 
 
 # ---------------------------------------------------------------------------
-# Documents — VisuraDocumentDB runtime view
+# Documents — VisuraDocument runtime view
 # ---------------------------------------------------------------------------
 
 
 class VisuraDocument(BaseModel):
-    """Runtime view of a VisuraDocumentDB row (downloaded PDF/XML/P7M)."""
+    """Runtime view of a VisuraDocument row (downloaded PDF/XML/P7M)."""
 
     id: Optional[int] = None
     response_id: Optional[str] = None

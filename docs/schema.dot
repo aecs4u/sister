@@ -1,0 +1,745 @@
+digraph ER {
+  graph [
+    rankdir=LR
+    fontname="Helvetica Neue,Helvetica,Arial,sans-serif"
+    fontsize=12
+    splines=polyline
+    nodesep=0.4
+    ranksep=2.0
+    bgcolor="#f0f4f8"
+    pad=0.6
+  ]
+  node [shape=none margin=0 fontname="Helvetica Neue,Helvetica,Arial,sans-serif" fontsize=9]
+  edge [fontname="Helvetica Neue,Helvetica,Arial,sans-serif" fontsize=8 color="#334155"]
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Shared normalised dimensions
+  // ─────────────────────────────────────────────────────────────────────────
+  subgraph cluster_shared {
+    label="Shared normalised tables"
+    style=rounded color="#0f766e" bgcolor="#ecfdf5"
+    fontname="Helvetica Neue,Helvetica,Arial,sans-serif" fontsize=12 fontcolor="#134e4a"
+    margin=16
+
+    cadastral_locations [label=<
+      <TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="3" BGCOLOR="#ccfbf1">
+        <TR><TD COLSPAN="3" BGCOLOR="#0f766e" ALIGN="CENTER"><FONT COLOR="white"><B>cadastral_locations</B></FONT></TD></TR>
+        <TR><TD><B>PK</B></TD><TD PORT="pk"><B>id</B></TD><TD>INT AI</TD></TR>
+        <TR><TD> </TD><TD>cadastre_type</TD><TD>TEXT</TD></TR>
+        <TR><TD> </TD><TD>province</TD><TD>TEXT</TD></TR>
+        <TR><TD> </TD><TD>municipality</TD><TD>TEXT</TD></TR>
+        <TR><TD> </TD><TD>sheet</TD><TD>TEXT</TD></TR>
+        <TR><TD> </TD><TD>parcel</TD><TD>TEXT</TD></TR>
+        <TR><TD> </TD><TD>subunit</TD><TD>TEXT</TD></TR>
+        <TR><TD> </TD><TD>section</TD><TD>TEXT</TD></TR>
+        <TR><TD COLSPAN="3" ALIGN="LEFT"><I>UNQ(cadastre_type,province,municipality,sheet,parcel,subunit,section)</I></TD></TR>
+      </TABLE>
+    >]
+
+    cadastral_subjects [label=<
+      <TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="3" BGCOLOR="#ccfbf1">
+        <TR><TD COLSPAN="3" BGCOLOR="#0f766e" ALIGN="CENTER"><FONT COLOR="white"><B>cadastral_subjects</B></FONT></TD></TR>
+        <TR><TD><B>PK</B></TD><TD PORT="pk"><B>id</B></TD><TD>INT AI</TD></TR>
+        <TR><TD> </TD><TD>display_name</TD><TD>TEXT?</TD></TR>
+        <TR><TD> </TD><TD>last_name</TD><TD>TEXT?</TD></TR>
+        <TR><TD> </TD><TD>first_name</TD><TD>TEXT?</TD></TR>
+        <TR><TD> </TD><TD>gender</TD><TD>TEXT(1)?</TD></TR>
+        <TR><TD> </TD><TD>date_of_birth</TD><TD>TEXT?</TD></TR>
+        <TR><TD><B>FK?</B></TD><TD PORT="fk_birth">birth_location_id</TD><TD>INT IDX?</TD></TR>
+        <TR><TD> </TD><TD>birth_municipality_code</TD><TD>TEXT?</TD></TR>
+        <TR><TD> </TD><TD>subject_type</TD><TD>TEXT?</TD></TR>
+      </TABLE>
+    >]
+
+    ownership_rights [label=<
+      <TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="3" BGCOLOR="#ccfbf1">
+        <TR><TD COLSPAN="3" BGCOLOR="#0f766e" ALIGN="CENTER"><FONT COLOR="white"><B>ownership_rights</B></FONT></TD></TR>
+        <TR><TD><B>PK</B></TD><TD PORT="pk"><B>id</B></TD><TD>INT AI</TD></TR>
+        <TR><TD> </TD><TD>right_type</TD><TD>TEXT?</TD></TR>
+        <TR><TD> </TD><TD>right_code</TD><TD>TEXT?</TD></TR>
+        <TR><TD> </TD><TD>right_description</TD><TD>TEXT?</TD></TR>
+        <TR><TD> </TD><TD>ownership_share</TD><TD>TEXT?</TD></TR>
+        <TR><TD> </TD><TD>start_date</TD><TD>TEXT?</TD></TR>
+        <TR><TD> </TD><TD>end_date</TD><TD>TEXT?</TD></TR>
+      </TABLE>
+    >]
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // db_models.py — Visura Pipeline
+  // ─────────────────────────────────────────────────────────────────────────
+  subgraph cluster_visura {
+    label="db_models.py — Visura Pipeline"
+    style=rounded color="#3b82f6" bgcolor="#eff6ff"
+    fontname="Helvetica Neue,Helvetica,Arial,sans-serif" fontsize=12 fontcolor="#1e40af"
+    margin=16
+
+    visura_requests [label=<
+      <TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="3" BGCOLOR="#dbeafe">
+        <TR><TD COLSPAN="3" BGCOLOR="#1d4ed8" ALIGN="CENTER"><FONT COLOR="white"><B>visura_requests</B></FONT></TD></TR>
+        <TR><TD><B>PK</B></TD><TD PORT="pk"><B>request_id</B></TD><TD>TEXT</TD></TR>
+        <TR><TD> </TD><TD>request_type</TD><TD>TEXT</TD></TR>
+        <TR><TD><B>FK?</B></TD><TD PORT="fk_loc">location_id</TD><TD>INT IDX?</TD></TR>
+        <TR><TD>IDX</TD><TD>cache_key</TD><TD>TEXT?</TD></TR>
+        <TR><TD> </TD><TD>cost_text</TD><TD>TEXT?</TD></TR>
+        <TR><TD> </TD><TD>cost_value</TD><TD>REAL?</TD></TR>
+        <TR><TD> </TD><TD>created_at</TD><TD>DATETIME</TD></TR>
+      </TABLE>
+    >]
+
+    visura_responses [label=<
+      <TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="3" BGCOLOR="#dbeafe">
+        <TR><TD COLSPAN="3" BGCOLOR="#1d4ed8" ALIGN="CENTER"><FONT COLOR="white"><B>visura_responses</B></FONT></TD></TR>
+        <TR><TD><B>PK/FK</B></TD><TD PORT="pk"><B>request_id</B></TD><TD>TEXT</TD></TR>
+        <TR><TD> </TD><TD>success</TD><TD>BOOL</TD></TR>
+        <TR><TD> </TD><TD>cadastre_type</TD><TD>TEXT</TD></TR>
+        <TR><TD> </TD><TD>data</TD><TD>JSON?</TD></TR>
+        <TR><TD> </TD><TD>error</TD><TD>TEXT?</TD></TR>
+        <TR><TD> </TD><TD>created_at</TD><TD>DATETIME</TD></TR>
+      </TABLE>
+    >]
+
+    visura_properties [label=<
+      <TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="3" BGCOLOR="#dbeafe">
+        <TR><TD COLSPAN="3" BGCOLOR="#1d4ed8" ALIGN="CENTER"><FONT COLOR="white"><B>visura_properties</B></FONT></TD></TR>
+        <TR><TD><B>PK</B></TD><TD>id</TD><TD>INT AI</TD></TR>
+        <TR><TD><B>FK</B></TD><TD PORT="fk"><B>response_id</B></TD><TD>TEXT IDX</TD></TR>
+        <TR><TD><B>FK?</B></TD><TD PORT="fk_loc">location_id</TD><TD>INT IDX?</TD></TR>
+        <TR><TD><B>FK?</B></TD><TD PORT="fk_subject">subject_id</TD><TD>INT IDX?</TD></TR>
+        <TR><TD><B>DISC</B></TD><TD>property_type</TD><TD>TEXT?</TD></TR>
+        <TR><TD> </TD><TD>address</TD><TD>TEXT?</TD></TR>
+        <TR><TD> </TD><TD>partita</TD><TD>TEXT?</TD></TR>
+        <TR><TD> </TD><TD>category</TD><TD>TEXT?</TD></TR>
+        <TR><TD> </TD><TD>cadastral_class</TD><TD>TEXT?</TD></TR>
+        <TR><TD> </TD><TD>consistency</TD><TD>TEXT?</TD></TR>
+        <TR><TD> </TD><TD>income</TD><TD>TEXT?</TD></TR>
+        <TR><TD> </TD><TD>census_zone</TD><TD>TEXT?</TD></TR>
+        <TR><TD> </TD><TD>quality</TD><TD>TEXT?</TD></TR>
+        <TR><TD> </TD><TD>area</TD><TD>TEXT?</TD></TR>
+        <TR><TD> </TD><TD>dominical_income</TD><TD>TEXT?</TD></TR>
+        <TR><TD> </TD><TD>agricultural_income</TD><TD>TEXT?</TD></TR>
+        <TR><TD> </TD><TD>registered_office</TD><TD>TEXT?</TD></TR>
+        <TR><TD> </TD><TD>province</TD><TD>TEXT?</TD></TR>
+        <TR><TD> </TD><TD>municipality</TD><TD>TEXT?</TD></TR>
+        <TR><TD COLSPAN="3" ALIGN="LEFT"><FONT COLOR="#1e40af"><I>property_type="building"|"land"|"entity"</I></FONT></TD></TR>
+      </TABLE>
+    >]
+
+    visura_owners [label=<
+      <TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="3" BGCOLOR="#dbeafe">
+        <TR><TD COLSPAN="3" BGCOLOR="#1d4ed8" ALIGN="CENTER"><FONT COLOR="white"><B>visura_owners</B></FONT></TD></TR>
+        <TR><TD><B>PK</B></TD><TD>id</TD><TD>INT AI</TD></TR>
+        <TR><TD><B>FK</B></TD><TD PORT="fk"><B>response_id</B></TD><TD>TEXT IDX</TD></TR>
+        <TR><TD><B>FK?</B></TD><TD PORT="fk_subject">subject_id</TD><TD>INT IDX?</TD></TR>
+        <TR><TD><B>FK?</B></TD><TD PORT="fk_right">right_id</TD><TD>INT IDX?</TD></TR>
+      </TABLE>
+    >]
+
+    page_visits [label=<
+      <TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="3" BGCOLOR="#dbeafe">
+        <TR><TD COLSPAN="3" BGCOLOR="#1d4ed8" ALIGN="CENTER"><FONT COLOR="white"><B>page_visits</B></FONT></TD></TR>
+        <TR><TD><B>PK</B></TD><TD>id</TD><TD>INT AI</TD></TR>
+        <TR><TD><B>FK</B></TD><TD PORT="fk"><B>response_id</B></TD><TD>TEXT IDX</TD></TR>
+        <TR><TD> </TD><TD>step</TD><TD>TEXT</TD></TR>
+        <TR><TD> </TD><TD>url</TD><TD>TEXT?</TD></TR>
+        <TR><TD> </TD><TD>screenshot_url</TD><TD>TEXT?</TD></TR>
+        <TR><TD> </TD><TD>form_elements_json</TD><TD>TEXT?</TD></TR>
+        <TR><TD> </TD><TD>errors_json</TD><TD>TEXT?</TD></TR>
+        <TR><TD> </TD><TD>timestamp</TD><TD>DATETIME?</TD></TR>
+      </TABLE>
+    >]
+
+    visura_documents [label=<
+      <TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="3" BGCOLOR="#dbeafe">
+        <TR><TD COLSPAN="3" BGCOLOR="#1d4ed8" ALIGN="CENTER"><FONT COLOR="white"><B>visura_documents</B></FONT></TD></TR>
+        <TR><TD><B>PK</B></TD><TD PORT="pk">id</TD><TD>INT AI</TD></TR>
+        <TR><TD><B>FK?</B></TD><TD PORT="fk"><B>response_id</B></TD><TD>TEXT IDX?</TD></TR>
+        <TR><TD> </TD><TD>document_type</TD><TD>TEXT</TD></TR>
+        <TR><TD> </TD><TD>file_format</TD><TD>TEXT</TD></TR>
+        <TR><TD> </TD><TD>filename</TD><TD>TEXT</TD></TR>
+        <TR><TD> </TD><TD>file_path</TD><TD>TEXT?</TD></TR>
+        <TR><TD> </TD><TD>file_size</TD><TD>INT?</TD></TR>
+        <TR><TD> </TD><TD>subject</TD><TD>TEXT?</TD></TR>
+        <TR><TD> </TD><TD>requested_at</TD><TD>TEXT?</TD></TR>
+        <TR><TD> </TD><TD>created_at</TD><TD>DATETIME</TD></TR>
+      </TABLE>
+    >]
+
+    document_metadata [label=<
+      <TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="3" BGCOLOR="#bfdbfe">
+        <TR><TD COLSPAN="3" BGCOLOR="#1e40af" ALIGN="CENTER"><FONT COLOR="white"><B>document_metadata</B></FONT></TD></TR>
+        <TR><TD><B>PK/FK</B></TD><TD PORT="fk"><B>id</B></TD><TD>INT (→visura_documents)</TD></TR>
+        <TR><TD><B>FK?</B></TD><TD PORT="fk_loc">location_id</TD><TD>INT IDX?</TD></TR>
+        <TR><TD> </TD><TD>municipality_code</TD><TD>TEXT?</TD></TR>
+        <TR><TD COLSPAN="3" ALIGN="LEFT"><FONT COLOR="#1e40af"><I>— DatiRichiesta (parsed)</I></FONT></TD></TR>
+        <TR><TD> </TD><TD>view_subtype</TD><TD>TEXT?</TD></TR>
+        <TR><TD> </TD><TD>protocol</TD><TD>TEXT?</TD></TR>
+        <TR><TD> </TD><TD>year</TD><TD>TEXT?</TD></TR>
+        <TR><TD COLSPAN="3" ALIGN="LEFT"><FONT COLOR="#1e40af"><I>— TitoloVisura (parsed)</I></FONT></TD></TR>
+        <TR><TD> </TD><TD>title</TD><TD>TEXT?</TD></TR>
+        <TR><TD> </TD><TD>reference_date</TD><TD>TEXT?</TD></TR>
+        <TR><TD> </TD><TD>registry_view_type</TD><TD>TEXT?</TD></TR>
+        <TR><TD> </TD><TD>service_type</TD><TD>TEXT?</TD></TR>
+        <TR><TD> </TD><TD>generation_date</TD><TD>TEXT?</TD></TR>
+        <TR><TD> </TD><TD>generation_time</TD><TD>TEXT?</TD></TR>
+        <TR><TD> </TD><TD>source_system</TD><TD>TEXT?</TD></TR>
+        <TR><TD COLSPAN="3" ALIGN="LEFT"><FONT COLOR="#1e40af"><I>— DatiLiquidazione (parsed)</I></FONT></TD></TR>
+        <TR><TD> </TD><TD>liquidation_protocol</TD><TD>TEXT?</TD></TR>
+        <TR><TD> </TD><TD>liquidation_year</TD><TD>TEXT?</TD></TR>
+        <TR><TD> </TD><TD>liquidation_units</TD><TD>INT?</TD></TR>
+        <TR><TD> </TD><TD>requester</TD><TD>TEXT?</TD></TR>
+        <TR><TD COLSPAN="3" ALIGN="LEFT"><FONT COLOR="#1e40af"><I>— StoriaImmobile.SuperficieF (parsed)</I></FONT></TD></TR>
+        <TR><TD> </TD><TD>historical_total_area</TD><TD>DECIMAL?</TD></TR>
+        <TR><TD> </TD><TD>historical_excluded_area</TD><TD>DECIMAL?</TD></TR>
+        <TR><TD> </TD><TD>content</TD><TD>TEXT?</TD></TR>
+        <TR><TD COLSPAN="3" ALIGN="LEFT"><I>1:1 with visura_documents (XML/P7M only)</I></TD></TR>
+      </TABLE>
+    >]
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // db_models.py — Feedback
+  // ─────────────────────────────────────────────────────────────────────────
+  subgraph cluster_feedback {
+    label="db_models.py — Feedback"
+    style=rounded color="#ca8a04" bgcolor="#fefce8"
+    fontname="Helvetica Neue,Helvetica,Arial,sans-serif" fontsize=12 fontcolor="#854d0e"
+    margin=16
+
+    feedback_config [label=<
+      <TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="3" BGCOLOR="#fef9c3">
+        <TR><TD COLSPAN="3" BGCOLOR="#a16207" ALIGN="CENTER"><FONT COLOR="white"><B>feedback_config</B></FONT></TD></TR>
+        <TR><TD><B>PK</B></TD><TD><B>id</B></TD><TD>INT (=1)</TD></TR>
+        <TR><TD> </TD><TD>cc_emails</TD><TD>JSON</TD></TR>
+        <TR><TD> </TD><TD>bcc_emails</TD><TD>JSON</TD></TR>
+        <TR><TD> </TD><TD>invitation_subject</TD><TD>TEXT</TD></TR>
+        <TR><TD> </TD><TD>invitation_intro</TD><TD>TEXT</TD></TR>
+        <TR><TD> </TD><TD>invitation_bullets</TD><TD>JSON</TD></TR>
+        <TR><TD> </TD><TD>invitation_cta_text</TD><TD>TEXT</TD></TR>
+        <TR><TD> </TD><TD>invitation_privacy_note</TD><TD>TEXT</TD></TR>
+        <TR><TD> </TD><TD>invitation_signature</TD><TD>TEXT</TD></TR>
+        <TR><TD> </TD><TD>invitation_unsub_text</TD><TD>TEXT</TD></TR>
+        <TR><TD> </TD><TD>invitation_unsub_link_text</TD><TD>TEXT</TD></TR>
+        <TR><TD> </TD><TD>grace_period_days</TD><TD>INT</TD></TR>
+      </TABLE>
+    >]
+
+    feedback_unsubscribes [label=<
+      <TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="3" BGCOLOR="#fef9c3">
+        <TR><TD COLSPAN="3" BGCOLOR="#a16207" ALIGN="CENTER"><FONT COLOR="white"><B>feedback_unsubscribes</B></FONT></TD></TR>
+        <TR><TD><B>PK</B></TD><TD><B>email</B></TD><TD>TEXT</TD></TR>
+        <TR><TD> </TD><TD>unsubscribed_at</TD><TD>DATETIME TZ</TD></TR>
+      </TABLE>
+    >]
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // cadastral.py — Inspections
+  // ─────────────────────────────────────────────────────────────────────────
+  subgraph cluster_cadastral_inspections {
+    label="cadastral.py — Inspections"
+    style=rounded color="#dc2626" bgcolor="#fef2f2"
+    fontname="Helvetica Neue,Helvetica,Arial,sans-serif" fontsize=12 fontcolor="#7f1d1d"
+    margin=16
+
+    cadastral_inspections [label=<
+      <TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="3" BGCOLOR="#fee2e2">
+        <TR><TD COLSPAN="3" BGCOLOR="#991b1b" ALIGN="CENTER"><FONT COLOR="white"><B>cadastral_inspections</B></FONT></TD></TR>
+        <TR><TD><B>PK</B></TD><TD PORT="pk"><B>id</B></TD><TD>TEXT</TD></TR>
+        <TR><TD> </TD><TD>entity</TD><TD>TEXT</TD></TR>
+        <TR><TD> </TD><TD>callback</TD><TD>BOOL</TD></TR>
+        <TR><TD> </TD><TD>inspection_type</TD><TD>TEXT</TD></TR>
+        <TR><TD> </TD><TD>requester</TD><TD>TEXT</TD></TR>
+        <TR><TD> </TD><TD>document</TD><TD>TEXT</TD></TR>
+        <TR><TD> </TD><TD>outcome</TD><TD>TEXT</TD></TR>
+      </TABLE>
+    >]
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // cadastral.py — Query detail tables  (entity_type: "property" | "prospect")
+  // ─────────────────────────────────────────────────────────────────────────
+  subgraph cluster_query_details {
+    label="cadastral.py — Entity query detail tables"
+    style=rounded color="#ea580c" bgcolor="#fff7ed"
+    fontname="Helvetica Neue,Helvetica,Arial,sans-serif" fontsize=12 fontcolor="#7c2d12"
+    margin=16
+
+    cadastral_location_parameters [label=<
+      <TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="3" BGCOLOR="#fed7aa">
+        <TR><TD COLSPAN="3" BGCOLOR="#9a3412" ALIGN="CENTER"><FONT COLOR="white"><B>cadastral_location_parameters</B></FONT></TD></TR>
+        <TR><TD><B>PK</B></TD><TD PORT="pk"><B>id</B></TD><TD>INT AI</TD></TR>
+        <TR><TD><B>FK?</B></TD><TD PORT="fk_query"><B>query_id</B></TD><TD>TEXT IDX?</TD></TR>
+        <TR><TD><B>FK?</B></TD><TD PORT="fk_insp"><B>inspection_id</B></TD><TD>TEXT IDX?</TD></TR>
+        <TR><TD><B>FK?</B></TD><TD PORT="fk_loc">location_id</TD><TD>INT IDX?</TD></TR>
+        <TR><TD> </TD><TD>property_id</TD><TD>TEXT?</TD></TR>
+        <TR><TD COLSPAN="3" ALIGN="LEFT"><FONT COLOR="#7c2d12"><I>exactly one FK set per row</I></FONT></TD></TR>
+      </TABLE>
+    >]
+
+    cadastral_property_properties [label=<
+      <TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="3" BGCOLOR="#fed7aa">
+        <TR><TD COLSPAN="3" BGCOLOR="#9a3412" ALIGN="CENTER"><FONT COLOR="white"><B>cadastral_property_properties</B></FONT></TD></TR>
+        <TR><TD><B>PK/FK</B></TD><TD PORT="fk"><B>id</B></TD><TD>TEXT</TD></TR>
+        <TR><TD COLSPAN="3" ALIGN="CENTER"><I>(stub)</I></TD></TR>
+      </TABLE>
+    >]
+
+    cadastral_prospect_properties [label=<
+      <TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="3" BGCOLOR="#fed7aa">
+        <TR><TD COLSPAN="3" BGCOLOR="#9a3412" ALIGN="CENTER"><FONT COLOR="white"><B>cadastral_prospect_properties</B></FONT></TD></TR>
+        <TR><TD><B>PK/FK</B></TD><TD PORT="fk"><B>id</B></TD><TD>TEXT</TD></TR>
+        <TR><TD COLSPAN="3" ALIGN="CENTER"><I>(stub)</I></TD></TR>
+      </TABLE>
+    >]
+
+    cadastral_prospect_owners [label=<
+      <TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="3" BGCOLOR="#fed7aa">
+        <TR><TD COLSPAN="3" BGCOLOR="#9a3412" ALIGN="CENTER"><FONT COLOR="white"><B>cadastral_prospect_owners</B></FONT></TD></TR>
+        <TR><TD><B>PK/FK</B></TD><TD PORT="fk"><B>id</B></TD><TD>TEXT</TD></TR>
+        <TR><TD COLSPAN="3" ALIGN="CENTER"><I>(stub)</I></TD></TR>
+      </TABLE>
+    >]
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // cadastral.py — Queries + Legal Entity Search
+  // (query_type: "entity_record" | "entity_search"; scope: "national" | "local")
+  // ─────────────────────────────────────────────────────────────────────────
+  subgraph cluster_les {
+    label="cadastral.py — Queries + Legal Entity Search"
+    style=rounded color="#7c3aed" bgcolor="#f5f3ff"
+    fontname="Helvetica Neue,Helvetica,Arial,sans-serif" fontsize=12 fontcolor="#4c1d95"
+    margin=16
+
+    cadastral_queries [label=<
+      <TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="3" BGCOLOR="#ede9fe">
+        <TR><TD COLSPAN="3" BGCOLOR="#5b21b6" ALIGN="CENTER"><FONT COLOR="white"><B>cadastral_queries</B></FONT></TD></TR>
+        <TR><TD><B>PK</B></TD><TD PORT="pk"><B>id</B></TD><TD>TEXT?</TD></TR>
+        <TR><TD><B>DISC</B></TD><TD>query_type</TD><TD>TEXT</TD></TR>
+        <TR><TD> </TD><TD>endpoint</TD><TD>TEXT</TD></TR>
+        <TR><TD> </TD><TD>status</TD><TD>TEXT</TD></TR>
+        <TR><TD> </TD><TD>timestamp</TD><TD>DATETIME</TD></TR>
+        <TR><TD> </TD><TD>owner</TD><TD>TEXT</TD></TR>
+        <TR><TD> </TD><TD>query_datetime</TD><TD>DATETIME? (entity_record)</TD></TR>
+        <TR><TD> </TD><TD>entity_type</TD><TD>TEXT? (property|prospect)</TD></TR>
+        <TR><TD> </TD><TD>result</TD><TD>JSON? (entity_record)</TD></TR>
+        <TR><TD> </TD><TD>source_timestamp</TD><TD>INT? (entity_record)</TD></TR>
+        <TR><TD> </TD><TD>scope</TD><TD>TEXT? (entity_search)</TD></TR>
+        <TR><TD> </TD><TD>callback</TD><TD>BOOL?</TD></TR>
+        <TR><TD> </TD><TD>outcome</TD><TD>TEXT?</TD></TR>
+        <TR><TD COLSPAN="3" ALIGN="LEFT"><FONT COLOR="#4c1d95"><I>query_type="entity_record" | "entity_search"</I></FONT></TD></TR>
+      </TABLE>
+    >]
+
+    les_parameter [label=<
+      <TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="3" BGCOLOR="#ede9fe">
+        <TR><TD COLSPAN="3" BGCOLOR="#5b21b6" ALIGN="CENTER"><FONT COLOR="white"><B>legal_entity_search_parameters</B></FONT></TD></TR>
+        <TR><TD><B>PK/FK</B></TD><TD PORT="fk"><B>id</B></TD><TD>TEXT</TD></TR>
+        <TR><TD> </TD><TD>tax_code</TD><TD>TEXT</TD></TR>
+        <TR><TD> </TD><TD>cadastre_type</TD><TD>TEXT</TD></TR>
+        <TR><TD> </TD><TD>province</TD><TD>TEXT</TD></TR>
+      </TABLE>
+    >]
+
+    les_entity [label=<
+      <TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="3" BGCOLOR="#ede9fe">
+        <TR><TD COLSPAN="3" BGCOLOR="#5b21b6" ALIGN="CENTER"><FONT COLOR="white"><B>legal_entity_search_entities</B></FONT></TD></TR>
+        <TR><TD><B>PK</B></TD><TD PORT="pk"><B>id</B></TD><TD>TEXT?</TD></TR>
+        <TR><TD><B>FK</B></TD><TD PORT="fk"><B>query_id</B></TD><TD>TEXT</TD></TR>
+        <TR><TD><B>FK?</B></TD><TD PORT="fk_subject">subject_id</TD><TD>INT IDX?</TD></TR>
+        <TR><TD> </TD><TD>birth_place_text</TD><TD>TEXT?</TD></TR>
+      </TABLE>
+    >]
+
+    les_geo_summary [label=<
+      <TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="3" BGCOLOR="#ede9fe">
+        <TR><TD COLSPAN="3" BGCOLOR="#5b21b6" ALIGN="CENTER"><FONT COLOR="white"><B>legal_entity_search_geo_summaries</B></FONT></TD></TR>
+        <TR><TD><B>PK</B></TD><TD>id</TD><TD>INT AI</TD></TR>
+        <TR><TD><B>FK</B></TD><TD PORT="fk"><B>entity_id</B></TD><TD>TEXT IDX</TD></TR>
+        <TR><TD><B>DISC</B></TD><TD>geo_type</TD><TD>TEXT</TD></TR>
+        <TR><TD> </TD><TD>town</TD><TD>TEXT? (land_registry)</TD></TR>
+        <TR><TD> </TD><TD>province</TD><TD>TEXT? (land_registry)</TD></TR>
+        <TR><TD> </TD><TD>municipality</TD><TD>TEXT? (municipality)</TD></TR>
+        <TR><TD> </TD><TD>buildings</TD><TD>INT</TD></TR>
+        <TR><TD> </TD><TD>lands</TD><TD>INT</TD></TR>
+        <TR><TD COLSPAN="3" ALIGN="LEFT"><FONT COLOR="#4c1d95"><I>geo_type="land_registry" | "municipality"</I></FONT></TD></TR>
+      </TABLE>
+    >]
+
+    les_property [label=<
+      <TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="3" BGCOLOR="#ede9fe">
+        <TR><TD COLSPAN="3" BGCOLOR="#5b21b6" ALIGN="CENTER"><FONT COLOR="white"><B>legal_entity_search_properties</B></FONT></TD></TR>
+        <TR><TD><B>PK</B></TD><TD>id</TD><TD>INT AI</TD></TR>
+        <TR><TD><B>FK</B></TD><TD PORT="fk"><B>entity_id</B></TD><TD>TEXT</TD></TR>
+        <TR><TD> </TD><TD>land_registry</TD><TD>TEXT</TD></TR>
+        <TR><TD> </TD><TD>ownership</TD><TD>TEXT</TD></TR>
+        <TR><TD> </TD><TD>location</TD><TD>TEXT</TD></TR>
+        <TR><TD><B>FK?</B></TD><TD PORT="fk_loc">location_id</TD><TD>INT IDX?</TD></TR>
+        <TR><TD> </TD><TD>cadastral_code</TD><TD>TEXT</TD></TR>
+        <TR><TD> </TD><TD>classification</TD><TD>TEXT</TD></TR>
+        <TR><TD> </TD><TD>cadastral_class</TD><TD>TEXT</TD></TR>
+        <TR><TD> </TD><TD>consistency</TD><TD>TEXT</TD></TR>
+        <TR><TD> </TD><TD>income</TD><TD>TEXT</TD></TR>
+        <TR><TD> </TD><TD>property_id</TD><TD>TEXT</TD></TR>
+      </TABLE>
+    >]
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // visura_xml_models.py — Parsed XML child tables
+  // ─────────────────────────────────────────────────────────────────────────
+  subgraph cluster_xml {
+    label="visura_xml_models.py — Parsed XML child tables  (all FK → visura_documents.id)"
+    style=rounded color="#0891b2" bgcolor="#ecfeff"
+    fontname="Helvetica Neue,Helvetica,Arial,sans-serif" fontsize=12 fontcolor="#164e63"
+    margin=16
+
+    document_subject [label=<
+      <TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="3" BGCOLOR="#cffafe">
+        <TR><TD COLSPAN="3" BGCOLOR="#155e75" ALIGN="CENTER"><FONT COLOR="white"><B>document_subjects</B></FONT></TD></TR>
+        <TR><TD><B>PK/FK</B></TD><TD PORT="fk"><B>id</B></TD><TD>INT</TD></TR>
+        <TR><TD><B>FK?</B></TD><TD PORT="fk_subject">subject_id</TD><TD>INT IDX?</TD></TR>
+        <TR><TD COLSPAN="3" ALIGN="LEFT"><I>soggetto_attuale only</I></TD></TR>
+      </TABLE>
+    >]
+
+    property_group [label=<
+      <TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="3" BGCOLOR="#cffafe">
+        <TR><TD COLSPAN="3" BGCOLOR="#155e75" ALIGN="CENTER"><FONT COLOR="white"><B>property_groups</B></FONT></TD></TR>
+        <TR><TD><B>PK</B></TD><TD PORT="pk"><B>id</B></TD><TD>INT AI</TD></TR>
+        <TR><TD><B>FK</B></TD><TD PORT="fk"><B>document_id</B></TD><TD>INT</TD></TR>
+        <TR><TD> </TD><TD>group_index</TD><TD>TEXT?</TD></TR>
+        <TR><TD> </TD><TD>cadastre_type</TD><TD>TEXT?</TD></TR>
+        <TR><TD> </TD><TD>municipality_code</TD><TD>TEXT?</TD></TR>
+        <TR><TD> </TD><TD>description</TD><TD>TEXT?</TD></TR>
+        <TR><TD COLSPAN="3" ALIGN="LEFT"><I>soggetto_attuale only</I></TD></TR>
+      </TABLE>
+    >]
+
+    building_unit [label=<
+      <TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="3" BGCOLOR="#cffafe">
+        <TR><TD COLSPAN="3" BGCOLOR="#155e75" ALIGN="CENTER"><FONT COLOR="white"><B>building_units</B></FONT></TD></TR>
+        <TR><TD><B>PK</B></TD><TD PORT="pk"><B>id</B></TD><TD>INT AI</TD></TR>
+        <TR><TD><B>FK</B></TD><TD PORT="fk"><B>group_id</B></TD><TD>INT</TD></TR>
+        <TR><TD> </TD><TD>unit_index</TD><TD>TEXT?</TD></TR>
+      </TABLE>
+    >]
+
+    building_current_state [label=<
+      <TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="3" BGCOLOR="#cffafe">
+        <TR><TD COLSPAN="3" BGCOLOR="#155e75" ALIGN="CENTER"><FONT COLOR="white"><B>building_current_states</B></FONT></TD></TR>
+        <TR><TD><B>PK/FK</B></TD><TD PORT="fk"><B>id</B></TD><TD>INT</TD></TR>
+        <TR><TD> </TD><TD>address_text</TD><TD>TEXT?</TD></TR>
+        <TR><TD COLSPAN="3" ALIGN="LEFT"><I>fabbricati_storica only</I></TD></TR>
+      </TABLE>
+    >]
+
+    building_identifier [label=<
+      <TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="3" BGCOLOR="#cffafe">
+        <TR><TD COLSPAN="3" BGCOLOR="#155e75" ALIGN="CENTER"><FONT COLOR="white"><B>building_identifiers</B></FONT></TD></TR>
+        <TR><TD><B>PK</B></TD><TD PORT="pk"><B>id</B></TD><TD>INT AI</TD></TR>
+        <TR><TD><B>FK?</B></TD><TD PORT="fk_unit">building_unit_id</TD><TD>INT?</TD></TR>
+        <TR><TD><B>FK?</B></TD><TD PORT="fk_cs">current_state_id</TD><TD>INT?</TD></TR>
+        <TR><TD><B>FK?</B></TD><TD PORT="fk_doc">history_document_id</TD><TD>INT?</TD></TR>
+        <TR><TD><B>FK?</B></TD><TD PORT="fk_loc">location_id</TD><TD>INT IDX?</TD></TR>
+        <TR><TD> </TD><TD>municipality_code</TD><TD>TEXT?</TD></TR>
+        <TR><TD> </TD><TD>sequence_id</TD><TD>TEXT?</TD></TR>
+      </TABLE>
+    >]
+
+    building_classification [label=<
+      <TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="3" BGCOLOR="#cffafe">
+        <TR><TD COLSPAN="3" BGCOLOR="#155e75" ALIGN="CENTER"><FONT COLOR="white"><B>building_classifications</B></FONT></TD></TR>
+        <TR><TD><B>PK</B></TD><TD PORT="pk"><B>id</B></TD><TD>INT AI</TD></TR>
+        <TR><TD><B>FK?</B></TD><TD PORT="fk_unit">building_unit_id</TD><TD>INT?</TD></TR>
+        <TR><TD><B>FK?</B></TD><TD PORT="fk_cs">current_state_id</TD><TD>INT?</TD></TR>
+        <TR><TD><B>FK?</B></TD><TD PORT="fk_doc">history_document_id</TD><TD>INT?</TD></TR>
+        <TR><TD> </TD><TD>census_zone</TD><TD>TEXT?</TD></TR>
+        <TR><TD> </TD><TD>category</TD><TD>TEXT? (A1–F7)</TD></TR>
+        <TR><TD> </TD><TD>cadastral_class</TD><TD>TEXT?</TD></TR>
+        <TR><TD> </TD><TD>cadastral_income</TD><TD>DECIMAL?</TD></TR>
+        <TR><TD> </TD><TD>consistency_value</TD><TD>DECIMAL?</TD></TR>
+        <TR><TD> </TD><TD>consistency_unit</TD><TD>TEXT?</TD></TR>
+      </TABLE>
+    >]
+
+    building_surface [label=<
+      <TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="3" BGCOLOR="#cffafe">
+        <TR><TD COLSPAN="3" BGCOLOR="#155e75" ALIGN="CENTER"><FONT COLOR="white"><B>building_surfaces</B></FONT></TD></TR>
+        <TR><TD><B>PK</B></TD><TD PORT="pk"><B>id</B></TD><TD>INT AI</TD></TR>
+        <TR><TD><B>FK?</B></TD><TD PORT="fk_unit">building_unit_id</TD><TD>INT?</TD></TR>
+        <TR><TD><B>FK?</B></TD><TD PORT="fk_cs">current_state_id</TD><TD>INT?</TD></TR>
+        <TR><TD> </TD><TD>total_area</TD><TD>DECIMAL?</TD></TR>
+        <TR><TD> </TD><TD>excluded_area</TD><TD>DECIMAL?</TD></TR>
+        <TR><TD> </TD><TD>planimetria</TD><TD>TEXT?</TD></TR>
+      </TABLE>
+    >]
+
+    building_address [label=<
+      <TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="3" BGCOLOR="#cffafe">
+        <TR><TD COLSPAN="3" BGCOLOR="#155e75" ALIGN="CENTER"><FONT COLOR="white"><B>building_addresses</B></FONT></TD></TR>
+        <TR><TD><B>PK</B></TD><TD PORT="pk"><B>id</B></TD><TD>INT AI</TD></TR>
+        <TR><TD><B>FK</B></TD><TD PORT="fk"><B>document_id</B></TD><TD>INT</TD></TR>
+        <TR><TD> </TD><TD>address_text</TD><TD>TEXT?</TD></TR>
+        <TR><TD> </TD><TD>situation</TD><TD>TEXT?</TD></TR>
+        <TR><TD COLSPAN="3" ALIGN="LEFT"><I>StoriaImmobileFabbricati history rows</I></TD></TR>
+      </TABLE>
+    >]
+
+    related_parcel [label=<
+      <TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="3" BGCOLOR="#cffafe">
+        <TR><TD COLSPAN="3" BGCOLOR="#155e75" ALIGN="CENTER"><FONT COLOR="white"><B>related_parcels</B></FONT></TD></TR>
+        <TR><TD><B>PK</B></TD><TD PORT="pk"><B>id</B></TD><TD>INT AI</TD></TR>
+        <TR><TD><B>FK?</B></TD><TD PORT="fk_unit">building_unit_id</TD><TD>INT?</TD></TR>
+        <TR><TD><B>FK?</B></TD><TD PORT="fk_cs">current_state_id</TD><TD>INT?</TD></TR>
+        <TR><TD><B>FK?</B></TD><TD PORT="fk_loc">location_id</TD><TD>INT IDX?</TD></TR>
+        <TR><TD> </TD><TD>sequence_id</TD><TD>TEXT?</TD></TR>
+      </TABLE>
+    >]
+
+    land_parcel [label=<
+      <TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="3" BGCOLOR="#cffafe">
+        <TR><TD COLSPAN="3" BGCOLOR="#155e75" ALIGN="CENTER"><FONT COLOR="white"><B>land_parcels</B></FONT></TD></TR>
+        <TR><TD><B>PK</B></TD><TD PORT="pk"><B>id</B></TD><TD>INT AI</TD></TR>
+        <TR><TD><B>FK</B></TD><TD PORT="fk"><B>document_id</B></TD><TD>INT</TD></TR>
+        <TR><TD><B>FK?</B></TD><TD PORT="fk_loc">location_id</TD><TD>INT IDX?</TD></TR>
+        <TR><TD> </TD><TD>municipality_code</TD><TD>TEXT?</TD></TR>
+        <TR><TD> </TD><TD>sequence_id</TD><TD>TEXT?</TD></TR>
+        <TR><TD> </TD><TD>partita</TD><TD>TEXT?</TD></TR>
+        <TR><TD COLSPAN="3" ALIGN="LEFT"><I>terreni_attuale only</I></TD></TR>
+      </TABLE>
+    >]
+
+    land_classification [label=<
+      <TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="3" BGCOLOR="#cffafe">
+        <TR><TD COLSPAN="3" BGCOLOR="#155e75" ALIGN="CENTER"><FONT COLOR="white"><B>land_classifications</B></FONT></TD></TR>
+        <TR><TD><B>PK</B></TD><TD PORT="pk"><B>id</B></TD><TD>INT AI</TD></TR>
+        <TR><TD><B>FK</B></TD><TD PORT="fk"><B>parcel_id</B></TD><TD>INT</TD></TR>
+        <TR><TD> </TD><TD>quality</TD><TD>TEXT?</TD></TR>
+        <TR><TD> </TD><TD>cadastral_class</TD><TD>TEXT?</TD></TR>
+        <TR><TD> </TD><TD>area</TD><TD>DECIMAL?</TD></TR>
+        <TR><TD> </TD><TD>deduction_symbol</TD><TD>TEXT?</TD></TR>
+        <TR><TD> </TD><TD>dominical_income</TD><TD>DECIMAL?</TD></TR>
+        <TR><TD> </TD><TD>agricultural_income</TD><TD>DECIMAL?</TD></TR>
+        <TR><TD> </TD><TD>dominical_income_lire</TD><TD>TEXT?</TD></TR>
+        <TR><TD> </TD><TD>agricultural_income_lire</TD><TD>TEXT?</TD></TR>
+      </TABLE>
+    >]
+
+    ownership_mutation [label=<
+      <TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="3" BGCOLOR="#cffafe">
+        <TR><TD COLSPAN="3" BGCOLOR="#155e75" ALIGN="CENTER"><FONT COLOR="white"><B>ownership_mutations</B></FONT></TD></TR>
+        <TR><TD><B>PK</B></TD><TD PORT="pk"><B>id</B></TD><TD>INT AI</TD></TR>
+        <TR><TD><B>FK?</B></TD><TD PORT="fk_doc">document_id</TD><TD>INT?</TD></TR>
+        <TR><TD><B>FK?</B></TD><TD PORT="fk_grp">property_group_id</TD><TD>INT?</TD></TR>
+        <TR><TD><B>FK?</B></TD><TD PORT="fk_land">land_parcel_id</TD><TD>INT?</TD></TR>
+        <TR><TD> </TD><TD>mutation_index</TD><TD>TEXT?</TD></TR>
+        <TR><TD> </TD><TD>mutation_date</TD><TD>TEXT?</TD></TR>
+        <TR><TD> </TD><TD>source_description</TD><TD>TEXT?</TD></TR>
+        <TR><TD COLSPAN="3" ALIGN="LEFT"><FONT COLOR="#164e63"><I>— ref cross-reference</I></FONT></TD></TR>
+        <TR><TD><B>FK?</B></TD><TD PORT="fk_ref_loc">reference_location_id</TD><TD>INT IDX?</TD></TR>
+        <TR><TD> </TD><TD>ref_municipality_code</TD><TD>TEXT?</TD></TR>
+        <TR><TD> </TD><TD>ref_property_status</TD><TD>TEXT? (A|S)</TD></TR>
+      </TABLE>
+    >]
+
+    property_owner [label=<
+      <TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="3" BGCOLOR="#cffafe">
+        <TR><TD COLSPAN="3" BGCOLOR="#155e75" ALIGN="CENTER"><FONT COLOR="white"><B>property_owners</B></FONT></TD></TR>
+        <TR><TD><B>PK</B></TD><TD PORT="pk"><B>id</B></TD><TD>INT AI</TD></TR>
+        <TR><TD><B>FK</B></TD><TD PORT="fk"><B>mutation_id</B></TD><TD>INT</TD></TR>
+        <TR><TD> </TD><TD>owner_index</TD><TD>TEXT?</TD></TR>
+        <TR><TD><B>FK?</B></TD><TD PORT="fk_subject">subject_id</TD><TD>INT IDX?</TD></TR>
+        <TR><TD><B>FK?</B></TD><TD PORT="fk_right">right_id</TD><TD>INT IDX?</TD></TR>
+      </TABLE>
+    >]
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Edges — db_models.py FK relations
+  // ─────────────────────────────────────────────────────────────────────────
+  visura_requests:pk -> visura_responses:pk [
+    label="1:1" style=solid arrowhead=tee arrowtail=none color="#1d4ed8" penwidth=2
+  ]
+  visura_responses:pk -> visura_properties:fk [
+    label="1:N" style=solid arrowhead=crow arrowtail=none color="#1d4ed8" penwidth=1.5
+  ]
+  visura_responses:pk -> visura_owners:fk [
+    label="1:N" style=solid arrowhead=crow arrowtail=none color="#1d4ed8" penwidth=1.5
+  ]
+  visura_responses:pk -> page_visits:fk [
+    label="1:N" style=solid arrowhead=crow arrowtail=none color="#1d4ed8" penwidth=1.5
+  ]
+  visura_responses:pk -> visura_documents:fk [
+    label="1:N" style=solid arrowhead=crow arrowtail=none color="#1d4ed8" penwidth=1.5
+  ]
+  cadastral_locations:pk -> visura_requests:fk_loc [
+    label="request location" style=dashed arrowhead=crow arrowtail=none color="#0f766e" penwidth=1.2
+  ]
+  cadastral_locations:pk -> visura_properties:fk_loc [
+    label="property location" style=dashed arrowhead=crow arrowtail=none color="#0f766e" penwidth=1.2
+  ]
+  visura_documents:pk -> document_metadata:fk [
+    label="1:1 (XML/P7M)" style=solid arrowhead=tee arrowtail=none color="#1d4ed8" penwidth=2
+  ]
+  cadastral_locations:pk -> document_metadata:fk_loc [
+    label="doc location" style=dashed arrowhead=crow arrowtail=none color="#0f766e" penwidth=1.2
+  ]
+  cadastral_subjects:pk -> visura_properties:fk_subject [
+    label="entity subject" style=dashed arrowhead=crow arrowtail=none color="#0f766e" penwidth=1.2
+  ]
+  cadastral_subjects:pk -> visura_owners:fk_subject [
+    label="owner subject" style=dashed arrowhead=crow arrowtail=none color="#0f766e" penwidth=1.2
+  ]
+  ownership_rights:pk -> visura_owners:fk_right [
+    label="owner right" style=dashed arrowhead=crow arrowtail=none color="#0f766e" penwidth=1.2
+  ]
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Edges — Entity query detail FK
+  // ─────────────────────────────────────────────────────────────────────────
+  cadastral_queries:pk -> cadastral_location_parameters:fk_query [
+    label="1:1 (entity record)" style=solid arrowhead=tee arrowtail=none color="#9a3412" penwidth=2
+  ]
+  cadastral_queries:pk -> cadastral_property_properties:fk [
+    label="1:1 (property)" style=solid arrowhead=tee arrowtail=none color="#9a3412" penwidth=2
+  ]
+  cadastral_queries:pk -> cadastral_prospect_properties:fk [
+    label="1:1 (prospect)" style=solid arrowhead=tee arrowtail=none color="#9a3412" penwidth=2
+  ]
+  cadastral_queries:pk -> cadastral_prospect_owners:fk [
+    label="1:N (prospect)" style=solid arrowhead=crow arrowtail=none color="#9a3412" penwidth=1.5
+  ]
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Edges — Inspections FK (cross-cluster to cadastral_location_parameters)
+  // ─────────────────────────────────────────────────────────────────────────
+  cadastral_inspections:pk -> cadastral_location_parameters:fk_insp [
+    label="1:1" style=solid arrowhead=tee arrowtail=none color="#991b1b" penwidth=2
+  ]
+  cadastral_locations:pk -> cadastral_location_parameters:fk_loc [
+    label="location" style=dashed arrowhead=crow arrowtail=none color="#0f766e" penwidth=1.2
+  ]
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Edges — Queries + Legal Entity Search FK
+  // ─────────────────────────────────────────────────────────────────────────
+  cadastral_queries:pk -> les_parameter:fk [
+    label="1:1" style=solid arrowhead=tee arrowtail=none color="#5b21b6" penwidth=2
+  ]
+  cadastral_queries:pk -> les_entity:fk [
+    label="1:N" style=solid arrowhead=crow arrowtail=none color="#5b21b6" penwidth=1.5
+  ]
+  les_entity:pk -> les_geo_summary:fk [
+    label="1:N" style=solid arrowhead=crow arrowtail=none color="#5b21b6" penwidth=1.5
+  ]
+  les_entity:pk -> les_property:fk [
+    label="1:N (local)" style=solid arrowhead=crow arrowtail=none color="#5b21b6" penwidth=1.5
+  ]
+  cadastral_subjects:pk -> les_entity:fk_subject [
+    label="subject" style=dashed arrowhead=crow arrowtail=none color="#0f766e" penwidth=1.2
+  ]
+  cadastral_locations:pk -> les_property:fk_loc [
+    label="location" style=dashed arrowhead=crow arrowtail=none color="#0f766e" penwidth=1.2
+  ]
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Edges — visura_documents → XML child tables (all anchor to visura_documents.pk)
+  // ─────────────────────────────────────────────────────────────────────────
+  visura_documents:pk -> document_subject:fk [
+    label="1:1 (soggetto)" style=solid arrowhead=tee arrowtail=none color="#155e75" penwidth=2
+  ]
+  cadastral_subjects:pk -> document_subject:fk_subject [
+    label="subject" style=dashed arrowhead=crow arrowtail=none color="#0f766e" penwidth=1.2
+  ]
+  visura_documents:pk -> property_group:fk [
+    label="1:N (soggetto)" style=solid arrowhead=crow arrowtail=none color="#155e75" penwidth=1.5
+  ]
+  property_group:pk -> building_unit:fk [
+    label="1:N" style=solid arrowhead=crow arrowtail=none color="#155e75" penwidth=1.5
+  ]
+  visura_documents:pk -> building_current_state:fk [
+    label="1:1 (storica)" style=solid arrowhead=tee arrowtail=none color="#155e75" penwidth=2
+  ]
+  visura_documents:pk -> building_address:fk [
+    label="1:N (storica)" style=solid arrowhead=crow arrowtail=none color="#155e75" penwidth=1.5
+  ]
+  visura_documents:pk -> land_parcel:fk [
+    label="1:N (terreni)" style=solid arrowhead=crow arrowtail=none color="#155e75" penwidth=1.5
+  ]
+  land_parcel:pk -> land_classification:fk [
+    label="1:N" style=solid arrowhead=crow arrowtail=none color="#155e75" penwidth=1.5
+  ]
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Edges — XML polymorphic FKs (dashed = nullable)
+  // ─────────────────────────────────────────────────────────────────────────
+  building_unit:pk -> building_identifier:fk_unit [
+    label="unit→id" style=dashed arrowhead=crow arrowtail=none color="#0891b2" penwidth=1.2
+  ]
+  building_current_state:fk -> building_identifier:fk_cs [
+    label="cs→id" style=dashed arrowhead=crow arrowtail=none color="#0891b2" penwidth=1.2
+  ]
+  visura_documents:pk -> building_identifier:fk_doc [
+    label="hist→id" style=dashed arrowhead=crow arrowtail=none color="#0891b2" penwidth=1.2
+  ]
+  cadastral_locations:pk -> building_identifier:fk_loc [
+    label="location" style=dashed arrowhead=crow arrowtail=none color="#0f766e" penwidth=1.2
+  ]
+
+  building_unit:pk -> building_classification:fk_unit [
+    label="unit→class" style=dashed arrowhead=crow arrowtail=none color="#0891b2" penwidth=1.2
+  ]
+  building_current_state:fk -> building_classification:fk_cs [
+    label="cs→class" style=dashed arrowhead=crow arrowtail=none color="#0891b2" penwidth=1.2
+  ]
+  visura_documents:pk -> building_classification:fk_doc [
+    label="hist→class" style=dashed arrowhead=crow arrowtail=none color="#0891b2" penwidth=1.2
+  ]
+
+  building_unit:pk -> building_surface:fk_unit [
+    label="unit→surf" style=dashed arrowhead=tee arrowtail=none color="#0891b2" penwidth=1.2
+  ]
+  building_current_state:fk -> building_surface:fk_cs [
+    label="cs→surf" style=dashed arrowhead=tee arrowtail=none color="#0891b2" penwidth=1.2
+  ]
+
+  building_unit:pk -> related_parcel:fk_unit [
+    label="unit→rel" style=dashed arrowhead=crow arrowtail=none color="#0891b2" penwidth=1.2
+  ]
+  building_current_state:fk -> related_parcel:fk_cs [
+    label="cs→rel" style=dashed arrowhead=crow arrowtail=none color="#0891b2" penwidth=1.2
+  ]
+  cadastral_locations:pk -> related_parcel:fk_loc [
+    label="location" style=dashed arrowhead=crow arrowtail=none color="#0f766e" penwidth=1.2
+  ]
+  cadastral_locations:pk -> land_parcel:fk_loc [
+    label="location" style=dashed arrowhead=crow arrowtail=none color="#0f766e" penwidth=1.2
+  ]
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Edges — XML ownership mutations (polymorphic)
+  // ─────────────────────────────────────────────────────────────────────────
+  visura_documents:pk -> ownership_mutation:fk_doc [
+    label="storica" style=dashed arrowhead=crow arrowtail=none color="#0e7490" penwidth=1.5
+  ]
+  property_group:pk -> ownership_mutation:fk_grp [
+    label="soggetto" style=dashed arrowhead=crow arrowtail=none color="#0e7490" penwidth=1.5
+  ]
+  land_parcel:pk -> ownership_mutation:fk_land [
+    label="terreni" style=dashed arrowhead=crow arrowtail=none color="#0e7490" penwidth=1.5
+  ]
+  cadastral_locations:pk -> ownership_mutation:fk_ref_loc [
+    label="ref location" style=dashed arrowhead=crow arrowtail=none color="#0f766e" penwidth=1.2
+  ]
+  ownership_mutation:pk -> property_owner:fk [
+    label="1:N" style=solid arrowhead=crow arrowtail=none color="#155e75" penwidth=1.5
+  ]
+  cadastral_subjects:pk -> property_owner:fk_subject [
+    label="owner subject" style=dashed arrowhead=crow arrowtail=none color="#0f766e" penwidth=1.2
+  ]
+  ownership_rights:pk -> property_owner:fk_right [
+    label="owner right" style=dashed arrowhead=crow arrowtail=none color="#0f766e" penwidth=1.2
+  ]
+}

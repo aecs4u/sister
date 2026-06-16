@@ -13,11 +13,46 @@ from alembic import context
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 # Import all models to register them with SQLModel.metadata
+from sister.cadastral import (  # noqa: F401, E402
+    CadastralInspection,
+    CadastralLegalEntitySearchEntity,
+    CadastralLegalEntitySearchGeoSummary,
+    CadastralLegalEntitySearchParameter,
+    CadastralLegalEntitySearchProperty,
+    CadastralLocationParameters,
+    CadastralProspectOwner,
+    CadastralProspectProperty,
+    CadastralPropertyProperty,
+    CadastralQuery,
+)
 from sister.db_models import (  # noqa: F401, E402
-    ImmobileDB,
-    IntestatoDB,
-    VisuraRequestDB,
-    VisuraResponseDB,
+    CadastralLocation,
+    CadastralSubject,
+    DocumentMetadata,
+    FeedbackConfig,
+    FeedbackUnsubscribe,
+    OwnershipRight,
+    PageVisit,
+    VisuraDocument,
+    VisuraOwner,
+    VisuraProperty,
+    VisuraRequest,
+    VisuraResponse,
+)
+from sister.visura_xml_models import (  # noqa: F401, E402
+    BuildingAddress,
+    BuildingClassification,
+    BuildingCurrentState,
+    BuildingIdentifier,
+    BuildingSurface,
+    BuildingUnit,
+    DocumentSubject,
+    LandClassification,
+    LandParcel,
+    OwnershipMutation,
+    PropertyGroup,
+    PropertyOwner,
+    RelatedParcel,
 )
 
 config = context.config

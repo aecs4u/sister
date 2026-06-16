@@ -23,6 +23,8 @@ from .database import (
     count_total_result_rows,
     find_result_rows,
     get_all_documents,
+    get_db_owners_for_response,
+    get_db_properties_for_response,
     get_document_by_id,
     get_documents_for_response,
     get_indexed_file_metadata,
@@ -1503,22 +1505,27 @@ async def web_results(
     )
 
 
+async def get_workflow_result_record(request_id: str) -> Optional[dict]:
+    """Fetch a workflow run from opendata (returns None on miss or error)."""
+    import httpx
+
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(f"{_OPENDATA_API_URL}/catasto/workflow/runs/{request_id}")
+            if resp.status_code == 200:
+                return resp.json()
+    except Exception as exc:
+        logger.warning("Could not fetch workflow %s from opendata: %s", request_id, exc)
+    return None
+
+
 @router.get("/web/results/{request_id}", response_class=HTMLResponse)
 async def web_result_detail(request: Request, request_id: str, user=Depends(_require_auth)):
     """Single result detail page."""
     theme = _get_theme(request)
     result = await get_result_record(request_id)
     if result is None and request_id.startswith("wf_"):
-        # Workflow runs are stored in opendata — proxy the lookup
-        import httpx
-
-        try:
-            async with httpx.AsyncClient(timeout=10) as client:
-                resp = await client.get(f"{_OPENDATA_API_URL}/catasto/workflow/runs/{request_id}")
-                if resp.status_code == 200:
-                    result = resp.json()
-        except Exception as exc:
-            logger.warning("Could not fetch workflow %s from opendata: %s", request_id, exc)
+        result = await get_workflow_result_record(request_id)
     if result is None:
         response = theme.render(
             "result_detail.html",
@@ -1598,6 +1605,8 @@ async def web_result_detail(request: Request, request_id: str, user=Depends(_req
         }
         for v in (result.get("page_visits") or [])
     ]
+    result["db_properties"] = await get_db_properties_for_response(request_id)
+    result["db_owners"] = await get_db_owners_for_response(request_id)
     return theme.render(
         "result_detail.html",
         request,
@@ -1606,6 +1615,23 @@ async def web_result_detail(request: Request, request_id: str, user=Depends(_req
         request_id=request_id,
         not_found=False,
     )
+
+
+async def find_workflow_runs(status: Optional[str] = None, limit: int = 50, offset: int = 0) -> list[dict]:
+    """Fetch workflow runs from opendata (returns empty list on error)."""
+    import httpx
+
+    params: dict[str, Any] = {"limit": limit, "offset": offset}
+    if status:
+        params["status"] = status
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(f"{_OPENDATA_API_URL}/catasto/workflow/runs", params=params)
+            if resp.status_code == 200:
+                return resp.json().get("runs", [])
+    except Exception as exc:
+        logger.warning("Could not fetch workflow runs from opendata: %s", exc)
+    return []
 
 
 @router.get("/web/workflows", response_class=HTMLResponse)
@@ -1617,26 +1643,11 @@ async def web_workflows(
     offset: int = 0,
 ):
     """Workflow runs list — proxied from opendata (which owns workflow storage)."""
-    import httpx
-
     theme = _get_theme(request)
     limit = max(1, min(limit, 200))
     offset = max(0, offset)
 
-    runs: list[dict] = []
-    try:
-        params: dict[str, Any] = {"limit": limit, "offset": offset}
-        if status:
-            params["status"] = status
-        async with httpx.AsyncClient(timeout=10) as client:
-            resp = await client.get(
-                f"{_OPENDATA_API_URL}/catasto/workflow/runs",
-                params=params,
-            )
-            if resp.status_code == 200:
-                runs = resp.json().get("runs", [])
-    except Exception as exc:
-        logger.warning("Could not fetch workflow runs from opendata: %s", exc)
+    runs = await find_workflow_runs(status=status, limit=limit, offset=offset)
 
     for run in runs:
         run["created_at_display"] = _format_timestamp(run.get("created_at"))
@@ -1657,20 +1668,9 @@ async def web_workflows(
 @router.get("/web/workflows/{workflow_id}", response_class=HTMLResponse)
 async def web_workflow_detail(request: Request, workflow_id: str, user=Depends(_require_auth)):
     """Workflow detail page — proxied from opendata."""
-    import httpx
-
     theme = _get_theme(request)
 
-    result: Optional[dict] = None
-    try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            resp = await client.get(
-                f"{_OPENDATA_API_URL}/catasto/workflow/runs/{workflow_id}",
-            )
-            if resp.status_code == 200:
-                result = resp.json()
-    except Exception as exc:
-        logger.warning("Could not fetch workflow %s from opendata: %s", workflow_id, exc)
+    result = await get_workflow_result_record(workflow_id)
 
     if result is None:
         response = theme.render(

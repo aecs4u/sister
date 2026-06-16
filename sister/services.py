@@ -369,7 +369,7 @@ class VisuraService:
             await save_response(
                 request_id=response.request_id,
                 success=response.success,
-                tipo_catasto=response.tipo_catasto,
+                tipo_catasto=response.cadastre_type,
                 data=response.data,
                 error=response.error,
             )
@@ -385,7 +385,7 @@ class VisuraService:
         return VisuraResponse(
             request_id=record["request_id"],
             success=bool(record["success"]),
-            tipo_catasto=record["tipo_catasto"],
+            cadastre_type=record["tipo_catasto"],
             data=record.get("data"),
             error=record.get("error"),
             timestamp=timestamp,
@@ -393,16 +393,16 @@ class VisuraService:
 
     @staticmethod
     def _request_cache_params(request_type: str, request) -> dict:
-        params = {"tipo_catasto": getattr(request, "tipo_catasto", "")}
+        params = {"cadastre_type": getattr(request, "cadastre_type", "")}
         for attr in (
-            "provincia",
-            "comune",
-            "foglio",
-            "particella",
-            "sezione",
-            "subalterno",
-            "codice_fiscale",
-            "identificativo",
+            "province",
+            "municipality",
+            "sheet",
+            "parcel",
+            "section",
+            "subunit",
+            "fiscal_code",
+            "identifier",
             "search_type",
         ):
             val = getattr(request, attr, None)
@@ -441,13 +441,13 @@ class VisuraService:
             await save_request(
                 request_id=request.request_id,
                 request_type=request_type,
-                tipo_catasto=request.tipo_catasto,
-                provincia=getattr(request, "provincia", None) or "",
-                comune=getattr(request, "comune", None) or "",
-                foglio=getattr(request, "foglio", None) or "",
-                particella=getattr(request, "particella", None) or getattr(request, "codice_fiscale", ""),
-                sezione=getattr(request, "sezione", None),
-                subalterno=getattr(request, "subalterno", None),
+                tipo_catasto=request.cadastre_type,
+                provincia=getattr(request, "province", None) or "",
+                comune=getattr(request, "municipality", None) or "",
+                foglio=getattr(request, "sheet", None) or "",
+                particella=getattr(request, "parcel", None) or getattr(request, "fiscal_code", ""),
+                sezione=getattr(request, "section", None),
+                subalterno=getattr(request, "subunit", None),
                 cache_key=cache_key,
             )
         except Exception as e:
@@ -463,13 +463,13 @@ class VisuraService:
             {
                 "request_id": request.request_id,
                 "request_type": "visura",
-                "tipo_catasto": request.tipo_catasto,
-                "provincia": request.provincia,
-                "comune": request.comune,
-                "foglio": request.foglio,
-                "particella": request.particella,
-                "sezione": request.sezione,
-                "subalterno": request.subalterno,
+                "tipo_catasto": request.cadastre_type,
+                "provincia": request.province,
+                "comune": request.municipality,
+                "foglio": request.sheet,
+                "particella": request.parcel,
+                "sezione": request.section,
+                "subalterno": request.subunit,
             }
             for request in requests
         ]
@@ -542,7 +542,7 @@ class VisuraService:
     async def add_ispezione_ipotecaria_request(
         self, request: IspezioneIpotecariaRequest, force: bool = False
     ) -> str | SubmitResult:
-        return await self._add_single(f"ipotecaria_{request.tipo_ricerca}", request, force=force)
+        return await self._add_single(f"ipotecaria_{request.search_type}", request, force=force)
 
     async def add_elenco_immobili_request(
         self, request: ElencoImmobiliRequest, force: bool = False

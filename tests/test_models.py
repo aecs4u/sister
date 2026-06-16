@@ -19,29 +19,29 @@ from sister.models import (
 
 class TestVisuraInput:
     def test_valid_minimal(self):
-        v = VisuraInput(provincia="Trieste", comune="TRIESTE", foglio="9", particella="166")
-        assert v.provincia == "Trieste"
-        assert v.tipo_catasto is None
+        v = VisuraInput(province="Trieste", municipality="TRIESTE", sheet="9", parcel="166")
+        assert v.province == "Trieste"
+        assert v.cadastre_type is None
 
     def test_valid_with_tipo_catasto(self):
-        v = VisuraInput(provincia="Roma", comune="ROMA", foglio="1", particella="1", tipo_catasto="f")
-        assert v.tipo_catasto == "F"
+        v = VisuraInput(province="Roma", municipality="ROMA", sheet="1", parcel="1", cadastre_type="f")
+        assert v.cadastre_type == "F"
 
     def test_tipo_catasto_normalised_to_upper(self):
-        v = VisuraInput(provincia="X", comune="X", foglio="1", particella="1", tipo_catasto="t")
-        assert v.tipo_catasto == "T"
+        v = VisuraInput(province="X", municipality="X", sheet="1", parcel="1", cadastre_type="t")
+        assert v.cadastre_type == "T"
 
     def test_invalid_tipo_catasto_rejected(self):
         with pytest.raises(ValidationError):
-            VisuraInput(provincia="X", comune="X", foglio="1", particella="1", tipo_catasto="X")
+            VisuraInput(province="X", municipality="X", sheet="1", parcel="1", cadastre_type="X")
 
     def test_empty_provincia_rejected(self):
         with pytest.raises(ValidationError):
-            VisuraInput(provincia="", comune="TRIESTE", foglio="9", particella="166")
+            VisuraInput(province="", municipality="TRIESTE", sheet="9", parcel="166")
 
     def test_empty_foglio_rejected(self):
         with pytest.raises(ValidationError):
-            VisuraInput(provincia="Trieste", comune="TRIESTE", foglio="", particella="166")
+            VisuraInput(province="Trieste", municipality="TRIESTE", sheet="", parcel="166")
 
 
 # ---------------------------------------------------------------------------
@@ -52,69 +52,69 @@ class TestVisuraInput:
 class TestVisuraIntestatiInput:
     def test_valid_fabbricati_with_subalterno(self):
         v = VisuraIntestatiInput(
-            provincia="Trieste",
-            comune="TRIESTE",
-            foglio="9",
-            particella="166",
-            tipo_catasto="F",
-            subalterno="3",
+            province="Trieste",
+            municipality="TRIESTE",
+            sheet="9",
+            parcel="166",
+            cadastre_type="F",
+            subunit="3",
         )
-        assert v.tipo_catasto == "F"
-        assert v.subalterno == "3"
+        assert v.cadastre_type == "F"
+        assert v.subunit == "3"
 
     def test_valid_terreni_without_subalterno(self):
         v = VisuraIntestatiInput(
-            provincia="Roma",
-            comune="ROMA",
-            foglio="50",
-            particella="10",
-            tipo_catasto="T",
+            province="Roma",
+            municipality="ROMA",
+            sheet="50",
+            parcel="10",
+            cadastre_type="T",
         )
-        assert v.subalterno is None
+        assert v.subunit is None
 
     def test_fabbricati_requires_subalterno(self):
         with pytest.raises(ValidationError, match="subalterno"):
             VisuraIntestatiInput(
-                provincia="Trieste",
-                comune="TRIESTE",
-                foglio="9",
-                particella="166",
-                tipo_catasto="F",
+                province="Trieste",
+                municipality="TRIESTE",
+                sheet="9",
+                parcel="166",
+                cadastre_type="F",
             )
 
     def test_terreni_rejects_subalterno(self):
         with pytest.raises(ValidationError, match="subalterno"):
             VisuraIntestatiInput(
-                provincia="Trieste",
-                comune="TRIESTE",
-                foglio="9",
-                particella="166",
-                tipo_catasto="T",
-                subalterno="3",
+                province="Trieste",
+                municipality="TRIESTE",
+                sheet="9",
+                parcel="166",
+                cadastre_type="T",
+                subunit="3",
             )
 
     def test_tipo_catasto_normalised(self):
         v = VisuraIntestatiInput(
-            provincia="X",
-            comune="X",
-            foglio="1",
-            particella="1",
-            tipo_catasto="f",
-            subalterno="1",
+            province="X",
+            municipality="X",
+            sheet="1",
+            parcel="1",
+            cadastre_type="f",
+            subunit="1",
         )
-        assert v.tipo_catasto == "F"
+        assert v.cadastre_type == "F"
 
     def test_whitespace_subalterno_normalised_to_none(self):
         with pytest.raises(ValidationError, match="subalterno"):
-            # Whitespace-only subalterno should normalise to None,
-            # then fail the F-requires-subalterno validator
+            # Whitespace-only subunit should normalise to None,
+            # then fail the F-requires-subunit validator
             VisuraIntestatiInput(
-                provincia="X",
-                comune="X",
-                foglio="1",
-                particella="1",
-                tipo_catasto="F",
-                subalterno="   ",
+                province="X",
+                municipality="X",
+                sheet="1",
+                parcel="1",
+                cadastre_type="F",
+                subunit="   ",
             )
 
 
@@ -126,19 +126,19 @@ class TestVisuraIntestatiInput:
 class TestSezioniExtractionRequest:
     def test_defaults(self):
         s = SezioniExtractionRequest()
-        assert s.tipo_catasto == "T"
-        assert s.max_province == 200
+        assert s.cadastre_type == "T"
+        assert s.max_provinces == 200
 
     def test_custom_values(self):
-        s = SezioniExtractionRequest(tipo_catasto="f", max_province=10)
-        assert s.tipo_catasto == "F"
-        assert s.max_province == 10
+        s = SezioniExtractionRequest(cadastre_type="f", max_provinces=10)
+        assert s.cadastre_type == "F"
+        assert s.max_provinces == 10
 
     def test_max_province_bounds(self):
         with pytest.raises(ValidationError):
-            SezioniExtractionRequest(max_province=0)
+            SezioniExtractionRequest(max_provinces=0)
         with pytest.raises(ValidationError):
-            SezioniExtractionRequest(max_province=201)
+            SezioniExtractionRequest(max_provinces=201)
 
 
 # ---------------------------------------------------------------------------
@@ -150,25 +150,25 @@ class TestVisuraRequest:
     def test_default_timestamp(self):
         r = VisuraRequest(
             request_id="req_T_1",
-            tipo_catasto="T",
-            provincia="X",
-            comune="X",
-            foglio="1",
-            particella="1",
+            cadastre_type="T",
+            province="X",
+            municipality="X",
+            sheet="1",
+            parcel="1",
         )
         assert r.timestamp is not None
 
     def test_optional_fields_default_none(self):
         r = VisuraRequest(
             request_id="req_T_2",
-            tipo_catasto="T",
-            provincia="X",
-            comune="X",
-            foglio="1",
-            particella="1",
+            cadastre_type="T",
+            province="X",
+            municipality="X",
+            sheet="1",
+            parcel="1",
         )
-        assert r.sezione is None
-        assert r.subalterno is None
+        assert r.section is None
+        assert r.subunit is None
 
 
 class TestVisuraResponse:
@@ -176,7 +176,7 @@ class TestVisuraResponse:
         r = VisuraResponse(
             request_id="req_F_1",
             success=True,
-            tipo_catasto="F",
+            cadastre_type="F",
             data={"immobili": []},
         )
         assert r.success is True
@@ -187,7 +187,7 @@ class TestVisuraResponse:
         r = VisuraResponse(
             request_id="req_F_2",
             success=False,
-            tipo_catasto="F",
+            cadastre_type="F",
             error="something broke",
         )
         assert r.success is False

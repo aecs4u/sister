@@ -9,7 +9,7 @@ def _response(main_module, request_id: str, timestamp: datetime | None = None):
     return main_module.VisuraResponse(
         request_id=request_id,
         success=True,
-        tipo_catasto="F",
+        cadastre_type="F",
         data={"ok": True},
         timestamp=timestamp,
     )
@@ -376,11 +376,11 @@ async def test_add_request_returns_runtime_error_when_persistence_fails(monkeypa
     service.processing = True
     request = main_module.VisuraRequest(
         request_id="req_F_persist_fail",
-        tipo_catasto="F",
-        provincia="Trieste",
-        comune="TRIESTE",
-        foglio="9",
-        particella="166",
+        cadastre_type="F",
+        province="Trieste",
+        municipality="TRIESTE",
+        sheet="9",
+        parcel="166",
     )
 
     async def failing_save(*_args, **_kwargs):

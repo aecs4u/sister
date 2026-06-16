@@ -97,34 +97,34 @@ class TestVisuraInput:
 
     def test_trieste_fabbricati(self, main_module):
         model = main_module.VisuraInput(**TRIESTE_FABBRICATI_INPUT)
-        assert model.provincia == "Trieste"
-        assert model.comune == "TRIESTE"
-        assert model.foglio == "9"
-        assert model.particella == "166"
-        assert model.tipo_catasto == "F"
-        assert model.sezione is None
+        assert model.province == "Trieste"
+        assert model.municipality == "TRIESTE"
+        assert model.sheet == "9"
+        assert model.parcel == "166"
+        assert model.cadastre_type == "F"
+        assert model.section is None
 
     def test_roma_fabbricati(self, main_module):
         model = main_module.VisuraInput(**ROMA_FABBRICATI_INPUT)
-        assert model.provincia == "Roma"
-        assert model.tipo_catasto == "F"
+        assert model.province == "Roma"
+        assert model.cadastre_type == "F"
 
     def test_tipo_catasto_omitted_defaults_to_none(self, main_module):
         """README: se tipo_catasto omesso, vengono accodate due richieste (T+F)."""
         model = main_module.VisuraInput(provincia="Trieste", comune="TRIESTE", foglio="9", particella="166")
-        assert model.tipo_catasto is None
+        assert model.cadastre_type is None
 
     def test_tipo_catasto_terreni(self, main_module):
         model = main_module.VisuraInput(
             provincia="Trieste", comune="TRIESTE", foglio="9", particella="166", tipo_catasto="T"
         )
-        assert model.tipo_catasto == "T"
+        assert model.cadastre_type == "T"
 
     def test_tipo_catasto_case_insensitive(self, main_module):
         model = main_module.VisuraInput(
             provincia="Trieste", comune="TRIESTE", foglio="9", particella="166", tipo_catasto="f"
         )
-        assert model.tipo_catasto == "F"
+        assert model.cadastre_type == "F"
 
     def test_tipo_catasto_invalid_raises(self, main_module):
         with pytest.raises(Exception):
@@ -136,7 +136,7 @@ class TestVisuraInput:
         model = main_module.VisuraInput(
             provincia="Trieste", comune="TRIESTE", foglio="9", particella="166", sezione="P"
         )
-        assert model.sezione == "P"
+        assert model.section == "P"
 
     def test_with_subalterno(self, main_module):
         model = main_module.VisuraInput(
@@ -147,7 +147,7 @@ class TestVisuraInput:
             tipo_catasto="F",
             subalterno="3",
         )
-        assert model.subalterno == "3"
+        assert model.subunit == "3"
 
     def test_empty_provincia_raises(self, main_module):
         with pytest.raises(Exception):
@@ -164,21 +164,21 @@ class TestVisuraIntestatiInput:
 
     def test_trieste_intestati(self, main_module):
         model = main_module.VisuraIntestatiInput(**TRIESTE_INTESTATI_INPUT)
-        assert model.provincia == "Trieste"
-        assert model.tipo_catasto == "F"
-        assert model.subalterno == "3"
+        assert model.province == "Trieste"
+        assert model.cadastre_type == "F"
+        assert model.subunit == "3"
 
     def test_roma_intestati(self, main_module):
         model = main_module.VisuraIntestatiInput(**ROMA_INTESTATI_INPUT)
-        assert model.provincia == "Roma"
-        assert model.subalterno == "3"
+        assert model.province == "Roma"
+        assert model.subunit == "3"
 
     def test_terreni_no_subalterno(self, main_module):
         model = main_module.VisuraIntestatiInput(
             provincia="Trieste", comune="TRIESTE", foglio="9", particella="166", tipo_catasto="T"
         )
-        assert model.tipo_catasto == "T"
-        assert model.subalterno is None
+        assert model.cadastre_type == "T"
+        assert model.subunit is None
 
     def test_fabbricati_without_subalterno_raises(self, main_module):
         """README: subalterno obbligatorio per Fabbricati."""
@@ -208,7 +208,7 @@ class TestVisuraIntestatiInput:
             tipo_catasto="f",
             subalterno="3",
         )
-        assert model.tipo_catasto == "F"
+        assert model.cadastre_type == "F"
 
     def test_subalterno_whitespace_stripped(self, main_module):
         model = main_module.VisuraIntestatiInput(
@@ -219,7 +219,7 @@ class TestVisuraIntestatiInput:
             tipo_catasto="F",
             subalterno="  3  ",
         )
-        assert model.subalterno == "3"
+        assert model.subunit == "3"
 
     def test_subalterno_blank_string_treated_as_none(self, main_module):
         """Blank subalterno should be treated as missing (None)."""
@@ -243,20 +243,20 @@ class TestSezioniExtractionRequest:
 
     def test_defaults(self, main_module):
         model = main_module.SezioniExtractionRequest()
-        assert model.tipo_catasto == "T"
-        assert model.max_province == 200
+        assert model.cadastre_type == "T"
+        assert model.max_provinces == 200
 
     def test_fabbricati(self, main_module):
         model = main_module.SezioniExtractionRequest(tipo_catasto="F", max_province=10)
-        assert model.tipo_catasto == "F"
-        assert model.max_province == 10
+        assert model.cadastre_type == "F"
+        assert model.max_provinces == 10
 
     def test_max_province_out_of_range(self, main_module):
         with pytest.raises(Exception):
-            main_module.SezioniExtractionRequest(max_province=0)
+            main_module.SezioniExtractionRequest(max_provinces=0)
 
         with pytest.raises(Exception):
-            main_module.SezioniExtractionRequest(max_province=201)
+            main_module.SezioniExtractionRequest(max_provinces=201)
 
 
 # ---------------------------------------------------------------------------
@@ -270,11 +270,11 @@ class TestVisuraRequest:
     def test_from_readme_trieste(self, main_module):
         req = main_module.VisuraRequest(
             request_id="req_F_2f7f40f95cfb4bd8a8d8fe7b89612268",
-            tipo_catasto="F",
-            provincia="Trieste",
-            comune="TRIESTE",
-            foglio="9",
-            particella="166",
+            cadastre_type="F",
+            province="Trieste",
+            municipality="TRIESTE",
+            sheet="9",
+            parcel="166",
         )
         assert req.request_id.startswith("req_F_")
         assert req.timestamp is not None
@@ -282,16 +282,16 @@ class TestVisuraRequest:
     def test_with_sezione_and_subalterno(self, main_module):
         req = main_module.VisuraRequest(
             request_id="req_F_test",
-            tipo_catasto="F",
-            provincia="Roma",
-            comune="ROMA",
-            foglio="100",
-            particella="50",
-            sezione="A",
-            subalterno="3",
+            cadastre_type="F",
+            province="Roma",
+            municipality="ROMA",
+            sheet="100",
+            parcel="50",
+            section="A",
+            subunit="3",
         )
-        assert req.sezione == "A"
-        assert req.subalterno == "3"
+        assert req.section == "A"
+        assert req.subunit == "3"
 
 
 class TestVisuraResponse:
@@ -301,7 +301,7 @@ class TestVisuraResponse:
         resp = main_module.VisuraResponse(
             request_id="req_F_2f7f40f95cfb4bd8a8d8fe7b89612268",
             success=True,
-            tipo_catasto="F",
+            cadastre_type="F",
             data=VISURA_FASE1_DATA,
         )
         assert resp.success is True
@@ -313,7 +313,7 @@ class TestVisuraResponse:
         resp = main_module.VisuraResponse(
             request_id="intestati_F_9f3fa9cf2fcb49c6a8a21bf2312e3ef3",
             success=True,
-            tipo_catasto="F",
+            cadastre_type="F",
             data=VISURA_FASE2_DATA,
         )
         assert resp.data["total_intestati"] == 1
@@ -323,7 +323,7 @@ class TestVisuraResponse:
         resp = main_module.VisuraResponse(
             request_id="req_F_empty",
             success=True,
-            tipo_catasto="F",
+            cadastre_type="F",
             data=VISURA_NESSUNA_CORRISPONDENZA,
         )
         assert resp.data["total_results"] == 0
@@ -333,7 +333,7 @@ class TestVisuraResponse:
         resp = main_module.VisuraResponse(
             request_id="req_F_fail",
             success=False,
-            tipo_catasto="F",
+            cadastre_type="F",
             error="Login failed: timeout",
         )
         assert resp.success is False
@@ -466,7 +466,7 @@ class TestPollingEndpoint:
         service.response_store["req_F_done"] = main_module.VisuraResponse(
             request_id="req_F_done",
             success=True,
-            tipo_catasto="F",
+            cadastre_type="F",
             data=VISURA_FASE1_DATA,
         )
 
@@ -485,7 +485,7 @@ class TestPollingEndpoint:
         service.response_store["req_F_err"] = main_module.VisuraResponse(
             request_id="req_F_err",
             success=False,
-            tipo_catasto="F",
+            cadastre_type="F",
             error="Sessione scaduta",
         )
 

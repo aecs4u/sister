@@ -5,11 +5,19 @@ moved to opendata/opendata/workflows/models.py. Sister retains only the
 atomic cadastral scraping primitives.
 """
 
-from dataclasses import dataclass
 from datetime import datetime
-from typing import Dict, Optional, Self
+from typing import Any, ClassVar, Dict, Optional, Self
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import AliasChoices, ConfigDict, Field, field_validator, model_validator
+from sqlmodel import SQLModel
+
+# Workflow symbols live in aecs4u_workflow (shared package).
+from aecs4u_workflow.models import (  # noqa: F401
+    STEP_METADATA,
+    WORKFLOW_PRESETS,
+    WorkflowInput,
+    _DEPTH_ORDER,
+)
 
 # ---------------------------------------------------------------------------
 # Custom Exception Classes
@@ -45,60 +53,93 @@ class QueueFullError(VisuraError):
 # ---------------------------------------------------------------------------
 
 
-@dataclass
-class VisuraRequest:
+def _default_timestamp() -> datetime:
+    return datetime.now()
+
+
+def _coerce_timestamp(v: Optional[datetime]) -> datetime:
+    return v if v is not None else datetime.now()
+
+
+class VisuraRequest(SQLModel):
+    names: ClassVar[dict[str, str]] = {
+        "tipo_catasto": "cadastre_type",
+        "provincia": "province",
+        "comune": "municipality",
+        "foglio": "sheet",
+        "particella": "parcel",
+        "sezione": "section",
+        "sezione_urbana": "urban_section",
+        "subalterno": "subunit",
+    }
+
     request_id: str
-    tipo_catasto: str
-    provincia: str
-    comune: str
-    foglio: str
-    particella: str
-    sezione: Optional[str] = None
-    sezione_urbana: Optional[str] = None
-    subalterno: Optional[str] = None  # Opzionale: restringe la ricerca per fabbricati
-    timestamp: datetime = None
+    cadastre_type: str
+    province: str
+    municipality: str
+    sheet: str
+    parcel: str
+    section: Optional[str] = None
+    urban_section: Optional[str] = None
+    subunit: Optional[str] = None
+    timestamp: datetime = Field(default_factory=_default_timestamp)
 
-    def __post_init__(self):
-        if self.timestamp is None:
-            self.timestamp = datetime.now()
+    @field_validator("timestamp", mode="before")
+    @classmethod
+    def _set_timestamp(cls, v: Optional[datetime]) -> datetime:
+        return _coerce_timestamp(v)
 
 
-@dataclass
-class VisuraIntestatiRequest:
+class VisuraIntestatiRequest(SQLModel):
     """Richiesta per ottenere gli intestati di un immobile specifico"""
 
+    names: ClassVar[dict[str, str]] = {
+        "tipo_catasto": "cadastre_type",
+        "provincia": "province",
+        "comune": "municipality",
+        "foglio": "sheet",
+        "particella": "parcel",
+        "subalterno": "subunit",
+        "sezione": "section",
+        "sezione_urbana": "urban_section",
+    }
+
     request_id: str
-    tipo_catasto: str
-    provincia: str
-    comune: str
-    foglio: str
-    particella: str
-    subalterno: Optional[str] = None
-    sezione: Optional[str] = None
-    sezione_urbana: Optional[str] = None
-    timestamp: datetime = None
+    cadastre_type: str
+    province: str
+    municipality: str
+    sheet: str
+    parcel: str
+    subunit: Optional[str] = None
+    section: Optional[str] = None
+    urban_section: Optional[str] = None
+    timestamp: datetime = Field(default_factory=_default_timestamp)
 
-    def __post_init__(self):
-        if self.timestamp is None:
-            self.timestamp = datetime.now()
+    @field_validator("timestamp", mode="before")
+    @classmethod
+    def _set_timestamp(cls, v: Optional[datetime]) -> datetime:
+        return _coerce_timestamp(v)
 
 
-@dataclass
-class VisuraResponse:
+class VisuraResponse(SQLModel):
+    names: ClassVar[dict[str, str]] = {
+        "tipo_catasto": "cadastre_type",
+    }
+
     request_id: str
     success: bool
-    tipo_catasto: str
-    data: Optional[Dict] = None
+    cadastre_type: str
+    data: Optional[Dict[str, Any]] = None
     error: Optional[str] = None
-    timestamp: datetime = None
+    timestamp: datetime = Field(default_factory=_default_timestamp)
 
-    def __post_init__(self):
-        if self.timestamp is None:
-            self.timestamp = datetime.now()
+    @field_validator("timestamp", mode="before")
+    @classmethod
+    def _set_timestamp(cls, v: Optional[datetime]) -> datetime:
+        return _coerce_timestamp(v)
 
 
-@dataclass
-class SubmitResult:
+class SubmitResult(SQLModel):
     """Result of submitting a request — either cached or queued."""
 
     request_id: str
@@ -111,23 +152,39 @@ class SubmitResult:
 # ---------------------------------------------------------------------------
 
 
-class VisuraInput(BaseModel):
+class VisuraInput(SQLModel):
     """Richiesta per una visura catastale (solo dati catastali, senza intestati)"""
 
-    provincia: str = Field(..., min_length=1, description="Nome della provincia")
-    comune: str = Field(..., min_length=1, description="Nome del comune")
-    foglio: str = Field(..., min_length=1, description="Numero di foglio")
-    particella: str = Field(..., min_length=1, description="Numero di particella")
-    sezione: Optional[str] = Field(None, description="Sezione (opzionale)")
-    sezione_urbana: Optional[str] = Field(None, description="Sezione urbana (opzionale, e.g. RA, PA)")
-    subalterno: Optional[str] = Field(None, description="Subalterno (opzionale, restringe la ricerca per fabbricati)")
-    tipo_catasto: Optional[str] = Field(
-        None, pattern=r"^[TF]$", description="'T' = Terreni, 'F' = Fabbricati (se omesso esegue entrambi)"
+    model_config = ConfigDict(populate_by_name=True)
+
+    names: ClassVar[dict[str, str]] = {
+        "provincia": "province",
+        "comune": "municipality",
+        "foglio": "sheet",
+        "particella": "parcel",
+        "sezione": "section",
+        "sezione_urbana": "urban_section",
+        "subalterno": "subunit",
+        "tipo_catasto": "cadastre_type",
+    }
+
+    province: str = Field(..., validation_alias=AliasChoices("province", "provincia"), min_length=1, description="Province name")
+    municipality: str = Field(..., validation_alias=AliasChoices("municipality", "comune"), min_length=1, description="Municipality name")
+    sheet: str = Field(..., validation_alias=AliasChoices("sheet", "foglio"), min_length=1, description="Sheet number")
+    parcel: str = Field(..., validation_alias=AliasChoices("parcel", "particella"), min_length=1, description="Parcel number")
+    section: Optional[str] = Field(None, validation_alias=AliasChoices("section", "sezione"))
+    urban_section: Optional[str] = Field(None, validation_alias=AliasChoices("urban_section", "sezione_urbana"))
+    subunit: Optional[str] = Field(None, validation_alias=AliasChoices("subunit", "subalterno"))
+    cadastre_type: Optional[str] = Field(
+        None,
+        validation_alias=AliasChoices("cadastre_type", "tipo_catasto"),
+        pattern=r"^[TF]$",
+        description="'T' = Terreni, 'F' = Fabbricati (se omesso esegue entrambi)",
     )
 
-    @field_validator("tipo_catasto", mode="before")
+    @field_validator("cadastre_type", mode="before")
     @classmethod
-    def validate_tipo_catasto(cls, value: Optional[str]) -> Optional[str]:
+    def validate_cadastre_type(cls, value: Optional[str]) -> Optional[str]:
         if value is None:
             return None
         normalized = value.strip().upper()
@@ -136,23 +193,39 @@ class VisuraInput(BaseModel):
         return normalized
 
 
-class VisuraIntestatiInput(BaseModel):
+class VisuraIntestatiInput(SQLModel):
     """Richiesta per ottenere gli intestati di un immobile specifico"""
 
-    provincia: str = Field(..., min_length=1, description="Nome della provincia")
-    comune: str = Field(..., min_length=1, description="Nome del comune")
-    foglio: str = Field(..., min_length=1, description="Numero di foglio")
-    particella: str = Field(..., min_length=1, description="Numero di particella")
-    tipo_catasto: Optional[str] = Field(
-        None, pattern=r"^[TF]$", description="'T' = Terreni, 'F' = Fabbricati (default T)"
-    )
-    subalterno: Optional[str] = Field(None, description="Numero di subalterno (obbligatorio per Fabbricati)")
-    sezione: Optional[str] = Field(None, description="Sezione (opzionale)")
-    sezione_urbana: Optional[str] = Field(None, description="Sezione urbana (opzionale, e.g. RA, PA)")
+    model_config = ConfigDict(populate_by_name=True)
 
-    @field_validator("tipo_catasto", mode="before")
+    names: ClassVar[dict[str, str]] = {
+        "provincia": "province",
+        "comune": "municipality",
+        "foglio": "sheet",
+        "particella": "parcel",
+        "tipo_catasto": "cadastre_type",
+        "subalterno": "subunit",
+        "sezione": "section",
+        "sezione_urbana": "urban_section",
+    }
+
+    province: str = Field(..., validation_alias=AliasChoices("province", "provincia"), min_length=1, description="Province name")
+    municipality: str = Field(..., validation_alias=AliasChoices("municipality", "comune"), min_length=1, description="Municipality name")
+    sheet: str = Field(..., validation_alias=AliasChoices("sheet", "foglio"), min_length=1, description="Sheet number")
+    parcel: str = Field(..., validation_alias=AliasChoices("parcel", "particella"), min_length=1, description="Parcel number")
+    cadastre_type: Optional[str] = Field(
+        None,
+        validation_alias=AliasChoices("cadastre_type", "tipo_catasto"),
+        pattern=r"^[TF]$",
+        description="'T' = Terreni, 'F' = Fabbricati (default T)",
+    )
+    subunit: Optional[str] = Field(None, validation_alias=AliasChoices("subunit", "subalterno"), description="Subunit number (required for Fabbricati)")
+    section: Optional[str] = Field(None, validation_alias=AliasChoices("section", "sezione"))
+    urban_section: Optional[str] = Field(None, validation_alias=AliasChoices("urban_section", "sezione_urbana"))
+
+    @field_validator("cadastre_type", mode="before")
     @classmethod
-    def validate_tipo_catasto(cls, value: Optional[str]) -> Optional[str]:
+    def validate_cadastre_type(cls, value: Optional[str]) -> Optional[str]:
         if value is None:
             return None
         normalized = value.strip().upper()
@@ -160,35 +233,46 @@ class VisuraIntestatiInput(BaseModel):
             return None
         return normalized
 
-    @field_validator("subalterno", mode="before")
+    @field_validator("subunit", mode="before")
     @classmethod
-    def normalize_subalterno(cls, value: Optional[str]) -> Optional[str]:
+    def normalize_subunit(cls, value: Optional[str]) -> Optional[str]:
         if value is None:
             return None
         normalized = value.strip()
         return normalized or None
 
     @model_validator(mode="after")
-    def validate_subalterno(self) -> Self:
-        if self.tipo_catasto == "F" and not self.subalterno:
+    def validate_subunit(self) -> Self:
+        if self.cadastre_type == "F" and not self.subunit:
             raise ValueError("subalterno è obbligatorio per i fabbricati (tipo_catasto='F')")
-        if self.tipo_catasto == "T" and self.subalterno:
+        if self.cadastre_type == "T" and self.subunit:
             raise ValueError("subalterno non va indicato per i terreni (tipo_catasto='T')")
         return self
 
 
-class VisuraSoggettoInput(BaseModel):
+class VisuraSoggettoInput(SQLModel):
     """Richiesta per una ricerca per soggetto (codice fiscale) su SISTER"""
 
-    codice_fiscale: str = Field(..., min_length=11, max_length=16, description="Codice fiscale del soggetto")
-    tipo_catasto: Optional[str] = Field(
-        None, pattern=r"^[TFE]$", description="'T' = Terreni, 'F' = Fabbricati, 'E' = Entrambi (default)"
-    )
-    provincia: Optional[str] = Field(None, description="Provincia (ometti per ricerca nazionale)")
+    model_config = ConfigDict(populate_by_name=True)
 
-    @field_validator("tipo_catasto", mode="before")
+    names: ClassVar[dict[str, str]] = {
+        "codice_fiscale": "fiscal_code",
+        "tipo_catasto": "cadastre_type",
+        "provincia": "province",
+    }
+
+    fiscal_code: str = Field(..., validation_alias=AliasChoices("fiscal_code", "codice_fiscale"), min_length=11, max_length=16, description="Codice fiscale del soggetto")
+    cadastre_type: Optional[str] = Field(
+        None,
+        validation_alias=AliasChoices("cadastre_type", "tipo_catasto"),
+        pattern=r"^[TFE]$",
+        description="'T' = Terreni, 'F' = Fabbricati, 'E' = Entrambi (default)",
+    )
+    province: Optional[str] = Field(None, validation_alias=AliasChoices("province", "provincia"), description="Province (omit for nationwide search)")
+
+    @field_validator("cadastre_type", mode="before")
     @classmethod
-    def validate_tipo_catasto(cls, value: Optional[str]) -> Optional[str]:
+    def validate_cadastre_type(cls, value: Optional[str]) -> Optional[str]:
         if value is None:
             return None
         normalized = value.strip().upper()
@@ -196,39 +280,56 @@ class VisuraSoggettoInput(BaseModel):
             raise ValueError(f"tipo_catasto deve essere 'T', 'F' o 'E', ricevuto {value}")
         return normalized
 
-    @field_validator("codice_fiscale", mode="before")
+    @field_validator("fiscal_code", mode="before")
     @classmethod
-    def normalize_codice_fiscale(cls, value: str) -> str:
+    def normalize_fiscal_code(cls, value: str) -> str:
         return value.strip().upper()
 
 
-@dataclass
-class VisuraSoggettoRequest:
+class VisuraSoggettoRequest(SQLModel):
     """Internal request for soggetto search"""
 
+    names: ClassVar[dict[str, str]] = {
+        "codice_fiscale": "fiscal_code",
+        "tipo_catasto": "cadastre_type",
+        "provincia": "province",
+    }
+
     request_id: str
-    codice_fiscale: str
-    tipo_catasto: str = "E"
-    provincia: Optional[str] = None
-    timestamp: datetime = None
+    fiscal_code: str
+    cadastre_type: str = "E"
+    province: Optional[str] = None
+    timestamp: datetime = Field(default_factory=_default_timestamp)
 
-    def __post_init__(self):
-        if self.timestamp is None:
-            self.timestamp = datetime.now()
+    @field_validator("timestamp", mode="before")
+    @classmethod
+    def _set_timestamp(cls, v: Optional[datetime]) -> datetime:
+        return _coerce_timestamp(v)
 
 
-class VisuraPersonaGiuridicaInput(BaseModel):
+class VisuraPersonaGiuridicaInput(SQLModel):
     """Richiesta per ricerca persona giuridica (P.IVA o denominazione)"""
 
-    identificativo: str = Field(..., min_length=1, description="P.IVA (11 cifre) o denominazione azienda")
-    tipo_catasto: Optional[str] = Field(
-        None, pattern=r"^[TFE]$", description="'T' = Terreni, 'F' = Fabbricati, 'E' = Entrambi"
-    )
-    provincia: Optional[str] = Field(None, description="Provincia (ometti per ricerca nazionale)")
+    model_config = ConfigDict(populate_by_name=True)
 
-    @field_validator("tipo_catasto", mode="before")
+    names: ClassVar[dict[str, str]] = {
+        "identificativo": "identifier",
+        "tipo_catasto": "cadastre_type",
+        "provincia": "province",
+    }
+
+    identifier: str = Field(..., validation_alias=AliasChoices("identifier", "identificativo"), min_length=1, description="P.IVA (11 cifre) o denominazione azienda")
+    cadastre_type: Optional[str] = Field(
+        None,
+        validation_alias=AliasChoices("cadastre_type", "tipo_catasto"),
+        pattern=r"^[TFE]$",
+        description="'T' = Terreni, 'F' = Fabbricati, 'E' = Entrambi",
+    )
+    province: Optional[str] = Field(None, validation_alias=AliasChoices("province", "provincia"), description="Province (omit for nationwide search)")
+
+    @field_validator("cadastre_type", mode="before")
     @classmethod
-    def validate_tipo_catasto(cls, value: Optional[str]) -> Optional[str]:
+    def validate_cadastre_type(cls, value: Optional[str]) -> Optional[str]:
         if value is None:
             return None
         normalized = value.strip().upper()
@@ -237,31 +338,52 @@ class VisuraPersonaGiuridicaInput(BaseModel):
         return normalized
 
 
-@dataclass
-class VisuraPersonaGiuridicaRequest:
+class VisuraPersonaGiuridicaRequest(SQLModel):
+    names: ClassVar[dict[str, str]] = {
+        "identificativo": "identifier",
+        "tipo_catasto": "cadastre_type",
+        "provincia": "province",
+    }
+
     request_id: str
-    identificativo: str
-    tipo_catasto: str = "E"
-    provincia: Optional[str] = None
-    timestamp: datetime = None
+    identifier: str
+    cadastre_type: str = "E"
+    province: Optional[str] = None
+    timestamp: datetime = Field(default_factory=_default_timestamp)
 
-    def __post_init__(self):
-        if self.timestamp is None:
-            self.timestamp = datetime.now()
+    @field_validator("timestamp", mode="before")
+    @classmethod
+    def _set_timestamp(cls, v: Optional[datetime]) -> datetime:
+        return _coerce_timestamp(v)
 
 
-class ElencoImmobiliInput(BaseModel):
+class ElencoImmobiliInput(SQLModel):
     """Richiesta per elenco immobili di un comune"""
 
-    provincia: str = Field(..., min_length=1, description="Nome della provincia")
-    comune: str = Field(..., min_length=1, description="Nome del comune")
-    tipo_catasto: Optional[str] = Field(None, pattern=r"^[TF]$", description="'T' = Terreni, 'F' = Fabbricati")
-    foglio: Optional[str] = Field(None, description="Foglio (opzionale, filtra per foglio)")
-    sezione: Optional[str] = Field(None, description="Sezione (opzionale)")
+    model_config = ConfigDict(populate_by_name=True)
 
-    @field_validator("tipo_catasto", mode="before")
+    names: ClassVar[dict[str, str]] = {
+        "provincia": "province",
+        "comune": "municipality",
+        "tipo_catasto": "cadastre_type",
+        "foglio": "sheet",
+        "sezione": "section",
+    }
+
+    province: str = Field(..., validation_alias=AliasChoices("province", "provincia"), min_length=1, description="Province name")
+    municipality: str = Field(..., validation_alias=AliasChoices("municipality", "comune"), min_length=1, description="Municipality name")
+    cadastre_type: Optional[str] = Field(
+        None,
+        validation_alias=AliasChoices("cadastre_type", "tipo_catasto"),
+        pattern=r"^[TF]$",
+        description="'T' = Terreni, 'F' = Fabbricati",
+    )
+    sheet: Optional[str] = Field(None, validation_alias=AliasChoices("sheet", "foglio"), description="Sheet number (optional, filters by sheet)")
+    section: Optional[str] = Field(None, validation_alias=AliasChoices("section", "sezione"), description="Section (optional)")
+
+    @field_validator("cadastre_type", mode="before")
     @classmethod
-    def validate_tipo_catasto(cls, value: Optional[str]) -> Optional[str]:
+    def validate_cadastre_type(cls, value: Optional[str]) -> Optional[str]:
         if value is None:
             return None
         normalized = value.strip().upper()
@@ -270,90 +392,135 @@ class ElencoImmobiliInput(BaseModel):
         return normalized
 
 
-@dataclass
-class ElencoImmobiliRequest:
+class ElencoImmobiliRequest(SQLModel):
+    names: ClassVar[dict[str, str]] = {
+        "provincia": "province",
+        "comune": "municipality",
+        "tipo_catasto": "cadastre_type",
+        "foglio": "sheet",
+        "sezione": "section",
+    }
+
     request_id: str
-    provincia: str
-    comune: str
-    tipo_catasto: str = "T"
-    foglio: Optional[str] = None
-    sezione: Optional[str] = None
-    timestamp: datetime = None
+    province: str
+    municipality: str
+    cadastre_type: str = "T"
+    sheet: Optional[str] = None
+    section: Optional[str] = None
+    timestamp: datetime = Field(default_factory=_default_timestamp)
 
-    def __post_init__(self):
-        if self.timestamp is None:
-            self.timestamp = datetime.now()
+    @field_validator("timestamp", mode="before")
+    @classmethod
+    def _set_timestamp(cls, v: Optional[datetime]) -> datetime:
+        return _coerce_timestamp(v)
 
 
-@dataclass
-class GenericSisterRequest:
+class GenericSisterRequest(SQLModel):
     """Generic request for SISTER search types (IND, PART, NOTA, EM, EXPM, OOII, FID, ISP, ISPCART)."""
 
+    names: ClassVar[dict[str, str]] = {
+        "provincia": "province",
+        "comune": "municipality",
+        "tipo_catasto": "cadastre_type",
+    }
+
     request_id: str
-    search_type: str  # indirizzo, partita, nota, mappa, export_mappa, originali, fiduciali, ispezioni, ispezioni_cart
-    provincia: str
-    comune: Optional[str] = None
-    tipo_catasto: str = "T"
-    params: Optional[Dict] = None  # type-specific params (foglio, indirizzo, numero_nota, etc.)
-    timestamp: datetime = None
+    search_type: str
+    province: str
+    municipality: Optional[str] = None
+    cadastre_type: str = "T"
+    params: Dict[str, Any] = Field(default_factory=dict)
+    timestamp: datetime = Field(default_factory=_default_timestamp)
 
-    def __post_init__(self):
-        if self.timestamp is None:
-            self.timestamp = datetime.now()
-        if self.params is None:
-            self.params = {}
+    @field_validator("timestamp", mode="before")
+    @classmethod
+    def _set_timestamp(cls, v: Optional[datetime]) -> datetime:
+        return _coerce_timestamp(v)
 
 
-@dataclass
-class IspezioneIpotecariaRequest:
+class IspezioneIpotecariaRequest(SQLModel):
     """Request for Ispezione Ipotecaria (paid inspection service)."""
 
+    names: ClassVar[dict[str, str]] = {
+        "tipo_ricerca": "search_type",
+        "provincia": "province",
+        "comune": "municipality",
+        "tipo_catasto": "cadastre_type",
+        "codice_fiscale": "fiscal_code",
+        "identificativo": "identifier",
+        "foglio": "sheet",
+        "particella": "parcel",
+        "numero_nota": "note_number",
+        "anno_nota": "note_year",
+    }
+
     request_id: str
-    tipo_ricerca: str  # immobile, persona_fisica, persona_giuridica, nota
-    provincia: str
-    comune: Optional[str] = None
-    tipo_catasto: str = "T"
-    codice_fiscale: Optional[str] = None
-    identificativo: Optional[str] = None
-    foglio: Optional[str] = None
-    particella: Optional[str] = None
-    numero_nota: Optional[str] = None
-    anno_nota: Optional[str] = None
+    search_type: str
+    province: str
+    municipality: Optional[str] = None
+    cadastre_type: str = "T"
+    fiscal_code: Optional[str] = None
+    identifier: Optional[str] = None
+    sheet: Optional[str] = None
+    parcel: Optional[str] = None
+    note_number: Optional[str] = None
+    note_year: Optional[str] = None
     auto_confirm: bool = False
-    timestamp: datetime = None
+    timestamp: datetime = Field(default_factory=_default_timestamp)
 
-    def __post_init__(self):
-        if self.timestamp is None:
-            self.timestamp = datetime.now()
+    @field_validator("timestamp", mode="before")
+    @classmethod
+    def _set_timestamp(cls, v: Optional[datetime]) -> datetime:
+        return _coerce_timestamp(v)
 
 
-class IspezioneIpotecariaInput(BaseModel):
+class IspezioneIpotecariaInput(SQLModel):
     """API input for Ispezione Ipotecaria (paid inspection)."""
 
-    tipo_ricerca: str = Field(..., description="Search type: immobile, persona_fisica, persona_giuridica, nota")
-    provincia: str = Field(..., min_length=1, description="Province name")
-    comune: Optional[str] = Field(None, description="Municipality name")
-    tipo_catasto: Optional[str] = Field(None, pattern=r"^[TF]$", description="'T' = Terreni, 'F' = Fabbricati")
-    codice_fiscale: Optional[str] = Field(None, description="Codice fiscale (for persona_fisica)")
-    identificativo: Optional[str] = Field(None, description="P.IVA or company name (for persona_giuridica)")
-    foglio: Optional[str] = Field(None, description="Sheet number (for immobile)")
-    particella: Optional[str] = Field(None, description="Parcel number (for immobile)")
-    numero_nota: Optional[str] = Field(None, description="Note number (for nota)")
-    anno_nota: Optional[str] = Field(None, description="Note year (for nota)")
+    model_config = ConfigDict(populate_by_name=True)
+
+    names: ClassVar[dict[str, str]] = {
+        "tipo_ricerca": "search_type",
+        "provincia": "province",
+        "comune": "municipality",
+        "tipo_catasto": "cadastre_type",
+        "codice_fiscale": "fiscal_code",
+        "identificativo": "identifier",
+        "foglio": "sheet",
+        "particella": "parcel",
+        "numero_nota": "note_number",
+        "anno_nota": "note_year",
+    }
+
+    search_type: str = Field(..., validation_alias=AliasChoices("search_type", "tipo_ricerca"), description="Search type: immobile, persona_fisica, persona_giuridica, nota")
+    province: str = Field(..., validation_alias=AliasChoices("province", "provincia"), min_length=1, description="Province name")
+    municipality: Optional[str] = Field(None, validation_alias=AliasChoices("municipality", "comune"), description="Municipality name")
+    cadastre_type: Optional[str] = Field(
+        None,
+        validation_alias=AliasChoices("cadastre_type", "tipo_catasto"),
+        pattern=r"^[TF]$",
+        description="'T' = Terreni, 'F' = Fabbricati",
+    )
+    fiscal_code: Optional[str] = Field(None, validation_alias=AliasChoices("fiscal_code", "codice_fiscale"), description="Codice fiscale (for persona_fisica)")
+    identifier: Optional[str] = Field(None, validation_alias=AliasChoices("identifier", "identificativo"), description="P.IVA or company name (for persona_giuridica)")
+    sheet: Optional[str] = Field(None, validation_alias=AliasChoices("sheet", "foglio"), description="Sheet number (for immobile)")
+    parcel: Optional[str] = Field(None, validation_alias=AliasChoices("parcel", "particella"), description="Parcel number (for immobile)")
+    note_number: Optional[str] = Field(None, validation_alias=AliasChoices("note_number", "numero_nota"), description="Note number (for nota)")
+    note_year: Optional[str] = Field(None, validation_alias=AliasChoices("note_year", "anno_nota"), description="Note year (for nota)")
     auto_confirm: bool = Field(False, description="Auto-confirm cost without prompting")
 
-    @field_validator("tipo_ricerca", mode="before")
+    @field_validator("search_type", mode="before")
     @classmethod
-    def validate_tipo_ricerca(cls, value: str) -> str:
+    def validate_search_type(cls, value: str) -> str:
         normalized = value.strip().lower().replace("-", "_")
         valid = {"immobile", "persona_fisica", "persona_giuridica", "nota"}
         if normalized not in valid:
             raise ValueError(f"tipo_ricerca must be one of {valid}, got '{value}'")
         return normalized
 
-    @field_validator("tipo_catasto", mode="before")
+    @field_validator("cadastre_type", mode="before")
     @classmethod
-    def validate_tipo_catasto(cls, value: Optional[str]) -> Optional[str]:
+    def validate_cadastre_type(cls, value: Optional[str]) -> Optional[str]:
         if value is None:
             return None
         normalized = value.strip().upper()
@@ -362,17 +529,33 @@ class IspezioneIpotecariaInput(BaseModel):
         return normalized
 
 
-class SezioniExtractionRequest(BaseModel):
+class SezioniExtractionRequest(SQLModel):
     """Richiesta per l'estrazione delle sezioni territoriali"""
 
-    tipo_catasto: str = Field("T", pattern=r"^[TF]$", description="'T' = Terreni, 'F' = Fabbricati")
-    max_province: int = Field(
-        200, ge=1, le=200, description="Numero massimo di province da processare (default: tutte)"
+    model_config = ConfigDict(populate_by_name=True)
+
+    names: ClassVar[dict[str, str]] = {
+        "tipo_catasto": "cadastre_type",
+        "max_province": "max_provinces",
+    }
+
+    cadastre_type: str = Field(
+        "T",
+        validation_alias=AliasChoices("cadastre_type", "tipo_catasto"),
+        pattern=r"^[TF]$",
+        description="'T' = Terreni, 'F' = Fabbricati",
+    )
+    max_provinces: int = Field(
+        200,
+        validation_alias=AliasChoices("max_provinces", "max_province"),
+        ge=1,
+        le=200,
+        description="Max number of provinces to process (default: all)",
     )
 
-    @field_validator("tipo_catasto", mode="before")
+    @field_validator("cadastre_type", mode="before")
     @classmethod
-    def validate_tipo_catasto(cls, value: str) -> str:
+    def validate_cadastre_type(cls, value: str) -> str:
         normalized = value.strip().upper()
         if normalized not in {"T", "F"}:
             raise ValueError(f"tipo_catasto deve essere 'T' o 'F', ricevuto {value}")
