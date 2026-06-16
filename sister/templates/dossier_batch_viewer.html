@@ -1,36 +1,19 @@
 {% extends "_base.html" %}
+{% from "parts/_hero.html" import hero_section %}
 
 {% block page_title %}{{ name }}{% endblock %}
 
 {% block extra_css %}
 {{ super() }}
-<link rel="stylesheet" href="/static/css/pages/css/pages/dossier_batch_viewer.css">
+<link rel="stylesheet" href="/static/css/pages/dossier_batch_viewer.css">
 {% endblock %}
 
 {% block content %}
 {# ── Hero ──────────────────────────────────────────────────────────────────── #}
-<div class="hero-section no-print">
-    <div class="container-fluid">
-        <nav class="mb-2" aria-label="breadcrumb">
-            <ol class="breadcrumb mb-0">
-                <li class="breadcrumb-item"><a href="/web/" class="text-white-50">Dashboard</a></li>
-                <li class="breadcrumb-item"><a href="/web/dossiers" class="text-white-50">Dossier</a></li>
-                <li class="breadcrumb-item active text-white">{{ name }}</li>
-            </ol>
-        </nav>
-        <div class="d-flex flex-wrap justify-content-between align-items-end gap-3">
-            <h1 class="h4 fw-bold mb-0"><i class="fas fa-table-list me-2"></i>{{ name }}</h1>
-            <div class="d-flex gap-2 no-print">
-                <a href="/web/dossiers/{{ name }}?download=1" class="btn btn-sm btn-outline-light">
-                    <i class="fas fa-download me-1"></i>JSON
-                </a>
-                <button onclick="window.print()" class="btn btn-sm btn-outline-light">
-                    <i class="fas fa-print me-1"></i>Stampa
-                </button>
-            </div>
-        </div>
-    </div>
-</div>
+{% set _dl_url = '/web/dossiers/' ~ name ~ '?download=1' %}
+{{ hero_section(name, 'fa-table-list', '/web/dossiers', 'Dossier',
+                breadcrumb_parent='Dossier', breadcrumb_current=name,
+                extra_btn_url=_dl_url, extra_btn_label='JSON', extra_btn_icon='fa-download') }}
 
 <div class="container-fluid">
 

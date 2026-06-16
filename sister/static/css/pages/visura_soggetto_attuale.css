@@ -1,7 +1,3 @@
-/* Page styles for templates/visura_soggetto_attuale.html. Extracted from an inline <style> block. */
-.hero-section { background: linear-gradient(135deg, #17a2b8 0%, #138496 100%); color: white; padding: 2rem 0; margin-bottom: 2rem; }
-.detail-label { font-size: .75rem; text-transform: uppercase; letter-spacing: .05em; color: #6c757d; }
+/* Page styles for templates/visura_soggetto_attuale.html. */
+.hero-section { background: linear-gradient(135deg, #17a2b8 0%, #138496 100%); }
 .persona-header { border-left: 4px solid #17a2b8; }
-.cadastral-ref { font-family: monospace; background-color: #e9ecef; padding: .2rem .45rem; border-radius: .25rem; font-size: .9rem; }
-.income-highlight { font-size: 1.1rem; font-weight: 600; color: #fd7e14; }
-@media print { .no-print { display: none !important; } .hero-section { background: #f8f9fa !important; color: #333 !important; } }

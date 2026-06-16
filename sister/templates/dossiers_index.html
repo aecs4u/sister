@@ -1,6 +1,7 @@
 {% extends "_base.html" %}
 {% from "_doc_macros.html" import shared_section_css, jump_chips, query_section,
                                    query_subsection, dossier_card, doc_macros_css %}
+{% from "parts/_hero.html" import hero_section %}
 
 {% block page_title %}Dossier{% endblock %}
 
@@ -8,33 +9,16 @@
 {{ super() }}
 {{ shared_section_css() }}
 {{ doc_macros_css() }}
-<link rel="stylesheet" href="/static/css/pages/css/pages/dossiers_index.css">
+<link rel="stylesheet" href="/static/css/pages/dossiers_index.css">
 {% endblock %}
 
 {% block content %}
 {# ── Hero ───────────────────────────────────────────────────────────────── #}
-<div class="hero-section no-print">
-    <div class="container-fluid">
-        <nav class="mb-3" aria-label="breadcrumb">
-            <ol class="breadcrumb mb-0">
-                <li class="breadcrumb-item"><a href="/web/" class="text-white-50">Dashboard</a></li>
-                <li class="breadcrumb-item active text-white">Dossier</li>
-            </ol>
-        </nav>
-        <div class="d-flex flex-wrap justify-content-between align-items-center">
-            <div>
-                <h1 class="display-6 fw-bold mb-2"><i class="fas fa-folder-open me-3"></i>Dossier</h1>
-                <p class="lead mb-0 opacity-75">
-                    <strong>{{ total }}</strong> dossier — query <em>single-step</em> e <em>workflow multi-step</em>
-                </p>
-            </div>
-            <div class="d-flex gap-2 mt-3 mt-md-0">
-                <a href="/web/documents" class="btn btn-outline-light"><i class="fas fa-folder-tree me-2"></i>Documenti</a>
-                <button onclick="window.print()" class="btn btn-outline-light"><i class="fas fa-print me-2"></i>Stampa</button>
-            </div>
-        </div>
-    </div>
-</div>
+{% call hero_section('Dossier', 'fa-folder-open', '/web/', 'Dashboard',
+                     breadcrumb_parent='Dashboard', breadcrumb_current='Dossier',
+                     extra_btn_url='/web/documents', extra_btn_label='Documenti', extra_btn_icon='fa-folder-tree') %}
+<strong>{{ total }}</strong> dossier — query <em>single-step</em> e <em>workflow multi-step</em>
+{% endcall %}
 
 <div class="container-fluid">
     {% if not groups %}

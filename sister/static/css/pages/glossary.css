@@ -1,16 +1,18 @@
-/* Page styles for templates/glossary.html. Extracted from an inline <style> block. */
-.gl-hero { background: linear-gradient(135deg, #6f42c1 0%, #59359a 100%); color: white; padding: 2rem 0; margin-bottom: 2rem; }
+/* Page styles for templates/glossary.html. */
+.hero-section { background: linear-gradient(135deg, #6f42c1 0%, #59359a 100%); }
 .gl-section { margin-bottom: 2.5rem; }
 .gl-section h2 { font-size: 1.2rem; font-weight: 700; border-bottom: 2px solid #6f42c1; padding-bottom: .4rem; margin-bottom: 1rem; color: #6f42c1; }
 .gl-section h3 { font-size: .95rem; font-weight: 600; margin-top: 1.25rem; margin-bottom: .4rem; color: #495057; }
 .badge-type { font-size: .7rem; font-family: var(--bs-font-monospace); }
+/* chip-demo provides border structure; chip-* from sister.css provide colors;
+   border-color overrides below fix cascade: chip-demo's `border` shorthand resets border-color */
 .chip-demo { display: inline-flex; align-items: center; gap: .3rem; font-size: .75rem; border-radius: .3rem; padding: .2rem .55rem; border: 1px solid; }
-.chip-fab  { background: #d1e7dd; color: #0a3622; border-color: #a3cfbb; }
-.chip-ter  { background: #fff3cd; color: #664d03; border-color: #ffe69c; }
-.chip-sogg { background: #cff4fc; color: #055160; border-color: #9eeaf9; }
-.chip-sto  { background: #e2e3e5; color: #2b2d2f; border-color: #c4c8cb; }
-.chip-epa  { background: #e0cffc; color: #2c0b5b; border-color: #c29ffa; }
-.chip-plan { background: #f8d7da; color: #58151c; border-color: #f1aeb5; }
-.chip-eln  { background: #d2f4ea; color: #0a3622; border-color: #a3cfbb; }
-.chip-other{ background: #f8f9fa; color: #495057; border-color: #dee2e6; }
+.chip-fab   { border-color: #a3cfbb; }
+.chip-ter   { border-color: #ffe69c; }
+.chip-sogg  { border-color: #9eeaf9; }
+.chip-sto   { border-color: #c4c8cb; }
+.chip-epa   { border-color: #c29ffa; }
+.chip-plan  { border-color: #f1aeb5; }
+.chip-eln   { border-color: #a3cfbb; }
+.chip-other { border-color: #dee2e6; }
 .term-dt { font-weight: 600; font-family: var(--bs-font-monospace); font-size: .8rem; background: #f8f9fa; padding: .1rem .4rem; border-radius: .25rem; }

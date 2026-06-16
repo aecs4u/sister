@@ -1,6 +1,10 @@
 {% extends "_base.html" %}
 {% from "_timeline.html" import timeline_css, timeline_js, render_timeline %}
 {% from "_nested.html" import complete_data_section %}
+{% from "parts/_hero.html" import hero_section %}
+{% from "parts/_visura_header.html" import visura_location_card, visura_doc_card %}
+{% from "components/table.html" import table_filter_csv_js %}
+{% from "components/cadastral.html" import liquidazione_row %}
 {% set _v = doc.xml_parsed.VisuraTerreniAttuale or doc.xml_parsed.VisuraTerrenoStorica or doc.xml_parsed.VisuraTerreno or {} %}
 {% set _t = _v.TitoloVisura or {} %}
 {% set _dr = _v.DatiRichiesta or {} %}
@@ -19,102 +23,32 @@
 {% block extra_css %}
 {{ super() }}
 {{ timeline_css() }}
-<link rel="stylesheet" href="/static/css/pages/css/pages/visura_terreni_attuale.css">
+<link rel="stylesheet" href="/static/css/pages/visura_terreni_attuale.css">
 {% endblock %}
 
 {% block content %}
 {# ── Hero ───────────────────────────────────────────────────────────────── #}
-<div class="hero-section no-print">
-    <div class="container-fluid">
-        <nav class="mb-3" aria-label="breadcrumb">
-            <ol class="breadcrumb mb-0">
-                <li class="breadcrumb-item">
-                    <a href="/web/documents" class="text-white-50">Documenti</a>
-                </li>
-                <li class="breadcrumb-item active text-white">Visura Terreni</li>
-            </ol>
-        </nav>
-        <div class="d-flex flex-wrap justify-content-between align-items-center">
-            <div>
-                <h1 class="display-6 fw-bold mb-2">
-                    <i class="fas fa-leaf me-3"></i>Visura Attuale Terreno
-                </h1>
-                <p class="lead mb-0 opacity-75">
-                    {{ doc.comune or _dr.Comune or '' }}
-                    — FG <strong>{{ doc.foglio or _dr.Foglio or '-' }}</strong>
-                    PT <strong>{{ doc.particella or _dr.ParticellaNum or '-' }}</strong>
-                    {% if _partita %}— Partita <strong>{{ _partita }}</strong>{% endif %}
-                </p>
-            </div>
-            <div class="d-flex gap-2 mt-3 mt-md-0">
-                <a href="/web/documents" class="btn btn-outline-light">
-                    <i class="fas fa-arrow-left me-2"></i>Documenti
-                </a>
-                <button onclick="window.print()" class="btn btn-outline-light">
-                    <i class="fas fa-print me-2"></i>Stampa
-                </button>
-            </div>
-        </div>
-    </div>
-</div>
+{% call hero_section('Visura Attuale Terreno', 'fa-leaf', '/web/documents', 'Documenti',
+                     breadcrumb_parent='Documenti', breadcrumb_current='Visura Terreni') %}
+{{ doc.comune or _dr.Comune or '' }}
+— FG <strong>{{ doc.foglio or _dr.Foglio or '-' }}</strong>
+PT <strong>{{ doc.particella or _dr.ParticellaNum or '-' }}</strong>
+{% if _partita %}— Partita <strong>{{ _partita }}</strong>{% endif %}
+{% endcall %}
 
 <div class="container-fluid">
 
     {# ── Query info ──────────────────────────────────────────────────────── #}
     <div class="row mb-4">
         <div class="col-lg-8 mb-3 mb-lg-0">
-            <div class="card border-start border-warning border-3 h-100">
-                <div class="card-body">
-                    <h5 class="card-title"><i class="fas fa-map-marker-alt text-warning me-2"></i>{{ _t.Titolo or 'Visura Terreni Attuale' }}</h5>
-                    <div class="row">
-                        <div class="col-md-4">
-                            <ul class="list-unstyled mb-0 small">
-                                <li class="mb-2"><strong>Provincia:</strong>
-                                    <span class="badge bg-warning text-dark ms-1">{{ _dr.Provincia or doc.provincia or '-' }}</span>
-                                </li>
-                                <li class="mb-2"><strong>Comune:</strong> {{ _dr.Comune or doc.comune or '-' }}</li>
-                            </ul>
-                        </div>
-                        <div class="col-md-4">
-                            <ul class="list-unstyled mb-0 small">
-                                <li class="mb-2"><strong>Foglio:</strong> <span class="cadastral-ref">{{ _dr.Foglio or doc.foglio or '-' }}</span></li>
-                                <li class="mb-2"><strong>Particella:</strong> <span class="cadastral-ref">{{ _dr.ParticellaNum or doc.particella or '-' }}</span></li>
-                                {% if _partita %}
-                                <li class="mb-2"><strong>Partita:</strong> <span class="cadastral-ref">{{ _partita }}</span></li>
-                                {% endif %}
-                            </ul>
-                        </div>
-                        <div class="col-md-4">
-                            <ul class="list-unstyled mb-0 small">
-                                {% if _dr.SezCensuaria or doc.sezione_urbana %}
-                                <li class="mb-2"><strong>Sez. Censuaria:</strong> <span class="cadastral-ref">{{ _dr.SezCensuaria or doc.sezione_urbana }}</span></li>
-                                {% endif %}
-                                <li class="mb-2"><strong>Provenienza:</strong> {{ _t.Provenienza or '-' }}</li>
-                            </ul>
-                        </div>
-                    </div>
-                </div>
-            </div>
+            {{ visura_location_card('warning', _t.Titolo or 'Visura Terreni Attuale', _dr, doc,
+                                    partita=_partita,
+                                    sez_label='Sez. Censuaria',
+                                    sez_value=_dr.SezCensuaria or doc.sezione_urbana,
+                                    provenienza=_t.Provenienza) }}
         </div>
         <div class="col-lg-4">
-            <div class="card border-start border-warning border-3 h-100">
-                <div class="card-body">
-                    <h5 class="card-title"><i class="fas fa-info-circle text-warning me-2"></i>Documento</h5>
-                    <ul class="list-unstyled mb-0 small">
-                        <li class="mb-2"><strong>Situazione al:</strong>
-                            {% if _t.SituazioneAl and _t.SituazioneAl|length == 8 %}
-                            <strong>{{ _t.SituazioneAl[:4] }}/{{ _t.SituazioneAl[4:6] }}/{{ _t.SituazioneAl[6:] }}</strong>
-                            {% else %}
-                            {{ _t.SituazioneAl or '-' }}
-                            {% endif %}
-                        </li>
-                        <li class="mb-2"><strong>Protocollo:</strong> {{ _dr.Protocollo or '-' }} / {{ _dr.Anno or '-' }}</li>
-                        {% if doc.id %}
-                        <li><strong>ID Doc:</strong> <code>{{ doc.id }}</code></li>
-                        {% endif %}
-                    </ul>
-                </div>
-            </div>
+            {{ visura_doc_card('warning', _t, _dr, doc) }}
         </div>
     </div>
 
@@ -236,16 +170,7 @@
     {% endfor %}
 
     {# ── Liquidazione ────────────────────────────────────────────────────── #}
-    {% set _liq = _v.DatiLiquidazione or {} %}
-    {% if _liq %}
-    <div class="card border-0 shadow-sm mb-4">
-        <div class="card-body">
-            <span class="detail-label">Liquidazione</span>
-            <span class="ms-3">Prot. {{ _liq.Protocollo or '-' }} / {{ _liq.Anno or '-' }}
-            — {{ _liq.UnitaImmobiliari or '0' }} unità immobiliari</span>
-        </div>
-    </div>
-    {% endif %}
+    {{ liquidazione_row(_v.DatiLiquidazione or {}) }}
 
     {# ── Dati completi (exhaustive dump) ─────────────────────────────────── #}
     {{ complete_data_section(doc.xml_parsed, accent='#fd7e14') }}
@@ -262,31 +187,5 @@
 {% block extra_js %}
 {{ super() }}
 {{ timeline_js() }}
-<script>
-(function () {
-    function addFilter(tableId) {
-        var tbl = document.getElementById(tableId);
-        if (!tbl) return;
-        var bar = document.createElement('div');
-        bar.className = 'd-flex gap-2 mb-2 no-print';
-        var inp = document.createElement('input');
-        inp.type = 'search'; inp.className = 'form-control form-control-sm'; inp.placeholder = 'Filtra…'; inp.style.maxWidth = '260px';
-        inp.addEventListener('input', function () {
-            var q = this.value.toLowerCase();
-            tbl.querySelectorAll('tbody tr').forEach(function (r) { r.style.display = !q || r.textContent.toLowerCase().includes(q) ? '' : 'none'; });
-        });
-        var btn = document.createElement('button');
-        btn.type = 'button'; btn.className = 'btn btn-sm btn-outline-secondary no-print';
-        btn.innerHTML = '<i class="fas fa-download me-1"></i>CSV';
-        btn.addEventListener('click', function () {
-            var rows = Array.from(tbl.querySelectorAll('tr')).filter(function (r) { return r.style.display !== 'none'; });
-            var csv = rows.map(function (r) { return Array.from(r.querySelectorAll('th,td')).map(function (c) { return '"' + c.textContent.trim().replace(/"/g, '""') + '"'; }).join(','); }).join('\n');
-            var a = document.createElement('a'); a.href = 'data:text/csv;charset=utf-8,' + encodeURIComponent(csv); a.download = tableId + '.csv'; a.click();
-        });
-        bar.appendChild(inp); bar.appendChild(btn);
-        tbl.closest('.table-responsive').before(bar);
-    }
-    document.querySelectorAll('[id^="classamento-table-"]').forEach(function (t) { addFilter(t.id); });
-})();
-</script>
+{{ table_filter_csv_js('[id^="classamento-table-"]') }}
 {% endblock %}

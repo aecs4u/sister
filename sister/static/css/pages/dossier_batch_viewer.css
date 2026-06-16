@@ -1,5 +1,5 @@
-/* Page styles for templates/dossier_batch_viewer.html. Extracted from an inline <style> block. */
-.hero-section { background: linear-gradient(135deg, #495057 0%, #1a1d20 100%); color: white; padding: 1.5rem 0; margin-bottom: 1.5rem; }
+/* Page styles for templates/dossier_batch_viewer.html. */
+.hero-section { background: linear-gradient(135deg, #495057 0%, #1a1d20 100%); padding: 1.5rem 0; margin-bottom: 1.5rem; }
 
 /* KPI bar */
 .kpi-bar { display: flex; flex-wrap: wrap; gap: .6rem; margin-bottom: 1.25rem; }
@@ -74,8 +74,6 @@
 .empty-row td { text-align: center; color: #6c757d; padding: 1rem !important; font-style: italic; }
 
 @media print {
-  .no-print { display: none !important; }
-  .hero-section { background: #f8f9fa !important; color: #333 !important; }
   .tbl-scroll { max-height: none; overflow: visible; }
   .btbl tbody tr.dimmed { display: none; }
 }

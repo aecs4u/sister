@@ -117,3 +117,10 @@ DEP002 = [
 DEP001 = [
     "playwright",      # optional, comes via aecs4u-auth[browser] — not a direct dep
 ]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.3",
+    "pytest-asyncio>=1.4.0",
+    "pytest-cov>=7.1.0",
+]

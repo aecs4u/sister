@@ -100,3 +100,30 @@
     overflow: hidden;
     text-overflow: ellipsis;
 }
+
+/* ── Hero section — base layout; each page CSS sets its background gradient ── */
+.hero-section { color: white; padding: 2rem 0; margin-bottom: 2rem; }
+
+/* ── Shared print rules ───────────────────────────────────────────────────── */
+@media print {
+    .no-print { display: none !important; }
+    .hero-section { background: #f8f9fa !important; color: #333 !important; }
+}
+
+/* ── Cadastral reference pills ────────────────────────────────────────────── */
+.cadastral-ref { font-family: monospace; background-color: #e9ecef; padding: .2rem .45rem; border-radius: .25rem; font-size: .9rem; }
+
+/* ── Income / rendita boxes (used by _macros.html and components/cadastral.html) ── */
+.income-box { background: linear-gradient(135deg, #28a745 0%, #20c997 100%); color: white; padding: 1rem; border-radius: .5rem; text-align: center; }
+.income-label { font-size: .75rem; opacity: .85; }
+.income-highlight { font-size: 1.1rem; font-weight: 600; color: #fd7e14; }
+
+/* ── Document type chip colors (documents_map, glossary) ─────────────────── */
+.chip-fab   { background: #d1e7dd; color: #0a3622; border: 1px solid #a3cfbb; }
+.chip-ter   { background: #fff3cd; color: #664d03; border: 1px solid #ffe69c; }
+.chip-sogg  { background: #cff4fc; color: #055160; border: 1px solid #9eeaf9; }
+.chip-sto   { background: #e2e3e5; color: #2b2d2f; border: 1px solid #c4c8cb; }
+.chip-epa   { background: #e0cffc; color: #2c0b5b; border: 1px solid #c29ffa; }
+.chip-plan  { background: #f8d7da; color: #58151c; border: 1px solid #f1aeb5; }
+.chip-eln   { background: #d2f4ea; color: #0a3622; border: 1px solid #a3cfbb; }
+.chip-other { background: #f8f9fa; color: #495057; border: 1px solid #dee2e6; }

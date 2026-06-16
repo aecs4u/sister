@@ -1,0 +1,20 @@
+{# ── card.html — SISTER stat card override ──────────────────────────────────
+   Overrides the theme's components/card.html stat_card with a centered layout
+   (icon → value → label stacked) suited for cadastral summary panels.
+   The theme's version uses a horizontal layout with optional href/change.
+
+   Import: {% from "components/card.html" import stat_card %}
+
+   stat_card(title, value, icon, color)
+     Contrast with stats_card in _macros.html which wraps an <a href>.
+   ─────────────────────────────────────────────────────────────────────── #}
+
+{% macro stat_card(title, value, icon='fa-chart-bar', color='secondary') %}
+<div class="card border-0 shadow-sm h-100">
+    <div class="card-body text-center py-3">
+        <i class="fas {{ icon }} fa-lg text-{{ color }} mb-1"></i>
+        <h4 class="mb-0">{{ value }}</h4>
+        <small class="text-muted">{{ title }}</small>
+    </div>
+</div>
+{% endmacro %}

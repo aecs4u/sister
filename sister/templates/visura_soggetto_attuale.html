@@ -1,6 +1,9 @@
 {% extends "_base.html" %}
 {% from "_timeline.html" import timeline_css, timeline_js, render_timeline %}
 {% from "_nested.html" import complete_data_section %}
+{% from "components/card.html" import stat_card %}
+{% from "parts/_hero.html" import hero_section %}
+{% from "components/table.html" import table_filter_csv_js %}
 {% set _v = doc.xml_parsed.VisuraSoggettoAttuale or doc.xml_parsed.VisuraSoggettoStorica or {} %}
 {% set _t = _v.TitoloVisura or {} %}
 {% set _dr = _v.DatiRichiesta or {} %}
@@ -13,46 +16,18 @@
 {% block extra_css %}
 {{ super() }}
 {{ timeline_css() }}
-<link rel="stylesheet" href="/static/css/pages/css/pages/visura_soggetto_attuale.css">
+<link rel="stylesheet" href="/static/css/pages/visura_soggetto_attuale.css">
 {% endblock %}
-
-{% from "components/card.html" import stat_card %}
 
 {% block content %}
 {# ── Hero ───────────────────────────────────────────────────────────────── #}
-<div class="hero-section no-print">
-    <div class="container-fluid">
-        <nav class="mb-3" aria-label="breadcrumb">
-            <ol class="breadcrumb mb-0">
-                <li class="breadcrumb-item">
-                    <a href="/web/documents" class="text-white-50">Documenti</a>
-                </li>
-                <li class="breadcrumb-item active text-white">Visura Soggetto</li>
-            </ol>
-        </nav>
-        <div class="d-flex flex-wrap justify-content-between align-items-center">
-            <div>
-                <h1 class="display-6 fw-bold mb-2">
-                    <i class="fas fa-user me-3"></i>
-                    {% if _sogg.Cognome %}{{ _sogg.Cognome }} {{ _sogg.Nome or '' }}{% else %}{{ doc.oggetto or 'Visura Soggetto Attuale' }}{% endif %}
-                </h1>
-                <p class="lead mb-0 opacity-75">
-                    Visura soggetto
-                    {% if _t.TipoCatasto or _dr.TipoCatasto %} — {{ _t.TipoCatasto or _dr.TipoCatasto }}{% endif %}
-                    {% if _dr.Provincia or doc.provincia %} — {{ _dr.Provincia or doc.provincia }}{% endif %}
-                </p>
-            </div>
-            <div class="d-flex gap-2 mt-3 mt-md-0">
-                <a href="/web/documents" class="btn btn-outline-light">
-                    <i class="fas fa-arrow-left me-2"></i>Documenti
-                </a>
-                <button onclick="window.print()" class="btn btn-outline-light">
-                    <i class="fas fa-print me-2"></i>Stampa
-                </button>
-            </div>
-        </div>
-    </div>
-</div>
+{% set _hero_title = (_sogg.Cognome ~ ' ' ~ (_sogg.Nome or ''))|trim if _sogg.Cognome else (doc.oggetto or 'Visura Soggetto Attuale') %}
+{% call hero_section(_hero_title, 'fa-user', '/web/documents', 'Documenti',
+                     breadcrumb_parent='Documenti', breadcrumb_current='Visura Soggetto') %}
+Visura soggetto
+{% if _t.TipoCatasto or _dr.TipoCatasto %} — {{ _t.TipoCatasto or _dr.TipoCatasto }}{% endif %}
+{% if _dr.Provincia or doc.provincia %} — {{ _dr.Provincia or doc.provincia }}{% endif %}
+{% endcall %}
 
 <div class="container-fluid">
 
@@ -254,31 +229,5 @@
 {% block extra_js %}
 {{ super() }}
 {{ timeline_js() }}
-<script>
-(function () {
-    function addFilter(tableId) {
-        var tbl = document.getElementById(tableId);
-        if (!tbl) return;
-        var bar = document.createElement('div');
-        bar.className = 'd-flex gap-2 mb-2 no-print';
-        var inp = document.createElement('input');
-        inp.type = 'search'; inp.className = 'form-control form-control-sm'; inp.placeholder = 'Filtra…'; inp.style.maxWidth = '260px';
-        inp.addEventListener('input', function () {
-            var q = this.value.toLowerCase();
-            tbl.querySelectorAll('tbody tr').forEach(function (r) { r.style.display = !q || r.textContent.toLowerCase().includes(q) ? '' : 'none'; });
-        });
-        var btn = document.createElement('button');
-        btn.type = 'button'; btn.className = 'btn btn-sm btn-outline-secondary no-print';
-        btn.innerHTML = '<i class="fas fa-download me-1"></i>CSV';
-        btn.addEventListener('click', function () {
-            var rows = Array.from(tbl.querySelectorAll('tr')).filter(function (r) { return r.style.display !== 'none'; });
-            var csv = rows.map(function (r) { return Array.from(r.querySelectorAll('th,td')).map(function (c) { return '"' + c.textContent.trim().replace(/"/g, '""') + '"'; }).join(','); }).join('\n');
-            var a = document.createElement('a'); a.href = 'data:text/csv;charset=utf-8,' + encodeURIComponent(csv); a.download = tableId + '.csv'; a.click();
-        });
-        bar.appendChild(inp); bar.appendChild(btn);
-        tbl.closest('.table-responsive').before(bar);
-    }
-    document.querySelectorAll('[id^="imm-table-"]').forEach(function (t) { addFilter(t.id); });
-})();
-</script>
+{{ table_filter_csv_js('[id^="imm-table-"]') }}
 {% endblock %}

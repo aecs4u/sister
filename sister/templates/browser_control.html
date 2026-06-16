@@ -1,30 +1,19 @@
 {% extends "_base.html" %}
+{% from "parts/_hero.html" import hero_section %}
 
 {% block page_title %}Browser Control{% endblock %}
 
 {% block extra_css %}
 {{ super() }}
-<link rel="stylesheet" href="/static/css/pages/css/pages/browser_control.css">
+<link rel="stylesheet" href="/static/css/pages/browser_control.css">
 {% endblock %}
 
 {% block content %}
 {# ── Hero ────────────────────────────────────────────────────────────────── #}
-<div class="hero-section no-print">
-    <div class="container-fluid">
-        <nav class="mb-3" aria-label="breadcrumb">
-            <ol class="breadcrumb mb-0">
-                <li class="breadcrumb-item"><a href="/web/" class="text-white-50">Dashboard</a></li>
-                <li class="breadcrumb-item active text-white">Browser Control</li>
-            </ol>
-        </nav>
-        <div class="d-flex flex-wrap justify-content-between align-items-center">
-            <div>
-                <h1 class="display-6 fw-bold mb-2"><i class="fas fa-browser me-3"></i>Browser Control</h1>
-                <p class="lead mb-0 opacity-75">Gestisci la sessione Playwright / autenticazione SISTER</p>
-            </div>
-        </div>
-    </div>
-</div>
+{% call hero_section('Browser Control', 'fa-browser', '/web/', 'Dashboard',
+                     breadcrumb_parent='Dashboard', breadcrumb_current='Browser Control') %}
+Gestisci la sessione Playwright / autenticazione SISTER
+{% endcall %}
 
 <div class="container-fluid">
 <div class="row g-4">

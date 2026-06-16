@@ -1,0 +1,52 @@
+{# ── table.html — filterable table JS helper ───────────────────────────────
+   Import: {% from "components/table.html" import table_filter_csv_js %}
+
+   table_filter_csv_js(selector)
+     Emits a <script> that adds a filter input + CSV download button before
+     the .table-responsive wrapper of every table matching `selector`.
+
+   Examples:
+     {{ table_filter_csv_js('#my-table') }}
+     {{ table_filter_csv_js('[id^="classamento-table-"]') }}
+     {{ table_filter_csv_js('#province-table, #comuni-table') }}
+   ─────────────────────────────────────────────────────────────────────── #}
+
+{% macro table_filter_csv_js(selector='[data-filterable]') %}
+<script>
+(function () {
+    function addFilter(tbl) {
+        var bar = document.createElement('div');
+        bar.className = 'd-flex gap-2 mb-2 no-print';
+        var inp = document.createElement('input');
+        inp.type = 'search'; inp.className = 'form-control form-control-sm';
+        inp.placeholder = 'Filtra…'; inp.style.maxWidth = '260px';
+        inp.addEventListener('input', function () {
+            var q = this.value.toLowerCase();
+            tbl.querySelectorAll('tbody tr').forEach(function (r) {
+                r.style.display = !q || r.textContent.toLowerCase().includes(q) ? '' : 'none';
+            });
+        });
+        var btn = document.createElement('button');
+        btn.type = 'button'; btn.className = 'btn btn-sm btn-outline-secondary no-print';
+        btn.innerHTML = '<i class="fas fa-download me-1"><\/i>CSV';
+        btn.addEventListener('click', function () {
+            var rows = Array.from(tbl.querySelectorAll('tr')).filter(function (r) {
+                return r.style.display !== 'none';
+            });
+            var csv = rows.map(function (r) {
+                return Array.from(r.querySelectorAll('th,td'))
+                    .map(function (c) { return '"' + c.textContent.trim().replace(/\s+/g, ' ').replace(/"/g, '""') + '"'; })
+                    .join(',');
+            }).join('\n');
+            var a = document.createElement('a');
+            a.href = 'data:text/csv;charset=utf-8,' + encodeURIComponent(csv);
+            a.download = (tbl.id || 'table') + '.csv'; a.click();
+        });
+        bar.appendChild(inp); bar.appendChild(btn);
+        var wrap = tbl.closest('.table-responsive');
+        (wrap || tbl).before(bar);
+    }
+    document.querySelectorAll('{{ selector }}').forEach(function (t) { addFilter(t); });
+})();
+</script>
+{% endmacro %}

@@ -1,0 +1,50 @@
+{# ── cadastral.html — shared cadastral data helpers ────────────────────────
+   Import: {% from "components/cadastral.html" import cadastral_ref,
+                tipo_catasto_badge, situazione_al, rendita_box, liquidazione_row %}
+   ─────────────────────────────────────────────────────────────────────── #}
+
+{# Inline FG/PT[/Sub] reference — requires .cadastral-ref CSS class (sister.css) #}
+{% macro cadastral_ref(foglio, particella, sub=None) %}
+FG <span class="cadastral-ref">{{ foglio or '-' }}</span>
+PT <span class="cadastral-ref">{{ particella or '-' }}</span>
+{% if sub %}<br><small>Sub <span class="cadastral-ref">{{ sub }}</span></small>{% endif %}
+{% endmacro %}
+
+{# Tipo catasto badge: F=Fabbricati, T=Terreni, E=Entrambi #}
+{% macro tipo_catasto_badge(tipo) %}
+{% if tipo == 'F' %}<span class="badge bg-success">Fabbricati</span>
+{% elif tipo == 'T' %}<span class="badge bg-warning text-dark">Terreni</span>
+{% elif tipo == 'E' %}<span class="badge bg-info text-dark">Entrambi</span>
+{% else %}<span class="badge bg-secondary">{{ tipo or '-' }}</span>{% endif %}
+{% endmacro %}
+
+{# Format YYYYMMDD → YYYY/MM/DD (bold), or pass through as-is #}
+{% macro situazione_al(date_str) %}
+{% if date_str and date_str|length == 8 %}<strong>{{ date_str[:4] }}/{{ date_str[4:6] }}/{{ date_str[6:] }}</strong>
+{% else %}{{ date_str or '-' }}{% endif %}
+{% endmacro %}
+
+{# Rendita / reddito highlight box (requires .income-box CSS) #}
+{% macro rendita_box(euro, label='Rendita Catastale') %}
+{% if euro %}
+<div class="income-box">
+    <div class="small mb-1">{{ label }}</div>
+    <div class="income-value">€ {{ euro }}</div>
+</div>
+{% else %}
+<div class="text-muted fst-italic text-center py-3">{{ label }} non disponibile</div>
+{% endif %}
+{% endmacro %}
+
+{# Liquidazione footer card — pass DatiLiquidazione dict or None #}
+{% macro liquidazione_row(liq) %}
+{% if liq %}
+<div class="card border-0 shadow-sm mb-4">
+    <div class="card-body">
+        <span class="detail-label">Liquidazione</span>
+        <span class="ms-3">Prot. {{ liq.Protocollo or '-' }} / {{ liq.Anno or '-' }}
+        — {{ liq.UnitaImmobiliari or '0' }} unità immobiliari</span>
+    </div>
+</div>
+{% endif %}
+{% endmacro %}

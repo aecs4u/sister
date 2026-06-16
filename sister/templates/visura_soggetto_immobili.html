@@ -1,11 +1,13 @@
 {% extends "_base.html" %}
+{% from "components/table.html" import table_filter_csv_js %}
+{% from "parts/_hero.html" import hero_section %}
 {% block page_title %}
     {{- data.risultato.soggetti[0].denominazione if data.risultato.soggetti else 'Visura Soggetto' }} - Immobili
 {%- endblock %}
 
 {% block extra_css %}
 {{ super() }}
-<link rel="stylesheet" href="/static/css/pages/css/pages/visura_soggetto_immobili.css">
+<link rel="stylesheet" href="/static/css/pages/visura_soggetto_immobili.css">
 {% endblock %}
 
 {% block content %}
@@ -17,36 +19,10 @@
 {% set soggetto = data.risultato.soggetti[0] %}
 
 {# ── Hero ───────────────────────────────────────────────────────────────── #}
-<div class="hero-section no-print">
-    <div class="container-fluid">
-        <nav class="mb-3" aria-label="breadcrumb">
-            <ol class="breadcrumb mb-0">
-                <li class="breadcrumb-item">
-                    <a href="/web/results" class="text-white-50">Risultati</a>
-                </li>
-                <li class="breadcrumb-item active text-white">Dettaglio Immobili</li>
-            </ol>
-        </nav>
-        <div class="d-flex flex-wrap justify-content-between align-items-center">
-            <div>
-                <h1 class="display-6 fw-bold mb-2">
-                    <i class="fas fa-building me-3"></i>{{ soggetto.denominazione }}
-                </h1>
-                <p class="lead mb-0 opacity-75">
-                    Dettaglio proprietà — <strong>{{ soggetto.immobili|length }}</strong> immobili
-                </p>
-            </div>
-            <div class="d-flex gap-2 mt-3 mt-md-0">
-                <a href="/web/results" class="btn btn-outline-light">
-                    <i class="fas fa-arrow-left me-2"></i>Risultati
-                </a>
-                <button onclick="window.print()" class="btn btn-outline-light">
-                    <i class="fas fa-print me-2"></i>Stampa
-                </button>
-            </div>
-        </div>
-    </div>
-</div>
+{% call hero_section(soggetto.denominazione, 'fa-building', '/web/results', 'Risultati',
+                     breadcrumb_parent='Risultati', breadcrumb_current='Dettaglio Immobili') %}
+Dettaglio proprietà — <strong>{{ soggetto.immobili|length }}</strong> immobili
+{% endcall %}
 
 <div class="container-fluid">
 
@@ -176,30 +152,7 @@
     });
     {% endif %}
 
-    // Table filter + CSV
-    function addFilter(tableId) {
-        var tbl = document.getElementById(tableId);
-        if (!tbl) return;
-        var bar = document.createElement('div');
-        bar.className = 'd-flex gap-2 mb-2 no-print';
-        var inp = document.createElement('input');
-        inp.type = 'search'; inp.className = 'form-control form-control-sm'; inp.placeholder = 'Filtra…'; inp.style.maxWidth = '300px';
-        inp.addEventListener('input', function () {
-            var q = this.value.toLowerCase();
-            tbl.querySelectorAll('tbody tr').forEach(function (r) { r.style.display = !q || r.textContent.toLowerCase().includes(q) ? '' : 'none'; });
-        });
-        var btn = document.createElement('button');
-        btn.type = 'button'; btn.className = 'btn btn-sm btn-outline-secondary no-print';
-        btn.innerHTML = '<i class="fas fa-download me-1"></i>CSV';
-        btn.addEventListener('click', function () {
-            var rows = Array.from(tbl.querySelectorAll('tr')).filter(function (r) { return r.style.display !== 'none'; });
-            var csv = rows.map(function (r) { return Array.from(r.querySelectorAll('th,td')).map(function (c) { return '"' + c.textContent.trim().replace(/"/g, '""') + '"'; }).join(','); }).join('\n');
-            var a = document.createElement('a'); a.href = 'data:text/csv;charset=utf-8,' + encodeURIComponent(csv); a.download = tableId + '.csv'; a.click();
-        });
-        bar.appendChild(inp); bar.appendChild(btn);
-        tbl.closest('.table-responsive').before(bar);
-    }
-    addFilter('immobili-table');
 })();
 </script>
+{{ table_filter_csv_js('#immobili-table') }}
 {% endblock %}

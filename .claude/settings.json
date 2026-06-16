@@ -11,7 +11,18 @@
       "Read(//mnt/developer/git/aecs4u.it/classaction/.github/workflows/**)",
       "Read(//mnt/developer/git/aecs4u.it/classaction/alembic/versions/**)",
       "Read(//mnt/developer/git/aecs4u.it/aecs4u-assistant/**)",
-      "Read(//mnt/developer/git/aecs4u.it/lighthouse/lighthouse/cli/**)"
+      "Read(//mnt/developer/git/aecs4u.it/lighthouse/lighthouse/cli/**)",
+      "Read(//mnt/developer/git/aecs4u.it/property-scraper/.claude/worktrees/agent-a1a3876b/property_scraper/spiders/pvp/**)",
+      "Read(//mnt/developer/git/aecs4u.it/opendata/opendata/workflows/**)",
+      "Read(//mnt/developer/git/aecs4u.it/opendata/opendata/routers/**)",
+      "Read(//mnt/developer/git/aecs4u.it/opendata/**)",
+      "mcp__playwright__browser_navigate",
+      "mcp__playwright__browser_take_screenshot",
+      "mcp__playwright__browser_evaluate",
+      "mcp__playwright__browser_click",
+      "mcp__playwright__browser_wait_for",
+      "Read(//mnt/developer/git/aecs4u.it/aecs4u-theme/aecs4u_theme/templates/**)",
+      "Read(//mnt/developer/git/aecs4u.it/aecs4u-theme/aecs4u_theme/**)"
     ],
     "additionalDirectories": [
       "/mnt/developer/git/aecs4u.it/advisor/.github/workflows",
@@ -21,7 +32,11 @@
       "/mnt/developer/git/aecs4u.it/aecs4u-assistant",
       "/mnt/developer/git/aecs4u.it/lighthouse/lighthouse/cli",
       "/mnt/developer/git/aecs4u.it/lighthouse",
-      "/mnt/developer/git/aecs4u.it/classaction/classaction/routers"
+      "/mnt/developer/git/aecs4u.it/classaction/classaction/routers",
+      "/mnt/developer/git/aecs4u.it/aecs4u-workflow",
+      "/mnt/developer/git/aecs4u.it/opendata/opendata/workflows",
+      "/mnt/developer/git/aecs4u.it/opendata/opendata/routers",
+      "/mnt/developer/git/aecs4u.it/opendata"
     ]
   }
 }

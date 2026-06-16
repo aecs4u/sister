@@ -1,0 +1,61 @@
+{# ── _hero.html — full-width gradient hero for visura / detail pages ─────────
+   Import: {% from "parts/_hero.html" import hero_section %}
+
+   hero_section(title, icon, back_url, back_label, breadcrumb_parent, breadcrumb_current,
+                extra_btn_url, extra_btn_label, extra_btn_icon)
+     Use {% call %} to inject a dynamic subtitle; omit for no subtitle.
+     extra_btn_* adds a single extra action button before Back/Print.
+
+   With subtitle:
+     {% call hero_section('Visura Attuale Terreno', 'fa-leaf',
+                          '/web/documents', 'Documenti',
+                          breadcrumb_parent='Documenti',
+                          breadcrumb_current='Visura Terreni') %}
+       {{ doc.comune }} — FG <strong>{{ doc.foglio }}</strong>
+     {% endcall %}
+
+   Without subtitle (or caller):
+     {{ hero_section('About', 'fa-info-circle', '/web/', 'Dashboard') }}
+   ─────────────────────────────────────────────────────────────────────── #}
+
+{% macro hero_section(title, icon, back_url, back_label='Indietro',
+                      breadcrumb_parent=None, breadcrumb_current=None,
+                      extra_btn_url=None, extra_btn_label=None, extra_btn_icon=None) %}
+<div class="hero-section no-print">
+    <div class="container-fluid">
+        {% if breadcrumb_parent %}
+        <nav class="mb-3" aria-label="breadcrumb">
+            <ol class="breadcrumb mb-0">
+                <li class="breadcrumb-item">
+                    <a href="{{ back_url }}" class="text-white-50">{{ breadcrumb_parent }}</a>
+                </li>
+                <li class="breadcrumb-item active text-white">{{ breadcrumb_current or title }}</li>
+            </ol>
+        </nav>
+        {% endif %}
+        <div class="d-flex flex-wrap justify-content-between align-items-center">
+            <div>
+                <h1 class="display-6 fw-bold mb-2">
+                    <i class="fas {{ icon }} me-3"></i>{{ title }}
+                </h1>
+                {% if caller is defined %}
+                <p class="lead mb-0 opacity-75">{{ caller() }}</p>
+                {% endif %}
+            </div>
+            <div class="d-flex gap-2 mt-3 mt-md-0">
+                <a href="{{ back_url }}" class="btn btn-outline-light">
+                    <i class="fas fa-arrow-left me-2"></i>{{ back_label }}
+                </a>
+                {% if extra_btn_url %}
+                <a href="{{ extra_btn_url }}" class="btn btn-outline-light">
+                    {% if extra_btn_icon %}<i class="fas {{ extra_btn_icon }} me-2"></i>{% endif %}{{ extra_btn_label }}
+                </a>
+                {% endif %}
+                <button onclick="window.print()" class="btn btn-outline-light">
+                    <i class="fas fa-print me-2"></i>Stampa
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+{% endmacro %}

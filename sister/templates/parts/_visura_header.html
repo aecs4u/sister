@@ -1,0 +1,97 @@
+{# ── _visura_header.html — 2-col cadastral query + document info cards ───────
+   Used by: visura_terreni_attuale, visura_fabbricati_storica
+   Import:  {% from "parts/_visura_header.html" import visura_location_card, visura_doc_card %}
+
+   visura_location_card(color, title, dr, doc, sub, partita, sez_label, sez_value, provenienza)
+     color       — Bootstrap color name ('warning', 'success', …)
+     title       — Card heading text (from TitoloVisura.Titolo)
+     dr          — DatiRichiesta dict  (Provincia, Comune, Foglio, ParticellaNum, …)
+     doc         — DB document dict   (doc.provincia, doc.foglio, …)
+     sub         — optional Subalterno string (fabbricati)
+     partita     — optional Partita string (terreni)
+     sez_label   — column-3 sezione label ('Sez. Censuaria' / 'Sezione Urbana')
+     sez_value   — column-3 sezione value
+     provenienza — from TitoloVisura.Provenienza
+
+   visura_doc_card(color, t, dr, doc)
+     t           — TitoloVisura dict  (SituazioneAl)
+     dr          — DatiRichiesta dict (Protocollo, Anno)
+   ─────────────────────────────────────────────────────────────────────── #}
+
+{% macro visura_location_card(color, title, dr, doc, sub=None, partita=None,
+                               sez_label=None, sez_value=None, provenienza=None) %}
+<div class="card border-start border-{{ color }} border-3 h-100">
+    <div class="card-body">
+        <h5 class="card-title">
+            <i class="fas fa-map-marker-alt text-{{ color }} me-2"></i>{{ title }}
+        </h5>
+        <div class="row">
+            <div class="col-md-4">
+                <ul class="list-unstyled mb-0 small">
+                    <li class="mb-2"><strong>Provincia:</strong>
+                        <span class="badge bg-{{ color }}{% if color == 'warning' %} text-dark{% endif %} ms-1">
+                            {{ dr.Provincia or doc.provincia or '-' }}
+                        </span>
+                    </li>
+                    <li class="mb-2"><strong>Comune:</strong> {{ dr.Comune or doc.comune or '-' }}</li>
+                </ul>
+            </div>
+            <div class="col-md-4">
+                <ul class="list-unstyled mb-0 small">
+                    <li class="mb-2"><strong>Foglio:</strong>
+                        <span class="cadastral-ref">{{ dr.Foglio or doc.foglio or '-' }}</span>
+                    </li>
+                    <li class="mb-2"><strong>Particella:</strong>
+                        <span class="cadastral-ref">{{ dr.ParticellaNum or doc.particella or '-' }}</span>
+                    </li>
+                    {% if sub %}
+                    <li class="mb-2"><strong>Subalterno:</strong>
+                        <span class="cadastral-ref">{{ sub }}</span>
+                    </li>
+                    {% endif %}
+                    {% if partita %}
+                    <li class="mb-2"><strong>Partita:</strong>
+                        <span class="cadastral-ref">{{ partita }}</span>
+                    </li>
+                    {% endif %}
+                </ul>
+            </div>
+            <div class="col-md-4">
+                <ul class="list-unstyled mb-0 small">
+                    {% if sez_label and sez_value %}
+                    <li class="mb-2"><strong>{{ sez_label }}:</strong>
+                        <span class="cadastral-ref">{{ sez_value }}</span>
+                    </li>
+                    {% endif %}
+                    <li class="mb-2"><strong>Provenienza:</strong> {{ provenienza or '-' }}</li>
+                </ul>
+            </div>
+        </div>
+    </div>
+</div>
+{% endmacro %}
+
+
+{% macro visura_doc_card(color, t, dr, doc) %}
+<div class="card border-start border-{{ color }} border-3 h-100">
+    <div class="card-body">
+        <h5 class="card-title">
+            <i class="fas fa-info-circle text-{{ color }} me-2"></i>Documento
+        </h5>
+        <ul class="list-unstyled mb-0 small">
+            <li class="mb-2"><strong>Situazione al:</strong>
+                {% set _sal = t.SituazioneAl %}
+                {% if _sal and _sal|length == 8 %}
+                <strong>{{ _sal[:4] }}/{{ _sal[4:6] }}/{{ _sal[6:] }}</strong>
+                {% else %}{{ _sal or '-' }}{% endif %}
+            </li>
+            <li class="mb-2"><strong>Protocollo:</strong>
+                {{ dr.Protocollo or '-' }} / {{ dr.Anno or '-' }}
+            </li>
+            {% if doc.id %}
+            <li><strong>ID Doc:</strong> <code>{{ doc.id }}</code></li>
+            {% endif %}
+        </ul>
+    </div>
+</div>
+{% endmacro %}
