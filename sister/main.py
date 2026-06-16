@@ -291,6 +291,24 @@ try:
                     url = f"{url}?next_url={_urlquote(exc.return_url, safe='')}"
                 return RedirectResponse(url=url, status_code=302)
 
+        # Register local password callback (used when USE_CLERK_AUTH=false).
+        # Reads AUTH_USERNAME / AUTH_PASSWORD from env; falls back to dev defaults.
+        from aecs4u_auth.routers.auth import set_password_verify_callback
+
+        _auth_username = os.getenv("AUTH_USERNAME", "demo@aecs4u.com")
+        _auth_password = os.getenv("AUTH_PASSWORD", "demo123")
+
+        class _LocalUser:
+            id = "local"
+            email = _auth_username
+
+        def _verify_local_password(username: str, password: str):
+            if username == _auth_username and password == _auth_password:
+                return _LocalUser()
+            return None
+
+        set_password_verify_callback(_verify_local_password)
+
         app.state.auth_setup = auth_setup
         app.state.auth_config = auth_config
         auth_mode = getattr(auth_config, "AUTH_MODE", getattr(auth_config, "auth_mode", "unknown"))

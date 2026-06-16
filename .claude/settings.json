@@ -22,7 +22,10 @@
       "mcp__playwright__browser_click",
       "mcp__playwright__browser_wait_for",
       "Read(//mnt/developer/git/aecs4u.it/aecs4u-theme/aecs4u_theme/templates/**)",
-      "Read(//mnt/developer/git/aecs4u.it/aecs4u-theme/aecs4u_theme/**)"
+      "Read(//mnt/developer/git/aecs4u.it/aecs4u-theme/aecs4u_theme/**)",
+      "Read(//mnt/developer/git/aecs4u.it/aecs4u-auth/aecs4u_auth/**)",
+      "Read(//mnt/developer/git/aecs4u.it/get-me-the-job/get_me_the_job/**)",
+      "Read(//mnt/developer/git/aecs4u.it/aecs4u-auth/**)"
     ],
     "additionalDirectories": [
       "/mnt/developer/git/aecs4u.it/advisor/.github/workflows",
@@ -36,7 +39,8 @@
       "/mnt/developer/git/aecs4u.it/aecs4u-workflow",
       "/mnt/developer/git/aecs4u.it/opendata/opendata/workflows",
       "/mnt/developer/git/aecs4u.it/opendata/opendata/routers",
-      "/mnt/developer/git/aecs4u.it/opendata"
+      "/mnt/developer/git/aecs4u.it/opendata",
+      "/mnt/developer/git/aecs4u.it/aecs4u-auth"
     ]
   }
 }
