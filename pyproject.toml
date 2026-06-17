@@ -26,7 +26,7 @@ classifiers = [
 ]
 
 dependencies = [
-    "aecs4u-auth[browser]",
+    "aecs4u-auth[browser]>=1.19.0",
     "aecs4u-email",
     "aecs4u-workflow",
     "fastapi>=0.115.0",

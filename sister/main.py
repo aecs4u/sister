@@ -293,7 +293,7 @@ try:
 
         # Register local password callback (used when USE_CLERK_AUTH=false).
         # Reads AUTH_USERNAME / AUTH_PASSWORD from env; falls back to dev defaults.
-        from aecs4u_auth.routers.auth import set_password_verify_callback
+        from aecs4u_auth import set_password_verify_callback
 
         _auth_username = os.getenv("AUTH_USERNAME", "demo@aecs4u.com")
         _auth_password = os.getenv("AUTH_PASSWORD", "demo123")
