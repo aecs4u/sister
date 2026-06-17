@@ -1,5 +1,5 @@
 /* Page styles for templates/visura_terreni_attuale.html. */
-.hero-section { background: linear-gradient(135deg, #fd7e14 0%, #e67e22 100%); }
+.page-hero { background: linear-gradient(135deg, #fd7e14 0%, #e67e22 100%); }
 .income-box-dom { background: linear-gradient(135deg, #fd7e14 0%, #e67e22 100%); color: white; padding: 1rem; border-radius: .5rem; text-align: center; }
 .income-box-agr { background: linear-gradient(135deg, #28a745 0%, #20c997 100%); color: white; padding: 1rem; border-radius: .5rem; text-align: center; }
 .income-value { font-size: 1.5rem; font-weight: 700; }

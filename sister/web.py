@@ -1444,7 +1444,7 @@ async def landing(request: Request):
     """Public landing page."""
     theme = _get_theme(request)
     user = _get_user(request)
-    return theme.render("landing.html", request, user=user)
+    return theme.render("_landing.html", request, user=user)
 
 
 # ---------------------------------------------------------------------------

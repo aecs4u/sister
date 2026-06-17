@@ -1,12 +1,11 @@
-{# ── card.html — SISTER stat card override ──────────────────────────────────
-   Overrides the theme's components/card.html stat_card with a centered layout
-   (icon → value → label stacked) suited for cadastral summary panels.
-   The theme's version uses a horizontal layout with optional href/change.
+{# ── kpi_card.html — centered KPI stat card ──────────────────────────────────
+   Centered layout (icon → value → label stacked) suited for cadastral summary
+   panels. Distinct from the theme's components/card.html stat_card (horizontal,
+   with optional href/change) and from stats_card in _macros.html (clickable).
 
-   Import: {% from "components/card.html" import stat_card %}
+   Import: {% from "components/kpi_card.html" import stat_card %}
 
    stat_card(title, value, icon, color)
-     Contrast with stats_card in _macros.html which wraps an <a href>.
    ─────────────────────────────────────────────────────────────────────── #}
 
 {% macro stat_card(title, value, icon='fa-chart-bar', color='secondary') %}

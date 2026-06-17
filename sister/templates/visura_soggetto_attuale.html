@@ -1,7 +1,7 @@
 {% extends "_base.html" %}
 {% from "_timeline.html" import timeline_css, timeline_js, render_timeline %}
 {% from "_nested.html" import complete_data_section %}
-{% from "components/card.html" import stat_card %}
+{% from "components/kpi_card.html" import stat_card %}
 {% from "parts/_hero.html" import hero_section %}
 {% from "components/table.html" import table_filter_csv_js %}
 {% set _v = doc.xml_parsed.VisuraSoggettoAttuale or doc.xml_parsed.VisuraSoggettoStorica or {} %}

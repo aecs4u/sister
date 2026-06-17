@@ -1,0 +1,87 @@
+{% extends "landing.html" %}
+
+{% block title %}SISTER - Italian Cadastral Data Service{% endblock %}
+
+{% block hero_title %}<i class="fas fa-landmark me-2"></i>SISTER{% endblock %}
+
+{% block hero_subtitle %}Automated cadastral data extraction from the Italian Land Registry (Agenzia delle Entrate).{% endblock %}
+
+{% block hero_actions %}
+<a href="/web/" class="btn btn-primary btn-lg me-3">
+    <i class="fas fa-rocket me-2"></i>Get Started
+</a>
+<a href="/docs" class="btn btn-outline-secondary btn-lg" target="_blank">
+    <i class="fas fa-book me-2"></i>API Docs
+</a>
+{% endblock %}
+
+{% block hero_image %}
+<div class="hero-image">
+    <div class="hero-placeholder">
+        <i class="fas fa-landmark"></i>
+    </div>
+</div>
+{% endblock %}
+
+{% block features_subtitle %}Everything you need to query the Italian cadastral registry{% endblock %}
+
+{% block features_content %}
+<div class="col-md-4">
+    <div class="feature-card">
+        <div class="feature-icon"><i class="fas fa-search"></i></div>
+        <h3>Property Search</h3>
+        <p>Search properties by cadastral coordinates, address, or owner across all of Italy.</p>
+    </div>
+</div>
+<div class="col-md-4">
+    <div class="feature-card">
+        <div class="feature-icon"><i class="fas fa-user"></i></div>
+        <h3>Owner Lookup</h3>
+        <p>Find all properties owned by a person or company using codice fiscale or P.IVA.</p>
+    </div>
+</div>
+<div class="col-md-4">
+    <div class="feature-card">
+        <div class="feature-icon"><i class="fas fa-project-diagram"></i></div>
+        <h3>Automated Workflows</h3>
+        <p>Run multi-phase investigations: due diligence, asset audit, land survey, and more.</p>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_sections %}
+<section class="features-section">
+    <div class="container">
+        <div class="text-center mb-4">
+            <h2 class="section-title">Available Search Types</h2>
+        </div>
+        <div class="row g-3 justify-content-center">
+            {% for item in [
+                ("fa-home", "Immobili"),
+                ("fa-users", "Intestati"),
+                ("fa-user", "Soggetto"),
+                ("fa-building", "Azienda"),
+                ("fa-list", "Elenco"),
+                ("fa-map-marker-alt", "Indirizzo"),
+                ("fa-hashtag", "Partita"),
+                ("fa-terminal", "CLI")
+            ] %}
+            <div class="col-md-3 col-6">
+                <div class="feature-card text-center py-3">
+                    <div class="feature-icon"><i class="fas {{ item[0] }}"></i></div>
+                    <div class="fw-semibold">{{ item[1] }}</div>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+</section>
+{% endblock %}
+
+{% block cta_subtitle %}Powered by browser automation against the SISTER portal.{% endblock %}
+
+{% block cta_actions %}
+<a href="/web/" class="btn btn-light btn-lg">
+    <i class="fas fa-sign-in-alt me-2"></i>Sign In to Dashboard
+</a>
+{% endblock %}

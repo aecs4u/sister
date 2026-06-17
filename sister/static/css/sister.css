@@ -102,12 +102,12 @@
 }
 
 /* ── Hero section — base layout; each page CSS sets its background gradient ── */
-.hero-section { color: white; padding: 2rem 0; margin-bottom: 2rem; }
+.page-hero { color: white; padding: 2rem 0; margin-bottom: 2rem; }
 
 /* ── Shared print rules ───────────────────────────────────────────────────── */
 @media print {
     .no-print { display: none !important; }
-    .hero-section { background: #f8f9fa !important; color: #333 !important; }
+    .page-hero { background: #f8f9fa !important; color: #333 !important; }
 }
 
 /* ── Cadastral reference pills ────────────────────────────────────────────── */

@@ -1,5 +1,5 @@
 /* Page styles for templates/documents_map.html. */
-.hero-section { background: linear-gradient(135deg, #495057 0%, #212529 100%); }
+.page-hero { background: linear-gradient(135deg, #495057 0%, #212529 100%); }
 @media print { .collapse { display: block !important; height: auto !important; } }
 
 /* Province block */

@@ -1,5 +1,5 @@
 /* Page styles for templates/guide.html. */
-.hero-section { background: linear-gradient(135deg, #0d6efd 0%, #0a58ca 100%); }
+.page-hero { background: linear-gradient(135deg, #0d6efd 0%, #0a58ca 100%); }
 .guide-section { margin-bottom: 2.5rem; }
 .guide-section h2 { font-size: 1.25rem; font-weight: 700; border-bottom: 2px solid #0d6efd; padding-bottom: .4rem; margin-bottom: 1rem; color: #0d6efd; }
 .guide-section h3 { font-size: 1rem; font-weight: 600; margin-top: 1.25rem; margin-bottom: .5rem; }

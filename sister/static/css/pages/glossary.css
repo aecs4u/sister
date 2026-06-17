@@ -1,5 +1,5 @@
 /* Page styles for templates/glossary.html. */
-.hero-section { background: linear-gradient(135deg, #6f42c1 0%, #59359a 100%); }
+.page-hero { background: linear-gradient(135deg, #6f42c1 0%, #59359a 100%); }
 .gl-section { margin-bottom: 2.5rem; }
 .gl-section h2 { font-size: 1.2rem; font-weight: 700; border-bottom: 2px solid #6f42c1; padding-bottom: .4rem; margin-bottom: 1rem; color: #6f42c1; }
 .gl-section h3 { font-size: .95rem; font-weight: 600; margin-top: 1.25rem; margin-bottom: .4rem; color: #495057; }

@@ -1,3 +1,3 @@
 /* Page styles for templates/visura_soggetto_riepilogo.html. */
-.hero-section { background: linear-gradient(135deg, #dc3545 0%, #c0392b 100%); }
+.page-hero { background: linear-gradient(135deg, #dc3545 0%, #c0392b 100%); }
 .municipality-item { border-left: 3px solid #dc3545; background-color: #f8f9fa; padding: .5rem .75rem; border-radius: .25rem; margin-bottom: .35rem; }

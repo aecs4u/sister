@@ -1,5 +1,5 @@
 /* Page styles for templates/dossier_batch_viewer.html. */
-.hero-section { background: linear-gradient(135deg, #495057 0%, #1a1d20 100%); padding: 1.5rem 0; margin-bottom: 1.5rem; }
+.page-hero { background: linear-gradient(135deg, #495057 0%, #1a1d20 100%); padding: 1.5rem 0; margin-bottom: 1.5rem; }
 
 /* KPI bar */
 .kpi-bar { display: flex; flex-wrap: wrap; gap: .6rem; margin-bottom: 1.25rem; }
