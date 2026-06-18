@@ -27,8 +27,8 @@ classifiers = [
 
 dependencies = [
     "aecs4u-auth[browser]>=1.19.0",
-    "aecs4u-email",
-    "aecs4u-workflow",
+    "aecs4u-email>=1.0.0",
+    "aecs4u-workflow>=0.1.0",
     "fastapi>=0.115.0",
     "itsdangerous>=2.2.0",
     "structlog>=26.0.0",
@@ -43,7 +43,7 @@ dependencies = [
     "typer>=0.9.0",
     "httpx>=0.27.0",
     "jinja2>=3.1.0",
-    "aecs4u-theme",
+    "aecs4u-theme>=1.6.0",
     "lxml>=6.1.1",
     "sqlalchemy>=2.0.50",
     "starlette>=1.2.1",
@@ -112,7 +112,7 @@ DEP002 = [
     "pytest-asyncio",  # dev tool
     "black",           # dev tool
     "ruff",            # dev tool
-    "aecs4u-theme",    # static files via importlib / mount
+    "aecs4u-theme>=1.6.0",    # static files via importlib / mount
 ]
 DEP001 = [
     "playwright",      # optional, comes via aecs4u-auth[browser] — not a direct dep
