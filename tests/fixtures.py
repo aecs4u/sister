@@ -292,3 +292,328 @@ PARTITE_IVA = [
     {"piva": "03618371201", "denominazione": "ALTRAVIA SERVIZI SRL", "provincia": "BO"},
     {"piva": "12485671007", "denominazione": "ALTRAVIA SERVIZI SRL", "provincia": "RM"},
 ]
+
+# ---------------------------------------------------------------------------
+# Visura soggetto (persona fisica) inputs and responses
+# ---------------------------------------------------------------------------
+
+SOGGETTO_ROSSI_INPUT = {
+    "codice_fiscale": "RSSMRI85E28H501E",  # nationwide search, both catasti
+}
+
+SOGGETTO_BIANCHI_PROVINCIAL_INPUT = {
+    "codice_fiscale": "BNCLRA90A41H501Z",
+    "tipo_catasto": "F",
+    "provincia": "MI",
+}
+
+SOGGETTO_TERRENI_ONLY_INPUT = {
+    "codice_fiscale": "RSSMRI85E28H501E",
+    "tipo_catasto": "T",
+}
+
+SISTER_SOGGETTO_EMPTY_RESPONSE = {
+    "request_id": "soggetto_F_fixture002",
+    "tipo_catasto": "F",
+    "status": "completed",
+    "data": {
+        "soggetto": "BNCLRA90A41H501Z",
+        "immobili": [],
+        "total_results": 0,
+        "error": "NESSUNA CORRISPONDENZA TROVATA",
+    },
+    "timestamp": "2026-04-10T13:00:00",
+}
+
+# ---------------------------------------------------------------------------
+# Visura persona giuridica inputs and responses
+# ---------------------------------------------------------------------------
+
+PG_TIGULLIO_PIVA_INPUT = {
+    "identificativo": "02471840997",  # P.IVA, nationwide
+}
+
+PG_ALTRAVIA_PROVINCIAL_INPUT = {
+    "identificativo": "03618371201",
+    "tipo_catasto": "F",
+    "provincia": "BO",
+}
+
+PG_BY_NAME_INPUT = {
+    "identificativo": "TIGULLIO IMMOBILIARE SRL",
+    "tipo_catasto": "E",
+}
+
+# SISTER_PNF_RESPONSE already covers the success case
+
+SISTER_PG_EMPTY_RESPONSE = {
+    "request_id": "pnf_E_fixture002",
+    "tipo_catasto": "E",
+    "status": "completed",
+    "data": {
+        "soggetto": "AZIENDA INESISTENTE SRL",
+        "immobili": [],
+        "total_results": 0,
+        "error": "NESSUNA CORRISPONDENZA TROVATA",
+    },
+    "timestamp": "2026-04-10T13:05:00",
+}
+
+# ---------------------------------------------------------------------------
+# Elenco immobili inputs and responses
+# ---------------------------------------------------------------------------
+
+ELENCO_TRIESTE_TERRENI_INPUT = {
+    "provincia": "Trieste",
+    "comune": "TRIESTE",
+    "tipo_catasto": "T",
+}
+
+ELENCO_TRIESTE_SHEET_INPUT = {
+    "provincia": "Trieste",
+    "comune": "TRIESTE",
+    "tipo_catasto": "F",
+    "foglio": "9",
+}
+
+ELENCO_ROMA_NO_SHEET_INPUT = {
+    "provincia": "Roma",
+    "comune": "ROMA",
+    # tipo_catasto omitted — should default to "T"
+}
+
+SISTER_ELENCO_FABBRICATI_RESPONSE = {
+    "request_id": "eimm_F_fixture001",
+    "tipo_catasto": "F",
+    "status": "completed",
+    "data": {
+        "provincia": "Trieste",
+        "comune": "TRIESTE",
+        "foglio": "9",
+        "immobili": [
+            {"Foglio": "9", "Particella": "166", "Sub": "1", "Categoria": "A/2"},
+            {"Foglio": "9", "Particella": "166", "Sub": "3", "Categoria": "A/2"},
+            {"Foglio": "9", "Particella": "167", "Sub": "1", "Categoria": "C/2"},
+        ],
+        "total_results": 3,
+    },
+    "timestamp": "2026-04-10T13:10:00",
+}
+
+# ---------------------------------------------------------------------------
+# Generic single-step requests (indirizzo, partita, nota, mappa, …)
+# Each dict matches the keyword args of richiedi_generic_sister()
+# ---------------------------------------------------------------------------
+
+GENERIC_INDIRIZZO_ARGS = {
+    "search_type": "indirizzo",
+    "provincia": "Terni",
+    "comune": "TERNI",
+    "tipo_catasto": "F",
+    "params": {"indirizzo": "VIA DEL RIVO"},
+}
+
+GENERIC_PARTITA_ARGS = {
+    "search_type": "partita",
+    "provincia": "Roma",
+    "comune": "ROMA",
+    "tipo_catasto": "T",
+    "params": {"partita": "123456"},
+}
+
+GENERIC_NOTA_ARGS = {
+    "search_type": "nota",
+    "provincia": "Roma",
+    "tipo_catasto": "T",
+    "params": {"numero_nota": "12345", "anno_nota": "2020"},
+}
+
+GENERIC_MAPPA_ARGS = {
+    "search_type": "mappa",
+    "provincia": "Trieste",
+    "comune": "TRIESTE",
+    "tipo_catasto": "T",
+    "params": {"foglio": "9"},
+}
+
+GENERIC_EXPORT_MAPPA_ARGS = {
+    "search_type": "export_mappa",
+    "provincia": "Trieste",
+    "comune": "TRIESTE",
+    "tipo_catasto": "T",
+    "params": {"foglio": "9"},
+}
+
+GENERIC_ORIGINALI_ARGS = {
+    "search_type": "originali",
+    "provincia": "Trieste",
+    "comune": "TRIESTE",
+    "tipo_catasto": "T",
+    "params": {},
+}
+
+GENERIC_FIDUCIALI_ARGS = {
+    "search_type": "fiduciali",
+    "provincia": "Roma",
+    "comune": "ROMA",
+    "tipo_catasto": "T",
+    "params": {},
+}
+
+GENERIC_ISPEZIONI_ARGS = {
+    "search_type": "ispezioni",
+    "provincia": "Trieste",
+    "comune": "TRIESTE",
+    "tipo_catasto": "T",
+    "params": {"foglio": "9"},
+}
+
+GENERIC_ISPEZIONI_CART_ARGS = {
+    "search_type": "ispezioni_cart",
+    "provincia": "Trieste",
+    "comune": "TRIESTE",
+    "tipo_catasto": "T",
+    "params": {},
+}
+
+GENERIC_ELABORATO_ARGS = {
+    "search_type": "elaborato_planimetrico",
+    "provincia": "Roma",
+    "comune": "ROMA",
+    "tipo_catasto": "F",
+    "params": {},
+}
+
+SISTER_GENERIC_QUEUED_RESPONSE = {
+    "status": "queued",
+    "tipo_catasto": "T",
+}
+
+SISTER_INDIRIZZO_RESPONSE = {
+    "request_id": "indirizzo_F_fixture001",
+    "tipo_catasto": "F",
+    "status": "completed",
+    "data": {
+        "indirizzi": [{"indirizzo": "VIA DEL RIVO", "id_indirizzo": "NDUyODgw"}],
+        "immobili": [{"Foglio": "12", "Particella": "100", "Categoria": "A/2"}],
+        "total_results": 1,
+    },
+    "timestamp": "2026-04-10T13:15:00",
+}
+
+# ---------------------------------------------------------------------------
+# Ispezione ipotecaria inputs (paid service, 4 search types)
+# Field names match IspezioneIpotecariaInput aliases
+# ---------------------------------------------------------------------------
+
+IPOTECARIA_IMMOBILE_INPUT = {
+    "search_type": "immobile",
+    "province": "Roma",
+    "municipality": "ROMA",
+    "sheet": "100",
+    "parcel": "50",
+    "cadastre_type": "F",
+    "auto_confirm": False,
+}
+
+IPOTECARIA_PF_INPUT = {
+    "search_type": "persona_fisica",
+    "province": "Roma",
+    "fiscal_code": "RSSMRI85E28H501E",
+    "auto_confirm": False,
+}
+
+IPOTECARIA_PG_INPUT = {
+    "search_type": "persona_giuridica",
+    "province": "Roma",
+    "identifier": "02471840997",
+    "auto_confirm": False,
+}
+
+IPOTECARIA_NOTA_INPUT = {
+    "search_type": "nota",
+    "province": "Roma",
+    "note_number": "12345",
+    "note_year": "2020",
+    "auto_confirm": False,
+}
+
+SISTER_IPOTECARIA_RESPONSE = {
+    "request_id": "ipotecaria_immobile_fixture001",
+    "tipo_ricerca": "immobile",
+    "status": "completed",
+    "data": {
+        "search_type": "immobile",
+        "note": [{"tipo": "Ipoteca volontaria", "numero": "12345/2020", "importo": "200.000,00"}],
+        "total_note": 1,
+    },
+    "timestamp": "2026-04-10T13:25:00",
+}
+
+# ---------------------------------------------------------------------------
+# Multi-step workflow inputs (all 10 presets)
+# ---------------------------------------------------------------------------
+
+WORKFLOW_DUE_DILIGENCE_INPUT = {
+    "preset": "due-diligence",
+    "provincia": "Roma",
+    "comune": "ROMA",
+    "foglio": "100",
+    "particella": "50",
+}
+
+WORKFLOW_PATRIMONIO_INPUT = {
+    "preset": "patrimonio",
+    "codice_fiscale": "RSSMRI85E28H501E",
+}
+
+WORKFLOW_FONDIARIO_INPUT = {
+    "preset": "fondiario",
+    "provincia": "Trieste",
+    "comune": "TRIESTE",
+    "foglio": "9",
+}
+
+WORKFLOW_AZIENDALE_INPUT = {
+    "preset": "aziendale",
+    "identificativo": "02471840997",
+}
+
+WORKFLOW_STORICO_INPUT = {
+    "preset": "storico",
+    "provincia": "Trieste",
+    "comune": "TRIESTE",
+    "foglio": "9",
+    "particella": "166",
+}
+
+WORKFLOW_INDIRIZZO_INPUT = {
+    "preset": "indirizzo",
+    "provincia": "Terni",
+    "comune": "TERNI",
+    "indirizzo": "VIA DEL RIVO 1",
+}
+
+WORKFLOW_CROSS_REF_INPUT = {
+    "preset": "cross-reference",
+    "codice_fiscale": "RSSMRI85E28H501E",
+    "identificativo": "02471840997",
+}
+
+WORKFLOW_FULL_DUE_DILIGENCE_INPUT = {
+    "preset": "full-due-diligence",
+    "provincia": "Roma",
+    "comune": "ROMA",
+    "foglio": "100",
+    "particella": "50",
+}
+
+WORKFLOW_FULL_PATRIMONIO_INPUT = {
+    "preset": "full-patrimonio",
+    "codice_fiscale": "RSSMRI85E28H501E",
+}
+
+WORKFLOW_FULL_AZIENDALE_INPUT = {
+    "preset": "full-aziendale",
+    "identificativo": "02471840997",
+}
