@@ -105,32 +105,26 @@ class VisuraService:
         logger.info("Browser autenticato e pronto")
 
     async def _background_auth(self):
-        max_retries = 5
-        last_error = ""
-        for attempt in range(1, max_retries + 1):
-            try:
-                if attempt == 1:
-                    logger.info("Autenticazione browser in corso...")
-                else:
-                    logger.info("Autenticazione browser: tentativo %d/%d", attempt, max_retries)
-                await self._do_auth()
-                return
-            except Exception as e:
-                last_error = str(e)
-                logger.debug("Auth attempt %d/%d failed: %s", attempt, max_retries, last_error)
-
-                if "active session" in last_error.lower() or "già in sessione" in last_error.lower():
-                    await self._try_close_stale_session()
-
-                if attempt < max_retries:
-                    wait = 15 * attempt
-                    await asyncio.sleep(wait)
-        self._auth_failed_message = f"Authentication failed after {max_retries} attempts: {last_error}"
-        logger.error(
-            "Browser authentication failed after %d attempts: %s — queries will not work",
-            max_retries,
-            last_error,
-        )
+        from .models import AuthenticationError as _AuthError
+        from .models import BrowserError as _BrowserError
+        logger.info("Autenticazione browser in corso...")
+        try:
+            await self._do_auth()
+        except _AuthError as e:
+            cause = str(e)
+            if "active session" in cause.lower() or "già in sessione" in cause.lower():
+                await self._try_close_stale_session()
+            msg = f"Autenticazione fallita — riprova dal pannello Browser. ({e})"
+            self._auth_failed_message = msg
+            logger.error("Browser auth failed: %s", e)
+        except _BrowserError as e:
+            msg = f"Errore inizializzazione browser — riprova dal pannello Browser. ({e})"
+            self._auth_failed_message = msg
+            logger.error("Browser init error: %s", e)
+        except Exception as e:
+            msg = f"Errore inatteso durante l'autenticazione: {type(e).__name__}: {e}"
+            self._auth_failed_message = msg
+            logger.error("Browser auth unexpected error: %s", msg)
 
     async def _try_close_stale_session(self):
         try:
