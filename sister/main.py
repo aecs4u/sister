@@ -53,6 +53,7 @@ from .services import PageLogger, VisuraService
 
 # Carica variabili d'ambiente da .env
 load_dotenv()
+load_dotenv(Path(__file__).resolve().parents[2] / ".env", override=False)  # shared workspace-root defaults (project .env above wins)
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -324,6 +325,13 @@ try:
         templates_dir=str(_templates_dir),
     )
     app.state.theme_setup = theme_setup
+    # Defensive fallback: inject_jinja2 (called by setup_theme_from_env) should
+    # register get_locale, but guard against running under the wrong venv where
+    # the registration might fail silently.
+    if "get_locale" not in theme_setup.templates.env.globals:
+        theme_setup.templates.env.globals["get_locale"] = (
+            lambda req: getattr(getattr(req, "state", None), "locale", "it")
+        )
 
     # Mount sister-specific static files
     if _static_dir.exists():
