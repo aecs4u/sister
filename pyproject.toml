@@ -28,6 +28,7 @@ classifiers = [
 dependencies = [
     "aecs4u-auth[browser]>=1.19.0",
     "aecs4u-email>=1.0.0",
+    "aecs4u-crypto>=0.2.0",
     "aecs4u-workflow>=0.1.0",
     "fastapi>=0.115.0",
     "itsdangerous>=2.2.0",
@@ -72,6 +73,7 @@ sister = "sister.cli:run"
 [tool.uv.sources]
 aecs4u-auth = { git = "https://github.com/aecs4u/aecs4u-auth.git", branch = "main" }
 aecs4u-email = { git = "https://github.com/aecs4u/aecs4u-email.git", branch = "main" }
+aecs4u-crypto = { git = "https://github.com/aecs4u/aecs4u-crypto.git", branch = "main" }
 aecs4u-theme = { git = "https://github.com/aecs4u/aecs4u-theme.git", branch = "main" }
 aecs4u-workflow = { git = "https://github.com/aecs4u/aecs4u-workflow.git", branch = "main" }
 

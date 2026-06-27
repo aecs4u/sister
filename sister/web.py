@@ -2227,37 +2227,19 @@ async def web_document_download(request: Request, doc_id: int, user=Depends(_req
 
 
 def _extract_planimetria_zip(file_path: str) -> bytes | None:
-    """Extract the inner ZIP payload from a CAdES-signed P7M file.
+    """Extract the inner ZIP payload from a CAdES-signed P7M file (aecs4u-crypto).
 
-    Uses ``openssl smime`` to strip the CMS signature layer.
-    Returns raw ZIP bytes, or None if extraction fails.
+    Strips the CMS signature layer via the shared pure-Python extractor (no
+    openssl). Returns raw ZIP bytes, or None if extraction fails or the payload
+    is not a ZIP.
     """
-    import subprocess
-    import tempfile
+    from aecs4u_crypto import extract_p7m_payload, P7MError
 
-    with tempfile.NamedTemporaryFile(suffix=".bin", delete=False) as tmp:
-        tmp_path = tmp.name
     try:
-        r = subprocess.run(
-            ["openssl", "smime", "-verify", "-noverify",
-             "-in", file_path, "-inform", "DER", "-out", tmp_path],
-            capture_output=True, timeout=15,
-        )
-        if r.returncode != 0:
-            return None
-        with open(tmp_path, "rb") as f:
-            data = f.read()
-        if not data.startswith(b"PK\x03\x04"):
-            return None
-        return data
-    except Exception:
+        data = extract_p7m_payload(open(file_path, "rb").read())
+    except (P7MError, OSError):
         return None
-    finally:
-        import os
-        try:
-            os.unlink(tmp_path)
-        except OSError:
-            pass
+    return data if data.startswith(b"PK\x03\x04") else None
 
 
 def _read_planimetria_geojson(file_path: str) -> dict | None:

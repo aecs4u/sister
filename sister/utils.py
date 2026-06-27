@@ -1292,26 +1292,25 @@ def _descriptive_filename(parsed: dict) -> str:
 
 
 def _extract_p7m(file_path: str) -> str | None:
-    """Extract the signed content from a P7M file using openssl.
+    """Extract the signed content from a P7M file via aecs4u-crypto (no openssl).
 
     Returns the path to the extracted file, or None on failure.
-    After extraction, renames the output to a descriptive filename based on content.
     """
-    import subprocess
+    from aecs4u_crypto import extract_p7m_payload, P7MError
 
     out_path = file_path.rsplit(".p7m", 1)[0]
     if not out_path or out_path == file_path:
         out_path = file_path + ".extracted"
     try:
-        result = subprocess.run(
-            ["openssl", "cms", "-verify", "-inform", "DER", "-in", file_path, "-noverify", "-out", out_path],
-            capture_output=True,
-            timeout=30,
-        )
-        if result.returncode == 0 and os.path.exists(out_path) and os.path.getsize(out_path) > 0:
-            log.info("P7M estratto: %s → %s (%d bytes)", file_path, out_path, os.path.getsize(out_path))
-            return out_path
-        log.warning("openssl cms fallito (rc=%d): %s", result.returncode, result.stderr.decode(errors="ignore")[:200])
+        payload = extract_p7m_payload(open(file_path, "rb").read())
+        if not payload:
+            return None
+        with open(out_path, "wb") as f:
+            f.write(payload)
+        log.info("P7M estratto: %s → %s (%d bytes)", file_path, out_path, len(payload))
+        return out_path
+    except P7MError as e:
+        log.warning("Estrazione P7M fallita %s: %s", file_path, e)
     except Exception as e:
         log.warning("Errore estrazione P7M %s: %s", file_path, e)
     return None
@@ -1321,7 +1320,7 @@ def _parse_visura_xml(file_path: str) -> dict | None:
     """Parse a SISTER visura XML file and extract structured data.
 
     Handles both plain .xml and .p7m (signed XML) files.
-    P7M files are first extracted via openssl cms.
+    P7M files are first extracted via aecs4u-crypto (CMS payload extraction).
     """
     try:
         xml_path = file_path
