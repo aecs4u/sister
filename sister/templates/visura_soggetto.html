@@ -4,13 +4,18 @@
 {% from "components/kpi_card.html" import stat_card %}
 {% from "parts/_hero.html" import hero_section %}
 {% from "components/table.html" import table_filter_csv_js %}
-{% set _v = doc.xml_parsed.VisuraSoggettoAttuale or doc.xml_parsed.VisuraSoggettoStorica or {} %}
+{% set _v = doc.xml_parsed.VisuraSoggettoAttuale or doc.xml_parsed.VisuraSoggettoStorica or doc.xml_parsed.VisuraSoggettoSintetica or doc.xml_parsed.VisuraSoggetto or {} %}
 {% set _t = _v.TitoloVisura or {} %}
 {% set _dr = _v.DatiRichiesta or {} %}
-{% set _sogg = (_dr.SoggettoIndividuato or {}).SoggettoPF or {} %}
+{% set _title = (_t.Titolo or '')|lower %}
+{% set _is_historical = 'storic' in _title or doc.xml_parsed.VisuraSoggettoStorica %}
+{% set _is_synthetic = 'sintetic' in _title or doc.xml_parsed.VisuraSoggettoSintetica %}
+{% set _variant_label = 'Sintetica' if _is_synthetic else ('Storica' if _is_historical else 'Attuale') %}
+{% set _subject_container = _dr.SoggettoIndividuato or {} %}
+{% set _sogg = _subject_container.SoggettoPF or _subject_container.SoggettoPNF or _v.SoggettoPF or _v.SoggettoPNF or {} %}
 
 {% block page_title %}
-    Visura Soggetto — {{ _sogg.Cognome or doc.oggetto or 'Soggetto' }} {{ _sogg.Nome or '' }}
+    Visura Soggetto {{ _variant_label }} — {{ _sogg.Cognome or doc.oggetto or 'Soggetto' }} {{ _sogg.Nome or '' }}
 {% endblock %}
 
 {% block extra_css %}
@@ -21,10 +26,10 @@
 
 {% block content %}
 {# ── Hero ───────────────────────────────────────────────────────────────── #}
-{% set _hero_title = (_sogg.Cognome ~ ' ' ~ (_sogg.Nome or ''))|trim if _sogg.Cognome else (doc.oggetto or 'Visura Soggetto Attuale') %}
+{% set _hero_title = (_sogg.Cognome ~ ' ' ~ (_sogg.Nome or ''))|trim if _sogg.Cognome else (doc.oggetto or ('Visura Soggetto ' ~ _variant_label)) %}
 {% call hero_section(_hero_title, 'fa-user', '/web/documents', 'Documenti',
                      breadcrumb_parent='Documenti', breadcrumb_current='Visura Soggetto') %}
-Visura soggetto
+Visura soggetto {{ _variant_label|lower }}
 {% if _t.TipoCatasto or _dr.TipoCatasto %} — {{ _t.TipoCatasto or _dr.TipoCatasto }}{% endif %}
 {% if _dr.Provincia or doc.provincia %} — {{ _dr.Provincia or doc.provincia }}{% endif %}
 {% endcall %}

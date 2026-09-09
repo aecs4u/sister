@@ -34,11 +34,14 @@ from sister.db_models import (  # noqa: F401, E402
     GeographicPlace,
     OwnershipRight,
     PageVisit,
+    PageVisitError,
+    PageVisitFormElement,
     VisuraDocument,
     VisuraOwner,
     VisuraProperty,
     VisuraRequest,
     VisuraResponse,
+    VisuraResult,
 )
 from sister.visura_xml_models import (  # noqa: F401, E402
     BuildingAddress,
@@ -46,6 +49,8 @@ from sister.visura_xml_models import (  # noqa: F401, E402
     BuildingCurrentState,
     BuildingIdentifier,
     BuildingSurface,
+    DocumentXmlAttribute,
+    DocumentXmlNode,
     BuildingUnit,
     DocumentSubject,
     LandClassification,
@@ -58,12 +63,16 @@ from sister.visura_xml_models import (  # noqa: F401, E402
 
 config = context.config
 
-# Override sqlalchemy.url from environment if set
-db_path = os.getenv(
-    "SISTER_DB_PATH",
-    os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "sister.sqlite"),
-)
-config.set_main_option("sqlalchemy.url", f"sqlite:///{db_path}")
+# Prefer PostgreSQL when its DSN is configured; retain SQLite as the local default.
+database_dsn = os.getenv("DATABSE_DSN")
+if database_dsn:
+    config.set_main_option("sqlalchemy.url", database_dsn.replace("+asyncpg", "+psycopg2", 1))
+else:
+    db_path = os.getenv(
+        "SISTER_DB_PATH",
+        os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "sister.sqlite"),
+    )
+    config.set_main_option("sqlalchemy.url", f"sqlite:///{db_path}")
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
@@ -78,7 +87,7 @@ def run_migrations_offline() -> None:
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
-        render_as_batch=True,  # Required for SQLite ALTER TABLE support
+        render_as_batch=url.startswith("sqlite"),
     )
     with context.begin_transaction():
         context.run_migrations()
@@ -94,7 +103,7 @@ def run_migrations_online() -> None:
         context.configure(
             connection=connection,
             target_metadata=target_metadata,
-            render_as_batch=True,  # Required for SQLite ALTER TABLE support
+            render_as_batch=connection.dialect.name == "sqlite",
         )
         with context.begin_transaction():
             context.run_migrations()
