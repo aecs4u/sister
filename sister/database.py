@@ -47,11 +47,14 @@ from .db_models import (
     GeographicPlace,
     OwnershipRight,
     PageVisit,
+    PageVisitError,
+    PageVisitFormElement,
     VisuraDocument,
     VisuraOwner,
     VisuraProperty,
     VisuraRequest,
     VisuraResponse,
+    VisuraResult,
 )
 from .visura_xml_models import (
     BuildingAddress,
@@ -59,6 +62,8 @@ from .visura_xml_models import (
     BuildingCurrentState,
     BuildingIdentifier,
     BuildingSurface,
+    DocumentXmlAttribute,
+    DocumentXmlNode,
     BuildingUnit,
     DocumentSubject,
     LandClassification,
@@ -85,12 +90,17 @@ _SISTER_TABLES = [
     OwnershipRight.__table__,
     VisuraRequest.__table__,
     VisuraResponse.__table__,
+    VisuraResult.__table__,
     VisuraProperty.__table__,
     VisuraOwner.__table__,
     PageVisit.__table__,
+    PageVisitFormElement.__table__,
+    PageVisitError.__table__,
     VisuraDocument.__table__,
     DocumentMetadata.__table__,
     DocumentSubject.__table__,
+    DocumentXmlNode.__table__,
+    DocumentXmlAttribute.__table__,
     PropertyGroup.__table__,
     BuildingUnit.__table__,
     BuildingCurrentState.__table__,
@@ -530,6 +540,37 @@ def _parse_page_visits(response_id: str, data: Optional[dict]) -> list[PageVisit
     return rows
 
 
+def _response_summary(data: Optional[dict]) -> dict[str, Any]:
+    """Extract scalar response summary fields from the legacy payload."""
+    if not isinstance(data, dict):
+        return {}
+    result: dict[str, Any] = {}
+    for key in ("total_results", "total_intestati", "skipped_soppresso"):
+        value = data.get(key)
+        if isinstance(value, int) and not isinstance(value, bool):
+            result[key] = value
+    if isinstance(data.get("soggetto"), str):
+        result["subject_query"] = data["soggetto"]
+    return result
+
+
+def _parse_response_results(data: Optional[dict]) -> list[dict[str, Any]]:
+    """Flatten the response ``results`` collection to scalar result rows."""
+    if not isinstance(data, dict) or not isinstance(data.get("results"), list):
+        return []
+    rows = []
+    for position, item in enumerate(data["results"], start=1):
+        if not isinstance(item, dict):
+            continue
+        raw_index = item.get("result_index", position)
+        try:
+            result_index = int(raw_index)
+        except (TypeError, ValueError):
+            result_index = position
+        rows.append({"result_index": result_index, "visura_present": bool(item.get("visura"))})
+    return rows
+
+
 async def save_response(
     request_id: str,
     success: bool,
@@ -541,9 +582,24 @@ async def save_response(
     session_factory = _get_session_factory()
     async with session_factory() as session:
         # Delete existing response + related rows if any (upsert)
+        await session.execute(
+            text(
+                "DELETE FROM page_visit_form_elements WHERE page_visit_id IN "
+                "(SELECT id FROM page_visits WHERE response_id = :rid)"
+            ),
+            {"rid": request_id},
+        )
+        await session.execute(
+            text(
+                "DELETE FROM page_visit_errors WHERE page_visit_id IN "
+                "(SELECT id FROM page_visits WHERE response_id = :rid)"
+            ),
+            {"rid": request_id},
+        )
         await session.execute(text("DELETE FROM page_visits WHERE response_id = :rid"), {"rid": request_id})
         await session.execute(text("DELETE FROM visura_owners WHERE response_id = :rid"), {"rid": request_id})
         await session.execute(text("DELETE FROM visura_properties WHERE response_id = :rid"), {"rid": request_id})
+        await session.execute(text("DELETE FROM visura_results WHERE response_id = :rid"), {"rid": request_id})
         await session.execute(text("DELETE FROM visura_responses WHERE request_id = :rid"), {"rid": request_id})
 
         resp = VisuraResponse(
@@ -552,8 +608,10 @@ async def save_response(
             cadastre_type=tipo_catasto,
             data=data,
             error=error,
+            **_response_summary(data),
         )
         session.add(resp)
+        await session.flush()
 
         # Look up request location to inherit province/municipality for property locations
         req_row = await session.get(VisuraRequest, request_id)
@@ -573,8 +631,36 @@ async def save_response(
             subject_id = await get_or_create_subject(session, **subject_fields) if subject_fields else None
             right_id = await get_or_create_right(session, **right_fields) if right_fields else None
             session.add(VisuraOwner(response_id=request_id, subject_id=subject_id, right_id=right_id))
-        for pv in _parse_page_visits(request_id, data):
+        for result_fields in _parse_response_results(data):
+            session.add(VisuraResult(response_id=request_id, **result_fields))
+        await session.flush()
+        raw_visits = (data or {}).get("page_visits", []) if isinstance(data, dict) else []
+        for source_visit in raw_visits if isinstance(raw_visits, list) else []:
+            if not isinstance(source_visit, dict):
+                continue
+            parsed_visits = _parse_page_visits(request_id, {"page_visits": [source_visit]})
+            if not parsed_visits:
+                continue
+            pv = parsed_visits[0]
             session.add(pv)
+            await session.flush()
+            for element_index, element in enumerate(source_visit.get("form_elements", []) or []):
+                if isinstance(element, dict):
+                    session.add(
+                        PageVisitFormElement(
+                            page_visit_id=pv.id,
+                            element_index=element_index,
+                            tag=str(element.get("tag") or ""),
+                            element_type=str(element.get("type") or ""),
+                            name=str(element.get("name") or ""),
+                            label=str(element.get("label") or ""),
+                            value=str(element.get("value") or ""),
+                        )
+                    )
+            for error_index, message in enumerate(source_visit.get("errors", []) or []):
+                if isinstance(message, dict):
+                    message = message.get("message") or message.get("text") or ""
+                session.add(PageVisitError(page_visit_id=pv.id, error_index=error_index, message=str(message or "")))
 
         await session.commit()
 
@@ -1022,6 +1108,8 @@ async def find_result_rows(
                     resp.success,
                     resp.error,
                     resp.created_at AS responded_at,
+                    resp.total_results,
+                    resp.total_intestati,
                     (SELECT COUNT(*) FROM visura_properties WHERE response_id = req.request_id) AS property_count,
                     (SELECT COUNT(*) FROM visura_owners WHERE response_id = req.request_id) AS owner_count
                 FROM visura_requests AS req
@@ -1050,6 +1138,12 @@ async def find_result_rows(
                         "data": None,
                         "error": row["error"],
                         "responded_at": row["responded_at"],
+                        # Keep both the response metadata and the normalized
+                        # extraction counts available to the UI.  Older rows
+                        # may not have response totals, so the DB projections
+                        # are the reliable fallback.
+                        "total_results": row["total_results"],
+                        "total_intestati": row["total_intestati"],
                         "property_count": row["property_count"] or 0,
                         "owner_count": row["owner_count"] or 0,
                     }

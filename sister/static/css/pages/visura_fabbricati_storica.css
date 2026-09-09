@@ -1,4 +1,4 @@
-/* Page styles for templates/visura_fabbricati_storica.html. */
+/* Page styles for the unified visura_fabbricati.html template. */
 .page-hero { background: linear-gradient(135deg, #28a745 0%, #20c997 100%); }
 .income-value { font-size: 1.75rem; font-weight: 700; }
 /* fallback owner-row for IntestazioneAttuale shown without history */

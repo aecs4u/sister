@@ -139,6 +139,10 @@ class VisuraResponse(SQLModel, table=True):
     cadastre_type: str
     data: Optional[dict[str, Any]] = Field(default=None, sa_column=Column(SA_JSON))
     error: Optional[str] = None
+    total_results: Optional[int] = None
+    total_intestati: Optional[int] = None
+    skipped_soppresso: Optional[int] = None
+    subject_query: Optional[str] = None
     created_at: datetime = Field(default_factory=datetime.now)
 
     request: Optional["VisuraRequest"] = Relationship(back_populates="response")
@@ -156,6 +160,17 @@ class VisuraResponse(SQLModel, table=True):
     )
 
 
+class VisuraResult(SQLModel, table=True):
+    """One explicitly indexed result row from a response's results collection."""
+
+    __tablename__ = "visura_results"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    response_id: str = Field(foreign_key="visura_responses.request_id", index=True)
+    result_index: int = Field(default=0)
+    visura_present: bool = Field(default=False)
+
+
 class VisuraProperty(SQLModel, table=True):
     """Structured property data extracted from response JSON."""
 
@@ -163,6 +178,7 @@ class VisuraProperty(SQLModel, table=True):
 
     id: Optional[int] = Field(default=None, primary_key=True)
     response_id: str = Field(foreign_key="visura_responses.request_id", index=True)
+    result_id: Optional[int] = Field(default=None, foreign_key="visura_results.id", index=True)
     location_id: Optional[int] = Field(default=None, foreign_key="cadastral_locations.id", index=True)
     subject_id: Optional[int] = Field(default=None, foreign_key="cadastral_subjects.id", index=True)
     property_type: Optional[str] = None  # "building" | "land" | "entity"
@@ -201,6 +217,8 @@ class VisuraOwner(SQLModel, table=True):
 
     id: Optional[int] = Field(default=None, primary_key=True)
     response_id: str = Field(foreign_key="visura_responses.request_id", index=True)
+    result_id: Optional[int] = Field(default=None, foreign_key="visura_results.id", index=True)
+    owner_index: Optional[int] = None
     subject_id: Optional[int] = Field(default=None, foreign_key="cadastral_subjects.id", index=True)
     right_id: Optional[int] = Field(default=None, foreign_key="ownership_rights.id", index=True)
 
@@ -265,6 +283,32 @@ class PageVisit(SQLModel, table=True):
     timestamp: Optional[datetime] = None
 
     response: Optional["VisuraResponse"] = Relationship(back_populates="page_visits")
+
+
+class PageVisitFormElement(SQLModel, table=True):
+    """One form control captured during a page visit."""
+
+    __tablename__ = "page_visit_form_elements"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    page_visit_id: int = Field(foreign_key="page_visits.id", index=True)
+    element_index: int = Field(default=0)
+    tag: str = Field(default="")
+    element_type: str = Field(default="")
+    name: str = Field(default="")
+    label: str = Field(default="")
+    value: str = Field(default="")
+
+
+class PageVisitError(SQLModel, table=True):
+    """One error message captured during a page visit."""
+
+    __tablename__ = "page_visit_errors"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    page_visit_id: int = Field(foreign_key="page_visits.id", index=True)
+    error_index: int = Field(default=0)
+    message: str = Field(default="")
 
 
 class VisuraDocument(SQLModel, table=True):

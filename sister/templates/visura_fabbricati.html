@@ -4,16 +4,26 @@
 {% from "components/cadastral.html" import liquidazione_row %}
 {% from "parts/_hero.html" import hero_section %}
 {% from "parts/_visura_header.html" import visura_location_card, visura_doc_card %}
-{% set _v = doc.xml_parsed.VisuraFabbricatiStorica or doc.xml_parsed.VisuraFabbricati or {} %}
+{% set _v = doc.xml_parsed.VisuraFabbricatiStorica or doc.xml_parsed.VisuraFabbricatiAttuale or doc.xml_parsed.VisuraFabbricati or {} %}
 {% set _t = _v.TitoloVisura or {} %}
 {% set _dr = _v.DatiRichiesta or {} %}
+{% set _title = (_t.Titolo or '')|lower %}
+{% set _is_historical = 'storic' in _title or _v.StoriaImmobileFabbricati or _v.StoriaIntestazione %}
+{% set _is_synthetic = 'sintetic' in _title %}
+{% set _variant_label = 'Sintetica' if _is_synthetic else ('Storica' if _is_historical else 'Attuale') %}
 {% set _saf = _v.SituazioneAttualeFabbricati or {} %}
-{% set _cls = _saf.DatiClassamentoF or {} %}
+{% set _property_raw = _saf or _v.ImmobileFabbricati or _v.ImmobileFabbricatiS or {} %}
+{% set _property = _property_raw if _property_raw is mapping else (_property_raw[0] if _property_raw else {}) %}
+{% set _cls_raw = _property.DatiClassamentoF or {} %}
+{% set _cls = _cls_raw if _cls_raw is mapping else (_cls_raw[0] if _cls_raw else {}) %}
 {% set _cons = _cls.Consistenza or {} %}
-{% set _sup = _saf.SuperficieF or {} %}
+{% set _sup_raw = _property.SuperficieF or {} %}
+{% set _sup = _sup_raw if _sup_raw is mapping else (_sup_raw[0] if _sup_raw else {}) %}
+{% set _address_raw = _property.IndirizzoImm or (_property.DatiIndirizzo.IndirizzoImm if _property.DatiIndirizzo else '') %}
+{% set _address = _address_raw if _address_raw is string else (_address_raw._text or '') %}
 
 {% block page_title %}
-    Visura Fabbricati Storica — FG {{ doc.foglio }} PT {{ doc.particella }}{% if doc.subalterno %}/{{ doc.subalterno }}{% endif %}
+    Visura Fabbricati {{ _variant_label }} — FG {{ doc.foglio }} PT {{ doc.particella }}{% if doc.subalterno %}/{{ doc.subalterno }}{% endif %}
 {% endblock %}
 
 {% block extra_css %}
@@ -24,8 +34,8 @@
 
 {% block content %}
 {# ── Hero ───────────────────────────────────────────────────────────────── #}
-{% call hero_section('Visura Storica Fabbricato', 'fa-building', '/web/documents', 'Documenti',
-                     breadcrumb_parent='Documenti', breadcrumb_current='Visura Fabbricati Storica') %}
+{% call hero_section('Visura Fabbricati ' ~ _variant_label, 'fa-building', '/web/documents', 'Documenti',
+                     breadcrumb_parent='Documenti', breadcrumb_current='Visura Fabbricati ' ~ _variant_label) %}
 {{ doc.comune or _dr.Comune or '' }}
 — FG <strong>{{ doc.foglio or _dr.Foglio or '-' }}</strong>
 PT <strong>{{ doc.particella or _dr.ParticellaNum or '-' }}</strong>
@@ -48,17 +58,17 @@ PT <strong>{{ doc.particella or _dr.ParticellaNum or '-' }}</strong>
         </div>
     </div>
 
-    {# ── Situazione attuale (property data, no owners here) ──────────────── #}
-    {% if _saf %}
-    <h2 class="h5 border-bottom pb-2 mb-3">Situazione Attuale</h2>
+    {# ── Property data: the source uses different containers per version. ── #}
+    {% if _property %}
+    <h2 class="h5 border-bottom pb-2 mb-3">{% if _is_historical %}Situazione Attuale{% elif _is_synthetic %}Riepilogo Sintetico{% else %}Dati del Fabbricato{% endif %}</h2>
     <div class="card border-0 shadow-sm mb-4">
         <div class="card-body">
             <div class="row g-4">
                 <div class="col-md-7">
-                    {% if _saf.IndirizzoImm %}
+                    {% if _address %}
                     <p class="mb-2">
                         <span class="detail-label">Indirizzo</span><br>
-                        <strong>{{ _saf.IndirizzoImm if _saf.IndirizzoImm is string else (_saf.IndirizzoImm._text or '') }}</strong>
+                        <strong>{{ _address }}</strong>
                     </p>
                     {% endif %}
                     <div class="row g-2 mt-1">
@@ -99,6 +109,9 @@ PT <strong>{{ doc.particella or _dr.ParticellaNum or '-' }}</strong>
     #}
     {% set _si = _v.StoriaIntestazione or {} %}
     {% set _mutazioni = _si.MutazioneSoggettiva if _si else none %}
+    {% if not _mutazioni and _property.MutazioneSoggettiva %}
+    {% set _mutazioni = _property.MutazioneSoggettiva %}
+    {% endif %}
     {% set _mutazioni_list = _mutazioni if _mutazioni is sequence and _mutazioni is not string and _mutazioni is not mapping else ([_mutazioni] if _mutazioni else []) %}
 
     {% if _mutazioni_list %}
@@ -115,7 +128,10 @@ PT <strong>{{ doc.particella or _dr.ParticellaNum or '-' }}</strong>
 
     {% else %}
     {# Fallback: no history — show IntestazioneAttuale directly #}
-    {% set _int = _saf.IntestazioneAttuale or {} %}
+    {% set _int = _property.IntestazioneAttuale or _property.Intestazione or {} %}
+    {% if not _int and _property.MutazioneSoggettiva %}
+    {% set _int = _property.MutazioneSoggettiva.Intestazione or {} %}
+    {% endif %}
     {% if _int %}
     {% set _intestati = _int.Intestato if _int.Intestato is sequence and _int.Intestato is not string and _int.Intestato is not mapping else ([_int.Intestato] if _int.Intestato else []) %}
     <h2 class="h5 border-bottom pb-2 mb-3">

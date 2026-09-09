@@ -1559,6 +1559,53 @@ def _parse_visura_pdf(file_path: str) -> dict | None:
     return result
 
 
+async def _persist_flattened_xml(session, document_id: int, content: str | None) -> None:
+    """Store XML elements and attributes in the relational document tree."""
+    if not content:
+        return
+
+    from sqlalchemy import delete, select
+
+    from .db_models import DocumentXmlAttribute, DocumentXmlNode
+
+    payload = content.replace("\x00", "").encode("utf-8", "replace")
+    try:
+        from lxml import etree
+
+        root = etree.fromstring(
+            payload,
+            etree.XMLParser(recover=True, resolve_entities=False, no_network=True),
+        )
+    except (etree.XMLSyntaxError, ValueError):
+        return
+    if root is None:
+        return
+
+    node_ids = select(DocumentXmlNode.id).where(DocumentXmlNode.document_id == document_id)
+    await session.execute(delete(DocumentXmlAttribute).where(DocumentXmlAttribute.node_id.in_(node_ids)))
+    await session.execute(delete(DocumentXmlNode).where(DocumentXmlNode.document_id == document_id))
+
+    def local_tag(tag: str) -> str:
+        return etree.QName(tag).localname if isinstance(tag, str) else str(tag)
+
+    async def visit(element, parent_id: int | None, ordinal: int) -> None:
+        node = DocumentXmlNode(
+            document_id=document_id,
+            parent_id=parent_id,
+            ordinal=ordinal,
+            tag=local_tag(element.tag),
+            text=(element.text or "").strip() or None,
+        )
+        session.add(node)
+        await session.flush()
+        for name, value in element.attrib.items():
+            session.add(DocumentXmlAttribute(node_id=node.id, name=local_tag(name), value=value))
+        for child_ordinal, child in enumerate(element):
+            await visit(child, node.id, child_ordinal)
+
+    await visit(root, None, 0)
+
+
 async def _save_documents_to_db(documents: list[dict]) -> None:
     """Persist downloaded documents to the visura_documents + document_metadata tables, skipping duplicates."""
 
@@ -1612,6 +1659,7 @@ async def _save_documents_to_db(documents: list[dict]) -> None:
             await session.flush()  # get row.id before creating child
 
             xml_content = parsed.get("xml_content")
+            location_id = None
             if xml_content or foglio or particella:
                 location_id = await get_or_create_location(
                     session,
@@ -1623,14 +1671,16 @@ async def _save_documents_to_db(documents: list[dict]) -> None:
                     subunit=subalterno,
                     section=parsed.get("sezione_urbana") or "",
                 )
-                meta = DocumentMetadata(
-                    id=row.id,
-                    location_id=location_id,
-                    view_subtype=parsed.get("visura_subtype") or None,
-                    reference_date=parsed.get("situazione_al") or None,
-                    content=xml_content,
-                )
-                session.add(meta)
+            meta = DocumentMetadata(
+                id=row.id,
+                location_id=location_id,
+                view_subtype=parsed.get("visura_subtype") or None,
+                reference_date=parsed.get("situazione_al") or None,
+                content=xml_content.replace("\x00", "") if xml_content else None,
+            )
+            session.add(meta)
+            await session.flush()
+            await _persist_flattened_xml(session, row.id, xml_content)
 
             saved += 1
         await session.commit()

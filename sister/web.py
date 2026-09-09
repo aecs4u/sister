@@ -1980,12 +1980,29 @@ def _render_doc_from_db(doc: dict, request, theme, user, force_template: str | N
             request_id=str(doc.get("id") or doc.get("filename") or ""),
         )
 
-    if "VisuraFabbricatiStorica" in xml_p or "VisuraFabbricati" in xml_p:
-        template = "visura_fabbricati_storica.html"
-    elif "VisuraSoggettoAttuale" in xml_p or "VisuraSoggettoStorica" in xml_p:
-        template = "visura_soggetto_attuale.html"
-    elif "VisuraTerreniAttuale" in xml_p or "VisuraTerrenoStorica" in xml_p or "VisuraTerreno" in xml_p:
-        template = "visura_terreni_attuale.html"
+    if any(
+        key in xml_p
+        for key in ("VisuraFabbricatiStorica", "VisuraFabbricatiAttuale", "VisuraFabbricatiSintetica", "VisuraFabbricati")
+    ):
+        template = "visura_fabbricati.html"
+    elif any(
+        key in xml_p
+        for key in ("VisuraSoggettoAttuale", "VisuraSoggettoStorica", "VisuraSoggettoSintetica", "VisuraSoggetto")
+    ):
+        template = "visura_soggetto.html"
+    elif any(
+        key in xml_p
+        for key in (
+            "VisuraTerreniAttuale",
+            "VisuraTerreniStorica",
+            "VisuraTerreniSintetica",
+            "VisuraTerrenoAttuale",
+            "VisuraTerrenoStorica",
+            "VisuraTerrenoSintetica",
+            "VisuraTerreno",
+        )
+    ):
+        template = "visura_terreni.html"
     else:
         template = "result_detail.html"
     if template == "result_detail.html":
@@ -2128,12 +2145,29 @@ async def web_document_view(request: Request, path: str, user=Depends(_require_a
     ]
 
     # Select template by XML root element
-    if "VisuraFabbricatiStorica" in xml_parsed or "VisuraFabbricati" in xml_parsed:
-        template = "visura_fabbricati_storica.html"
-    elif "VisuraSoggettoAttuale" in xml_parsed or "VisuraSoggettoStorica" in xml_parsed:
-        template = "visura_soggetto_attuale.html"
-    elif "VisuraTerreniAttuale" in xml_parsed or "VisuraTerrenoStorica" in xml_parsed or "VisuraTerreno" in xml_parsed:
-        template = "visura_terreni_attuale.html"
+    if any(
+        key in xml_parsed
+        for key in ("VisuraFabbricatiStorica", "VisuraFabbricatiAttuale", "VisuraFabbricatiSintetica", "VisuraFabbricati")
+    ):
+        template = "visura_fabbricati.html"
+    elif any(
+        key in xml_parsed
+        for key in ("VisuraSoggettoAttuale", "VisuraSoggettoStorica", "VisuraSoggettoSintetica", "VisuraSoggetto")
+    ):
+        template = "visura_soggetto.html"
+    elif any(
+        key in xml_parsed
+        for key in (
+            "VisuraTerreniAttuale",
+            "VisuraTerreniStorica",
+            "VisuraTerreniSintetica",
+            "VisuraTerrenoAttuale",
+            "VisuraTerrenoStorica",
+            "VisuraTerrenoSintetica",
+            "VisuraTerreno",
+        )
+    ):
+        template = "visura_terreni.html"
     else:
         template = "result_detail.html"
 
@@ -2621,7 +2655,7 @@ async def _backfill_document_metadata(base: Path, parsed_by_stem: dict) -> None:
 
     from .database import _get_session_factory, get_or_create_location, is_db_writable
     from .db_models import DocumentMetadata, VisuraDocument
-    from .utils import _parse_visura_xml
+    from .utils import _parse_visura_xml, _persist_flattened_xml
 
     if not is_db_writable():
         return
@@ -2714,6 +2748,8 @@ async def _backfill_document_metadata(base: Path, parsed_by_stem: dict) -> None:
                 content=xml_content,
             )
             session.add(meta)
+            await session.flush()
+            await _persist_flattened_xml(session, doc_id, xml_content)
             await session.commit()
         backfilled += 1
 

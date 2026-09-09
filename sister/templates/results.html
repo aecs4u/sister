@@ -1,11 +1,11 @@
 {% extends "_base.html" %}
-{% from "_macros.html" import status_badge, source_badge, catasto_badge, request_type_badge, stats_card %}
+{% from "components/index.html" import stat_card, page_header, data_table_assets %}
+{% from "macros/ui_base.html" import no_results %}
 {% block page_title %}Results{% endblock %}
 
 {% block extra_css %}
 {{ super() }}
-<link href="https://cdn.jsdelivr.net/npm/tabulator-tables@6.3.1/dist/css/tabulator_bootstrap5.min.css" rel="stylesheet">
-<link rel="stylesheet" href="{{ static_url_path|default('/static/aecs4u-theme') }}/css/data-table.css">
+{{ data_table_assets() }}
 {% endblock %}
 
 {% block content %}
@@ -13,7 +13,7 @@
 
   {# ── Page header ─────────────────────────────────────────────────────────── #}
   <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-4">
-    <h1 class="mb-0"><i class="fas fa-database text-primary me-2"></i>Results</h1>
+    {{ page_header("Executed jobs", "Browse completed jobs and their extracted responses", icon="fas fa-list-check text-primary", wrapper_class="mb-0") }}
     <div class="d-flex align-items-center gap-3">
       {% if current_count %}
       <span class="text-muted small">
@@ -32,19 +32,19 @@
   {# ── Dashboard stats ──────────────────────────────────────────────────────── #}
   <div class="row g-3 mb-4">
     <div class="col-lg col-md-4 col-6">
-      {{ stats_card('fa-paper-plane', 'primary', stats.total_requests, 'Total', stats_urls.total) }}
+      {{ stat_card('Executed jobs', stats.total_requests, icon='fa-list-check', color='primary', href=stats_urls.total) }}
     </div>
     <div class="col-lg col-md-4 col-6">
-      {{ stats_card('fa-check-circle', 'success', stats.successful, 'Successful', stats_urls.completed) }}
+      {{ stat_card('Completed', stats.successful, icon='fa-check-circle', color='success', href=stats_urls.completed) }}
     </div>
     <div class="col-lg col-md-4 col-6">
-      {{ stats_card('fa-adjust', 'warning', stats.partial or 0, 'Partial', stats_urls.partial) }}
+      {{ stat_card('Partial', stats.partial or 0, icon='fa-adjust', color='warning', href=stats_urls.partial) }}
     </div>
     <div class="col-lg col-md-4 col-6">
-      {{ stats_card('fa-times-circle', 'danger', stats.failed, 'Failed', stats_urls.failed) }}
+      {{ stat_card('Failed', stats.failed, icon='fa-times-circle', color='danger', href=stats_urls.failed) }}
     </div>
     <div class="col-lg col-md-4 col-6">
-      {{ stats_card('fa-hourglass-half', 'warning', stats.pending, 'Pending', stats_urls.pending) }}
+      {{ stat_card('Pending', stats.pending, icon='fa-hourglass-half', color='warning', href=stats_urls.pending) }}
     </div>
   </div>
 
@@ -171,11 +171,8 @@
   {% endif %}
 
   {% else %}
-  <div class="text-center py-5">
-    <i class="fas fa-inbox fa-3x text-muted mb-3"></i>
-    <p class="text-muted">No results found.</p>
-    <a href="/web/forms" class="btn btn-primary">Submit a Query</a>
-  </div>
+  {{ no_results("No executed jobs", "No jobs match the selected filters.") }}
+  <div class="text-center"><a href="/web/forms" class="btn btn-primary">Submit a Query</a></div>
   {% endif %}
 
 </div>
@@ -183,7 +180,6 @@
 
 {% block extra_js %}
 {{ super() }}
-<script src="https://cdn.jsdelivr.net/npm/tabulator-tables@6.3.1/dist/js/tabulator.min.js"></script>
 <script>
 (function() {
     'use strict';
@@ -223,6 +219,8 @@
             "status": {{ r.status | tojson }},
             "property_count": {{ (r.property_count or 0) | tojson }},
             "owner_count": {{ (r.owner_count or 0) | tojson }},
+            "extracted_results": {{ (r.total_results if r.total_results is defined and r.total_results is not none else (r.property_count or 0)) | tojson }},
+            "extracted_owners": {{ (r.total_intestati if r.total_intestati is defined and r.total_intestati is not none else (r.owner_count or 0)) | tojson }},
             "requested_at": {{ (r.requested_at_display or '-') | tojson }},
             "responded_at": {{ (r.responded_at_display or '') | tojson }},
         },
@@ -309,6 +307,16 @@
                  badge.className = "badge bg-info-subtle text-info-emphasis";
                  badge.textContent = v;
                  return badge;
+             }},
+            {title: "Extracted response", field: "extracted_results", sorter: "number", minWidth: 170,
+             headerTooltip: "Counts extracted from the response",
+             formatter: function(cell) {
+                 var d = cell.getRow().getData();
+                 var wrap = document.createElement("span");
+                 wrap.className = "small text-muted";
+                 wrap.innerHTML = '<i class="fas fa-table-list text-primary me-1"></i>' +
+                     d.extracted_results + ' results · ' + d.extracted_owners + ' owners';
+                 return wrap;
              }},
             {title: "Status", field: "status", width: 115, hozAlign: "center",
              headerFilter: "list",

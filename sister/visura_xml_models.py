@@ -45,6 +45,30 @@ class DocumentSubject(SQLModel, table=True):
     }
 
 
+class DocumentXmlNode(SQLModel, table=True):
+    """Flattened XML element tree retained for fields not covered by typed models."""
+
+    __tablename__ = "document_xml_nodes"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    document_id: int = Field(foreign_key="visura_documents.id", index=True)
+    parent_id: Optional[int] = Field(default=None, foreign_key="document_xml_nodes.id", index=True)
+    ordinal: int = Field(default=0)
+    tag: str = Field(default="")
+    text: Optional[str] = None
+
+
+class DocumentXmlAttribute(SQLModel, table=True):
+    """One XML attribute belonging to a flattened XML node."""
+
+    __tablename__ = "document_xml_attributes"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    node_id: int = Field(foreign_key="document_xml_nodes.id", index=True)
+    name: str = Field(default="")
+    value: str = Field(default="")
+
+
 class PropertyGroup(SQLModel, table=True):
     """Group of building units (GruppoUnitaImmobiliari) from a soggetto_attuale document."""
 

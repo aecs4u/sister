@@ -1,0 +1,64 @@
+{# SISTER job/response presentation built on aecs4u-theme primitives. #}
+{% from "components/badges.html" import badge as theme_badge %}
+
+{% macro status_badge(status, large=false) %}
+    {% set normalized = (status or 'pending')|lower %}
+    {% if normalized in ('completed', 'success', 'succeeded', 'ok') %}
+        {{ theme_badge('Completed', variant='success', pill=large, icon='fas fa-check-circle') }}
+    {% elif normalized in ('failed', 'error') %}
+        {{ theme_badge('Failed', variant='danger', pill=large, icon='fas fa-times-circle') }}
+    {% elif normalized == 'partial' %}
+        {{ theme_badge('Partial', variant='warning', dark=true, pill=large, icon='fas fa-adjust') }}
+    {% elif normalized in ('running', 'pending') %}
+        {{ theme_badge(normalized|title, variant='info' if normalized == 'running' else 'secondary', pill=large,
+                       icon='fas fa-spinner fa-spin' if normalized == 'running' else 'fas fa-hourglass-half') }}
+    {% else %}
+        {{ theme_badge((status or '-')|replace('_', ' ')|title, variant='secondary', pill=large) }}
+    {% endif %}
+{% endmacro %}
+
+{% macro response_summary(job, compact=false) %}
+    {% set payload = job.data if job.data is defined and job.data is mapping else {} %}
+    {% set has_result_count = (job.total_results is defined and job.total_results is not none)
+                              or (payload.total_results is defined and payload.total_results is not none)
+                              or (job.property_count is defined) %}
+    {% set result_count = job.total_results if job.total_results is defined and job.total_results is not none
+                          else payload.total_results if payload.total_results is defined and payload.total_results is not none
+                          else job.property_count|default(0, true) %}
+    {% set owner_count = job.total_intestati if job.total_intestati is defined and job.total_intestati is not none
+                         else payload.total_intestati if payload.total_intestati is defined and payload.total_intestati is not none
+                         else job.owner_count|default(0, true) %}
+    <span class="text-muted small" title="Extracted response">
+        <i class="fas fa-table-list me-1 text-primary"></i>
+        {% if not has_result_count and job.data is defined and job.data %}
+            response available
+        {% elif not has_result_count %}
+            response pending
+        {% elif compact %}
+            {{ result_count }} extracted
+        {% else %}
+            {{ result_count }} results · {{ owner_count }} owners
+        {% endif %}
+    </span>
+{% endmacro %}
+
+{% macro response_counts(job) %}
+    {% set payload = job.data if job.data is defined and job.data is mapping else {} %}
+    {% set has_result_count = (job.total_results is defined and job.total_results is not none)
+                              or (payload.total_results is defined and payload.total_results is not none)
+                              or (job.property_count is defined) %}
+    {% set result_count = job.total_results if job.total_results is defined and job.total_results is not none
+                          else payload.total_results if payload.total_results is defined and payload.total_results is not none
+                          else job.property_count|default(0, true) %}
+    {% set owner_count = job.total_intestati if job.total_intestati is defined and job.total_intestati is not none
+                         else payload.total_intestati if payload.total_intestati is defined and payload.total_intestati is not none
+                         else job.owner_count|default(0, true) %}
+    <div class="d-flex flex-wrap gap-2" aria-label="Extracted response counts">
+        {% if has_result_count %}
+            {{ theme_badge(result_count ~ ' results', variant='success', icon='fas fa-house') }}
+            {{ theme_badge(owner_count ~ ' owners', variant='info', dark=true, icon='fas fa-users') }}
+        {% else %}
+            {{ theme_badge('Response payload available', variant='primary', icon='fas fa-table-list') }}
+        {% endif %}
+    </div>
+{% endmacro %}

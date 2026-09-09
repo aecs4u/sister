@@ -370,9 +370,20 @@ def _upsert_response(conn: sqlite3.Connection, path: Path, payload: dict[str, An
     request_id = fields["request_id"]
     created_at = _created_at(path, payload)
 
+    conn.execute(
+        "DELETE FROM page_visit_form_elements WHERE page_visit_id IN "
+        "(SELECT id FROM page_visits WHERE response_id = ?)",
+        (request_id,),
+    )
+    conn.execute(
+        "DELETE FROM page_visit_errors WHERE page_visit_id IN "
+        "(SELECT id FROM page_visits WHERE response_id = ?)",
+        (request_id,),
+    )
     conn.execute("DELETE FROM page_visits WHERE response_id = ?", (request_id,))
     conn.execute("DELETE FROM visura_owners WHERE response_id = ?", (request_id,))
     conn.execute("DELETE FROM visura_properties WHERE response_id = ?", (request_id,))
+    conn.execute("DELETE FROM visura_results WHERE response_id = ?", (request_id,))
     conn.execute("DELETE FROM visura_responses WHERE request_id = ?", (request_id,))
     conn.execute("DELETE FROM visura_requests WHERE request_id = ?", (request_id,))
 
@@ -393,8 +404,10 @@ def _upsert_response(conn: sqlite3.Connection, path: Path, payload: dict[str, An
     )
     conn.execute(
         """
-        INSERT INTO visura_responses (request_id, success, cadastre_type, data, error, created_at)
-        VALUES (?, ?, ?, ?, ?, ?)
+        INSERT INTO visura_responses (
+            request_id, success, cadastre_type, data, error,
+            total_results, total_intestati, skipped_soppresso, subject_query, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             request_id,
@@ -402,6 +415,10 @@ def _upsert_response(conn: sqlite3.Connection, path: Path, payload: dict[str, An
             fields["tipo_catasto"],
             json.dumps(data, ensure_ascii=False, default=str),
             payload.get("error"),
+            data.get("total_results") if isinstance(data.get("total_results"), int) else None,
+            data.get("total_intestati") if isinstance(data.get("total_intestati"), int) else None,
+            data.get("skipped_soppresso") if isinstance(data.get("skipped_soppresso"), int) else None,
+            data.get("soggetto") if isinstance(data.get("soggetto"), str) else None,
             created_at,
         ),
     )
@@ -421,6 +438,90 @@ def _upsert_response(conn: sqlite3.Connection, path: Path, payload: dict[str, An
         _insert_mapping(conn, "visura_owners", {"response_id": request_id, "subject_id": subject_id, "right_id": right_id})
     for row in _parse_page_visits(request_id, data):
         _insert_mapping(conn, "page_visits", row)
+        page_visit_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+        source_visit = next(
+            (
+                item
+                for item in data.get("page_visits", [])
+                if isinstance(item, dict)
+                and item.get("step", "") == row.get("step", "")
+                and item.get("url") == row.get("url")
+                and item.get("timestamp") == row.get("timestamp")
+            ),
+            {},
+        )
+        for element_index, element in enumerate(source_visit.get("form_elements", []) or []):
+            if isinstance(element, dict):
+                _insert_mapping(
+                    conn,
+                    "page_visit_form_elements",
+                    {
+                        "page_visit_id": page_visit_id,
+                        "element_index": element_index,
+                        "tag": str(element.get("tag") or ""),
+                        "element_type": str(element.get("type") or ""),
+                        "name": str(element.get("name") or ""),
+                        "label": str(element.get("label") or ""),
+                        "value": str(element.get("value") or ""),
+                    },
+                )
+        for error_index, message in enumerate(source_visit.get("errors", []) or []):
+            if isinstance(message, dict):
+                message = message.get("message") or message.get("text") or ""
+            _insert_mapping(
+                conn,
+                "page_visit_errors",
+                {"page_visit_id": page_visit_id, "error_index": error_index, "message": str(message or "")},
+            )
+
+    for result_row in data.get("results", []) if isinstance(data.get("results"), list) else []:
+        if not isinstance(result_row, dict):
+            continue
+        raw_index = result_row.get("result_index", 0)
+        try:
+            result_index = int(raw_index)
+        except (TypeError, ValueError):
+            result_index = 0
+        _insert_mapping(
+            conn,
+            "visura_results",
+            {
+                "response_id": request_id,
+                "result_index": result_index,
+                "visura_present": 1 if result_row.get("visura") else 0,
+            },
+        )
+        result_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+        result_property = result_row.get("immobile")
+        if isinstance(result_property, dict):
+            for prop_fields, loc_fields in _parse_immobili(request_id, fields["tipo_catasto"], {"immobili": [result_property]}):
+                if not loc_fields["province"]:
+                    loc_fields["province"] = fields["provincia"] or ""
+                if not loc_fields["municipality"]:
+                    loc_fields["municipality"] = fields["comune"] or ""
+                prop_fields["location_id"] = _get_or_create_location_sql(conn, **loc_fields)
+                prop_fields["result_id"] = result_id
+                _insert_mapping(conn, "visura_properties", prop_fields)
+        result_owners = result_row.get("intestati")
+        if isinstance(result_owners, list):
+            for owner_index, item in enumerate(result_owners):
+                if not isinstance(item, dict):
+                    continue
+                owner_rows = _parse_intestati(request_id, {"intestati": [item]})
+                for subject_fields, right_fields in owner_rows:
+                    subject_id = _get_or_create_subject_sql(conn, **subject_fields) if subject_fields else None
+                    right_id = _get_or_create_right_sql(conn, **right_fields) if right_fields else None
+                    _insert_mapping(
+                        conn,
+                        "visura_owners",
+                        {
+                            "response_id": request_id,
+                            "result_id": result_id,
+                            "owner_index": owner_index,
+                            "subject_id": subject_id,
+                            "right_id": right_id,
+                        },
+                    )
 
 
 def _count(conn: sqlite3.Connection, table: str) -> int:
