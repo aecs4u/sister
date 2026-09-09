@@ -5,11 +5,15 @@
 {% from "parts/_visura_header.html" import visura_location_card, visura_doc_card %}
 {% from "components/table.html" import table_filter_csv_js %}
 {% from "components/cadastral.html" import liquidazione_row %}
-{% set _v = doc.xml_parsed.VisuraTerreniAttuale or doc.xml_parsed.VisuraTerrenoStorica or doc.xml_parsed.VisuraTerreno or {} %}
+{% set _v = doc.xml_parsed.VisuraTerreniAttuale or doc.xml_parsed.VisuraTerreniStorica or doc.xml_parsed.VisuraTerreniSintetica or doc.xml_parsed.VisuraTerrenoAttuale or doc.xml_parsed.VisuraTerrenoStorica or doc.xml_parsed.VisuraTerrenoSintetica or doc.xml_parsed.VisuraTerreno or {} %}
 {% set _t = _v.TitoloVisura or {} %}
 {% set _dr = _v.DatiRichiesta or {} %}
+{% set _title = (_t.Titolo or '')|lower %}
+{% set _is_historical = 'storic' in _title or _v.StoriaImmobileTerreni or doc.xml_parsed.VisuraTerreniStorica or doc.xml_parsed.VisuraTerrenoStorica %}
+{% set _is_synthetic = 'sintetic' in _title or doc.xml_parsed.VisuraTerreniSintetica or doc.xml_parsed.VisuraTerrenoSintetica %}
+{% set _variant_label = 'Sintetica' if _is_synthetic else ('Storica' if _is_historical else 'Attuale') %}
 {# ImmobileTerreni is unbounded (schema v2) — normalize to a list of parcels #}
-{% set _it_raw = _v.ImmobileTerreni %}
+{% set _it_raw = _v.ImmobileTerreni or _v.ImmobileTerreniS or (_v.SituazioneAttualeTerreni or {}).ImmobileTerreni or (_v.StoriaImmobileTerreni or {}).ImmobileTerreni %}
 {% set _immobili = _it_raw if _it_raw is sequence and _it_raw is not string and _it_raw is not mapping else ([_it_raw] if _it_raw else []) %}
 {# First parcel drives the hero/header (location is query-level, shared) #}
 {% set _it = _immobili[0] if _immobili else {} %}
@@ -17,7 +21,7 @@
 {% set _partita = _id_def.Partita if _id_def.Partita is string else (_id_def.Partita._text if _id_def.Partita is mapping else '') %}
 
 {% block page_title %}
-    Visura Terreni — FG {{ doc.foglio or _dr.Foglio or '-' }} PT {{ doc.particella or _dr.ParticellaNum or '-' }}
+    Visura Terreni {{ _variant_label }} — FG {{ doc.foglio or _dr.Foglio or '-' }} PT {{ doc.particella or _dr.ParticellaNum or '-' }}
 {% endblock %}
 
 {% block extra_css %}
@@ -28,7 +32,7 @@
 
 {% block content %}
 {# ── Hero ───────────────────────────────────────────────────────────────── #}
-{% call hero_section('Visura Attuale Terreno', 'fa-leaf', '/web/documents', 'Documenti',
+{% call hero_section('Visura Terreni ' ~ _variant_label, 'fa-leaf', '/web/documents', 'Documenti',
                      breadcrumb_parent='Documenti', breadcrumb_current='Visura Terreni') %}
 {{ doc.comune or _dr.Comune or '' }}
 — FG <strong>{{ doc.foglio or _dr.Foglio or '-' }}</strong>
@@ -152,7 +156,7 @@ PT <strong>{{ doc.particella or _dr.ParticellaNum or '-' }}</strong>
     {% endif %}
 
     {# Titolarità — ownership history timeline #}
-    {% set _mutazioni = _it.MutazioneSoggettiva %}
+    {% set _mutazioni = _it.MutazioneSoggettiva or _it.IntestazioneAttuale or _it.Intestazione %}
     {% if _mutazioni %}
     {% set _mutazioni_list = _mutazioni if _mutazioni is sequence and _mutazioni is not string and _mutazioni is not mapping else [_mutazioni] %}
     <h2 class="h5 border-bottom pb-2 mb-3">

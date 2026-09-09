@@ -1990,8 +1990,19 @@ def _render_doc_from_db(doc: dict, request, theme, user, force_template: str | N
         for key in ("VisuraSoggettoAttuale", "VisuraSoggettoStorica", "VisuraSoggettoSintetica", "VisuraSoggetto")
     ):
         template = "visura_soggetto.html"
-    elif "VisuraTerreniAttuale" in xml_p or "VisuraTerrenoStorica" in xml_p or "VisuraTerreno" in xml_p:
-        template = "visura_terreni_attuale.html"
+    elif any(
+        key in xml_p
+        for key in (
+            "VisuraTerreniAttuale",
+            "VisuraTerreniStorica",
+            "VisuraTerreniSintetica",
+            "VisuraTerrenoAttuale",
+            "VisuraTerrenoStorica",
+            "VisuraTerrenoSintetica",
+            "VisuraTerreno",
+        )
+    ):
+        template = "visura_terreni.html"
     else:
         template = "result_detail.html"
     if template == "result_detail.html":
@@ -2144,8 +2155,19 @@ async def web_document_view(request: Request, path: str, user=Depends(_require_a
         for key in ("VisuraSoggettoAttuale", "VisuraSoggettoStorica", "VisuraSoggettoSintetica", "VisuraSoggetto")
     ):
         template = "visura_soggetto.html"
-    elif "VisuraTerreniAttuale" in xml_parsed or "VisuraTerrenoStorica" in xml_parsed or "VisuraTerreno" in xml_parsed:
-        template = "visura_terreni_attuale.html"
+    elif any(
+        key in xml_parsed
+        for key in (
+            "VisuraTerreniAttuale",
+            "VisuraTerreniStorica",
+            "VisuraTerreniSintetica",
+            "VisuraTerrenoAttuale",
+            "VisuraTerrenoStorica",
+            "VisuraTerrenoSintetica",
+            "VisuraTerreno",
+        )
+    ):
+        template = "visura_terreni.html"
     else:
         template = "result_detail.html"
 
