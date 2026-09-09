@@ -1,13 +1,15 @@
 {% extends "_base.html" %}
-{% from "_macros.html" import status_badge, catasto_badge, param_label, jump_nav,
+{% from "components/index.html" import card, data_table_assets %}
+{% from "components/badges.html" import badge %}
+{% from "components/job.html" import status_badge %}
+{% from "_macros.html" import catasto_badge, param_label, jump_nav,
                                 section_icon, section_border, income_boxes,
                                 doc_accordion, render_workflow_steps %}
 {% block page_title %}Result {{ request_id[:20] }}{% endblock %}
 
 {% block extra_css %}
 {{ super() }}
-<link href="https://cdn.jsdelivr.net/npm/tabulator-tables@6.3.1/dist/css/tabulator_bootstrap5.min.css" rel="stylesheet">
-<link rel="stylesheet" href="{{ static_url_path|default('/static/aecs4u-theme') }}/css/data-table.css">
+{{ data_table_assets() }}
 <link rel="stylesheet" href="/static/css/pages/result_detail.css">
 {% endblock %}
 
@@ -65,6 +67,21 @@
   </nav>
 
   {% if result %}
+
+  {# The job is useful on its own even when the raw payload is large: show the
+     normalized extraction counts before the exhaustive response sections. #}
+  {% set payload = result.data if result.data is mapping else {} %}
+  {% set extracted_results = payload.total_results if payload.total_results is defined and payload.total_results is not none
+                             else result.db_properties|default([], true)|length %}
+  {% set extracted_owners = payload.total_intestati if payload.total_intestati is defined and payload.total_intestati is not none
+                            else result.db_owners|default([], true)|length %}
+  {% call card("Extracted response", subtitle="Normalized data returned by the executed job", class="border-0 shadow-sm mb-4") %}
+    <div class="d-flex flex-wrap align-items-center gap-3">
+      {{ badge(extracted_results ~ ' results', variant='success', icon='fas fa-table-list') }}
+      {{ badge(extracted_owners ~ ' owners', variant='info', dark=true, icon='fas fa-users') }}
+      {% if result.sections %}<span class="text-muted small">{{ result.sections|length }} response sections</span>{% endif %}
+    </div>
+  {% endcall %}
 
   {# ── Request Details card ──────────────────────────────────────────────── #}
   <div class="card border-0 shadow-sm mb-4">
@@ -335,7 +352,6 @@
 
 {% block extra_js %}
 {{ super() }}
-<script src="https://cdn.jsdelivr.net/npm/tabulator-tables@6.3.1/dist/js/tabulator.min.js"></script>
 <script>
 (function() {
     'use strict';

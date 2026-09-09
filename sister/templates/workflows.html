@@ -1,10 +1,13 @@
 {% extends "_base.html" %}
+{% from "components/index.html" import page_header, card %}
+{% from "components/job.html" import status_badge, response_summary %}
+{% from "macros/ui_base.html" import no_results %}
 {% block page_title %}Workflows{% endblock %}
 
 {% block content %}
 <div class="container-fluid py-4">
     <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-4">
-        <h1 class="mb-0"><i class="fas fa-project-diagram text-primary me-2"></i>Workflows</h1>
+        {{ page_header("Executed workflows", "Jobs, steps, and extracted responses", icon="fas fa-project-diagram text-primary", wrapper_class="mb-0") }}
         <div class="d-flex align-items-center gap-2">
             {% if status %}
             <a href="/web/workflows" class="btn btn-outline-secondary btn-sm"><i class="fas fa-times me-1"></i>Clear filter</a>
@@ -37,9 +40,7 @@
                     <div class="card-body">
                         <div class="d-flex justify-content-between align-items-start mb-2">
                             <span class="badge bg-secondary">{{ run.preset }}</span>
-                            <span class="badge bg-{% if run.status == 'completed' %}success{% elif run.status == 'partial' %}warning text-dark{% elif run.status == 'running' %}info{% elif run.status in ('failed', 'error') %}danger{% else %}secondary{% endif %}">
-                                {{ run.status|title }}
-                            </span>
+                            {{ status_badge(run.status) }}
                         </div>
                         <h6 class="card-title text-dark mb-2">
                             {{ run.provincia or '-' }} / {{ run.comune or '-' }}
@@ -54,6 +55,7 @@
                             </div>
                             <div class="text-muted small">{{ run.created_at_display or '-' }}</div>
                         </div>
+                        <div class="mt-2">{{ response_summary(run) }}</div>
                         {% if run.total_steps > 0 %}
                         <div class="progress mt-2" style="height: 4px;">
                             <div class="progress-bar bg-{% if run.status == 'completed' %}success{% elif run.status == 'partial' %}warning{% else %}info{% endif %}"
@@ -67,11 +69,8 @@
         {% endfor %}
     </div>
     {% else %}
-    <div class="text-center py-5">
-        <i class="fas fa-inbox fa-3x text-muted mb-3"></i>
-        <p class="text-muted">No workflow runs found.</p>
-        <a href="/web/forms" class="btn btn-primary">Start a Workflow</a>
-    </div>
+    {{ no_results("No executed workflows", "Start a workflow to see its steps and extracted response here.") }}
+    <div class="text-center"><a href="/web/forms" class="btn btn-primary">Start a Workflow</a></div>
     {% endif %}
 </div>
 {% endblock %}

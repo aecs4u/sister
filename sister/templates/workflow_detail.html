@@ -1,13 +1,15 @@
 {% extends "_base.html" %}
+{% from "components/index.html" import card, data_table_assets %}
+{% from "components/job.html" import status_badge, response_counts %}
 {% block page_title %}Workflow {{ workflow_id[:20] }}{% endblock %}
 
 {% block extra_css %}
 {{ super() }}
-<link href="https://cdn.jsdelivr.net/npm/tabulator-tables@6.3.1/dist/css/tabulator_bootstrap5.min.css" rel="stylesheet">
-<link rel="stylesheet" href="{{ static_url_path|default('/static/aecs4u-theme') }}/css/data-table.css">
+{{ data_table_assets() }}
 {% endblock %}
 
-{# Import render macros from result_detail #}
+{# The nested response renderer is local because it handles arbitrary workflow
+   output; job/status cards come from the theme-backed SISTER component. #}
 {% macro render_nested(value, level=0) %}
     {% if value is mapping %}
         {% if value %}
@@ -54,13 +56,6 @@
     {% endif %}
 {% endmacro %}
 
-{% macro workflow_status_badge(status) %}
-    {% set normalized = (status or '')|lower %}
-    <span class="badge bg-{% if normalized in ('completed', 'success') %}success{% elif normalized in ('failed', 'error') %}danger{% elif normalized == 'partial' %}warning text-dark{% elif normalized in ('running', 'pending') %}info text-dark{% else %}secondary{% endif %}">
-        {{ (status or '-')|replace('_', ' ')|title }}
-    </span>
-{% endmacro %}
-
 {% block content %}
 <div class="container-fluid py-4">
     <nav class="mb-3" aria-label="breadcrumb">
@@ -75,7 +70,7 @@
     <div class="card border-0 shadow-sm mb-4">
         <div class="card-header d-flex justify-content-between align-items-center">
             <h4 class="mb-0"><i class="fas fa-project-diagram text-primary me-2"></i>Workflow Details</h4>
-            {{ workflow_status_badge(result.status) }}
+            {{ status_badge(result.status, large=true) }}
         </div>
         <div class="card-body">
             <div class="row g-4">
@@ -132,6 +127,10 @@
         </div>
     </div>
 
+    {% call card("Extracted response", subtitle="Outputs produced by the executed workflow", class="border-0 shadow-sm mb-4") %}
+        {{ response_counts(result) }}
+    {% endcall %}
+
     {% if result.data %}
     {# --- Workflow sections --- #}
     {% for section in result.sections %}
@@ -156,7 +155,7 @@
                                     data-bs-toggle="collapse" data-bs-target="#{{ collapse_id }}">
                                 <span class="badge bg-light text-dark me-2">{{ loop.index }}</span>
                                 <code class="me-2">{{ step_name }}</code>
-                                {{ workflow_status_badge(step_status) }}
+                                {{ status_badge(step_status) }}
                                 {% if step.get('started_at') and step.get('finished_at') %}
                                 <span class="text-muted small ms-auto">{{ step.started_at[:16] }} &rarr; {{ step.finished_at[:16] }}</span>
                                 {% endif %}
@@ -268,7 +267,6 @@
 
 {% block extra_js %}
 {{ super() }}
-<script src="https://cdn.jsdelivr.net/npm/tabulator-tables@6.3.1/dist/js/tabulator.min.js"></script>
 <script>
 (function() {
     'use strict';
