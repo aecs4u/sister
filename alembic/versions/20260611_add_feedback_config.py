@@ -19,12 +19,7 @@ _DEFAULT_UNSUB = "Non vuoi più ricevere queste email?"
 
 
 def _table_exists(table: str) -> bool:
-    conn = op.get_bind()
-    row = conn.execute(
-        sa.text("SELECT count(*) FROM sqlite_master WHERE type='table' AND name=:t"),
-        {"t": table},
-    ).fetchone()
-    return bool(row and row[0])
+    return sa.inspect(op.get_bind()).has_table(table)
 
 
 def upgrade() -> None:

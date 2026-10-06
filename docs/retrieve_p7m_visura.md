@@ -122,6 +122,12 @@ XML (`<Visura …><VisuraFabbricatiAttuale>…`) with: `TitoloVisura`, `DatiRich
 `ImmobileFabbricati` (identificativi, indirizzo, classamento, superficie) and `Intestazione`
 (each `Intestato`: `Nominativo`, `CF`, `DirittiReali` quota/diritto).
 
+When the application downloads a document from **Richieste**, it stores the
+file under the parsed SISTER naming convention and keeps the portal's original
+download name as a symlink in `document_links`. See
+[`document_file_naming.md`](document_file_naming.md) for the filename rules and
+the `SISTER_DOCUMENT_LINKS_DIR` setting.
+
 ## 9. Navigating back (Indietro)
 
 Each results page has an `input[type='submit'][value='Indietro']` that steps one level back up

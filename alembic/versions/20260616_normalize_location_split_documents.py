@@ -18,18 +18,12 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def _column_exists(table: str, column: str) -> bool:
-    conn = op.get_bind()
-    rows = conn.execute(sa.text(f"PRAGMA table_info({table})")).fetchall()
-    return any(r[1] == column for r in rows)
+    inspector = sa.inspect(op.get_bind())
+    return inspector.has_table(table) and any(col["name"] == column for col in inspector.get_columns(table))
 
 
 def _table_exists(table: str) -> bool:
-    conn = op.get_bind()
-    row = conn.execute(
-        sa.text("SELECT count(*) FROM sqlite_master WHERE type='table' AND name=:t"),
-        {"t": table},
-    ).fetchone()
-    return bool(row and row[0])
+    return sa.inspect(op.get_bind()).has_table(table)
 
 
 def upgrade() -> None:
@@ -103,7 +97,7 @@ def upgrade() -> None:
         # Populate from old inline location columns (if they exist)
         if _column_exists("visura_requests", "tipo_catasto"):
             conn.execute(sa.text("""
-                INSERT OR IGNORE INTO cadastral_locations
+                INSERT INTO cadastral_locations
                     (cadastre_type, province, municipality, sheet, parcel, subunit, section)
                 SELECT
                     COALESCE(tipo_catasto, ''),
@@ -114,6 +108,7 @@ def upgrade() -> None:
                     COALESCE(subalterno, ''),
                     COALESCE(sezione, '')
                 FROM visura_requests
+                ON CONFLICT DO NOTHING
             """))
             conn.execute(sa.text("""
                 UPDATE visura_requests SET location_id = (
@@ -150,7 +145,7 @@ def upgrade() -> None:
         if _column_exists("visura_properties", "sheet"):
             # Derive cadastre_type from property_type or responses join for location population
             conn.execute(sa.text("""
-                INSERT OR IGNORE INTO cadastral_locations
+                INSERT INTO cadastral_locations
                     (cadastre_type, province, municipality, sheet, parcel, subunit, section)
                 SELECT DISTINCT
                     COALESCE(
@@ -168,6 +163,7 @@ def upgrade() -> None:
                     ''
                 FROM visura_properties
                 WHERE sheet IS NOT NULL AND sheet != ''
+                ON CONFLICT DO NOTHING
             """))
             conn.execute(sa.text("""
                 UPDATE visura_properties SET location_id = (

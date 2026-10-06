@@ -11,13 +11,16 @@ Usage:
 
 import asyncio
 import json
-import os
 import re
 import sys
 from datetime import datetime
 from pathlib import Path
+from dotenv import load_dotenv
 
-sys.path.insert(0, str(Path(__file__).parent.parent))
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(PROJECT_ROOT))
+load_dotenv(PROJECT_ROOT / ".env")
+load_dotenv(PROJECT_ROOT.parent / ".env", override=False)
 
 REPORTS_DIR = Path("/data/aecs4u.it/sister/reports")
 RENAME_MAP_PATH = REPORTS_DIR / "rename_map.json"
@@ -127,8 +130,6 @@ async def run(dry_run: bool = False):
     from sister.database import _get_session_factory, get_or_create_location, init_db
     from sister.db_models import DocumentMetadata, VisuraDocument
     from sister.utils import _parse_visura_xml
-
-    os.environ.setdefault("SISTER_DB_PATH", "/data/aecs4u.it/sister/data/sister.sqlite")
 
     await init_db()
     session_factory = _get_session_factory()

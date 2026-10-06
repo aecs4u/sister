@@ -1,11 +1,9 @@
 {% extends "_base.html" %}
-{% from "_doc_macros.html" import doc_macros_css %}
-
 {% block page_title %}Mappa Immobili{% endblock %}
 
 {% block extra_css %}
 {{ super() }}
-{{ doc_macros_css() }}
+<link rel="stylesheet" href="/static/css/doc_sections.css">
 <link rel="stylesheet" href="/static/css/pages/documents_map.css">
 {% endblock %}
 

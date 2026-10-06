@@ -14,6 +14,7 @@ from fastapi.responses import JSONResponse
 from .database import count_responses, find_responses
 from .models import (
     AuthenticationError,
+    CaptchaRequired,
     ElencoImmobiliInput,
     ElencoImmobiliRequest,
     GenericSisterRequest,
@@ -36,6 +37,18 @@ from .services import VisuraService
 logger = logging.getLogger("sister")
 
 
+def _response_status(response) -> str:
+    """Poll status for a stored response: completed, error, or needs_human (a CAPTCHA nobody solved).
+
+    A CAPTCHA timeout can arrive either as a failed response (marker in ``error``) or as a successful extraction
+    whose document request is still pending (``data["needs_human"]``).
+    """
+    if not response.success:
+        return "needs_human" if (response.error or "").startswith(CaptchaRequired.MARKER) else "error"
+    data = response.data
+    return "needs_human" if isinstance(data, dict) and data.get("needs_human") else "completed"
+
+
 def _submit_result_to_response(results: list, tipos_catasto: list, message: str):
     """Convert SubmitResult list to JSONResponse, handling cached results."""
     any_cached = any(isinstance(r, SubmitResult) and r.cached for r in results)
@@ -49,7 +62,7 @@ def _submit_result_to_response(results: list, tipos_catasto: list, message: str)
                     {
                         "request_id": r.request_id,
                         "tipo_catasto": r.response.cadastre_type,
-                        "status": "completed" if r.response.success else "error",
+                        "status": _response_status(r.response),
                         "data": r.response.data,
                         "error": r.response.error,
                     }
@@ -66,6 +79,27 @@ def _submit_result_to_response(results: list, tipos_catasto: list, message: str)
     if cached_data:
         resp["cached_results"] = cached_data
     return JSONResponse(resp)
+
+
+def _cached_single_response(result, tipo_catasto: str):
+    """JSONResponse for a single request answered from the cache, else None.
+
+    The cached answer lives under the id of the original request, so that id (not the freshly generated one,
+    which is never stored) is what the client has to poll.
+    """
+    if not (isinstance(result, SubmitResult) and result.cached and result.response):
+        return None
+    resp = result.response
+    return JSONResponse(
+        {
+            "request_id": result.request_id,
+            "tipo_catasto": tipo_catasto,
+            "status": _response_status(resp),
+            "data": resp.data,
+            "error": resp.error,
+            "timestamp": resp.timestamp.isoformat() if resp.timestamp else None,
+        }
+    )
 
 
 async def richiedi_visura(request: VisuraInput, service: VisuraService, force: bool = False):
@@ -138,7 +172,7 @@ async def ottieni_visura(request_id: str, service: VisuraService):
             {
                 "request_id": request_id,
                 "tipo_catasto": response.cadastre_type,
-                "status": "completed" if response.success else "error",
+                "status": _response_status(response),
                 "data": response.data,
                 "error": response.error,
                 "timestamp": response.timestamp.isoformat(),
@@ -180,7 +214,7 @@ async def richiedi_intestati_immobile(request: VisuraIntestatiInput, service: Vi
                 {
                     "request_id": result.request_id,
                     "tipo_catasto": tipo_catasto,
-                    "status": "completed" if resp.success else "error",
+                    "status": _response_status(resp),
                     "data": resp.data,
                     "error": resp.error,
                     "timestamp": resp.timestamp.isoformat() if resp.timestamp else None,
@@ -315,7 +349,9 @@ async def richiedi_visura_soggetto(request: VisuraSoggettoInput, service: Visura
             province=request.province,
         )
 
-        await service.add_soggetto_request(soggetto_request, force=force)
+        result = await service.add_soggetto_request(soggetto_request, force=force)
+        if (cached := _cached_single_response(result, tipo_catasto)) is not None:
+            return cached
 
         return JSONResponse(
             {
@@ -355,7 +391,9 @@ async def richiedi_visura_persona_giuridica(
             province=request.province,
         )
 
-        await service.add_persona_giuridica_request(pnf_request, force=force)
+        result = await service.add_persona_giuridica_request(pnf_request, force=force)
+        if (cached := _cached_single_response(result, tipo_catasto)) is not None:
+            return cached
 
         return JSONResponse(
             {
@@ -395,7 +433,9 @@ async def richiedi_elenco_immobili(request: ElencoImmobiliInput, service: Visura
             section=request.section,
         )
 
-        await service.add_elenco_immobili_request(eimm_request, force=force)
+        result = await service.add_elenco_immobili_request(eimm_request, force=force)
+        if (cached := _cached_single_response(result, tipo_catasto)) is not None:
+            return cached
 
         return JSONResponse(
             {

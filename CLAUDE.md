@@ -18,7 +18,7 @@ SISTER is a FastAPI service + Typer CLI for automated cadastral data extraction 
   - `cli.py` — Typer CLI with query, db, and top-level commands
 - **`tests/`** — pytest test suite
 - **`alembic/`** — Database migrations
-- **`data/`** — SQLite database (sister.sqlite)
+- **`data/`** — documenti, dossier e output generati
 - **`scripts/`** — Start script + bulk query scripts
   - `query_recrowd_proponents.py` — bulk `/visura/persona-giuridica` for all Recrowd proponents
 
@@ -45,7 +45,7 @@ uv run sister db init
 - Run commands with `uv run` prefix
 - Tests: `uv run python -m pytest` (158+ tests)
 - Service default port: 8025
-- Database: SQLite at `data/sister.sqlite` (configurable via `SISTER_DB_PATH`)
+- Database: PostgreSQL configured with `DATABASE_DSN`
 - All internal imports use relative imports (e.g., `from .database import ...`)
 - CLI entry point: `sister` (registered in pyproject.toml as `sister = "sister.cli:run"`)
 - Auth config: `.env` file with `ADE_USERNAME`, `ADE_PASSWORD`, `ADE_AUTH_METHOD=cie`
@@ -56,13 +56,21 @@ uv run sister db init
 - `query ispezioni` / `query ispezioni-cartacee` (ISP/ISPCART): "Passa a Ispezioni" opens a different SISTER module requiring dedicated navigation
 - Browser automation tests are deprioritized — do not suggest adding them
 
+## CAPTCHA
+
+The SISTER CAPTCHA (`input[name='inCaptchaChars']`) appears only on the document-request form (Tipo di visura →
+Inoltra): `/Visure/vimm/InoltraRichiestaVis.do`, `/Visure/vimm/TipoVisura.do`, `/Visure/vpf/TipoVisura.do`. Not seen on
+login, navigation, search or result pages; no saved evidence for ispezioni, mappa, originali, fiduciali, nota, partita,
+indirizzo or ipotecaria. It is never automated: `_wait_for_captcha` raises `CaptchaRequired`, polling reports
+`needs_human`. Details and limits: `docs/captcha_pages.md`.
+
 ## Persona giuridica queries
 
 Companies must use `POST /visura/persona-giuridica` with `{"identificativo": "<vat_number>", "tipo_catasto": "E"}` — **not** `/visura/soggetto` (persona fisica). The SISTER portal has separate forms for natural persons vs legal entities.
 
 ## Recrowd integration
 
-- DB: `/mnt/mobile/data/aecs4u.it/classaction/recrowd.sqlite`
+- DB: configure `RECROWD_DATABASE_DSN` with the Recrowd PostgreSQL connection for this script.
 - 97 proponents with VAT numbers; VAT comes from `COALESCE(recrowd_proponent_company_details.vat_code, recrowd_proponents.vat_number)`
 - Bulk query: `uv run python scripts/query_recrowd_proponents.py` — queries all 97 sequentially, saves progress to `outputs/recrowd_soggetto_<timestamp>.json`
 
@@ -70,6 +78,6 @@ Companies must use `POST /visura/persona-giuridica` with `{"identificativo": "<v
 
 - Line length: 120 (configured in ruff/black)
 - Python 3.11+
-- Async throughout (aiosqlite, async SQLAlchemy, asyncio)
+- Async throughout (psycopg, async SQLAlchemy, asyncio)
 - CLI commands use `asyncio.run()` to call async client methods
 - f-string log calls avoided in favor of `logger.info("msg: %s", var)` style

@@ -5,6 +5,7 @@ backwards compatibility.
 """
 
 import asyncio
+import json
 import logging
 import os
 from contextlib import suppress
@@ -77,12 +78,14 @@ class VisuraService:
     # Auth lifecycle
     # ------------------------------------------------------------------
 
-    async def initialize(self, background_auth: bool = True, defer_auth: bool = False):
+    async def initialize(self, background_auth: bool = True, defer_auth: bool = False, attach_only: bool = False):
         """Start the worker and cleanup tasks.
 
         background_auth=True  → auth runs in a background task (default, non-blocking startup)
         background_auth=False → auth blocks startup (used in tests / sync init)
         defer_auth=True       → worker starts but no auth is attempted; call start_browser() later
+        attach_only=True      → never log in: only adopt an existing SISTER session in the shared CDP
+                                Chrome (created by scripts/ade_login.py); otherwise stay idle
         """
         self.processing = True
         self._worker_task = asyncio.create_task(self._process_requests(), name="visura-request-worker")
@@ -92,14 +95,32 @@ class VisuraService:
             logger.info("Browser auth differita — usa /web/browser per avviare la sessione")
             return
 
-        if background_auth:
+        if attach_only:
+            self._auth_task = asyncio.create_task(self._background_attach(), name="visura-browser-attach")
+        elif background_auth:
             self._auth_task = asyncio.create_task(self._background_auth(), name="visura-browser-auth")
         else:
             await self._do_auth()
 
+    async def _background_attach(self):
+        """Startup path: adopt an existing SISTER session if there is one, never log in."""
+        try:
+            await self.browser_manager.initialize()
+            if await self.browser_manager.attach_existing_session():
+                await self.browser_manager.start_keep_alive()
+                self._auth_ready = True
+                logger.info("Browser agganciato a sessione SISTER esistente")
+            else:
+                logger.info("Nessuna sessione SISTER attiva — esegui scripts/ade_login.py o usa /web/browser")
+        except Exception as e:
+            self._auth_failed_message = f"Aggancio sessione browser fallito: {type(e).__name__}: {e}"
+            logger.error("Browser attach error: %s", e)
+
     async def _do_auth(self):
         await self.browser_manager.initialize()
-        await self.browser_manager.login()
+        # Reuse a session already open in the shared Chrome before falling back to a full login
+        if not await self.browser_manager.attach_existing_session():
+            await self.browser_manager.login()
         await self.browser_manager.start_keep_alive()
         self._auth_ready = True
         logger.info("Browser autenticato e pronto")
@@ -375,12 +396,25 @@ class VisuraService:
         if isinstance(timestamp_raw, str):
             with suppress(ValueError):
                 timestamp = datetime.fromisoformat(timestamp_raw)
+        if timestamp.tzinfo is not None:
+            # DB timestamps are aware (UTC); the in-memory TTL checks compare against naive local datetime.now()
+            timestamp = timestamp.astimezone().replace(tzinfo=None)
+
+        data = record.get("data")
+        if isinstance(data, str):
+            # some rows hold the payload as JSON text instead of a JSON object
+            try:
+                data = json.loads(data)
+            except ValueError:
+                data = None
+        if not isinstance(data, dict):
+            data = None
 
         return VisuraResponse(
             request_id=record["request_id"],
             success=bool(record["success"]),
             cadastre_type=record["tipo_catasto"],
-            data=record.get("data"),
+            data=data,
             error=record.get("error"),
             timestamp=timestamp,
         )
@@ -637,6 +671,10 @@ class VisuraService:
     # Browser session control (manual start/stop/restart)
     # ------------------------------------------------------------------
 
+    async def download_richieste_documents(self) -> list[dict]:
+        """Download the completed documents listed on the SISTER Richieste page (see /visura/download-documents)."""
+        return await self.browser_manager.download_richieste_documents()
+
     async def start_browser(self) -> dict:
         """Start browser authentication if not already running or ready."""
         if self.auth_ready:
@@ -660,6 +698,9 @@ class VisuraService:
             auth_task.cancel()
             with suppress(asyncio.CancelledError, Exception):
                 await auth_task
+        # Explicit stop: release the SISTER session too (a --reload restart deliberately does not, see
+        # BrowserManager.graceful_shutdown), otherwise the next login fails with "Utente gia' in sessione"
+        await self.browser_manager.close_sister_session()
         await self.browser_manager.close()
         self._auth_ready = False
         logger.info("Browser session fermata (force=%s)", force)

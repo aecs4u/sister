@@ -22,31 +22,25 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def _table_exists(table: str) -> bool:
-    conn = op.get_bind()
-    row = conn.execute(
-        sa.text("SELECT count(*) FROM sqlite_master WHERE type='table' AND name=:t"),
-        {"t": table},
-    ).fetchone()
-    return bool(row and row[0])
+    return sa.inspect(op.get_bind()).has_table(table)
 
 
 def _index_exists(index_name: str) -> bool:
-    conn = op.get_bind()
-    row = conn.execute(
-        sa.text("SELECT count(*) FROM sqlite_master WHERE type='index' AND name=:n"),
-        {"n": index_name},
-    ).fetchone()
-    return bool(row and row[0])
+    inspector = sa.inspect(op.get_bind())
+    return any(
+        index["name"] == index_name
+        for table in inspector.get_table_names()
+        for index in inspector.get_indexes(table)
+    )
 
 
 def _constraint_exists(table: str, constraint_name: str) -> bool:
-    """Check if a named CHECK constraint exists in the CREATE TABLE SQL."""
-    conn = op.get_bind()
-    row = conn.execute(
-        sa.text("SELECT sql FROM sqlite_master WHERE type='table' AND name=:t"),
-        {"t": table},
-    ).fetchone()
-    return bool(row and row[0] and constraint_name in row[0])
+    if not _table_exists(table):
+        return False
+    return any(
+        constraint.get("name") == constraint_name
+        for constraint in sa.inspect(op.get_bind()).get_check_constraints(table)
+    )
 
 
 def upgrade() -> None:
@@ -61,47 +55,50 @@ def upgrade() -> None:
             "ON cadastral_subjects (fiscal_code) WHERE fiscal_code IS NOT NULL"
         ))
 
-    # ── 2. Polymorphic tables: add CHECK constraints via batch alter ───────────
-    #
-    # SQLite does not support ADD CONSTRAINT after table creation; batch_alter_table
-    # with recreate="always" rebuilds the table with the new constraint in place.
-    # Existing rows are preserved; rows that violate exactly-one-parent would cause
-    # an error here, but no such rows should exist if the XML loader is correct.
+    # ── 2. Polymorphic tables: enforce exactly one parent ─────────────────────
 
     if not _constraint_exists("building_identifiers", "ck_building_identifier_one_parent"):
-        with op.batch_alter_table("building_identifiers", recreate="always") as batch_op:
-            batch_op.create_check_constraint(
-                "ck_building_identifier_one_parent",
-                "(building_unit_id IS NOT NULL) + (current_state_id IS NOT NULL) + (history_document_id IS NOT NULL) = 1",
-            )
+        op.create_check_constraint(
+            "ck_building_identifier_one_parent",
+            "building_identifiers",
+            "(CASE WHEN building_unit_id IS NOT NULL THEN 1 ELSE 0 END) + "
+            "(CASE WHEN current_state_id IS NOT NULL THEN 1 ELSE 0 END) + "
+            "(CASE WHEN history_document_id IS NOT NULL THEN 1 ELSE 0 END) = 1",
+        )
 
     if not _constraint_exists("building_classifications", "ck_building_classification_one_parent"):
-        with op.batch_alter_table("building_classifications", recreate="always") as batch_op:
-            batch_op.create_check_constraint(
-                "ck_building_classification_one_parent",
-                "(building_unit_id IS NOT NULL) + (current_state_id IS NOT NULL) + (history_document_id IS NOT NULL) = 1",
-            )
+        op.create_check_constraint(
+            "ck_building_classification_one_parent",
+            "building_classifications",
+            "(CASE WHEN building_unit_id IS NOT NULL THEN 1 ELSE 0 END) + "
+            "(CASE WHEN current_state_id IS NOT NULL THEN 1 ELSE 0 END) + "
+            "(CASE WHEN history_document_id IS NOT NULL THEN 1 ELSE 0 END) = 1",
+        )
 
     if not _constraint_exists("building_surfaces", "ck_building_surface_one_parent"):
-        with op.batch_alter_table("building_surfaces", recreate="always") as batch_op:
-            batch_op.create_check_constraint(
-                "ck_building_surface_one_parent",
-                "(building_unit_id IS NOT NULL) + (current_state_id IS NOT NULL) = 1",
-            )
+        op.create_check_constraint(
+            "ck_building_surface_one_parent",
+            "building_surfaces",
+            "(CASE WHEN building_unit_id IS NOT NULL THEN 1 ELSE 0 END) + "
+            "(CASE WHEN current_state_id IS NOT NULL THEN 1 ELSE 0 END) = 1",
+        )
 
     if not _constraint_exists("related_parcels", "ck_related_parcel_one_parent"):
-        with op.batch_alter_table("related_parcels", recreate="always") as batch_op:
-            batch_op.create_check_constraint(
-                "ck_related_parcel_one_parent",
-                "(building_unit_id IS NOT NULL) + (current_state_id IS NOT NULL) = 1",
-            )
+        op.create_check_constraint(
+            "ck_related_parcel_one_parent",
+            "related_parcels",
+            "(CASE WHEN building_unit_id IS NOT NULL THEN 1 ELSE 0 END) + "
+            "(CASE WHEN current_state_id IS NOT NULL THEN 1 ELSE 0 END) = 1",
+        )
 
     if not _constraint_exists("ownership_mutations", "ck_ownership_mutation_one_parent"):
-        with op.batch_alter_table("ownership_mutations", recreate="always") as batch_op:
-            batch_op.create_check_constraint(
-                "ck_ownership_mutation_one_parent",
-                "(document_id IS NOT NULL) + (property_group_id IS NOT NULL) + (land_parcel_id IS NOT NULL) = 1",
-            )
+        op.create_check_constraint(
+            "ck_ownership_mutation_one_parent",
+            "ownership_mutations",
+            "(CASE WHEN document_id IS NOT NULL THEN 1 ELSE 0 END) + "
+            "(CASE WHEN property_group_id IS NOT NULL THEN 1 ELSE 0 END) + "
+            "(CASE WHEN land_parcel_id IS NOT NULL THEN 1 ELSE 0 END) = 1",
+        )
 
     # ── 3. Create new cadastral.py tables ────────────────────────────────────
     #

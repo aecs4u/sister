@@ -11,11 +11,13 @@ import os
 import re
 from datetime import datetime
 from pathlib import Path
+from threading import Lock
 from typing import Any, Optional
 from urllib.parse import urlencode
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
+from starlette.concurrency import run_in_threadpool
 from starlette.responses import StreamingResponse
 
 from .database import (
@@ -42,10 +44,9 @@ _OPENDATA_API_URL = os.getenv("OPENDATA_API_URL", "http://localhost:8024")
 def _files_base() -> "Path":
     from pathlib import Path
 
-    from .database import DB_PATH
+    from .database import DATA_ROOT
 
-    data_root = Path(DB_PATH).parent.parent
-    return Path(os.getenv("SISTER_FILES_BASE", str(data_root / "documents"))).resolve()
+    return Path(os.getenv("SISTER_FILES_BASE", str(DATA_ROOT / "documents"))).resolve()
 
 
 logger = logging.getLogger("sister")
@@ -565,10 +566,77 @@ def _dossiers_base() -> "Path":
     """Filesystem root holding dossier JSON files (multi/single-step query responses)."""
     from pathlib import Path
 
-    from .database import DB_PATH
+    from .database import DATA_ROOT
 
-    data_root = Path(DB_PATH).parent.parent
-    return Path(os.getenv("SISTER_DOSSIERS_BASE", str(data_root / "dossiers"))).resolve()
+    return Path(os.getenv("SISTER_DOSSIERS_BASE", str(DATA_ROOT / "dossiers"))).resolve()
+
+
+# Cache only the lightweight index metadata. The file's nanosecond mtime and
+# size are checked on every scan, so changed files are parsed again immediately.
+_DOSSIER_META_CACHE: dict[str, tuple[int, int, dict]] = {}
+_DOSSIER_META_CACHE_LOCK = Lock()
+
+
+def _cached_dossier_meta(path: Path, stat_result: os.stat_result) -> dict:
+    cache_key = str(path.resolve())
+    signature = (stat_result.st_mtime_ns, stat_result.st_size)
+    with _DOSSIER_META_CACHE_LOCK:
+        cached = _DOSSIER_META_CACHE.get(cache_key)
+    if cached and cached[:2] == signature:
+        return dict(cached[2])
+
+    import json
+
+    data = json.loads(path.read_text(encoding="utf-8", errors="ignore"))
+    meta = _dossier_meta(path.name, data, stat_result.st_size, stat_result.st_mtime)
+    meta["size_bytes"] = stat_result.st_size
+    meta["mtime_ts"] = stat_result.st_mtime
+    search_terms = [path.name, meta["title"], meta["ident"]]
+    search_terms.extend(param["v"] for param in meta["request_params"])
+    meta["search_text"] = " ".join(str(term) for term in search_terms if term).casefold()
+    meta["filter_kind"] = "response" if meta["kind"] == "multi_response" else meta["kind"]
+
+    with _DOSSIER_META_CACHE_LOCK:
+        _DOSSIER_META_CACHE[cache_key] = (*signature, meta)
+    return dict(meta)
+
+
+def _load_dossier_index(base: Path) -> list[dict]:
+    """Read index metadata for dossier files, reusing unchanged file metadata."""
+    dossiers: list[dict] = []
+    seen_cache_keys: set[str] = set()
+    try:
+        children = list(base.iterdir()) if base.exists() else []
+    except OSError as exc:
+        logger.warning("Cannot scan dossier directory %s: %s", base, exc)
+        children = []
+
+    def modified_time(path: Path) -> float:
+        try:
+            return path.stat().st_mtime if path.is_file() else 0
+        except OSError:
+            return 0
+
+    for child in sorted(children, key=modified_time, reverse=True):
+        if not child.is_file() or child.suffix.lower() != ".json":
+            continue
+        cache_key = None
+        try:
+            stat = child.stat()
+            cache_key = str(child.resolve())
+            seen_cache_keys.add(cache_key)
+            dossiers.append(_cached_dossier_meta(child, stat))
+        except Exception as exc:
+            if cache_key:
+                with _DOSSIER_META_CACHE_LOCK:
+                    _DOSSIER_META_CACHE.pop(cache_key, None)
+            logger.warning("Skipping unreadable dossier JSON %s: %s", child, exc)
+
+    with _DOSSIER_META_CACHE_LOCK:
+        stale_cache_keys = _DOSSIER_META_CACHE.keys() - seen_cache_keys
+        for cache_key in stale_cache_keys:
+            _DOSSIER_META_CACHE.pop(cache_key, None)
+    return dossiers
 
 
 def _dossier_group_key(name: str, kind: str, data: Any) -> str:
@@ -690,7 +758,9 @@ def _dossier_meta(name: str, data: Any, size_bytes: int, mtime: float) -> dict:
     elif isinstance(data, dict) and ("request_id" in data or "data" in data):
         kind = "response"
         ident = data.get("request_id") or ""
-        ok = data.get("success")
+        success = data.get("success")
+        if success is not None:
+            ok = str(success).lower() not in ("false", "0", "no", "error")
         tc = data.get("tipo_catasto") or ""
         d = data.get("data") or {}
 
@@ -759,7 +829,9 @@ def _dossier_meta(name: str, data: Any, size_bytes: int, mtime: float) -> dict:
         "request_params": request_params,
         "response_meta": response_meta,
         "size_human": _human_size(size_bytes),
+        "size_bytes": size_bytes,
         "mtime": datetime.fromtimestamp(mtime).strftime("%Y-%m-%d %H:%M"),
+        "mtime_ts": mtime,
     }
 
 
@@ -822,6 +894,115 @@ def _dossier_query_group(kind: str, subtype: str) -> str:
         if subtype == "richieste":
             return "richieste"
     return "altro"
+
+
+def _build_dossier_groups(dossiers: list[dict]) -> list[dict]:
+    """Pair related responses and group dossiers by query type and subtype."""
+    from collections import defaultdict
+
+    def collapse_pairs(entries: list[dict]) -> list[dict]:
+        pair_groups: dict[str, list[dict]] = defaultdict(list)
+        for dossier in entries:
+            pair_groups[dossier.get("group_key", f"solo:{dossier['name']}")].append(dossier)
+
+        collapsed: list[dict] = []
+        for group_key, peers in pair_groups.items():
+            if not group_key.startswith("wf_pair:") or len(peers) <= 1:
+                collapsed.extend(peers)
+                continue
+
+            base_name = group_key[len("wf_pair:") :]
+            primary = max(peers, key=lambda peer: peer["mtime_ts"])
+            total_results = sum(peer.get("n_results", 0) for peer in peers)
+            combined_params: list[dict] = []
+            for peer in peers:
+                for param in peer.get("request_params", []):
+                    if param not in combined_params:
+                        combined_params.append(param)
+            combined_size = sum(peer.get("size_bytes", 0) for peer in peers)
+
+            merged = dict(primary)
+            merged.update(
+                {
+                    "title": base_name.replace("_", " "),
+                    "paired": True,
+                    "peers": sorted(peers, key=lambda peer: (peer["subtype"], peer["name"])),
+                    "ok": all(peer.get("ok") is not False for peer in peers),
+                    "n_results": total_results,
+                    "badges": [f"{total_results} risultati"] if total_results else [],
+                    "request_params": combined_params,
+                    "size_bytes": combined_size,
+                    "size_human": _human_size(combined_size),
+                    "search_text": " ".join(peer.get("search_text", "") for peer in peers).casefold(),
+                    "response_meta": {
+                        "n_results": total_results,
+                        "exported_at": primary.get("response_meta", {}).get("exported_at", ""),
+                    },
+                }
+            )
+            collapsed.append(merged)
+        return collapsed
+
+    query_buckets: dict[str, list[dict]] = defaultdict(list)
+    for dossier in dossiers:
+        query_buckets[_dossier_query_group(dossier["kind"], dossier["subtype"])].append(dossier)
+
+    groups: list[dict] = []
+    group_order = (
+        "visura_immobile",
+        "visura_soggetto",
+        "intestati",
+        "planimetria",
+        "epa",
+        "richieste",
+        "workflow",
+        "batch",
+        "altro",
+    )
+    for group_key in group_order:
+        entries = query_buckets.get(group_key)
+        if not entries:
+            continue
+        label, icon, color = _QUERY_GROUP_META[group_key]
+        collapsed = collapse_pairs(entries)
+
+        subtype_buckets: dict[str, list[dict]] = defaultdict(list)
+        for dossier in collapsed:
+            subtype_key = dossier["subtype"] if dossier["kind"] != "multi_response" else "multi_response"
+            subtype_buckets[subtype_key].append(dossier)
+
+        subgroups = []
+        for subtype_key, subtype_entries in subtype_buckets.items():
+            subtype_meta = _QUERY_SUBGROUP_META.get(subtype_key)
+            if subtype_meta:
+                subtype_label, subtype_icon, subtype_color = subtype_meta
+            else:
+                subtype_label = subtype_key.replace("-", " ").replace("_", " ").title()
+                subtype_icon = "fa-file"
+                subtype_color = color
+            subgroups.append(
+                {
+                    "key": f"{group_key}_{subtype_key}",
+                    "label": subtype_label,
+                    "icon": subtype_icon,
+                    "color": subtype_color,
+                    "count": len(subtype_entries),
+                    "entries": subtype_entries,
+                }
+            )
+        subgroups.sort(key=lambda subgroup: (subgroup["label"] == "Altro", subgroup["label"]))
+        groups.append(
+            {
+                "key": group_key,
+                "label": label,
+                "icon": icon,
+                "color": color,
+                "count": len(collapsed),
+                "subgroups": subgroups,
+            }
+        )
+
+    return groups
 
 
 # Kept for backwards compat with any internal callers (batch-viewer etc.).
@@ -1040,10 +1221,14 @@ def _filter_remove_url(key: str, filters: dict) -> str:
     return _build_url("/web/results", **params)
 
 
-def _format_timestamp(value: Optional[str]) -> Optional[str]:
+def _format_timestamp(value: Optional[str | datetime]) -> Optional[str]:
     """Format ISO timestamps for human-readable display."""
     if not value:
         return None
+    if isinstance(value, datetime):
+        return value.strftime("%Y-%m-%d %H:%M")
+    if not isinstance(value, str):
+        return str(value)
     try:
         return datetime.fromisoformat(value).strftime("%Y-%m-%d %H:%M")
     except ValueError:
@@ -1467,6 +1652,8 @@ async def web_index(request: Request, user=Depends(_require_auth)):
     theme = _get_theme(request)
     stats = await count_result_rows()
     recent = await find_result_rows(limit=5)
+    for item in recent:
+        item["requested_at_display"] = _format_timestamp(item.get("requested_at"))
     return theme.render(
         "index.html",
         request,
@@ -1493,12 +1680,11 @@ async def web_forms(request: Request, user=Depends(_require_auth)):
 
 @router.post("/web/results/refresh", response_class=HTMLResponse)
 async def web_results_refresh(request: Request, user=Depends(_require_auth)):
-    """Re-populate the database from exported JSON files in outputs/."""
-    import asyncio
+    """Import exported response JSON files into the configured database."""
     import importlib.util
     from pathlib import Path
 
-    from .database import DB_PATH
+    from .database import OUTPUTS_DIR, save_request, save_response
 
     project_root = Path(__file__).resolve().parent.parent
     script = project_root / "scripts" / "populate_query_data.py"
@@ -1506,17 +1692,33 @@ async def web_results_refresh(request: Request, user=Depends(_require_auth)):
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
 
-    db_path = Path(DB_PATH)
-    source = project_root / "outputs"
-    stats = await asyncio.to_thread(mod.populate, db_path, source, False)
-    logger.info("Database refreshed: %s", stats)
-
-    # Force the async engine to pick up data written by the sync sqlite3 connection
-    from . import database as _db
-
-    if _db._engine is not None:
-        await _db._engine.dispose()
-        _db._engine = None
+    source = Path(OUTPUTS_DIR)
+    imported = 0
+    for _, payload in list(mod._iter_response_payloads(source)):
+        fields = mod._infer_request_fields(payload)
+        await save_request(
+            request_id=fields["request_id"],
+            request_type=fields["request_type"],
+            tipo_catasto=fields["tipo_catasto"],
+            provincia=fields["provincia"],
+            comune=fields["comune"],
+            foglio=fields["foglio"],
+            particella=fields["particella"],
+            sezione=fields["sezione"],
+            subalterno=fields["subalterno"],
+            cache_key=fields["cache_key"],
+        )
+        data = payload.get("data") if isinstance(payload.get("data"), dict) else None
+        await save_response(
+            request_id=fields["request_id"],
+            success=mod._success(payload),
+            tipo_catasto=fields["tipo_catasto"],
+            data=data,
+            error=payload.get("error"),
+            export=False,
+        )
+        imported += 1
+    logger.info("Imported %s response payloads from %s", imported, source)
 
     return RedirectResponse("/web/results", status_code=303)
 
@@ -1862,7 +2064,13 @@ async def web_privacy(request: Request):
     """Privacy policy (public)."""
     theme = _get_theme(request)
     user = _get_user(request)
-    return theme.render("privacy_policy.html", request, user=user)
+    return theme.render("legal/privacy.html", request, user=user)
+
+
+@router.get("/privacy", include_in_schema=False)
+async def privacy_redirect():
+    """Target of the theme's cookie-modal/menu privacy links."""
+    return RedirectResponse(url="/web/privacy")
 
 
 @router.get("/web/guide", response_class=HTMLResponse)
@@ -1917,7 +2125,6 @@ def _file_icon(ext: str, is_dir: bool) -> tuple[str, str]:
         ".png": ("fa-file-image", "text-secondary"),
         ".jpg": ("fa-file-image", "text-secondary"),
         ".jpeg": ("fa-file-image", "text-secondary"),
-        ".sqlite": ("fa-database", "text-primary"),
         ".log": ("fa-scroll", "text-muted"),
         ".txt": ("fa-file-lines", "text-muted"),
         ".zip": ("fa-file-zipper", "text-secondary"),
@@ -3055,8 +3262,6 @@ def _safe_dossier_path(path: str) -> "Path":
 @router.get("/web/dossiers/view/{path:path}", response_class=HTMLResponse)
 async def web_dossier_view(request: Request, path: str, user=Depends(_require_auth)):
     """Render a single dossier JSON via the result_detail template."""
-    import json as _json
-
     theme = _get_theme(request)
     target = _safe_dossier_path(path.strip("/"))
     try:
@@ -3089,8 +3294,6 @@ async def web_dossiers(request: Request, path: str = "", download: str = "", use
     (``?download=1`` forces an attachment). Use /web/dossiers/view/<file> for the
     rendered view.
     """
-    import json as _json
-
     theme = _get_theme(request)
     path = path.strip("/")
     base = _dossiers_base()
@@ -3104,114 +3307,17 @@ async def web_dossiers(request: Request, path: str = "", download: str = "", use
             filename=target.name if download else None,
         )
 
-    # Root → list dossier files with extracted metadata
-    dossiers: list[dict] = []
-    if base.exists():
-        for child in sorted(base.iterdir(), key=lambda p: p.stat().st_mtime if p.is_file() else 0, reverse=True):
-            if not child.is_file() or child.suffix.lower() != ".json":
-                continue
-            try:
-                stat = child.stat()
-                data = _json.loads(child.read_text(encoding="utf-8", errors="ignore"))
-            except Exception:
-                continue
-            dossiers.append(_dossier_meta(child.name, data, stat.st_size, stat.st_mtime))
+    # Root → list dossier files with extracted metadata, off the event loop.
+    dossiers = await run_in_threadpool(_load_dossier_index, base)
+    groups = _build_dossier_groups(dossiers)
 
-    # Group by query type (unified taxonomy), then by subtype within each group
-    from collections import defaultdict
-
-    def _collapse_pairs(entries: list[dict]) -> list[dict]:
-        """Collapse wf_pair entries sharing the same group_key into one paired card."""
-        pair_groups: dict[str, list[dict]] = defaultdict(list)
-        for d in entries:
-            pair_groups[d.get("group_key", f"solo:{d['name']}")].append(d)
-        out: list[dict] = []
-        for gk, peers in pair_groups.items():
-            if gk.startswith("wf_pair:") and len(peers) > 1:
-                base_name = gk[len("wf_pair:") :]
-                primary = sorted(peers, key=lambda p: p["mtime"])[0]
-                total_results = sum(p.get("n_results", 0) for p in peers)
-                merged = dict(primary)
-                merged.update(
-                    {
-                        "title": base_name.replace("_", " "),
-                        "paired": True,
-                        "peers": sorted(peers, key=lambda p: p["subtype"]),
-                        "ok": all(p.get("ok") is not False for p in peers),
-                        "n_results": total_results,
-                        "badges": [f"{total_results} risultati"] if total_results else [],
-                        "response_meta": {
-                            "n_results": total_results,
-                            "exported_at": primary.get("response_meta", {}).get("exported_at", ""),
-                        },
-                    }
-                )
-                out.append(merged)
-            else:
-                out.extend(peers)
-        return out
-
-    # Bucket dossiers by query group
-    q_buckets: dict[str, list[dict]] = defaultdict(list)
-    for d in dossiers:
-        q_buckets[_dossier_query_group(d["kind"], d["subtype"])].append(d)
-
-    groups = []
-    for qkey in (
-        "visura_immobile",
-        "visura_soggetto",
-        "intestati",
-        "planimetria",
-        "epa",
-        "richieste",
-        "workflow",
-        "batch",
-        "altro",
-    ):
-        entries = q_buckets.get(qkey)
-        if not entries:
-            continue
-        label, icon, color = _QUERY_GROUP_META[qkey]
-
-        collapsed = _collapse_pairs(entries)
-
-        # Subgroup by subtype (+ kind for multi_response disambiguation)
-        sub_buckets: dict[str, list[dict]] = defaultdict(list)
-        for d in collapsed:
-            skey = d["subtype"] if d["kind"] != "multi_response" else "multi_response"
-            sub_buckets[skey].append(d)
-
-        subgroups = []
-        for skey, sentries in sub_buckets.items():
-            smeta = _QUERY_SUBGROUP_META.get(skey)
-            if smeta:
-                slabel, sicon, scolor = smeta
-            else:
-                slabel = skey.replace("-", " ").replace("_", " ").title()
-                sicon = "fa-file"
-                scolor = color
-            subgroups.append(
-                {
-                    "key": f"{qkey}_{skey}",
-                    "label": slabel,
-                    "icon": sicon,
-                    "color": scolor,
-                    "count": len(sentries),
-                    "entries": sentries,
-                }
-            )
-        subgroups.sort(key=lambda g: (g["label"] == "Altro", g["label"]))
-
-        groups.append(
-            {
-                "key": qkey,
-                "label": label,
-                "icon": icon,
-                "color": color,
-                "count": len(collapsed),
-                "subgroups": subgroups,
-            }
-        )
+    n_errors = sum(
+        1
+        for group in groups
+        for subgroup in group["subgroups"]
+        for dossier in subgroup["entries"]
+        if dossier.get("ok") is False
+    )
 
     return theme.render(
         "dossiers_index.html",
@@ -3219,6 +3325,7 @@ async def web_dossiers(request: Request, path: str = "", download: str = "", use
         user=user,
         groups=groups,
         total=len(dossiers),
+        n_errors=n_errors,
     )
 
 

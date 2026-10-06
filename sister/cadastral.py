@@ -100,11 +100,11 @@ class CadastralLocationParameters(SQLModel, table=True):
     __table_args__ = (
         sa.Index(
             "uq_location_params_query_id", "query_id", unique=True,
-            sqlite_where=sa.text("query_id IS NOT NULL"),
+            postgresql_where=sa.text("query_id IS NOT NULL"),
         ),
         sa.Index(
             "uq_location_params_inspection_id", "inspection_id", unique=True,
-            sqlite_where=sa.text("inspection_id IS NOT NULL"),
+            postgresql_where=sa.text("inspection_id IS NOT NULL"),
         ),
     )
 

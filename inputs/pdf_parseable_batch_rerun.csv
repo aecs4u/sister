@@ -1,0 +1,12 @@
+command,provincia,comune,foglio,particella,subalterno,tipo_catasto,sezione,codice_fiscale,identificativo,source_files,scope_note
+azienda,,,,,,E,,,03531340960,vs_att_03531340960.pdf,Fresh SISTER company JSON; it does not reproduce a dated PDF snapshot.
+azienda,,,,,,E,,,05311840283,vs_naz_05311840283.pdf,Fresh SISTER company JSON; it does not reproduce a dated PDF snapshot.
+azienda,,,,,,E,,,12485671007,vs_sto_12485671007.pdf; vs_sto_12485671007_T353797_2024.pdf,Fresh SISTER company JSON; it does not reproduce a dated PDF snapshot.
+elaborato-planimetrico,Ravenna,RAVENNA,103,,,F,,,,elab_plan_RA_FG103_PT1714_T47699_2026.pdf,"SISTER returns extracted result data as JSON, not the original map/plan document."
+elaborato-planimetrico,Ravenna,RAVENNA,104,,,F,,,,elab_plan_RA_FG104_PT2154_T474362_2026.pdf,"SISTER returns extracted result data as JSON, not the original map/plan document."
+elenco,Ravenna,RAVENNA,104,,,F,,,,el_imm_RA_FG104_PT2154_T472948_2026.pdf; el_sub_RA_FG104_PT2154_T474363_2026.pdf,Elenco JSON is filtered by sheet; the current SISTER API cannot filter this query by parcel.
+export-mappa,Ravenna,RAVENNA,103,,,F,,,,mappa_RA_FG103_PT1174_DOC_1992447229.pdf; mappa_RA_FG103_PT1174_DOC_1992451876.pdf; mappa_RA_FG103_PT1174_DOC_1992451990.pdf; mappa_RA_FG103_PT1714.pdf,"SISTER returns extracted result data as JSON, not the original map/plan document."
+export-mappa,Ravenna,RAVENNA,104,,,F,,,,mappa_RA_FG104_PT2154.pdf,"SISTER returns extracted result data as JSON, not the original map/plan document."
+search,Ravenna,RAVENNA,103,1714,6,F,,,,vi_sto_RA_FG103_PT1714_SUB6_T196731_2025.pdf; vi_sto_RA_FG103_PT1714_SUB6_T205472_2025.pdf; vi_sto_RA_FG103_PT1714_SUB6_T205529_2025.pdf,Fresh SISTER property JSON; a historical PDF's original date/period is not replayed.
+search,Ravenna,RAVENNA,104,2154,68,F,,,,vi_att_RA_FG104_PT2154_SUB68.pdf,Fresh SISTER property JSON.
+search,Ravenna,RAVENNA,104,2154,,T,,,,vi_att_ter_RA_RAVENNA_FG104_PT2154.pdf,Fresh SISTER property JSON.

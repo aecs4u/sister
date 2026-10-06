@@ -379,7 +379,7 @@ class VisuraClient:
     ) -> dict:
         """Poll until the request completes or times out.
 
-        Returns the final response dict (status will be 'completed' or 'error').
+        Returns the final response dict (status will be 'completed', 'error', 'expired' or 'needs_human').
         Raises ``TimeoutError`` if ``poll_timeout`` is exceeded.
         """
         interval = poll_interval or self.poll_interval
@@ -389,7 +389,7 @@ class VisuraClient:
         while True:
             result = await self.get_result(request_id)
             status = result.get("status", "")
-            if status in ("completed", "error", "expired"):
+            if status in ("completed", "error", "expired", "needs_human"):
                 return result
             elapsed = time.monotonic() - start
             if elapsed + interval > timeout:

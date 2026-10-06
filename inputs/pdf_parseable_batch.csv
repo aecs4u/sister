@@ -1,0 +1,63 @@
+command,provincia,comune,foglio,particella,subalterno,tipo_catasto,sezione,codice_fiscale,identificativo,source_files,scope_note
+azienda,,,,,,E,,,03531340960,vs_att_03531340960.pdf,Fresh SISTER company JSON; it does not reproduce a dated PDF snapshot.
+azienda,,,,,,E,,,05311840283,vs_naz_05311840283.pdf,Fresh SISTER company JSON; it does not reproduce a dated PDF snapshot.
+azienda,,,,,,E,,,12485671007,vs_sto_12485671007.pdf; vs_sto_12485671007_T353797_2024.pdf,Fresh SISTER company JSON; it does not reproduce a dated PDF snapshot.
+elaborato-planimetrico,Ravenna,RAVENNA,103,,,F,,,,elab_plan_RA_FG103_PT1714_T47699_2026.pdf,"SISTER returns extracted result data as JSON, not the original map/plan document."
+elaborato-planimetrico,Ravenna,RAVENNA,104,,,F,,,,elab_plan_RA_FG104_PT2154_T474362_2026.pdf,"SISTER returns extracted result data as JSON, not the original map/plan document."
+elenco,Ravenna,RAVENNA,104,,,F,,,,el_imm_RA_FG104_PT2154_T472948_2026.pdf; el_sub_RA_FG104_PT2154_T474363_2026.pdf,Elenco JSON is filtered by sheet; the current SISTER API cannot filter this query by parcel.
+export-mappa,Ravenna,RAVENNA,103,,,F,,,,mappa_RA_FG103_PT1174_DOC_1992447229.pdf; mappa_RA_FG103_PT1174_DOC_1992451876.pdf; mappa_RA_FG103_PT1174_DOC_1992451990.pdf; mappa_RA_FG103_PT1714.pdf,"SISTER returns extracted result data as JSON, not the original map/plan document."
+export-mappa,Ravenna,RAVENNA,104,,,F,,,,mappa_RA_FG104_PT2154.pdf,"SISTER returns extracted result data as JSON, not the original map/plan document."
+search,Palermo,PALERMO,134,122,21,F,,,,vi_sto_PA_FG134_PT122_SUB21.pdf,Fresh SISTER property JSON; a historical PDF's original date/period is not replayed.
+search,Palermo,PALERMO,134,122,5,F,,,,vi_sto_PA_FG134_PT122_SUB5.pdf,Fresh SISTER property JSON; a historical PDF's original date/period is not replayed.
+search,Ravenna,RAVENNA,101,2,16,F,,,,vi_sto_RA_FG101_PT2_SUB16.pdf,Fresh SISTER property JSON; a historical PDF's original date/period is not replayed.
+search,Ravenna,RAVENNA,101,2,17,F,,,,vi_sto_RA_FG101_PT2_SUB17.pdf,Fresh SISTER property JSON; a historical PDF's original date/period is not replayed.
+search,Ravenna,RAVENNA,101,2,24,F,,,,vi_sto_RA_FG101_PT2_SUB24.pdf,Fresh SISTER property JSON; a historical PDF's original date/period is not replayed.
+search,Ravenna,RAVENNA,101,2,26,F,,,,vi_sto_RA_FG101_PT2_SUB26.pdf,Fresh SISTER property JSON; a historical PDF's original date/period is not replayed.
+search,Ravenna,RAVENNA,101,2,27,F,,,,vi_sto_RA_FG101_PT2_SUB27.pdf,Fresh SISTER property JSON; a historical PDF's original date/period is not replayed.
+search,Ravenna,RAVENNA,101,2,28,F,,,,vi_sto_RA_FG101_PT2_SUB28.pdf,Fresh SISTER property JSON; a historical PDF's original date/period is not replayed.
+search,Ravenna,RAVENNA,101,2,29,F,,,,vi_sto_RA_FG101_PT2_SUB29.pdf,Fresh SISTER property JSON; a historical PDF's original date/period is not replayed.
+search,Ravenna,RAVENNA,101,2,30,F,,,,vi_sto_RA_FG101_PT2_SUB30.pdf,Fresh SISTER property JSON; a historical PDF's original date/period is not replayed.
+search,Ravenna,RAVENNA,101,2,31,F,,,,vi_sto_RA_FG101_PT2_SUB31.pdf,Fresh SISTER property JSON; a historical PDF's original date/period is not replayed.
+search,Ravenna,RAVENNA,101,2,57,F,,,,vi_sto_RA_FG101_PT2_SUB57.pdf,Fresh SISTER property JSON; a historical PDF's original date/period is not replayed.
+search,Ravenna,RAVENNA,101,2,58,F,,,,vi_sto_RA_FG101_PT2_SUB58.pdf,Fresh SISTER property JSON; a historical PDF's original date/period is not replayed.
+search,Ravenna,RAVENNA,101,2,59,F,,,,vi_sto_RA_FG101_PT2_SUB59.pdf,Fresh SISTER property JSON; a historical PDF's original date/period is not replayed.
+search,Ravenna,RAVENNA,101,2,60,F,,,,vi_sto_RA_FG101_PT2_SUB60.pdf,Fresh SISTER property JSON; a historical PDF's original date/period is not replayed.
+search,Ravenna,RAVENNA,101,2,61,F,,,,vi_sto_RA_FG101_PT2_SUB61.pdf,Fresh SISTER property JSON; a historical PDF's original date/period is not replayed.
+search,Ravenna,RAVENNA,101,2,63,F,,,,vi_sto_RA_FG101_PT2_SUB63.pdf,Fresh SISTER property JSON; a historical PDF's original date/period is not replayed.
+search,Ravenna,RAVENNA,101,230,,T,,,,vi_sto_RA_FG101_PT230.pdf,Fresh SISTER property JSON; a historical PDF's original date/period is not replayed.
+search,Ravenna,RAVENNA,103,1714,10,F,,,,vi_sto_RA_FG103_PT1714_SUB10_T197343_2025.pdf; vi_sto_RA_FG103_PT1714_SUB10_T205415_2025.pdf,Fresh SISTER property JSON; a historical PDF's original date/period is not replayed.
+search,Ravenna,RAVENNA,103,1714,16,F,,,,vi_sto_RA_FG103_PT1714_SUB16.pdf,Fresh SISTER property JSON; a historical PDF's original date/period is not replayed.
+search,Ravenna,RAVENNA,103,1714,17,F,,,,vi_sto_RA_FG103_PT1714_SUB17.pdf,Fresh SISTER property JSON; a historical PDF's original date/period is not replayed.
+search,Ravenna,RAVENNA,103,1714,18,F,,,,vi_sto_RA_FG103_PT1714_SUB18.pdf,Fresh SISTER property JSON; a historical PDF's original date/period is not replayed.
+search,Ravenna,RAVENNA,103,1714,19,F,,,,vi_sto_RA_FG103_PT1714_SUB19.pdf,Fresh SISTER property JSON; a historical PDF's original date/period is not replayed.
+search,Ravenna,RAVENNA,103,1714,2,F,,,,vi_sto_RA_FG103_PT1714_SUB2.pdf,Fresh SISTER property JSON; a historical PDF's original date/period is not replayed.
+search,Ravenna,RAVENNA,103,1714,6,F,,,,vi_sto_RA_FG103_PT1714_SUB6_T196731_2025.pdf; vi_sto_RA_FG103_PT1714_SUB6_T205472_2025.pdf; vi_sto_RA_FG103_PT1714_SUB6_T205529_2025.pdf,Fresh SISTER property JSON; a historical PDF's original date/period is not replayed.
+search,Ravenna,RAVENNA,103,1714,8,F,,,,vi_sto_RA_FG103_PT1714_SUB8_T196002_2025.pdf; vi_sto_RA_FG103_PT1714_SUB8_T196105_2025.pdf,Fresh SISTER property JSON; a historical PDF's original date/period is not replayed.
+search,Ravenna,RAVENNA,103,1714,9,F,,,,vi_sto_RA_FG103_PT1714_SUB9.pdf,Fresh SISTER property JSON; a historical PDF's original date/period is not replayed.
+search,Ravenna,RAVENNA,104,2154,68,F,,,,vi_att_RA_FG104_PT2154_SUB68.pdf,Fresh SISTER property JSON.
+search,Ravenna,RAVENNA,104,2154,69,F,,,,vi_att_RA_FG104_PT2154_SUB69.pdf,Fresh SISTER property JSON.
+search,Ravenna,RAVENNA,104,2154,70,F,,,,vi_att_RA_FG104_PT2154_SUB70.pdf,Fresh SISTER property JSON.
+search,Ravenna,RAVENNA,104,2154,,T,,,,vi_att_ter_RA_RAVENNA_FG104_PT2154.pdf,Fresh SISTER property JSON.
+search,Ravenna,RAVENNA,2,246,,T,,,,vi_sto_ter_RA_SAVIO_FG002_PT246.pdf,Fresh SISTER property JSON; a historical PDF's original date/period is not replayed.
+soggetto,Ravenna,,,,,E,,CFFMMN76M70F839H,,vs_att_CFFMMN76M70F839H.pdf,Fresh SISTER subject JSON; source PDF may be a dated export.
+soggetto,Ravenna,,,,,E,,CMNCHR82T46H199I,,vs_att_CMNCHR82T46H199I.pdf,Fresh SISTER subject JSON; source PDF may be a dated export.
+soggetto,Ravenna,,,,,E,,CNGLNI56B54Z110C,,vs_att_CNGLNI56B54Z110C.pdf,Fresh SISTER subject JSON; source PDF may be a dated export.
+soggetto,Ravenna,,,,,E,,CNGRNT83D09H501D,,vs_att_CNGRNT83D09H501D.pdf,Fresh SISTER subject JSON; source PDF may be a dated export.
+soggetto,Palermo,,,,,E,,CNNMNL74L04G273K,,vs_att_CNNMNL74L04G273K_T149343_2026.pdf; vs_att_CNNMNL74L04G273K_T193448_2025.pdf; vs_att_CNNMNL74L04G273K_T58998_2026.pdf,Fresh SISTER subject JSON; source PDF may be a dated export.
+soggetto,Ravenna,,,,,E,,CNNMNL74L04G273K,,vs_att_CNNMNL74L04G273K_T193610_2025.pdf; vs_att_CNNMNL74L04G273K_T195623_2025.pdf; vs_att_CNNMNL74L04G273K_T59020_2026.pdf; vs_sin_CNNMNL74L04G273K_STO_CE.pdf; vs_sto_CNNMNL74L04G273K.pdf,Fresh SISTER subject JSON; it does not reproduce the PDF's historical snapshot. | Fresh SISTER subject JSON; source PDF may be a dated export.
+soggetto,Ravenna,,,,,E,,DMSNRC76B24B990Q,,vs_att_DMSNRC76B24B990Q.pdf,Fresh SISTER subject JSON; source PDF may be a dated export.
+soggetto,Ravenna,,,,,E,,FNTMRA59E10C553Q,,vs_att_FNTMRA59E10C553Q.pdf,Fresh SISTER subject JSON; source PDF may be a dated export.
+soggetto,Ravenna,,,,,E,,FRSLSE77B54E730C,,vs_sin_FRSLSE77B54E730C_CE.pdf; vs_sin_FRSLSE77B54E730C_CE_T477370_2026.pdf; vs_sin_FRSLSE77B54E730C_CE_T478259_2026.pdf,Fresh SISTER subject JSON; it does not reproduce the PDF's historical snapshot.
+soggetto,Ravenna,,,,,E,,FRSMVT95P53H199F,,vs_att_FRSMVT95P53H199F_T479404_2026.pdf; vs_att_FRSMVT95P53H199F_T481910_2026.pdf,Fresh SISTER subject JSON; source PDF may be a dated export.
+soggetto,Ravenna,,,,,E,,GMMFNC73T04D488Y,,vs_att_GMMFNC73T04D488Y.pdf,Fresh SISTER subject JSON; source PDF may be a dated export.
+soggetto,Ravenna,,,,,E,,GRNFNC74C56C573Y,,vs_att_GRNFNC74C56C573Y.pdf,Fresh SISTER subject JSON; source PDF may be a dated export.
+soggetto,Ravenna,,,,,E,,MDAGLN53C09Z603E,,vs_att_MDAGLN53C09Z603E.pdf,Fresh SISTER subject JSON; source PDF may be a dated export.
+soggetto,Ravenna,,,,,E,,MDATMS94D18H199K,,vs_att_MDATMS94D18H199K.pdf,Fresh SISTER subject JSON; source PDF may be a dated export.
+soggetto,Ravenna,,,,,E,,MNDTMR63S64G186K,,vs_att_MNDTMR63S64G186K.pdf,Fresh SISTER subject JSON; source PDF may be a dated export.
+soggetto,Ravenna,,,,,E,,MZZDNL63R50C553D,,vs_att_MZZDNL63R50C553D.pdf,Fresh SISTER subject JSON; source PDF may be a dated export.
+soggetto,Ravenna,,,,,E,,MZZSNT59B53C553C,,vs_att_MZZSNT59B53C553C.pdf,Fresh SISTER subject JSON; source PDF may be a dated export.
+soggetto,Ravenna,,,,,E,,PGGPLA52C15H199K,,vs_att_PGGPLA52C15H199K.pdf,Fresh SISTER subject JSON; source PDF may be a dated export.
+soggetto,Ravenna,,,,,E,,RCLSRN69R64H199H,,vs_att_RCLSRN69R64H199H.pdf,Fresh SISTER subject JSON; source PDF may be a dated export.
+soggetto,Ravenna,,,,,E,,RSSMPN69R71F433Z,,vs_att_RSSMPN69R71F433Z.pdf,Fresh SISTER subject JSON; source PDF may be a dated export.
+soggetto,Ravenna,,,,,E,,VRGVTR77R23E472E,,vs_att_VRGVTR77R23E472E.pdf,Fresh SISTER subject JSON; source PDF may be a dated export.
+soggetto,Ravenna,,,,,E,,ZMBMNL62L65H294S,,vs_att_ZMBMNL62L65H294S.pdf,Fresh SISTER subject JSON; source PDF may be a dated export.

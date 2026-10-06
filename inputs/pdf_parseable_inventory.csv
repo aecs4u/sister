@@ -1,0 +1,93 @@
+pdf,status,companion_files,batch_row,command,scope_note
+el_imm_RA_FG104_PT2154_T472948_2026.pdf,queued_in_batch,,6,elenco,Elenco JSON is filtered by sheet; the current SISTER API cannot filter this query by parcel.
+el_sub_RA_FG104_PT2154_T474363_2026.pdf,queued_in_batch,,6,elenco,Elenco JSON is filtered by sheet; the current SISTER API cannot filter this query by parcel.
+elab_plan_RA_FG103_PT1714_T47699_2026.pdf,queued_in_batch,,4,elaborato-planimetrico,"SISTER returns extracted result data as JSON, not the original map/plan document."
+elab_plan_RA_FG104_PT2154_T474362_2026.pdf,queued_in_batch,,5,elaborato-planimetrico,"SISTER returns extracted result data as JSON, not the original map/plan document."
+mappa_RA_FG103_PT1174_DOC_1992447229.pdf,queued_in_batch,,7,export-mappa,"SISTER returns extracted result data as JSON, not the original map/plan document."
+mappa_RA_FG103_PT1174_DOC_1992451876.pdf,queued_in_batch,,7,export-mappa,"SISTER returns extracted result data as JSON, not the original map/plan document."
+mappa_RA_FG103_PT1174_DOC_1992451990.pdf,queued_in_batch,,7,export-mappa,"SISTER returns extracted result data as JSON, not the original map/plan document."
+mappa_RA_FG103_PT1714.pdf,queued_in_batch,,7,export-mappa,"SISTER returns extracted result data as JSON, not the original map/plan document."
+mappa_RA_FG104_PT2154.pdf,queued_in_batch,,8,export-mappa,"SISTER returns extracted result data as JSON, not the original map/plan document."
+vi_att_RA_FG104_PT2154_SUB68.pdf,queued_in_batch,,36,search,Fresh SISTER property JSON.
+vi_att_RA_FG104_PT2154_SUB69.pdf,queued_in_batch,,37,search,Fresh SISTER property JSON.
+vi_att_RA_FG104_PT2154_SUB70.pdf,queued_in_batch,,38,search,Fresh SISTER property JSON.
+vi_att_ter_RA_RAVENNA_FG104_PT2154.pdf,queued_in_batch,,39,search,Fresh SISTER property JSON.
+vi_att_ter_RA_SAVIO_FG002_PT246.pdf,has_parseable_companion,vi_att_ter_RA_SAVIO_FG002_PT246.p7m; vi_att_ter_RA_SAVIO_FG002_PT246.xml,,,
+vi_sto_PA_FG134_PT122_SUB21.pdf,queued_in_batch,,9,search,Fresh SISTER property JSON; a historical PDF's original date/period is not replayed.
+vi_sto_PA_FG134_PT122_SUB5.pdf,queued_in_batch,,10,search,Fresh SISTER property JSON; a historical PDF's original date/period is not replayed.
+vi_sto_RA_FG101_PT230.pdf,queued_in_batch,,26,search,Fresh SISTER property JSON; a historical PDF's original date/period is not replayed.
+vi_sto_RA_FG101_PT2_SUB15.pdf,has_parseable_companion,vi_sto_RA_FG101_PT2_SUB15.p7m; vi_sto_RA_FG101_PT2_SUB15.xml,,,
+vi_sto_RA_FG101_PT2_SUB16.pdf,queued_in_batch,,11,search,Fresh SISTER property JSON; a historical PDF's original date/period is not replayed.
+vi_sto_RA_FG101_PT2_SUB17.pdf,queued_in_batch,,12,search,Fresh SISTER property JSON; a historical PDF's original date/period is not replayed.
+vi_sto_RA_FG101_PT2_SUB24.pdf,queued_in_batch,,13,search,Fresh SISTER property JSON; a historical PDF's original date/period is not replayed.
+vi_sto_RA_FG101_PT2_SUB26.pdf,queued_in_batch,,14,search,Fresh SISTER property JSON; a historical PDF's original date/period is not replayed.
+vi_sto_RA_FG101_PT2_SUB27.pdf,queued_in_batch,,15,search,Fresh SISTER property JSON; a historical PDF's original date/period is not replayed.
+vi_sto_RA_FG101_PT2_SUB28.pdf,queued_in_batch,,16,search,Fresh SISTER property JSON; a historical PDF's original date/period is not replayed.
+vi_sto_RA_FG101_PT2_SUB29.pdf,queued_in_batch,,17,search,Fresh SISTER property JSON; a historical PDF's original date/period is not replayed.
+vi_sto_RA_FG101_PT2_SUB30.pdf,queued_in_batch,,18,search,Fresh SISTER property JSON; a historical PDF's original date/period is not replayed.
+vi_sto_RA_FG101_PT2_SUB31.pdf,queued_in_batch,,19,search,Fresh SISTER property JSON; a historical PDF's original date/period is not replayed.
+vi_sto_RA_FG101_PT2_SUB57.pdf,queued_in_batch,,20,search,Fresh SISTER property JSON; a historical PDF's original date/period is not replayed.
+vi_sto_RA_FG101_PT2_SUB58.pdf,queued_in_batch,,21,search,Fresh SISTER property JSON; a historical PDF's original date/period is not replayed.
+vi_sto_RA_FG101_PT2_SUB59.pdf,queued_in_batch,,22,search,Fresh SISTER property JSON; a historical PDF's original date/period is not replayed.
+vi_sto_RA_FG101_PT2_SUB60.pdf,queued_in_batch,,23,search,Fresh SISTER property JSON; a historical PDF's original date/period is not replayed.
+vi_sto_RA_FG101_PT2_SUB61.pdf,queued_in_batch,,24,search,Fresh SISTER property JSON; a historical PDF's original date/period is not replayed.
+vi_sto_RA_FG101_PT2_SUB62.pdf,has_parseable_companion,vi_sto_RA_FG101_PT2_SUB62.p7m; vi_sto_RA_FG101_PT2_SUB62.xml,,,
+vi_sto_RA_FG101_PT2_SUB63.pdf,queued_in_batch,,25,search,Fresh SISTER property JSON; a historical PDF's original date/period is not replayed.
+vi_sto_RA_FG103_PT1714_SUB10_T197343_2025.pdf,queued_in_batch,,27,search,Fresh SISTER property JSON; a historical PDF's original date/period is not replayed.
+vi_sto_RA_FG103_PT1714_SUB10_T205415_2025.pdf,queued_in_batch,,27,search,Fresh SISTER property JSON; a historical PDF's original date/period is not replayed.
+vi_sto_RA_FG103_PT1714_SUB11.pdf,has_parseable_companion,vi_sto_RA_FG103_PT1714_SUB11.p7m; vi_sto_RA_FG103_PT1714_SUB11.xml,,,
+vi_sto_RA_FG103_PT1714_SUB12.pdf,has_parseable_companion,vi_sto_RA_FG103_PT1714_SUB12.p7m; vi_sto_RA_FG103_PT1714_SUB12.xml,,,
+vi_sto_RA_FG103_PT1714_SUB13.pdf,has_parseable_companion,vi_sto_RA_FG103_PT1714_SUB13.p7m; vi_sto_RA_FG103_PT1714_SUB13.xml,,,
+vi_sto_RA_FG103_PT1714_SUB14.pdf,has_parseable_companion,vi_sto_RA_FG103_PT1714_SUB14.p7m; vi_sto_RA_FG103_PT1714_SUB14.xml,,,
+vi_sto_RA_FG103_PT1714_SUB15.pdf,has_parseable_companion,vi_sto_RA_FG103_PT1714_SUB15.p7m; vi_sto_RA_FG103_PT1714_SUB15.xml,,,
+vi_sto_RA_FG103_PT1714_SUB16.pdf,queued_in_batch,,28,search,Fresh SISTER property JSON; a historical PDF's original date/period is not replayed.
+vi_sto_RA_FG103_PT1714_SUB17.pdf,queued_in_batch,,29,search,Fresh SISTER property JSON; a historical PDF's original date/period is not replayed.
+vi_sto_RA_FG103_PT1714_SUB18.pdf,queued_in_batch,,30,search,Fresh SISTER property JSON; a historical PDF's original date/period is not replayed.
+vi_sto_RA_FG103_PT1714_SUB19.pdf,queued_in_batch,,31,search,Fresh SISTER property JSON; a historical PDF's original date/period is not replayed.
+vi_sto_RA_FG103_PT1714_SUB2.pdf,queued_in_batch,,32,search,Fresh SISTER property JSON; a historical PDF's original date/period is not replayed.
+vi_sto_RA_FG103_PT1714_SUB5.pdf,has_parseable_companion,vi_sto_RA_FG103_PT1714_SUB5.p7m; vi_sto_RA_FG103_PT1714_SUB5.xml,,,
+vi_sto_RA_FG103_PT1714_SUB6_T196731_2025.pdf,queued_in_batch,,33,search,Fresh SISTER property JSON; a historical PDF's original date/period is not replayed.
+vi_sto_RA_FG103_PT1714_SUB6_T205472_2025.pdf,queued_in_batch,,33,search,Fresh SISTER property JSON; a historical PDF's original date/period is not replayed.
+vi_sto_RA_FG103_PT1714_SUB6_T205529_2025.pdf,queued_in_batch,,33,search,Fresh SISTER property JSON; a historical PDF's original date/period is not replayed.
+vi_sto_RA_FG103_PT1714_SUB7.pdf,has_parseable_companion,vi_sto_RA_FG103_PT1714_SUB7.p7m; vi_sto_RA_FG103_PT1714_SUB7.xml,,,
+vi_sto_RA_FG103_PT1714_SUB8_T196002_2025.pdf,queued_in_batch,,34,search,Fresh SISTER property JSON; a historical PDF's original date/period is not replayed.
+vi_sto_RA_FG103_PT1714_SUB8_T196105_2025.pdf,queued_in_batch,,34,search,Fresh SISTER property JSON; a historical PDF's original date/period is not replayed.
+vi_sto_RA_FG103_PT1714_SUB9.pdf,queued_in_batch,,35,search,Fresh SISTER property JSON; a historical PDF's original date/period is not replayed.
+vi_sto_ter_RA_SAVIO_FG002_PT246.pdf,queued_in_batch,,40,search,Fresh SISTER property JSON; a historical PDF's original date/period is not replayed.
+vs_att_03531340960.pdf,queued_in_batch,,1,azienda,Fresh SISTER company JSON; it does not reproduce a dated PDF snapshot.
+vs_att_CFFMMN76M70F839H.pdf,queued_in_batch,,41,soggetto,Fresh SISTER subject JSON; source PDF may be a dated export.
+vs_att_CMNCHR82T46H199I.pdf,queued_in_batch,,42,soggetto,Fresh SISTER subject JSON; source PDF may be a dated export.
+vs_att_CNGLNI56B54Z110C.pdf,queued_in_batch,,43,soggetto,Fresh SISTER subject JSON; source PDF may be a dated export.
+vs_att_CNGRNT83D09H501D.pdf,queued_in_batch,,44,soggetto,Fresh SISTER subject JSON; source PDF may be a dated export.
+vs_att_CNNMNL74L04G273K_T149343_2026.pdf,queued_in_batch,,45,soggetto,Fresh SISTER subject JSON; source PDF may be a dated export.
+vs_att_CNNMNL74L04G273K_T193448_2025.pdf,queued_in_batch,,45,soggetto,Fresh SISTER subject JSON; source PDF may be a dated export.
+vs_att_CNNMNL74L04G273K_T193610_2025.pdf,queued_in_batch,,46,soggetto,Fresh SISTER subject JSON; source PDF may be a dated export.
+vs_att_CNNMNL74L04G273K_T195623_2025.pdf,queued_in_batch,,46,soggetto,Fresh SISTER subject JSON; source PDF may be a dated export.
+vs_att_CNNMNL74L04G273K_T58998_2026.pdf,queued_in_batch,,45,soggetto,Fresh SISTER subject JSON; source PDF may be a dated export.
+vs_att_CNNMNL74L04G273K_T59020_2026.pdf,queued_in_batch,,46,soggetto,Fresh SISTER subject JSON; source PDF may be a dated export.
+vs_att_DMSNRC76B24B990Q.pdf,queued_in_batch,,47,soggetto,Fresh SISTER subject JSON; source PDF may be a dated export.
+vs_att_FNTMRA59E10C553Q.pdf,queued_in_batch,,48,soggetto,Fresh SISTER subject JSON; source PDF may be a dated export.
+vs_att_FRSLSE77B54E730C.pdf,has_parseable_companion,vs_att_FRSLSE77B54E730C.p7m; vs_att_FRSLSE77B54E730C.xml,,,
+vs_att_FRSMVT95P53H199F_T479404_2026.pdf,queued_in_batch,,50,soggetto,Fresh SISTER subject JSON; source PDF may be a dated export.
+vs_att_FRSMVT95P53H199F_T481910_2026.pdf,queued_in_batch,,50,soggetto,Fresh SISTER subject JSON; source PDF may be a dated export.
+vs_att_GMMFNC73T04D488Y.pdf,queued_in_batch,,51,soggetto,Fresh SISTER subject JSON; source PDF may be a dated export.
+vs_att_GRNFNC74C56C573Y.pdf,queued_in_batch,,52,soggetto,Fresh SISTER subject JSON; source PDF may be a dated export.
+vs_att_MDAGLN53C09Z603E.pdf,queued_in_batch,,53,soggetto,Fresh SISTER subject JSON; source PDF may be a dated export.
+vs_att_MDATMS94D18H199K.pdf,queued_in_batch,,54,soggetto,Fresh SISTER subject JSON; source PDF may be a dated export.
+vs_att_MNDTMR63S64G186K.pdf,queued_in_batch,,55,soggetto,Fresh SISTER subject JSON; source PDF may be a dated export.
+vs_att_MZZDNL63R50C553D.pdf,queued_in_batch,,56,soggetto,Fresh SISTER subject JSON; source PDF may be a dated export.
+vs_att_MZZSNT59B53C553C.pdf,queued_in_batch,,57,soggetto,Fresh SISTER subject JSON; source PDF may be a dated export.
+vs_att_PGGPLA52C15H199K.pdf,queued_in_batch,,58,soggetto,Fresh SISTER subject JSON; source PDF may be a dated export.
+vs_att_RCLSRN69R64H199H.pdf,queued_in_batch,,59,soggetto,Fresh SISTER subject JSON; source PDF may be a dated export.
+vs_att_RSSMPN69R71F433Z.pdf,queued_in_batch,,60,soggetto,Fresh SISTER subject JSON; source PDF may be a dated export.
+vs_att_TMBSLV82D56H199Y.pdf,has_parseable_companion,vs_att_TMBSLV82D56H199Y.p7m; vs_att_TMBSLV82D56H199Y.xml,,,
+vs_att_VRGVTR77R23E472E.pdf,queued_in_batch,,61,soggetto,Fresh SISTER subject JSON; source PDF may be a dated export.
+vs_att_ZMBMNL62L65H294S.pdf,queued_in_batch,,62,soggetto,Fresh SISTER subject JSON; source PDF may be a dated export.
+vs_naz_05311840283.pdf,queued_in_batch,,2,azienda,Fresh SISTER company JSON; it does not reproduce a dated PDF snapshot.
+vs_sin_CNNMNL74L04G273K_STO_CE.pdf,queued_in_batch,,46,soggetto,Fresh SISTER subject JSON; it does not reproduce the PDF's historical snapshot.
+vs_sin_FRSLSE77B54E730C_CE.pdf,queued_in_batch,,49,soggetto,Fresh SISTER subject JSON; it does not reproduce the PDF's historical snapshot.
+vs_sin_FRSLSE77B54E730C_CE_T477370_2026.pdf,queued_in_batch,,49,soggetto,Fresh SISTER subject JSON; it does not reproduce the PDF's historical snapshot.
+vs_sin_FRSLSE77B54E730C_CE_T478259_2026.pdf,queued_in_batch,,49,soggetto,Fresh SISTER subject JSON; it does not reproduce the PDF's historical snapshot.
+vs_sto_12485671007.pdf,queued_in_batch,,3,azienda,Fresh SISTER company JSON; it does not reproduce a dated PDF snapshot.
+vs_sto_12485671007_T353797_2024.pdf,queued_in_batch,,3,azienda,Fresh SISTER company JSON; it does not reproduce a dated PDF snapshot.
+vs_sto_CNNMNL74L04G273K.pdf,queued_in_batch,,46,soggetto,Fresh SISTER subject JSON; it does not reproduce the PDF's historical snapshot.

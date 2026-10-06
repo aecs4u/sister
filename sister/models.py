@@ -42,6 +42,27 @@ class BrowserError(VisuraError):
     pass
 
 
+class SelectorDrift(BrowserError):
+    """Raised when a SISTER page does not match the expected workflow state."""
+
+    pass
+
+
+class CaptchaRequired(BrowserError):
+    """Raised when a SISTER CAPTCHA was not solved by a human in time.
+
+    The request is not submitted; it is reported as ``needs_human`` rather than as a failure or a success.
+    ``str()`` carries a stable ``CaptchaRequired: CAPTCHA_REQUIRED`` prefix so the marker survives being stored
+    as a plain ``VisuraResponse.error`` string.
+    """
+
+    MARKER = "CaptchaRequired: CAPTCHA_REQUIRED"
+
+    def __str__(self) -> str:
+        detail = super().__str__()
+        return f"{self.MARKER}: {detail}" if detail else self.MARKER
+
+
 class QueueFullError(VisuraError):
     """Raised when the request queue is at capacity"""
 

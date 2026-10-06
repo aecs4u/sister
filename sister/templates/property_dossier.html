@@ -1,0 +1,152 @@
+{% extends "_base.html" %}
+{% from "parts/_hero.html" import hero_section %}
+
+{% set subject = manifest.subject|default({}, true) %}
+
+{% block page_title %}Property Dossier — {{ subject.name|default('Subject', true) }}{% endblock %}
+
+{% block extra_css %}
+{{ super() }}
+<link rel="stylesheet" href="/static/css/pages/property_dossier.css">
+{% endblock %}
+
+{% block content %}
+{% call hero_section('Property Dossier', 'fa-diagram-project', '/web/dossiers', 'Dossiers',
+                     breadcrumb_parent='Dossiers', breadcrumb_current=subject.name|default('Property dossier', true)) %}
+{{ subject.name|default('Subject', true) }}{% if subject.codice_fiscale %} · <span class="font-monospace">{{ subject.codice_fiscale }}</span>{% endif %}
+{% endcall %}
+
+<div class="container-fluid py-3">
+    <section class="card border-0 shadow-sm mb-4 property-flow" aria-labelledby="flow-title">
+        <div class="card-header bg-white d-flex flex-wrap align-items-center justify-content-between gap-2">
+            <div>
+                <h2 class="h5 mb-1" id="flow-title"><i class="fas fa-diagram-project text-primary me-2"></i>Ownership flow</h2>
+                <p class="text-muted small mb-0">One subject, {{ documents|length }} property groups grouped by cadastral office.</p>
+            </div>
+            <span class="badge bg-primary-subtle text-primary border">{{ office_groups|length }} cadastral office{{ '' if office_groups|length == 1 else 's' }}</span>
+        </div>
+        <div class="card-body">
+            <div class="flow-scroll" tabindex="0" aria-label="Scrollable ownership flowchart">
+                <div class="flow-layout" style="--office-count: {{ office_groups|length if office_groups|length else 1 }}">
+                    <div class="flow-subject">
+                        <div class="flow-subject-node">
+                            <span class="flow-kicker">Subject</span>
+                            <strong>{{ subject.name|default('Subject', true) }}</strong>
+                            <code>{{ subject.codice_fiscale|default('—', true) }}</code>
+                        </div>
+                    </div>
+                    <div class="flow-offices" aria-label="Properties grouped by cadastral office">
+                        {% for office in office_groups %}
+                        <section class="office-flow-group" style="--property-count: {{ office.properties|length if office.properties|length else 1 }}" aria-label="{{ office.label }}">
+                            <div class="office-flow-node">
+                                <span class="flow-kicker">Cadastral office{% if office.province %} · {{ office.province }}{% endif %}</span>
+                                <strong><i class="fas fa-landmark me-1"></i>{{ office.label }}</strong>
+                            </div>
+                            <ol class="office-properties" aria-label="Properties at {{ office.label }}">
+                                {% for d in office.properties %}
+                                {% set property_style = 'fabbricati' if d.catasto_label == 'Fabbricati' else 'terreni' %}
+                                <li class="flow-property flow-{{ property_style }}">
+                                    <a href="#{{ d.anchor }}" class="flow-property-node">
+                                        <i class="fas {{ 'fa-building' if property_style == 'fabbricati' else 'fa-seedling' }} property-kind-icon" aria-hidden="true"></i>
+                                        <span class="flow-kicker">{{ d.catasto_label }}</span>
+                                        <strong>{{ d.primary_identifier }}</strong>
+                                        <span class="flow-category">{{ d.category|default('Category unavailable', true) }}{% if d.category_description %} · {{ d.category_description }}{% endif %}</span>
+                                        {% if property_style == 'fabbricati' %}
+                                        <span class="flow-income">Rendita {% if d.rendita_catastale %}€ {{ d.rendita_catastale }}{% else %}not assigned{% endif %}</span>
+                                        {% else %}
+                                        <span class="flow-income">RD € {{ d.reddito_dominicale|default('—', true) }} · RA € {{ d.reddito_agrario|default('—', true) }}</span>
+                                        {% endif %}
+                                        <span class="flow-share">Share {{ d.ownership_in_subject_report|default('not specified', true) }}</span>
+                                    </a>
+                                </li>
+                                {% endfor %}
+                            </ol>
+                        </section>
+                        {% endfor %}
+                    </div>
+                </div>
+            </div>
+            <p class="small text-muted mt-3 mb-0"><i class="fas fa-arrow-down me-1"></i>Select a property node to jump to its full report and related identifiers.</p>
+        </div>
+    </section>
+
+    <section class="row g-3 mb-4" aria-label="Dossier summary">
+        <div class="col-6 col-lg-3"><div class="summary-tile"><span>Property groups</span><strong>{{ documents|length }}</strong></div></div>
+        <div class="col-6 col-lg-3"><div class="summary-tile"><span>Signed reports</span><strong>{{ signed_report_count|default(documents|length) }}</strong></div></div>
+        <div class="col-6 col-lg-3"><div class="summary-tile"><span>Cadastral offices</span><strong>{{ office_groups|length }}</strong></div></div>
+        <div class="col-6 col-lg-3"><div class="summary-tile"><span>Report date</span><strong>{{ manifest.created_from_sister_reports_on|default('—', true) }}</strong></div></div>
+    </section>
+
+    <div class="d-flex align-items-center justify-content-between gap-2 mb-3">
+        <h2 class="h4 mb-0">{{ 'Property reports' if signed_report_count|default(documents|length) > 0 else 'Identified properties' }}</h2>
+        <span class="text-muted small">{{ source_label|default('P7M source and XML payload for each group', true) }}</span>
+    </div>
+
+    {% for office in office_groups %}
+    <section class="office-report-group mb-4" aria-labelledby="office-title-{{ loop.index }}">
+        <div class="office-report-heading">
+            <i class="fas fa-landmark me-2"></i>
+            <h3 class="h5 mb-0" id="office-title-{{ loop.index }}">{{ office.label }}</h3>
+            {% if office.province %}<span class="badge bg-light text-dark border">{{ office.province }}</span>{% endif %}
+            <span class="badge bg-secondary ms-auto">{{ office.properties|length }} properties</span>
+        </div>
+        <div class="property-list">
+            {% for d in office.properties %}
+            {% set property_style = 'fabbricati' if d.catasto_label == 'Fabbricati' else 'terreni' %}
+            <article class="card border-0 shadow-sm property-record property-{{ property_style }}" id="{{ d.anchor }}">
+                <div class="card-header bg-white d-flex flex-wrap align-items-center justify-content-between gap-2">
+                    <div class="d-flex align-items-center gap-2">
+                        <span class="property-index">{{ loop.index }}</span>
+                        <div>
+                            <span class="d-block text-muted small">{{ d.catasto_label }} · Property group</span>
+                            <h4 class="h5 mb-0">{{ d.primary_identifier }}</h4>
+                        </div>
+                    </div>
+                    <span class="badge text-bg-success">Ownership {{ d.ownership_in_subject_report|default('not specified', true) }}</span>
+                </div>
+                <div class="card-body">
+                    <dl class="property-facts">
+                        <div class="fact-wide">
+                            <dt>Identifiers covered</dt>
+                            <dd class="identifier-list">
+                                {% for identifier in d.identifiers|default([], true) %}<span class="identifier-chip">{{ identifier }}</span>{% endfor %}
+                            </dd>
+                        </div>
+                        <div>
+                            <dt>{{ 'Category' if property_style == 'fabbricati' else 'Quality' }}</dt>
+                            <dd>{{ d.category|default('Not available', true) }}{% if d.category_description %} — {{ d.category_description }}{% endif %}{% if d.class %} · Class {{ d.class }}{% endif %}</dd>
+                        </div>
+                        {% if d.address %}<div class="fact-wide"><dt>Address</dt><dd>{{ d.address }}</dd></div>{% endif %}
+                        {% if property_style == 'fabbricati' %}
+                        <div><dt>Rendita catastale</dt><dd>{% if d.rendita_catastale %}€ {{ d.rendita_catastale }}{% else %}Not assigned{% endif %}</dd></div>
+                        {% else %}
+                        <div><dt>Reddito dominicale</dt><dd>{% if d.reddito_dominicale %}€ {{ d.reddito_dominicale }}{% else %}Not available{% endif %}</dd></div>
+                        <div><dt>Reddito agrario</dt><dd>{% if d.reddito_agrario %}€ {{ d.reddito_agrario }}{% else %}Not available{% endif %}</dd></div>
+                        {% endif %}
+                        <div><dt>Report</dt><dd>{{ d.report_title|default('Visura', true) }}</dd></div>
+                        <div><dt>Request ID</dt><dd><code>{{ d.request_id|default('—', true) }}</code></dd></div>
+                    </dl>
+                    {% if d.note %}<p class="report-note mb-0"><i class="fas fa-circle-info me-2 text-primary"></i>{{ d.note }}</p>{% endif %}
+                </div>
+                <div class="card-footer bg-white d-flex flex-wrap align-items-center gap-2 no-print">
+                    {% if d.p7m and d.p7m.file %}
+                    <a class="btn btn-sm btn-outline-primary" href="/web/property-dossiers/{{ dossier_id }}/files/{{ d.p7m.file }}" download>
+                        <i class="fas fa-file-signature me-1"></i>Signed P7M
+                    </a>
+                    {% endif %}
+                    {% if d.xml and d.xml.file %}
+                    <a class="btn btn-sm btn-outline-secondary" href="/web/property-dossiers/{{ dossier_id }}/files/{{ d.xml.file }}" download>
+                        <i class="fas fa-file-code me-1"></i>XML payload
+                    </a>
+                    {% endif %}
+                    {% if not d.p7m and not d.xml %}
+                    <span class="small text-muted"><i class="fas fa-hourglass-half me-1"></i>Complete visura document pending</span>
+                    {% endif %}
+                </div>
+            </article>
+            {% endfor %}
+        </div>
+    </section>
+    {% endfor %}
+</div>
+{% endblock %}

@@ -101,7 +101,7 @@ Browser / CLI / API Client
 │                   │  • SPID/CIE login + SISTER   │   │
 │  ┌─────────────┐  │  • Keep-alive, recovery      │   │
 │  │ SQLModel DB │  └──────────┬───────────────────┘   │
-│  │ (SQLite)    │             │                       │
+│  │ (PostgreSQL)│             │                       │
 │  └─────────────┘             │                       │
 └──────────────────────────────┼───────────────────────┘
                                │
@@ -138,10 +138,11 @@ sister/
 │   └── static/             # CSS, JS, icons, workflow SVG flowcharts
 ├── tests/                  # Test suite (158+ test)
 ├── alembic/                # Database migrations
-├── data/                   # SQLite database (sister.sqlite)
+├── data/                   # Documenti, dossier e output generati
 ├── examples/               # CLI + Python client examples
 ├── scripts/                # Start script
 ├── docs/                   # Governance docs
+│   └── document_file_naming.md # Filename rules for downloaded documents
 ├── Dockerfile
 ├── docker-compose.yaml
 ├── pyproject.toml
@@ -171,7 +172,9 @@ git clone https://github.com/aecs4u/sister.git
 cd sister
 
 cp .env.example .env
-# Modifica .env con le tue credenziali SPID
+# Imposta DATABASE_DSN e le credenziali SPID in .env
+
+docker-compose run --rm visure-service alembic upgrade head
 
 docker-compose up -d
 
@@ -197,7 +200,9 @@ pip install -e .
 playwright install chromium
 
 cp .env.example .env
-# Modifica .env con le tue credenziali SPID
+# Imposta DATABASE_DSN e le credenziali SPID in .env
+
+alembic upgrade head
 
 ./scripts/start.sh
 ```
@@ -223,6 +228,9 @@ Crea un file `.env` nella root del progetto (vedi `.env.example`):
 ADE_USERNAME=RSSMRA85M01H501Z    # Codice fiscale
 ADE_PASSWORD=la_tua_password
 
+# Obbligatorio — Database PostgreSQL (schema gestito da Alembic)
+DATABASE_DSN=postgresql+psycopg://utente:password@host:5432/sister?sslmode=require
+
 # Opzionale — Autenticazione (gestite da aecs4u-auth)
 ADE_AUTH_METHOD=spid              # spid | cie | cns | fisconline
 ADE_SPID_PROVIDER=sielte          # sielte | aruba | poste | namirial
@@ -241,6 +249,7 @@ RESPONSE_CLEANUP_INTERVAL_SECONDS=60 # Intervallo cleanup cache (secondi)
 
 | Variabile | Obbligatoria | Default | Descrizione |
 |-----------|:------------:|---------|-------------|
+| `DATABASE_DSN` | ✅ | — | URL di connessione PostgreSQL usato dal servizio e da Alembic |
 | `ADE_USERNAME` | ✅ | — | Codice fiscale per il login SPID |
 | `ADE_PASSWORD` | ✅ | — | Password SPID |
 | `ADE_AUTH_METHOD` | | `spid` | Metodo di autenticazione: `spid`, `cie`, `cns`, `fisconline` |
@@ -265,6 +274,28 @@ RESPONSE_CLEANUP_INTERVAL_SECONDS=60 # Intervallo cleanup cache (secondi)
 | `VISURA_API_TIMEOUT` | `30` | Timeout HTTP in secondi |
 | `VISURA_POLL_INTERVAL` | `5` | Secondi tra un poll e l'altro |
 | `VISURA_POLL_TIMEOUT` | `300` | Tempo massimo di attesa (secondi) |
+
+### Verifica opzionale visura / planimetria
+
+La verifica della superficie catastale contro la stima dalla planimetria usa
+il workflow `floor-plan-ocr` di Ocular e non fa parte dell'installazione base:
+
+```bash
+pip install 'sister[floor-plan-ocr]'
+sister floor-plan-validate \
+  --visura visura.json \
+  --floor-plan planimetria.pdf \
+  --calibration calibration.json \
+  --rooms rooms.json \
+  --output validation.json
+```
+
+In alternativa, l'integrazione Python è disponibile in
+`sister.floor_plan.validate_visura_against_floor_plan`. Il risultato contiene
+la superficie della visura, la stima Ocular, lo scostamento e uno stato
+`match`, `mismatch` o `unavailable`. La planimetria deve essere calibrata e i
+perimetri degli ambienti devono essere confermati prima di interpretare la
+stima come verifica tecnica.
 
 ---
 
@@ -773,7 +804,7 @@ uv run sister wait req_F_abc123 --timeout 600
 GET /visura/history
 ```
 
-Consulta lo storico delle visure salvate nel database SQLite.
+Consulta lo storico delle visure salvate nel database PostgreSQL.
 
 | Parametro | Tipo | Default | Descrizione |
 |-----------|------|---------|-------------|
@@ -982,7 +1013,7 @@ logs/pages/
 - Unica `asyncio.Queue` con worker sequenziale
 - Pausa di **2 secondi** tra una richiesta e l'altra
 - Pausa di **5 secondi** dopo un errore
-- I risultati restano in memoria (`response_store`) e nel **database SQLite**
+- I risultati restano in memoria (`response_store`) e nel **database PostgreSQL**
 - Il client fa polling su `GET /visura/{request_id}` — restituisce `"processing"` finché il risultato non è pronto
 - Se il risultato non è in cache, viene cercato automaticamente nel database
 

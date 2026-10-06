@@ -250,7 +250,7 @@
         const res = await fetch('/web/api/visura/' + requestId, { signal: signal });
         const data = await res.json();
 
-        if (data.status === 'completed' || data.status === 'error' || data.status === 'expired') {
+        if (data.status === 'completed' || data.status === 'error' || data.status === 'expired' || data.status === 'needs_human') {
           return data;
         }
 

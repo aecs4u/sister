@@ -5,6 +5,7 @@
 
 {% block extra_css %}
 {{ super() }}
+<link rel="stylesheet" href="/static/css/doc_sections.css">
 <link rel="stylesheet" href="/static/css/pages/dossier_batch_viewer.css">
 {% endblock %}
 
@@ -60,7 +61,7 @@
         <span>Organizzazioni</span>
         <span class="badge bg-primary" id="t1-count">{{ summary_rows | length }}</span>
         <div class="tbl-section-actions no-print">
-            <button class="btn btn-xs btn-outline-secondary py-0 px-2" style="font-size:.75rem" onclick="exportCsv('t1','organizzazioni')">
+            <button class="btn btn-compact btn-outline-secondary" onclick="exportCsv('t1','organizzazioni')">
                 <i class="fas fa-file-csv me-1"></i>CSV
             </button>
         </div>
@@ -128,7 +129,7 @@
         <span class="text-muted fw-normal small">soggetti corrispondenti restituiti dalla visura persona giuridica</span>
         {% endif %}
         <div class="tbl-section-actions no-print">
-            <button class="btn btn-xs btn-outline-secondary py-0 px-2" style="font-size:.75rem" onclick="exportCsv('t2','{{ 'corrispondenze' if is_entity_match else 'immobili' }}')">
+            <button class="btn btn-compact btn-outline-secondary" onclick="exportCsv('t2','{{ 'corrispondenze' if is_entity_match else 'immobili' }}')">
                 <i class="fas fa-file-csv me-1"></i>CSV
             </button>
         </div>

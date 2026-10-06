@@ -23,7 +23,7 @@ class CadastralLocation(SQLModel, table=True):
     """Normalised cadastral location shared across visura_requests, visura_properties, and document_metadata.
 
     All seven fields default to empty string so the unique constraint can identify duplicates without
-    NULL ambiguity (SQLite treats each NULL as distinct in a UNIQUE index).
+    NULL ambiguity.
     """
 
     __tablename__ = "cadastral_locations"
@@ -86,7 +86,12 @@ class CadastralSubject(SQLModel, table=True):
     __table_args__ = (
         # Partial unique index: deduplicate subjects by fiscal code when present.
         # NULL fiscal codes are excluded so anonymous subjects don't collide.
-        Index("uq_subject_fiscal_code", "fiscal_code", unique=True, sqlite_where=sa.text("fiscal_code IS NOT NULL")),
+        Index(
+            "uq_subject_fiscal_code",
+            "fiscal_code",
+            unique=True,
+            postgresql_where=sa.text("fiscal_code IS NOT NULL"),
+        ),
     )
 
 
@@ -125,7 +130,7 @@ class VisuraRequest(SQLModel, table=True):
     cache_key: Optional[str] = Field(default=None, index=True)
     cost_text: Optional[str] = None
     cost_value: Optional[float] = None
-    created_at: datetime = Field(default_factory=datetime.now)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
     location: Optional["CadastralLocation"] = Relationship(back_populates="requests")
     response: Optional["VisuraResponse"] = Relationship(back_populates="request")
@@ -143,7 +148,7 @@ class VisuraResponse(SQLModel, table=True):
     total_intestati: Optional[int] = None
     skipped_soppresso: Optional[int] = None
     subject_query: Optional[str] = None
-    created_at: datetime = Field(default_factory=datetime.now)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
     request: Optional["VisuraRequest"] = Relationship(back_populates="response")
     properties: list["VisuraProperty"] = Relationship(
@@ -325,7 +330,7 @@ class VisuraDocument(SQLModel, table=True):
     file_size: Optional[int] = None
     subject: Optional[str] = None  # description from Richieste table
     requested_at: Optional[str] = None  # request timestamp from Richieste table
-    created_at: datetime = Field(default_factory=datetime.now)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
     response: Optional["VisuraResponse"] = Relationship(back_populates="documents")
     document_metadata: Optional["DocumentMetadata"] = Relationship(back_populates="document")

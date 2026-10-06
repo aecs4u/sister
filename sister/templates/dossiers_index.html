@@ -1,14 +1,13 @@
 {% extends "_base.html" %}
-{% from "_doc_macros.html" import shared_section_css, jump_chips, query_section,
-                                   query_subsection, dossier_card, doc_macros_css %}
+{% from "_doc_macros.html" import jump_chips, query_section,
+                                   query_subsection, dossier_card, doc_macros_js %}
 {% from "parts/_hero.html" import hero_section %}
 
 {% block page_title %}Dossier{% endblock %}
 
 {% block extra_css %}
 {{ super() }}
-{{ shared_section_css() }}
-{{ doc_macros_css() }}
+<link rel="stylesheet" href="/static/css/doc_sections.css">
 <link rel="stylesheet" href="/static/css/pages/dossiers_index.css">
 {% endblock %}
 
@@ -18,6 +17,11 @@
                      breadcrumb_parent='Dashboard', breadcrumb_current='Dossier',
                      extra_btn_url='/web/documents', extra_btn_label='Documenti', extra_btn_icon='fa-folder-tree') %}
 <strong>{{ total }}</strong> dossier — query <em>single-step</em> e <em>workflow multi-step</em>
+{% if n_errors %}
+<a class="d-inline-block ms-2 fw-semibold text-white" href="#dossier-filter-errors" data-show-errors>
+    <i class="fas fa-circle-exclamation me-1" aria-hidden="true"></i>{{ n_errors }} {{ 'errore' if n_errors == 1 else 'errori' }}
+</a>
+{% endif %}
 {% endcall %}
 
 <div class="container-fluid">
@@ -28,6 +32,52 @@
     </div>
     {% else %}
 
+    <div id="dossier-filters" class="dossier-toolbar d-flex flex-wrap align-items-center gap-3 mb-4 no-print" role="search" aria-label="Filtra i dossier">
+        <div class="flex-grow-1 dossier-search-wrap">
+            <label class="visually-hidden" for="dossier-search">Cerca nei dossier</label>
+            <div class="input-group">
+                <span class="input-group-text"><i class="fas fa-magnifying-glass" aria-hidden="true"></i></span>
+                <input id="dossier-search" type="search" class="form-control" placeholder="Cerca titolo, identificativo, CF/P.IVA o comune…" autocomplete="off">
+            </div>
+        </div>
+        <div class="dossier-filter-group d-flex flex-wrap align-items-center gap-1" data-filter-group="status" role="group" aria-label="Filtra per stato">
+            <span class="small text-muted me-1">Stato</span>
+            <button type="button" class="btn btn-sm btn-outline-secondary active" data-filter-value="all" aria-pressed="true">Tutti</button>
+            <button type="button" class="btn btn-sm btn-outline-success" data-filter-value="ok" aria-pressed="false"><i class="fas fa-circle-check me-1" aria-hidden="true"></i>OK</button>
+            <button id="dossier-filter-errors" type="button" class="btn btn-sm btn-outline-danger" data-filter-value="error" aria-pressed="false"><i class="fas fa-circle-xmark me-1" aria-hidden="true"></i>Errore</button>
+        </div>
+        <div class="dossier-filter-group d-flex flex-wrap align-items-center gap-1" data-filter-group="kind" role="group" aria-label="Filtra per tipo">
+            <span class="small text-muted me-1">Tipo</span>
+            <button type="button" class="btn btn-sm btn-outline-secondary active" data-filter-value="all" aria-pressed="true">Tutti</button>
+            <button type="button" class="btn btn-sm btn-outline-primary" data-filter-value="workflow" aria-pressed="false">Workflow</button>
+            <button type="button" class="btn btn-sm btn-outline-primary" data-filter-value="response" aria-pressed="false">Risposte</button>
+            <button type="button" class="btn btn-sm btn-outline-primary" data-filter-value="batch" aria-pressed="false">Batch</button>
+        </div>
+        <div class="dossier-filter-group d-flex flex-wrap align-items-center gap-1" data-filter-group="date" role="group" aria-label="Filtra per data">
+            <span class="small text-muted me-1">Data</span>
+            <button type="button" class="btn btn-sm btn-outline-secondary active" data-filter-value="all" aria-pressed="true">Sempre</button>
+            <button type="button" class="btn btn-sm btn-outline-secondary" data-filter-value="today" aria-pressed="false">Oggi</button>
+            <button type="button" class="btn btn-sm btn-outline-secondary" data-filter-value="week" aria-pressed="false">7 giorni</button>
+        </div>
+        <label class="small text-muted d-flex align-items-center gap-2" for="dossier-sort">
+            Ordina
+            <select id="dossier-sort" class="form-select form-select-sm">
+                <option value="newest">Più recenti</option>
+                <option value="results">Più risultati</option>
+                <option value="status">Prima gli errori</option>
+            </select>
+        </label>
+        <div class="d-flex gap-2 ms-lg-auto">
+            <button type="button" onclick="toggleAllSections(true)" class="btn btn-sm btn-outline-secondary"><i class="fas fa-angles-down me-1" aria-hidden="true"></i>Espandi</button>
+            <button type="button" onclick="toggleAllSections(false)" class="btn btn-sm btn-outline-secondary"><i class="fas fa-angles-up me-1" aria-hidden="true"></i>Riduci</button>
+            <button id="dossier-export-csv" type="button" class="btn btn-sm btn-outline-success"><i class="fas fa-file-csv me-1" aria-hidden="true"></i>CSV</button>
+        </div>
+        <span id="dossier-result-count" class="small text-muted" role="status" aria-live="polite"></span>
+    </div>
+    <div id="dossier-no-results" class="alert alert-info py-2" hidden>
+        <i class="fas fa-circle-info me-2" aria-hidden="true"></i>Nessun dossier corrisponde ai filtri selezionati.
+    </div>
+
     {{ jump_chips(groups) }}
 
     {% for g in groups %}
@@ -36,7 +86,17 @@
         {% call query_subsection(sg) %}
             <div class="row g-3">
                 {% for d in sg.entries %}
-                <div class="col-md-6 col-xl-4">
+                <div class="col-md-6 col-xl-4 dossier-entry"
+                     data-search="{{ d.search_text }}"
+                     data-kind="{{ d.filter_kind }}"
+                     data-mtime="{{ d.mtime_ts }}"
+                     data-date-label="{{ d.mtime }}"
+                     data-results="{{ d.n_results }}"
+                     data-title="{{ d.title }}"
+                     data-ident="{{ d.ident }}"
+                     data-size="{{ d.size_human }}"
+                     data-files="{% if d.paired %}{{ d.peers | map(attribute='name') | join('; ') }}{% else %}{{ d.name }}{% endif %}"
+                     data-status="{{ 'ok' if d.ok is sameas true else ('error' if d.ok is sameas false else 'unknown') }}">
                     {{ dossier_card(d, g.color) }}
                 </div>
                 {% endfor %}
@@ -48,4 +108,198 @@
 
     {% endif %}
 </div>
+{% endblock %}
+
+{% block extra_js %}
+{{ super() }}
+{{ doc_macros_js() }}
+<script>
+(function () {
+    var search = document.getElementById('dossier-search');
+    if (!search) return;
+
+    var entries = Array.from(document.querySelectorAll('.dossier-entry'));
+    var filters = {status: 'all', kind: 'all', date: 'all'};
+    var count = document.getElementById('dossier-result-count');
+    var empty = document.getElementById('dossier-no-results');
+    var sortSelect = document.getElementById('dossier-sort');
+    var exportButton = document.getElementById('dossier-export-csv');
+
+    function sortEntries() {
+        var mode = sortSelect.value;
+        document.querySelectorAll('.q-sub-body .row').forEach(function (row) {
+            var cards = Array.from(row.children).filter(function (child) { return child.classList.contains('dossier-entry'); });
+            cards.sort(function (a, b) {
+                var timeDiff = Number(b.dataset.mtime) - Number(a.dataset.mtime);
+                if (mode === 'results') {
+                    var resultDiff = Number(b.dataset.results) - Number(a.dataset.results);
+                    return resultDiff || timeDiff;
+                }
+                if (mode === 'status') {
+                    var rank = {error: 0, ok: 1, unknown: 2};
+                    var statusDiff = rank[a.dataset.status] - rank[b.dataset.status];
+                    return statusDiff || timeDiff;
+                }
+                return timeDiff;
+            });
+            cards.forEach(function (card) { row.appendChild(card); });
+        });
+    }
+
+    function applyFilters() {
+        var query = search.value.trim().toLocaleLowerCase('it');
+        var now = Date.now();
+        var startOfToday = new Date(new Date().getFullYear(), new Date().getMonth(), new Date().getDate()).getTime();
+        var visible = 0;
+        entries.forEach(function (entry) {
+            var matchesText = !query || entry.dataset.search.includes(query);
+            var matchesStatus = filters.status === 'all' || entry.dataset.status === filters.status;
+            var matchesKind = filters.kind === 'all' || entry.dataset.kind === filters.kind;
+            var fileTime = Number(entry.dataset.mtime) * 1000;
+            var matchesDate = filters.date === 'all'
+                || (filters.date === 'today' && fileTime >= startOfToday)
+                || (filters.date === 'week' && fileTime >= now - 7 * 24 * 60 * 60 * 1000);
+            entry.hidden = !(matchesText && matchesStatus && matchesKind && matchesDate);
+            if (!entry.hidden) visible += 1;
+        });
+
+        document.querySelectorAll('.q-sub').forEach(function (subgroup) {
+            subgroup.hidden = !Array.from(subgroup.querySelectorAll('.dossier-entry')).some(function (entry) { return !entry.hidden; });
+        });
+        document.querySelectorAll('.q-section').forEach(function (section) {
+            section.hidden = !Array.from(section.querySelectorAll('.dossier-entry')).some(function (entry) { return !entry.hidden; });
+            var chip = document.querySelector('.dossier-jump-chips a[href="#' + section.id + '"]');
+            if (chip) chip.hidden = section.hidden;
+        });
+
+        count.textContent = visible + (visible === 1 ? ' dossier visibile' : ' dossier visibili');
+        empty.hidden = visible !== 0;
+        exportButton.disabled = visible === 0;
+    }
+
+    search.addEventListener('input', applyFilters);
+    document.querySelectorAll('.dossier-filter-group').forEach(function (group) {
+        group.addEventListener('click', function (event) {
+            var button = event.target.closest('button[data-filter-value]');
+            if (!button) return;
+            group.querySelectorAll('button[data-filter-value]').forEach(function (candidate) {
+                var selected = candidate === button;
+                candidate.classList.toggle('active', selected);
+                candidate.setAttribute('aria-pressed', String(selected));
+            });
+            filters[group.dataset.filterGroup] = button.dataset.filterValue;
+            applyFilters();
+        });
+    });
+
+    document.addEventListener('click', async function (event) {
+        var button = event.target.closest('[data-copy-request-id]');
+        if (!button) return;
+        var value = button.dataset.copyRequestId;
+        var copied = false;
+        try {
+            if (navigator.clipboard && window.isSecureContext) {
+                await navigator.clipboard.writeText(value);
+                copied = true;
+            } else {
+                var field = document.createElement('textarea');
+                field.value = value;
+                field.setAttribute('readonly', '');
+                field.style.position = 'absolute';
+                field.style.left = '-9999px';
+                document.body.appendChild(field);
+                field.select();
+                copied = document.execCommand('copy');
+                field.remove();
+            }
+        } catch (e) {}
+        if (!copied) return;
+        var previous = button.innerHTML;
+        button.innerHTML = '<i class="fas fa-check" aria-hidden="true"></i>';
+        button.title = 'Copiato';
+        setTimeout(function () {
+            button.innerHTML = previous;
+            button.title = 'Copia request_id';
+        }, 1200);
+    });
+
+    sortSelect.addEventListener('change', sortEntries);
+    sortEntries();
+
+    exportButton.addEventListener('click', function () {
+        var rows = [['Tipo', 'Titolo', 'Identificativo', 'Stato', 'Modificato', 'Risultati', 'Dimensione', 'File']];
+        entries.filter(function (entry) { return !entry.hidden; }).forEach(function (entry) {
+            var status = entry.dataset.status === 'ok' ? 'OK' : (entry.dataset.status === 'error' ? 'Errore' : 'N/D');
+            rows.push([
+                entry.dataset.kind,
+                entry.dataset.title,
+                entry.dataset.ident,
+                status,
+                entry.dataset.dateLabel,
+                entry.dataset.results,
+                entry.dataset.size,
+                entry.dataset.files
+            ]);
+        });
+        var csv = '\ufeff' + rows.map(function (row) {
+            return row.map(function (value) {
+                return '"' + String(value || '').replace(/"/g, '""') + '"';
+            }).join(',');
+        }).join('\r\n');
+        var url = URL.createObjectURL(new Blob([csv], {type: 'text/csv;charset=utf-8'}));
+        var link = document.createElement('a');
+        link.href = url;
+        link.download = 'dossier-visibili.csv';
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+    });
+
+    var collapseStorageKey = 'sister:dossiers:collapse:v1';
+    var savedCollapseStates = {};
+    try {
+        var storedStates = JSON.parse(localStorage.getItem(collapseStorageKey) || '{}');
+        if (storedStates && typeof storedStates === 'object' && !Array.isArray(storedStates)) {
+            savedCollapseStates = storedStates;
+        }
+    } catch (e) {}
+
+    document.querySelectorAll('.q-section .collapse, .q-sub .collapse').forEach(function (element) {
+        if (!Object.prototype.hasOwnProperty.call(savedCollapseStates, element.id)) return;
+        var collapse = bootstrap.Collapse.getOrCreateInstance(element, {toggle: false});
+        savedCollapseStates[element.id] ? collapse.show() : collapse.hide();
+    });
+
+    document.addEventListener('shown.bs.collapse', function (event) {
+        if (!event.target.matches('.q-section .collapse, .q-sub .collapse')) return;
+        try {
+            var states = JSON.parse(localStorage.getItem(collapseStorageKey) || '{}');
+            states[event.target.id] = true;
+            localStorage.setItem(collapseStorageKey, JSON.stringify(states));
+        } catch (e) {}
+    });
+    document.addEventListener('hidden.bs.collapse', function (event) {
+        if (!event.target.matches('.q-section .collapse, .q-sub .collapse')) return;
+        try {
+            var states = JSON.parse(localStorage.getItem(collapseStorageKey) || '{}');
+            states[event.target.id] = false;
+            localStorage.setItem(collapseStorageKey, JSON.stringify(states));
+        } catch (e) {}
+    });
+
+    var errorButton = document.getElementById('dossier-filter-errors');
+    var errorSummary = document.querySelector('[data-show-errors]');
+    if (errorSummary && errorButton) {
+        errorSummary.addEventListener('click', function (event) {
+            event.preventDefault();
+            errorButton.click();
+            document.getElementById('dossier-filters').scrollIntoView({behavior: 'smooth', block: 'center'});
+        });
+        if (window.location.hash === '#dossier-filter-errors') errorButton.click();
+    }
+
+    applyFilters();
+})();
+</script>
 {% endblock %}

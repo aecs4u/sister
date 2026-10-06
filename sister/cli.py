@@ -68,6 +68,63 @@ def _write_output(data: dict | list, path: str) -> None:
     console.print(f"[dim]Output written to {p}[/dim]")
 
 
+@app.command("floor-plan-validate")
+def floor_plan_validate(
+    visura: Path = typer.Option(..., "--visura", help="JSON file containing the SISTER visura response/data"),
+    floor_plan: Path = typer.Option(..., "--floor-plan", help="Floor-plan PDF or image"),
+    calibration: Optional[Path] = typer.Option(None, "--calibration", help="JSON calibration file"),
+    rooms: Optional[Path] = typer.Option(None, "--rooms", help="JSON file containing rooms/polygons"),
+    property_index: int = typer.Option(0, "--property-index", min=0, help="Property in data.immobili to compare"),
+    visura_area_m2: Optional[float] = typer.Option(
+        None, "--visura-area-m2", min=0, help="Override the cadastral surface extracted from the JSON"
+    ),
+    tolerance_m2: float = typer.Option(1.0, "--tolerance-m2", min=0, help="Absolute tolerance in square metres"),
+    tolerance_percent: float = typer.Option(
+        0.05, "--tolerance-percent", min=0, help="Relative tolerance (0.05 = 5%%)"
+    ),
+    output: Optional[Path] = typer.Option(None, "--output", "-o", help="Write the validation result to JSON"),
+):
+    """Validate a cadastral visura surface against Ocular's floor-plan estimate."""
+    try:
+        from .floor_plan import FloorPlanFeatureUnavailable, validate_visura_against_floor_plan
+
+        visura_data = json.loads(visura.read_text(encoding="utf-8"))
+        calibration_data = json.loads(calibration.read_text(encoding="utf-8")) if calibration else None
+        rooms_data = json.loads(rooms.read_text(encoding="utf-8")) if rooms else None
+        result = asyncio.run(
+            validate_visura_against_floor_plan(
+                visura=visura_data,
+                floor_plan_path=floor_plan,
+                calibration=calibration_data,
+                rooms=rooms_data,
+                property_index=property_index,
+                visura_area_m2=visura_area_m2,
+                tolerance_m2=tolerance_m2,
+                tolerance_percent=tolerance_percent,
+            )
+        )
+    except FloorPlanFeatureUnavailable as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1)
+    except (OSError, json.JSONDecodeError, ValueError) as exc:
+        console.print(f"[red]Invalid floor-plan validation input: {exc}[/red]")
+        raise typer.Exit(1)
+    except Exception as exc:
+        console.print(f"[red]Floor-plan validation failed: {exc}[/red]")
+        raise typer.Exit(1)
+
+    comparison = result["comparison"]
+    status = comparison["status"]
+    style = {"match": "green", "mismatch": "yellow", "unavailable": "red"}.get(status, "red")
+    console.print(f"[{style}]Validation: {status}[/{style}]")
+    console.print(f"  Visura:     {comparison.get('visura_area_m2') or 'n/a'} m²")
+    console.print(f"  Planimetry: {comparison.get('estimated_area_m2') or 'n/a'} m²")
+    if comparison.get("difference_m2") is not None:
+        console.print(f"  Difference:  {comparison['difference_m2']} m²")
+    if output:
+        _write_output(result, str(output))
+
+
 def _print_result(result: dict) -> None:
     """Pretty-print a visura result with status-aware formatting."""
     status = result.get("status", "unknown")
@@ -87,6 +144,13 @@ def _print_result(result: dict) -> None:
     if status == "error":
         error = result.get("error", "unknown error")
         console.print(f"[red]Request {request_id} failed:[/red] {error}")
+        return
+
+    if status == "needs_human":
+        console.print(
+            f"[yellow]Request {request_id} needs a human:[/yellow] the SISTER CAPTCHA was not solved, "
+            "so no document was requested."
+        )
         return
 
     if status == "completed":
@@ -289,6 +353,7 @@ def intestati(
                 tipo_catasto=tipo_catasto,
                 subalterno=subalterno,
                 sezione=sezione,
+                force=force,
             )
         )
     except VisuraAPIError as e:
@@ -356,6 +421,7 @@ def soggetto(
                 codice_fiscale=codice_fiscale,
                 tipo_catasto=tipo_catasto,
                 provincia=provincia,
+                force=force,
             )
         )
     except VisuraAPIError as e:
@@ -425,6 +491,7 @@ def azienda(
                 identificativo=identificativo,
                 tipo_catasto=tipo_catasto,
                 provincia=provincia,
+                force=force,
             )
         )
     except VisuraAPIError as e:
@@ -497,6 +564,7 @@ def elenco(
                 tipo_catasto=tipo_catasto,
                 foglio=foglio,
                 sezione=sezione,
+                force=force,
             )
         )
     except VisuraAPIError as e:
@@ -1594,6 +1662,16 @@ _BATCH_DISPATCHERS = {
         ("provincia", "comune"),
         {"tipo_catasto": "tipo_catasto", "foglio": "foglio", "sezione": "sezione"},
     ),
+    "export-mappa": (
+        "generic_search",
+        ("provincia", "comune", "foglio"),
+        {"tipo_catasto": "tipo_catasto", "particella": "particella"},
+    ),
+    "elaborato-planimetrico": (
+        "generic_search",
+        ("provincia", "comune", "foglio"),
+        {"tipo_catasto": "tipo_catasto", "particella": "particella"},
+    ),
     "indirizzo": ("generic_search", ("provincia", "comune", "indirizzo"), {"tipo_catasto": "tipo_catasto"}),
     "partita": ("generic_search", ("provincia", "comune", "partita"), {"tipo_catasto": "tipo_catasto"}),
     "nota": (
@@ -1602,6 +1680,22 @@ _BATCH_DISPATCHERS = {
         {"anno_nota": "anno_nota", "tipo_catasto": "tipo_catasto"},
     ),
     "mappa": ("generic_search", ("provincia", "comune", "foglio"), {"tipo_catasto": "tipo_catasto"}),
+    "visura-storica": (
+        "generic_search",
+        ("provincia", "comune", "foglio", "particella"),
+        {"tipo_catasto": "tipo_catasto", "subalterno": "subalterno", "sezione": "sezione"},
+    ),
+    # provincia is required by the API; use NAZIONALE for a nationwide subject search
+    "soggetto-documento": (
+        "generic_search",
+        ("provincia", "codice_fiscale"),
+        {"tipo_catasto": "tipo_catasto", "vista": "vista"},
+    ),
+    "soggetto-immobili": (
+        "generic_search",
+        ("provincia", "codice_fiscale"),
+        {"tipo_catasto": "tipo_catasto", "con_intestati": "con_intestati", "azienda": "azienda"},
+    ),
     "ispezioni": (
         "generic_search",
         ("provincia", "comune"),
@@ -1617,7 +1711,7 @@ def batch(
         "search",
         "--command",
         "-c",
-        help="Query type: search, intestati, soggetto, azienda, elenco, indirizzo, partita, nota, mappa, ispezioni (or 'auto' to read from CSV 'command' column)",
+        help="Query type: search, intestati, soggetto, azienda, elenco, indirizzo, partita, nota, mappa, export-mappa, elaborato-planimetrico, ispezioni (or 'auto' to read from CSV 'command' column)",
     ),
     wait: bool = typer.Option(False, "--wait", "-w", help="Wait for each result before submitting the next"),
     output_dir: Optional[str] = typer.Option(None, "--output-dir", "-O", help="Directory — writes one JSON per row"),
@@ -1637,6 +1731,7 @@ def batch(
       soggetto:   codice_fiscale [,tipo_catasto, provincia]
       azienda:    identificativo [,tipo_catasto, provincia]
       elenco:     provincia, comune [,tipo_catasto, foglio]
+      export-mappa / elaborato-planimetrico: provincia, comune, foglio [,tipo_catasto, particella]
       indirizzo:  provincia, comune, indirizzo [,tipo_catasto]
       partita:    provincia, comune, partita [,tipo_catasto]
       nota:       provincia, numero_nota [,anno_nota, tipo_catasto]
@@ -1694,12 +1789,19 @@ def batch(
 
     for i, row in enumerate(rows, 1):
         cmd = row.pop("command", command)
+        input_metadata = {
+            key: row[key]
+            for key in ("source_files", "scope_note")
+            if row.get(key)
+        }
         dispatcher_info = _BATCH_DISPATCHERS.get(cmd)
 
         if not dispatcher_info:
             console.print(f"  [red]({i}/{len(rows)}) Unknown command: {cmd}[/red]")
             err_count += 1
-            all_results.append({"row": i, "command": cmd, "status": "error", "error": f"Unknown command: {cmd}"})
+            all_results.append(
+                {"row": i, "command": cmd, **input_metadata, "status": "error", "error": f"Unknown command: {cmd}"}
+            )
             continue
 
         method_name, required_fields, extra_mapping = dispatcher_info
@@ -1707,7 +1809,9 @@ def batch(
         if missing:
             console.print(f"  [red]({i}/{len(rows)}) [{cmd}] Missing fields: {', '.join(missing)}[/red]")
             err_count += 1
-            all_results.append({"row": i, "command": cmd, "status": "error", "error": f"Missing: {missing}"})
+            all_results.append(
+                {"row": i, "command": cmd, **input_metadata, "status": "error", "error": f"Missing: {missing}"}
+            )
             continue
 
         label = f"[{cmd}] " + " ".join(f"{k}={v}" for k, v in list(row.items())[:4])
@@ -1755,7 +1859,14 @@ def batch(
                     console.print(f"  [red]{rid}: HTTP {e.status_code}: {e.detail}[/red]")
                     row_results[rid] = {"status": "error"}
 
-            entry = {"row": i, "command": cmd, "label": label, "request_ids": request_ids, "results": row_results}
+            entry = {
+                "row": i,
+                "command": cmd,
+                **input_metadata,
+                "label": label,
+                "request_ids": request_ids,
+                "results": row_results,
+            }
             all_results.append(entry)
 
             if output_dir:
@@ -1768,7 +1879,14 @@ def batch(
                 err_count += 1
         else:
             all_results.append(
-                {"row": i, "command": cmd, "label": label, "request_ids": request_ids, "status": "queued"}
+                {
+                    "row": i,
+                    "command": cmd,
+                    **input_metadata,
+                    "label": label,
+                    "request_ids": request_ids,
+                    "status": "queued",
+                }
             )
             ok_count += 1
 

@@ -22,28 +22,27 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def _column_exists(table: str, column: str) -> bool:
-    conn = op.get_bind()
-    rows = conn.execute(sa.text(f"PRAGMA table_info({table})")).fetchall()
-    return any(r[1] == column for r in rows)
+    inspector = sa.inspect(op.get_bind())
+    return inspector.has_table(table) and any(col["name"] == column for col in inspector.get_columns(table))
 
 
 def _index_exists(index_name: str) -> bool:
-    conn = op.get_bind()
-    row = conn.execute(
-        sa.text("SELECT count(*) FROM sqlite_master WHERE type='index' AND name=:n"),
-        {"n": index_name},
-    ).fetchone()
-    return bool(row and row[0])
+    inspector = sa.inspect(op.get_bind())
+    return any(
+        index["name"] == index_name
+        for table in inspector.get_table_names()
+        for index in inspector.get_indexes(table)
+    )
 
 
 def upgrade() -> None:
     # ── 1. visura_responses: rename tipo_catasto → cadastre_type ─────────────
     if _column_exists("visura_responses", "tipo_catasto"):
-        with op.batch_alter_table("visura_responses", recreate="always") as batch_op:
+        with op.batch_alter_table("visura_responses") as batch_op:
             batch_op.alter_column("tipo_catasto", new_column_name="cadastre_type")
 
     # ── 2. visura_properties: add subject_id; drop denormalised entity fields ─
-    with op.batch_alter_table("visura_properties", recreate="always") as batch_op:
+    with op.batch_alter_table("visura_properties") as batch_op:
         if not _column_exists("visura_properties", "subject_id"):
             batch_op.add_column(sa.Column("subject_id", sa.Integer(), nullable=True))
             batch_op.create_index("ix_visura_properties_subject_id", ["subject_id"])
@@ -55,7 +54,7 @@ def upgrade() -> None:
             batch_op.drop_column("fiscal_code")
 
     # ── 3. visura_owners: add subject_id + right_id; drop old flat columns ────
-    with op.batch_alter_table("visura_owners", recreate="always") as batch_op:
+    with op.batch_alter_table("visura_owners") as batch_op:
         if not _column_exists("visura_owners", "subject_id"):
             batch_op.add_column(sa.Column("subject_id", sa.Integer(), nullable=True))
             batch_op.create_index("ix_visura_owners_subject_id", ["subject_id"])

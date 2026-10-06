@@ -2,7 +2,6 @@
    _doc_macros.html — shared macros for Documents and Dossiers pages.
 
    Navigation / layout (use in both pages):
-     shared_section_css()          — CSS for query-group sections & subsections
      jump_chips(groups)            — anchor chip bar linking to top-level groups
      query_section(g)              — caller macro: collapsible kind-level section
      query_subsection(sg)          — caller macro: collapsible subtype-level section
@@ -14,65 +13,19 @@
      doc_table(id, docs, color)    — table of logical documents
      file_chips(d, prefix)         — attachment chips (P7M/XML + PDF)
 
-   Shared CSS/JS helpers:
-     doc_macros_css()              — CSS for doc tables + attachment chips
+   Shared JS helper:
      doc_macros_js()               — filter + CSV JS for .doc-table elements
 
    Import example:
-     {% from "_doc_macros.html" import shared_section_css, jump_chips,
+   {% from "_doc_macros.html" import jump_chips,
                                         query_section, query_subsection,
                                         dossier_card, doc_table, file_chips,
-                                        doc_macros_css, doc_macros_js %}
+                                        doc_macros_js %}
    ─────────────────────────────────────────────────────────────────────────── #}
-
-{# ── Shared layout: section/subsection CSS ───────────────────────────────── #}
-{% macro shared_section_css() %}
-<style>
-/* Query-group sections (level 0) */
-.q-section { margin-bottom: 1.75rem; }
-.q-section-header {
-    display: flex; align-items: center; gap: .5rem;
-    padding: .65rem 1rem; cursor: pointer; user-select: none;
-    background: #f8f9fa; border: 1px solid #dee2e6; border-radius: .45rem;
-    border-left: 5px solid var(--q-color, #6c757d); font-size: 1.05rem;
-}
-.q-section-header:hover { background: #f1f3f5; }
-.q-section-body { padding: .5rem 0 .25rem 1.4rem; border-left: 2px dashed #e9ecef; margin-left: 1.2rem; }
-/* Sub-sections (level 1) */
-.q-sub { margin-bottom: 1rem; }
-.q-sub-header {
-    display: flex; align-items: center; gap: .45rem;
-    padding: .45rem .85rem; cursor: pointer; user-select: none;
-    background: #fff; border: 1px solid #e9ecef; border-radius: .4rem;
-    border-left: 3px solid var(--q-color, #adb5bd); font-size: .93rem;
-}
-.q-sub-header:hover { background: #f8f9fa; }
-.q-sub-body { padding: .5rem 0 .25rem 1.2rem; }
-/* Dossier cards */
-.dossier-card { transition: box-shadow .15s, transform .15s; }
-.dossier-card:hover { box-shadow: 0 .4rem 1rem rgba(0,0,0,.1); transform: translateY(-2px); }
-.dossier-ident { font-family: monospace; font-size: .75rem; color: #6c757d; word-break: break-all; }
-.card-split { display: grid; grid-template-columns: 1fr 1fr; gap: 0; border-top: 1px solid #f0f0f0; }
-.card-split-half { padding: .5rem .75rem; font-size: .8rem; }
-.card-split-half:first-child { border-right: 1px solid #f0f0f0; }
-.split-label { font-size: .68rem; text-transform: uppercase; letter-spacing: .04em; color: #adb5bd; margin-bottom: .2rem; }
-.split-kv { display: flex; gap: .3rem; flex-wrap: wrap; }
-.split-kv dt { color: #6c757d; font-weight: normal; white-space: nowrap; }
-.split-kv dt::after { content: ':'; }
-.split-kv dd { font-weight: 500; margin: 0; word-break: break-all; }
-/* Chevron */
-.q-chevron { transition: transform .2s; font-size: .7rem; color: #6c757d; }
-[aria-expanded="false"] .q-chevron { transform: rotate(-90deg); }
-@media print {
-  .no-print { display: none !important; }
-  .q-section-body, .q-sub-body { display: block !important; }
-}
-</style>
-{% endmacro %}
 
 {# ── Jump chips: quick-anchor bar to top-level groups ─────────────────────── #}
 {% macro jump_chips(groups) %}
-<div class="d-flex flex-wrap gap-2 mb-4 no-print">
+<div class="d-flex flex-wrap gap-2 mb-4 no-print dossier-jump-chips">
     {% for g in groups %}
     <a href="#q-{{ g.key }}" class="btn btn-sm btn-outline-{{ g.color }}">
         <i class="fas {{ g.icon }} me-1"></i>{{ g.label }}
@@ -87,13 +40,14 @@
    ─────────────────────────────────────────────────────────────────────────── #}
 {% macro query_section(g, expanded=True) %}
 <div class="q-section" id="q-{{ g.key }}" style="--q-color: var(--bs-{{ g.color }})">
-    <div class="q-section-header" data-bs-toggle="collapse"
-         data-bs-target="#q-body-{{ g.key }}" aria-expanded="{{ 'true' if expanded else 'false' }}">
+    <button type="button" class="q-section-header" data-bs-toggle="collapse"
+            data-bs-target="#q-body-{{ g.key }}" aria-expanded="{{ 'true' if expanded else 'false' }}"
+            aria-controls="q-body-{{ g.key }}">
         <i class="fas {{ g.icon }} text-{{ g.color }}"></i>
         <span class="fw-semibold">{{ g.label }}</span>
         <span class="badge bg-{{ g.color }}">{{ g.count }}</span>
         <i class="fas fa-chevron-down q-chevron ms-auto"></i>
-    </div>
+    </button>
     <div class="collapse {{ 'show' if expanded else '' }}" id="q-body-{{ g.key }}">
         <div class="q-section-body">{{ caller() }}</div>
     </div>
@@ -105,13 +59,14 @@
    ─────────────────────────────────────────────────────────────────────────── #}
 {% macro query_subsection(sg, expanded=True) %}
 <div class="q-sub" style="--q-color: var(--bs-{{ sg.color }})">
-    <div class="q-sub-header" data-bs-toggle="collapse"
-         data-bs-target="#q-sub-{{ sg.key }}" aria-expanded="{{ 'true' if expanded else 'false' }}">
+    <button type="button" class="q-sub-header" data-bs-toggle="collapse"
+            data-bs-target="#q-sub-{{ sg.key }}" aria-expanded="{{ 'true' if expanded else 'false' }}"
+            aria-controls="q-sub-{{ sg.key }}">
         <i class="fas {{ sg.icon }} text-{{ sg.color }}"></i>
         <span class="fw-semibold">{{ sg.label }}</span>
         <span class="badge bg-{{ sg.color }} bg-opacity-75">{{ sg.count }}</span>
         <i class="fas fa-chevron-down q-chevron ms-auto"></i>
-    </div>
+    </button>
     <div class="collapse {{ 'show' if expanded else '' }}" id="q-sub-{{ sg.key }}">
         <div class="q-sub-body">{{ caller() }}</div>
     </div>
@@ -122,53 +77,11 @@
 {% macro dossier_card(d, color) %}
 {% if d.paired %}
 {# ── Paired card (multiple related files) ── #}
-<div class="card border-0 shadow-sm dossier-card border-start border-3 border-{{ color }}">
+<div class="card border-0 shadow-sm dossier-card border-start border-3 border-{{ 'danger' if d.ok is sameas false else color }}">
     <div class="card-body pb-2">
         <div class="d-flex justify-content-between align-items-start gap-2">
-            <h3 class="h6 mb-0 text-truncate flex-grow-1" title="{{ d.title }}">
+            <h3 class="h6 mb-0 dossier-title flex-grow-1" title="{{ d.title }}">
                 <i class="fas fa-link text-{{ color }} me-1"></i>{{ d.title }}
-            </h3>
-            {% if d.ok is not none %}
-            <span class="badge bg-{{ 'success' if d.ok else 'danger' }} flex-shrink-0">{{ 'OK' if d.ok else 'Errore' }}</span>
-            {% endif %}
-        </div>
-    </div>
-    <ul class="list-group list-group-flush">
-        {% for peer in d.peers %}
-        <li class="list-group-item px-3 py-2">
-            <div class="d-flex align-items-center gap-2">
-                <span class="badge bg-{{ color }} bg-opacity-10 text-{{ color }} border small">
-                    {{ peer.subtype | replace('_', ' ') | title }}
-                </span>
-                <span class="small text-muted text-truncate flex-grow-1" title="{{ peer.name }}">{{ peer.name }}</span>
-                {% if peer.ok is not none %}
-                <span class="badge bg-{{ 'success' if peer.ok else 'danger' }}">{{ 'OK' if peer.ok else 'ERR' }}</span>
-                {% endif %}
-                {% if peer.n_results %}<span class="small text-muted">{{ peer.n_results }}</span>{% endif %}
-            </div>
-            <div class="d-flex gap-1 mt-1 no-print">
-                <a href="/web/dossiers/view/{{ peer.name }}" class="btn btn-xs btn-outline-{{ color }} py-0 px-2" style="font-size:.75rem">
-                    <i class="fas fa-eye"></i> Apri
-                </a>
-                <a href="/web/dossiers/{{ peer.name }}?download=1" class="btn btn-xs btn-outline-secondary py-0 px-2" style="font-size:.75rem">
-                    <i class="fas fa-download"></i>
-                </a>
-            </div>
-        </li>
-        {% endfor %}
-    </ul>
-    <div class="card-footer bg-transparent text-muted small d-flex justify-content-between">
-        <span><i class="fas fa-clock me-1"></i>{{ d.mtime }}</span>
-        <span>{{ d.peers | length }} file · {{ d.n_results }} risultati</span>
-    </div>
-</div>
-{% else %}
-{# ── Standard single-file card ── #}
-<div class="card border-0 shadow-sm dossier-card">
-    <div class="card-body pb-2">
-        <div class="d-flex justify-content-between align-items-start gap-2">
-            <h3 class="h6 mb-0 text-truncate flex-grow-1" title="{{ d.title }}">
-                <i class="fas fa-file-circle-check text-{{ color }} me-1"></i>{{ d.title }}
             </h3>
             {% if d.ok is not none %}
             <span class="badge bg-{{ 'success' if d.ok else 'danger' }} flex-shrink-0">{{ 'OK' if d.ok else 'Errore' }}</span>
@@ -181,30 +94,118 @@
         </div>
         {% endif %}
     </div>
-    {% if d.request_params or d.response_meta %}
-    <div class="card-split">
+    {% set has_request = d.request_params|length > 0 %}
+    {% set has_response = d.response_meta and (d.response_meta.n_results or d.response_meta.exported_at) %}
+    {% if has_request or has_response %}
+    <div class="card-split {{ 'card-split-single' if not has_request or not has_response else '' }}">
+        {% if has_request %}
         <div class="card-split-half">
             <div class="split-label"><i class="fas fa-arrow-right-to-bracket me-1"></i>Richiesta</div>
-            {% if d.request_params %}
             <dl class="split-kv mb-0">
                 {% for p in d.request_params %}<dt>{{ p.k }}</dt><dd>{{ p.v }}</dd>{% endfor %}
             </dl>
-            {% else %}<span class="text-muted">–</span>{% endif %}
         </div>
+        {% endif %}
+        {% if has_response %}
         <div class="card-split-half">
             <div class="split-label"><i class="fas fa-arrow-right-from-bracket me-1"></i>Risposta</div>
             <dl class="split-kv mb-0">
                 {% if d.response_meta.n_results %}<dt>Risultati</dt><dd>{{ d.response_meta.n_results }}</dd>{% endif %}
                 {% if d.response_meta.exported_at %}<dt>Data</dt><dd>{{ d.response_meta.exported_at }}</dd>{% endif %}
-                <dt>Dim</dt><dd>{{ d.size_human }}</dd>
             </dl>
         </div>
+        {% endif %}
     </div>
     {% endif %}
+    <ul class="list-group list-group-flush">
+        {% for peer in d.peers %}
+        <li class="list-group-item px-3 py-2">
+            <div class="d-flex align-items-center gap-2">
+                <span class="badge bg-{{ color }} bg-opacity-10 text-{{ color }} border small">
+                    {{ peer.subtype | replace('_', ' ') | title }}
+                </span>
+                <span class="d-flex flex-column text-truncate flex-grow-1">
+                    <span class="small dossier-peer-title" title="{{ peer.title }}">{{ peer.title }}</span>
+                    <span class="small text-muted text-truncate" title="{{ peer.name }}">{{ peer.name }}</span>
+                </span>
+                {% if peer.ok is not none %}
+                <span class="badge bg-{{ 'success' if peer.ok else 'danger' }}">{{ 'OK' if peer.ok else 'ERR' }}</span>
+                {% endif %}
+                {% if peer.n_results %}<span class="small text-muted">{{ peer.n_results }}</span>{% endif %}
+            </div>
+            <div class="d-flex gap-1 mt-1 no-print">
+                {% if peer.ident %}
+                <button type="button" class="btn btn-compact btn-outline-secondary" data-copy-request-id="{{ peer.ident }}" title="Copia request_id" aria-label="Copia request_id">
+                    <i class="fas fa-copy" aria-hidden="true"></i> ID
+                </button>
+                {% endif %}
+                <a href="/web/dossiers/view/{{ peer.name }}" class="btn btn-compact btn-outline-{{ color }}">
+                    <i class="fas fa-eye"></i> Apri
+                </a>
+                <a href="/web/dossiers/{{ peer.name }}?download=1" class="btn btn-compact btn-outline-secondary">
+                    <i class="fas fa-download"></i>
+                </a>
+            </div>
+        </li>
+        {% endfor %}
+    </ul>
+    <div class="card-footer bg-transparent text-muted small d-flex justify-content-between">
+        <span><i class="fas fa-clock me-1"></i>{{ d.mtime }}</span>
+        <span>{{ d.peers | length }} file · {{ d.n_results }} risultati · {{ d.size_human }}</span>
+    </div>
+</div>
+{% else %}
+{# ── Standard single-file card ── #}
+<div class="card border-0 shadow-sm dossier-card border-start border-3 border-{{ 'danger' if d.ok is sameas false else color }}">
+    <div class="card-body pb-2">
+        <div class="d-flex justify-content-between align-items-start gap-2">
+            <h3 class="h6 mb-0 dossier-title flex-grow-1" title="{{ d.title }}">
+                <i class="fas {{ 'fa-file-circle-xmark' if d.ok is sameas false else ('fa-file-circle-check' if d.ok is sameas true else 'fa-file-lines') }} text-{{ 'danger' if d.ok is sameas false else color }} me-1"></i>{{ d.title }}
+            </h3>
+            {% if d.ok is not none %}
+            <span class="badge bg-{{ 'success' if d.ok else 'danger' }} flex-shrink-0">{{ 'OK' if d.ok else 'Errore' }}</span>
+            {% endif %}
+        </div>
+        {% if d.ident %}<div class="dossier-ident mt-1">{{ d.ident }}</div>{% endif %}
+        {% if d.badges %}
+        <div class="d-flex flex-wrap gap-1 mt-2">
+            {% for b in d.badges %}<span class="badge bg-light text-dark border">{{ b }}</span>{% endfor %}
+        </div>
+        {% endif %}
+    </div>
+    {% set has_request = d.request_params|length > 0 %}
+    {% set has_response = d.response_meta and (d.response_meta.n_results or d.response_meta.exported_at) %}
+    {% if has_request or has_response %}
+    <div class="card-split {{ 'card-split-single' if not has_request or not has_response else '' }}">
+        {% if has_request %}
+        <div class="card-split-half">
+            <div class="split-label"><i class="fas fa-arrow-right-to-bracket me-1"></i>Richiesta</div>
+            <dl class="split-kv mb-0">
+                {% for p in d.request_params %}<dt>{{ p.k }}</dt><dd>{{ p.v }}</dd>{% endfor %}
+            </dl>
+        </div>
+        {% endif %}
+        {% if has_response %}
+        <div class="card-split-half">
+            <div class="split-label"><i class="fas fa-arrow-right-from-bracket me-1"></i>Risposta</div>
+            <dl class="split-kv mb-0">
+                {% if d.response_meta.n_results %}<dt>Risultati</dt><dd>{{ d.response_meta.n_results }}</dd>{% endif %}
+                {% if d.response_meta.exported_at %}<dt>Data</dt><dd>{{ d.response_meta.exported_at }}</dd>{% endif %}
+            </dl>
+        </div>
+        {% endif %}
+    </div>
+    {% endif %}
+    <div class="small text-muted px-3 pb-2"><i class="fas fa-clock me-1"></i>{{ d.mtime }} · {{ d.size_human }}</div>
     <div class="card-footer bg-transparent border-top-0 pt-0 pb-2 px-3 d-flex gap-2 no-print">
         <a href="/web/dossiers/view/{{ d.name }}" class="btn btn-sm btn-outline-{{ color }} flex-fill">
             <i class="fas fa-eye me-1"></i>Apri
         </a>
+        {% if d.ident %}
+        <button type="button" class="btn btn-sm btn-compact btn-outline-secondary" data-copy-request-id="{{ d.ident }}" title="Copia request_id" aria-label="Copia request_id">
+            <i class="fas fa-copy" aria-hidden="true"></i>
+        </button>
+        {% endif %}
         <a href="/web/dossiers/{{ d.name }}?download=1" class="btn btn-sm btn-outline-secondary" title="Scarica JSON">
             <i class="fas fa-download"></i>
         </a>
@@ -325,26 +326,16 @@
 </div>
 {% endmacro %}
 
-{# Shared CSS for attachment chips + doc tables (include once per page). #}
-{% macro doc_macros_css() %}
-<style>
-.cadastral-ref { font-family: monospace; background-color: #e9ecef; padding: .15rem .4rem; border-radius: .25rem; font-size: .85rem; }
-.attach { display: inline-flex; align-items: center; gap: .25rem; font-size: .72rem;
-          padding: .1rem .4rem; border-radius: .25rem; text-decoration: none; border: 1px solid; }
-.attach-p7m { color: #198754; border-color: #198754; }
-.attach-xml { color: #0d6efd; border-color: #0d6efd; }
-.attach-pdf { color: #dc3545; border-color: #dc3545; }
-.attach:hover { filter: brightness(.9); }
-.doc-actions .btn { --bs-btn-padding-y: .15rem; --bs-btn-padding-x: .4rem; --bs-btn-font-size: .75rem; }
-.doc-table thead th.th-sortable { cursor: pointer; user-select: none; white-space: nowrap; }
-.doc-table thead th.th-sortable:hover { background: #e9ecef; }
-.sort-icon { font-size: .7rem; opacity: .6; }
-</style>
-{% endmacro %}
-
 {# Shared filter + CSV-export JS for all .doc-table elements (call once per page). #}
 {% macro doc_macros_js() %}
 <script>
+function toggleAllSections(expand) {
+    document.querySelectorAll('[id^="q-body-"], [id^="q-sub-"]').forEach(function(el) {
+        var collapse = bootstrap.Collapse.getOrCreateInstance(el, {toggle: false});
+        expand ? collapse.show() : collapse.hide();
+    });
+}
+
 (function () {
     function parseItalianDate(s) {
         var m = s.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);

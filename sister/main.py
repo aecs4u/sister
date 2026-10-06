@@ -3,10 +3,16 @@ import logging
 import os
 import secrets
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
 from dotenv import load_dotenv
+
+# Load configuration before importing modules that read environment variables at import time.
+load_dotenv()
+load_dotenv(Path(__file__).resolve().parents[2] / ".env", override=False)  # shared workspace-root defaults (project .env above wins)
+
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -50,10 +56,6 @@ from .routes import (
     visura_history,
 )
 from .services import PageLogger, VisuraService
-
-# Carica variabili d'ambiente da .env
-load_dotenv()
-load_dotenv(Path(__file__).resolve().parents[2] / ".env", override=False)  # shared workspace-root defaults (project .env above wins)
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -215,12 +217,9 @@ async def lifespan(app: FastAPI):
         await _ensure_chrome_cdp()
         try:
             visura_service = VisuraService()
-            autostart = os.getenv("SISTER_BROWSER_AUTOSTART", "true").lower() not in ("false", "0", "no")
-            await visura_service.initialize(background_auth=True, defer_auth=not autostart)
-            if autostart:
-                logger.info("Servizio visure avviato (autenticazione in background)")
-            else:
-                logger.info("Servizio visure avviato — browser in attesa (SISTER_BROWSER_AUTOSTART=false)")
+            # No login at startup: only attach to a session created by scripts/ade_login.py
+            await visura_service.initialize(attach_only=True)
+            logger.info("Servizio visure avviato (aggancio sessione SISTER esistente in background)")
         except Exception as e:
             logger.warning("Browser service unavailable — web UI will run in read-only mode: %s", e)
             visura_service = None
@@ -259,6 +258,7 @@ try:
 
     # --- Auth setup (before theme) ---
     try:
+        import aecs4u_auth
         from aecs4u_auth import AuthConfig, setup_auth
 
         auth_config = AuthConfig(
@@ -272,9 +272,19 @@ try:
             app,
             config=auth_config,
             include_routes=True,
-            mount_static=True,
+            # The default auth mount exposes the package's internal static/
+            # directory, which only contains clerk-auth.js. The auth page
+            # templates reference the complete demo/static bundle instead.
+            mount_static=False,
             setup_exception_handlers=False,
         )
+        _auth_static_dir = Path(aecs4u_auth.__file__).parent / "demo" / "static"
+        if _auth_static_dir.is_dir():
+            app.mount(
+                "/static/aecs4u-auth",
+                StaticFiles(directory=str(_auth_static_dir)),
+                name="aecs4u_auth_static",
+            )
         from urllib.parse import quote as _urlquote
 
         from aecs4u_auth.dependencies import RedirectToLogin
@@ -292,23 +302,89 @@ try:
                     url = f"{url}?next_url={_urlquote(exc.return_url, safe='')}"
                 return RedirectResponse(url=url, status_code=302)
 
-        # Register local password callback (used when USE_CLERK_AUTH=false).
-        # Reads AUTH_USERNAME / AUTH_PASSWORD from env; falls back to dev defaults.
+        # Register file-backed local password authentication. Each non-comment
+        # line in local_users.txt is ``username password``.
         from aecs4u_auth import set_password_verify_callback
+        from aecs4u_auth import set_user_by_id_callback
+        from aecs4u_auth.dependencies import set_user_by_username_callback
 
-        _auth_username = os.getenv("AUTH_USERNAME", "demo@aecs4u.com")
-        _auth_password = os.getenv("AUTH_PASSWORD", "demo123")
+        _local_users_path = Path(
+            os.getenv(
+                "LOCAL_USERS_FILE",
+                str(Path(__file__).resolve().parents[2] / "local_users.txt"),
+            )
+        ).expanduser()
 
+        @dataclass(frozen=True)
         class _LocalUser:
-            id = "local"
-            email = _auth_username
+            id: str
+            email: str
+            username: str
+            full_name: str | None = None
+            role: str = "user"
+            is_active: bool = True
+            is_superuser: bool = False
+
+        def _load_local_users() -> dict[str, tuple[str, str]]:
+            users: dict[str, tuple[str, str]] = {}
+            try:
+                lines = _local_users_path.read_text(encoding="utf-8").splitlines()
+            except OSError as exc:
+                logger.error(
+                    "Could not read local users file %s (%s)",
+                    _local_users_path,
+                    type(exc).__name__,
+                )
+                return users
+
+            for line_number, line in enumerate(lines, start=1):
+                entry = line.strip()
+                if not entry or entry.startswith("#"):
+                    continue
+                fields = entry.split(maxsplit=1)
+                if len(fields) != 2 or not fields[0] or not fields[1]:
+                    logger.warning("Ignoring malformed local user entry on line %d", line_number)
+                    continue
+
+                username, password = fields
+                normalized_username = username.casefold()
+                if normalized_username in users:
+                    logger.warning("Ignoring duplicate local user entry on line %d", line_number)
+                    continue
+                users[normalized_username] = (username, password)
+            return users
+
+        _local_users = _load_local_users()
+        if _local_users:
+            logger.info("Loaded %d local authentication users", len(_local_users))
+        else:
+            logger.warning("No local authentication users loaded from %s", _local_users_path)
+
+        def _get_local_user(username: str, _db=None):
+            entry = _local_users.get(str(username).strip().casefold())
+            if entry is None:
+                return None
+            canonical_username = entry[0]
+            return _LocalUser(
+                id=canonical_username.casefold(),
+                email=canonical_username if "@" in canonical_username else "",
+                username=canonical_username,
+            )
 
         def _verify_local_password(username: str, password: str):
-            if username == _auth_username and password == _auth_password:
-                return _LocalUser()
-            return None
+            username_bytes = str(username).strip().casefold().encode("utf-8")
+            password_bytes = str(password).encode("utf-8")
+            matched_username = None
+            for normalized_username, (canonical_username, stored_password) in _local_users.items():
+                user_matches = secrets.compare_digest(username_bytes, normalized_username.encode("utf-8"))
+                password_matches = secrets.compare_digest(password_bytes, stored_password.encode("utf-8"))
+                if user_matches and password_matches:
+                    matched_username = canonical_username
+            return _get_local_user(matched_username) if matched_username else None
 
         set_password_verify_callback(_verify_local_password)
+        set_user_by_username_callback(_get_local_user)
+        set_user_by_id_callback(_get_local_user)
 
         app.state.auth_setup = auth_setup
         app.state.auth_config = auth_config
@@ -445,8 +521,17 @@ async def _richiedi_generic(
     numero_nota: Optional[str] = None,
     anno_nota: Optional[str] = None,
     partita: Optional[str] = None,
+    subalterno: Optional[str] = None,
+    sezione: Optional[str] = None,
+    codice_fiscale: Optional[str] = None,
+    vista: Optional[str] = None,
+    con_intestati: Optional[str] = None,
+    azienda: Optional[str] = None,
 ):
     valid_types = {
+        "visura-storica",
+        "soggetto-documento",
+        "soggetto-immobili",
         "indirizzo",
         "partita",
         "nota",
@@ -479,6 +564,18 @@ async def _richiedi_generic(
         params["anno_nota"] = anno_nota
     if partita:
         params["partita"] = partita
+    if subalterno:
+        params["subalterno"] = subalterno
+    if sezione:
+        params["sezione"] = sezione
+    if codice_fiscale:
+        params["codice_fiscale"] = codice_fiscale
+    if vista:
+        params["vista"] = vista
+    if con_intestati:
+        params["con_intestati"] = con_intestati
+    if azienda:
+        params["azienda"] = azienda
 
     return await richiedi_generic_sister(
         search_type=normalized,

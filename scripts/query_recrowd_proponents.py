@@ -2,36 +2,61 @@
 """Query SISTER /visura/soggetto for all Recrowd proponents fiscal codes."""
 
 import json
-import sqlite3
+import os
 import time
 from datetime import datetime
 from pathlib import Path
 
 import httpx
+from dotenv import load_dotenv
+from sqlalchemy import create_engine, text
+from sqlalchemy.engine import make_url
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+load_dotenv(PROJECT_ROOT / ".env")
+load_dotenv(PROJECT_ROOT.parent / ".env", override=False)
 
 SISTER_URL = "http://localhost:8025"
-DB_PATH = "/mnt/mobile/data/aecs4u.it/classaction/recrowd.sqlite"
 OUTPUT_PATH = (
-    Path(__file__).parent.parent / "outputs" / f"recrowd_soggetto_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+    PROJECT_ROOT / "outputs" / f"recrowd_soggetto_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
 )
 POLL_INTERVAL = 5  # seconds between status checks
 TIMEOUT = 300  # max seconds to wait per query
 
 
 def get_proponents() -> list[dict]:
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    cur = conn.execute("""
-        SELECT p.organization_name, COALESCE(d.vat_code, p.vat_number) AS vat_number
-        FROM recrowd_proponents p
-        LEFT JOIN recrowd_proponent_company_details d ON d.proponent_id = p.id
-        WHERE COALESCE(d.vat_code, p.vat_number) IS NOT NULL
-          AND COALESCE(d.vat_code, p.vat_number) != ''
-        ORDER BY p.organization_name
-    """)
-    rows = [dict(r) for r in cur.fetchall()]
-    conn.close()
-    return rows
+    database_dsn = os.getenv("RECROWD_DATABASE_DSN")
+    if not database_dsn:
+        raise RuntimeError("RECROWD_DATABASE_DSN must point to the Recrowd PostgreSQL database")
+    url = make_url(database_dsn)
+    if url.get_backend_name() != "postgresql":
+        raise RuntimeError("RECROWD_DATABASE_DSN must use PostgreSQL")
+    if url.drivername in {
+        "postgres",
+        "postgresql",
+        "postgresql+asyncpg",
+        "postgresql+psycopg2",
+        "postgresql+psycopg_async",
+    }:
+        url = url.set(drivername="postgresql+psycopg")
+
+    engine = create_engine(url, pool_pre_ping=True)
+    try:
+        with engine.connect() as conn:
+            result = conn.execute(
+                text("""
+                    SELECT p.organization_name,
+                           COALESCE(d.vat_code, p.vat_number) AS vat_number
+                    FROM recrowd_proponents p
+                    LEFT JOIN recrowd_proponent_company_details d ON d.proponent_id = p.id
+                    WHERE COALESCE(d.vat_code, p.vat_number) IS NOT NULL
+                      AND COALESCE(d.vat_code, p.vat_number) != ''
+                    ORDER BY p.organization_name
+                """)
+            )
+            return [dict(row) for row in result.mappings()]
+    finally:
+        engine.dispose()
 
 
 def submit(client: httpx.Client, vat_number: str) -> str | None:

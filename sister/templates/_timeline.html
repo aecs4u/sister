@@ -27,7 +27,7 @@
      • The top node (most recent mutation) is expanded by default and labelled
        "Attuale" with the situazione_al date.
      • Older nodes are collapsed; clicking the header toggles them.
-     • Owner rows with a non-empty FineDiritto are visually dimmed as "Cessato".
+     • Historical owner rows with a non-empty FineDiritto are visually dimmed as "Cessato".
      • A JS date-extraction regex pulls dates from DatiDerivantiDaMutazSogg text
        and displays them next to the mutation description header.
    ─────────────────────────────────────────────────────────────────────────── #}
@@ -162,7 +162,7 @@
         var text = node.getAttribute('data-ddm') || '';
         var m = DATE_RE.exec(text) || YEAR_RE.exec(text);
         var tag = node.querySelector('.tl-date-tag');
-        if (m && tag && m[1]) tag.textContent = m[1];
+        if (m && tag && m[1] && !tag.textContent.trim()) tag.textContent = m[1];
     });
 
     /* Click handler: toggle body + chevron rotation */
@@ -196,6 +196,9 @@
     {% set _rows_raw = _int.Intestato if _int else none %}
     {% set _rows = _rows_raw if (_rows_raw is sequence and _rows_raw is not string and _rows_raw is not mapping) else ([_rows_raw] if _rows_raw else []) %}
     {% set _desc = m.DatiDerivantiDaMutazSogg if m.DatiDerivantiDaMutazSogg is string else (m.DatiDerivantiDaMutazSogg._text if m.DatiDerivantiDaMutazSogg is mapping else '') %}
+    {% set _mutation_date_raw = m.DataMutazione or '' %}
+    {% set _mutation_date = _mutation_date_raw._text or '' if _mutation_date_raw is mapping else _mutation_date_raw %}
+    {% set _mutation_ref = m.IdentificativoDefinitivoRiferimento or {} %}
     <div class="tl-node" {% if _desc %}data-ddm="{{ _desc | e }}"{% endif %}>
         <div class="tl-dot {% if is_cur %}dot-current{% endif %}"></div>
         <div class="tl-card {% if is_cur %}tl-card-current{% endif %}">
@@ -205,6 +208,7 @@
                     <span class="badge" style="background:{{ color }};font-size:.7rem">
                         <i class="fas fa-check-circle me-1"></i>Attuale
                     </span>
+                    {% if m.IndiceMutazione %}<span class="badge bg-light text-dark border" style="font-size:.68rem">#{{ m.IndiceMutazione }}</span>{% endif %}
                     {% if situazione_al and situazione_al|length == 8 %}
                     <span class="badge bg-light text-dark border" style="font-size:.68rem">
                         al {{ situazione_al[:4] }}/{{ situazione_al[4:6] }}/{{ situazione_al[6:] }}
@@ -214,17 +218,32 @@
                     <span class="badge bg-light text-dark border" style="font-size:.68rem">#{{ m.IndiceMutazione or (_rev | length - loop.index0) }}</span>
                 {% endif %}
                 <span class="tl-desc" title="{{ _desc }}">{{ _desc or '—' }}</span>
-                <span class="tl-date-tag"></span>
+                <span class="tl-date-tag">{% if _mutation_date and _mutation_date|string|length == 8 %}{{ _mutation_date[:4] }}/{{ _mutation_date[4:6] }}/{{ _mutation_date[6:] }}{% else %}{{ _mutation_date }}{% endif %}</span>
                 <i class="fas fa-chevron-down tl-chevron {% if is_cur %}open{% endif %}"></i>
             </div>
             {# ─ Body (expanded for current, collapsed for historical) ─ #}
             <div class="tl-body {% if not is_cur %}d-none{% endif %}">
+                {% if _mutation_ref %}
+                <div class="small text-muted mb-2">
+                    <i class="fas fa-location-dot me-1"></i>
+                    {% if _mutation_ref.Comune %}{{ _mutation_ref.Comune }}{% if _mutation_ref.CodiceComune %} ({{ _mutation_ref.CodiceComune }}){% endif %}{% elif _mutation_ref.CodiceComune %}Comune {{ _mutation_ref.CodiceComune }}{% endif %}
+                    {% if _mutation_ref.Provincia %} ({{ _mutation_ref.Provincia }}){% endif %}
+                    {% if _mutation_ref.Foglio %} · FG {{ _mutation_ref.Foglio }}{% endif %}
+                    {% if _mutation_ref.ParticellaNum %} PT {{ _mutation_ref.ParticellaNum }}{% endif %}
+                    {% if _mutation_ref.Subalterno %} Sub {{ _mutation_ref.Subalterno }}{% endif %}
+                    {% if _mutation_ref.SezUrbana %} · Sez. Urbana {{ _mutation_ref.SezUrbana }}{% endif %}
+                    {% if _mutation_ref.StatoImmobile %} · {{ _mutation_ref.StatoImmobile }}{% endif %}
+                </div>
+                {% endif %}
                 {% if _rows %}
                 {% for r in _rows %}
                 {% set _dr2 = r.DirittiReali if r.DirittiReali is mapping else {} %}
                 {% set _name = r.Nominativo if r.Nominativo is string else (r.Nominativo._text if r.Nominativo is mapping else '-') %}
                 {% set _cf   = r.CF if r.CF is string else (r.CF._text if r.CF is mapping else '') %}
-                {% set _ended = _dr2.FineDiritto and (_dr2.FineDiritto | trim) %}
+                {% set _period = _dr2.FineDiritto if _dr2.FineDiritto is string else (_dr2.FineDiritto._text if _dr2.FineDiritto is mapping else '') %}
+                {% set _start = _dr2.InizioTitolo if _dr2.InizioTitolo is string else (_dr2.InizioTitolo._text if _dr2.InizioTitolo is mapping else '') %}
+                {% set _right_code = _dr2.CodiceDiritto if _dr2.CodiceDiritto is string else (_dr2.CodiceDiritto._text if _dr2.CodiceDiritto is mapping else '') %}
+                {% set _ended = (not is_cur) and _period and (_period | trim) %}
                 <div class="tl-owner-row {% if _ended %}tl-owner-ended{% else %}tl-owner-active{% endif %}">
                     <div class="row align-items-center g-1">
                         <div class="col-md-5">
@@ -233,11 +252,12 @@
                             {% if _cf %}<div class="tl-owner-cf">{{ _cf }}</div>{% endif %}
                         </div>
                         <div class="col-md-4">
-                            {% if _dr2.Descrizione %}
-                            <span class="badge bg-secondary me-1">{{ _dr2.Descrizione }}</span>
+                            {% if _dr2.Descrizione or _right_code %}
+                            <span class="badge bg-secondary me-1">{{ _dr2.Descrizione or 'Diritto' }}{% if _right_code %} ({{ _right_code }}){% endif %}</span>
                             {% endif %}
-                            {% if _ended %}
-                            <small class="text-muted d-block">Fino al: {{ _dr2.FineDiritto }}</small>
+                            {% if _start %}<small class="text-muted d-block">Decorrenza: {{ _start }}</small>{% endif %}
+                            {% if _period %}
+                            <small class="text-muted d-block">Periodo: {{ _period }}</small>
                             {% endif %}
                         </div>
                         <div class="col-md-3 text-end">

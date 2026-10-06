@@ -25,19 +25,11 @@ def _add_column(table: str, column: sa.Column) -> None:
 
 
 def _add_foreign_key(source: str, target: str, constraint: str, local: str, remote: str) -> None:
-    if op.get_bind().dialect.name == "sqlite":
-        with op.batch_alter_table(source) as batch:
-            batch.create_foreign_key(constraint, target, [local], [remote])
-    else:
-        op.create_foreign_key(constraint, source, target, [local], [remote])
+    op.create_foreign_key(constraint, source, target, [local], [remote])
 
 
 def _drop_foreign_key(source: str, constraint: str) -> None:
-    if op.get_bind().dialect.name == "sqlite":
-        with op.batch_alter_table(source) as batch:
-            batch.drop_constraint(constraint, type_="foreignkey")
-    else:
-        op.drop_constraint(constraint, source, type_="foreignkey")
+    op.drop_constraint(constraint, source, type_="foreignkey")
 
 
 def upgrade() -> None:

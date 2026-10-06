@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Index the files in the SISTER documents directory in SQLite and PostgreSQL.
+"""Index the files in the SISTER documents directory in PostgreSQL.
 
 The source files remain in place.  PDF, P7M, XML and ZIP files are indexed;
 generated ``*.plan.json`` sidecars are deliberately excluded.  XML content is
@@ -12,15 +12,18 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import os
 from pathlib import Path
 from typing import Any
 
 from dotenv import load_dotenv
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+load_dotenv(PROJECT_ROOT / ".env")
+load_dotenv(PROJECT_ROOT.parent / ".env", override=False)
+
 from lxml import etree
 from sqlalchemy import delete, select
-from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from sister.db_models import CadastralLocation, DocumentMetadata, VisuraDocument
 from sister.utils import _parse_visura_pdf, _parse_visura_xml
@@ -161,9 +164,12 @@ async def location_for(session: AsyncSession, parsed: dict[str, Any]) -> int | N
     return row.id
 
 
-async def import_one_database(database_url: str, files: list[Path], paired_xml: dict[str, Path]) -> dict[str, int]:
-    engine = create_async_engine(database_url, future=True)
-    session_factory = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+async def import_documents(files: list[Path], paired_xml: dict[str, Path]) -> dict[str, int]:
+    from sister.database import _get_engine, _get_session_factory, init_db
+
+    await init_db()
+    engine = _get_engine()
+    session_factory = _get_session_factory()
     stats = {"indexed": 0, "path_repaired": 0, "metadata": 0, "xml_flattened": 0, "skipped": 0}
     async with session_factory() as session:
         by_filename = {row.filename: row for row in (await session.scalars(select(VisuraDocument))).all()}
@@ -235,13 +241,10 @@ async def import_one_database(database_url: str, files: list[Path], paired_xml: 
 
 async def async_main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--documents", default="/data/aecs4u.it/sister/documents")
-    parser.add_argument("--sqlite", default="/data/aecs4u.it/sister/data/sister.sqlite")
+    parser.add_argument("--documents", default=str(PROJECT_ROOT / "documents"))
     args = parser.parse_args()
-    load_dotenv()
 
     documents_dir = resolve_path(args.documents)
-    sqlite_path = resolve_path(args.sqlite)
     files = sorted(
         path
         for path in documents_dir.rglob("*")
@@ -251,15 +254,8 @@ async def async_main() -> None:
     )
     xml_by_stem = {path.stem: path for path in files if file_kind(path) == "XML"}
 
-    sqlite_url = f"sqlite+aiosqlite:///{sqlite_path}"
-    pg_dsn = os.environ.get("DATABSE_DSN")
-    if not pg_dsn:
-        raise RuntimeError("DATABSE_DSN is not set")
-    pg_url = pg_dsn
-
     print(f"files={len(files)} xml_pairs={len(xml_by_stem)}")
-    print("sqlite", await import_one_database(sqlite_url, files, xml_by_stem))
-    print("postgresql", await import_one_database(pg_url, files, xml_by_stem))
+    print("postgresql", await import_documents(files, xml_by_stem))
 
 
 def main() -> None:

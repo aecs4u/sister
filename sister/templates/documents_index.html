@@ -1,13 +1,12 @@
 {% extends "_base.html" %}
-{% from "_doc_macros.html" import shared_section_css, jump_chips, query_section,
-                                   query_subsection, doc_table, doc_macros_css, doc_macros_js %}
+{% from "_doc_macros.html" import jump_chips, query_section,
+                                   query_subsection, doc_table, doc_macros_js %}
 
 {% block page_title %}Documenti{% endblock %}
 
 {% block extra_css %}
 {{ super() }}
-{{ shared_section_css() }}
-{{ doc_macros_css() }}
+<link rel="stylesheet" href="/static/css/doc_sections.css">
 <link rel="stylesheet" href="/static/css/pages/documents_index.css">
 {% endblock %}
 
@@ -110,11 +109,5 @@ function showExportToast(type, html) {
     setTimeout(() => document.getElementById(id)?.remove(), 8000);
 }
 
-function toggleAllSections(expand) {
-    document.querySelectorAll('[id^="q-body-"], [id^="q-sub-"]').forEach(function(el) {
-        var bsCollapse = bootstrap.Collapse.getOrCreateInstance(el, {toggle: false});
-        expand ? bsCollapse.show() : bsCollapse.hide();
-    });
-}
 </script>
 {% endblock %}

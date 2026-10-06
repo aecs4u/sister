@@ -1,3 +1,14 @@
 /* Page styles for templates/dossiers_index.html. */
 .page-hero { background: linear-gradient(135deg, #6f42c1 0%, #5a32a3 100%); }
+.dossier-search-wrap { min-width: min(100%, 20rem); max-width: 32rem; }
+.dossier-title, .dossier-peer-title {
+    display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
+    overflow: hidden; min-width: 0;
+}
+.q-section-header:focus-visible, .q-sub-header:focus-visible {
+    outline: 2px solid var(--bs-primary); outline-offset: 2px;
+}
+.card-split-single { grid-template-columns: 1fr; }
+.dossier-entry[hidden], .q-sub[hidden], .q-section[hidden],
+.dossier-jump-chips a[hidden] { display: none !important; }
 @media print { .collapse { display: block !important; height: auto !important; } }

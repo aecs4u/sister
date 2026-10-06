@@ -1,10 +1,11 @@
 {% extends "_base.html" %}
 {% from "_timeline.html" import timeline_css, timeline_js, render_timeline %}
 {% from "_nested.html" import complete_data_section %}
-{% from "components/cadastral.html" import liquidazione_row %}
+{% from "components/catasto.html" import assets as catasto_assets, location_section,
+    owners_section, cadastral_ref, liquidazione_row, visura_per_immobile %}
 {% from "parts/_hero.html" import hero_section %}
-{% from "parts/_visura_header.html" import visura_location_card, visura_doc_card %}
-{% set _v = doc.xml_parsed.VisuraFabbricatiStorica or doc.xml_parsed.VisuraFabbricatiAttuale or doc.xml_parsed.VisuraFabbricati or {} %}
+{% from "parts/_visura_header.html" import visura_doc_card %}
+{% set _v = doc.xml_parsed.VisuraFabbricatiStorica or doc.xml_parsed.VisuraFabbricatiAttuale or doc.xml_parsed.VisuraFabbricatiSintetica or doc.xml_parsed.VisuraFabbricati or {} %}
 {% set _t = _v.TitoloVisura or {} %}
 {% set _dr = _v.DatiRichiesta or {} %}
 {% set _title = (_t.Titolo or '')|lower %}
@@ -28,6 +29,7 @@
 
 {% block extra_css %}
 {{ super() }}
+{{ catasto_assets() }}
 {{ timeline_css() }}
 <link rel="stylesheet" href="/static/css/pages/visura_fabbricati_storica.css">
 {% endblock %}
@@ -44,62 +46,247 @@ PT <strong>{{ doc.particella or _dr.ParticellaNum or '-' }}</strong>
 
 <div class="container-fluid">
 
-    {# ── Query info ──────────────────────────────────────────────────────── #}
+    {# ── Query info (theme: location_section) ────────────────────────────── #}
     <div class="row mb-4">
         <div class="col-lg-8 mb-3 mb-lg-0">
-            {{ visura_location_card('success', _t.Titolo or 'Visura Fabbricati Storica', _dr, doc,
-                                    sub=_dr.Subalterno or doc.subalterno,
-                                    sez_label='Sezione Urbana',
-                                    sez_value=_dr.SezUrbana or doc.sezione_urbana,
-                                    provenienza=_t.Provenienza) }}
+            {% set _request_id_raw = (_dr.ImmobileIndividuato or {}).IdentificativoDefinitivo or {} %}
+            {% set _request_id = _request_id_raw if _request_id_raw is mapping else (_request_id_raw[0] if _request_id_raw else {}) %}
+            {{ location_section({
+                'provincia': _dr.Provincia or doc.provincia,
+                'comune': _dr.Comune or doc.comune,
+                'foglio': _dr.Foglio or doc.foglio,
+                'particella': _dr.ParticellaNum or doc.particella,
+                'subalterno': (_dr.Subalterno or doc.subalterno) or none,
+                'sezione_urbana': _dr.SezUrbana or doc.sezione_urbana,
+                'tipo_catasto': 'F',
+            }) }}
+            {% if _dr.CodiceComune or _request_id.CodiceComune %}
+            <p class="small text-muted mb-2 mt-n2"><i class="fas fa-hashtag me-1"></i>Codice Comune: <code>{{ _dr.CodiceComune or _request_id.CodiceComune }}</code></p>
+            {% endif %}
+            {% if _t.Provenienza %}<p class="small text-muted mb-0 mt-n2"><i class="fas fa-landmark me-1"></i>{{ _t.Provenienza }}</p>{% endif %}
         </div>
         <div class="col-lg-4">
             {{ visura_doc_card('success', _t, _dr, doc) }}
         </div>
     </div>
 
-    {# ── Property data: the source uses different containers per version. ── #}
+    {# ── Current property (theme: full visura_per_immobile component) ─────── #}
     {% if _property %}
+    {% set _idf_raw = (_property.DatiIdentificativi or {}).IdentificativoDefinitivo or {} %}
+    {% set _idf = _idf_raw if _idf_raw is mapping else (_idf_raw[0] if _idf_raw else {}) %}
+    {% set _categoria_raw = _cls.Categoria or '' %}
+    {% set _categoria = _categoria_raw._text or _categoria_raw.get('Descrizione') or _categoria_raw.get('Codice') or '' if _categoria_raw is mapping else _categoria_raw %}
+    {% set _categoria = _categoria|string|replace(':', '')|trim %}
+    {% set _classe_raw = _cls.Classe or '' %}
+    {% set _classe = _classe_raw._text or '' if _classe_raw is mapping else _classe_raw %}
+    {% set _zona_raw = _cls.ZonaCensuaria or '' %}
+    {% set _zona = _zona_raw._text or '' if _zona_raw is mapping else _zona_raw %}
+    {% set _cons_raw = _cons.Valore or '' %}
+    {% set _cons_val = _cons_raw._text or '' if _cons_raw is mapping else _cons_raw %}
+    {% set _cons_unit_raw = _cons.Unita or '' %}
+    {% set _cons_unit = _cons_unit_raw._text or '' if _cons_unit_raw is mapping else _cons_unit_raw %}
+    {% set _sup_raw_value = _sup.Totale or '' %}
+    {% set _sup_value = _sup_raw_value._text or '' if _sup_raw_value is mapping else _sup_raw_value %}
+    {% set _sup_excluded_raw = _sup.TotaleE or '' %}
+    {% set _sup_excluded = _sup_excluded_raw._text or '' if _sup_excluded_raw is mapping else _sup_excluded_raw %}
+    {% set _consistenza = ((_cons_val ~ ' ' ~ _cons_unit)|trim) if _cons_val else ((_sup_value ~ ' MQ') if _sup_value else '') %}
+    {% set _rendita_raw = _cls.RenditaEuro or '' %}
+    {% set _rendita = _rendita_raw._text or '' if _rendita_raw is mapping else _rendita_raw %}
+    {% if _rendita|string|trim in ('-', ':') %}{% set _rendita = '' %}{% endif %}
+    {% if _rendita and 'Euro:' not in (_rendita|string) %}{% set _rendita = 'R.Euro: ' ~ _rendita %}{% endif %}
+    {% set _partita_raw = _idf.Partita or _cls.Partita or '' %}
+    {% set _partita = _partita_raw._text or '' if _partita_raw is mapping else _partita_raw %}
+
+    {# The theme table supports expandable current owners as well as the
+       separate full ownership timeline below. #}
+    {% set _int_raw = _property.IntestazioneAttuale or _property.Intestazione or {} %}
+    {% set _int = _int_raw if _int_raw is mapping else (_int_raw[0] if _int_raw else {}) %}
+    {% if not _int and _property.MutazioneSoggettiva %}
+    {% set _int_raw = _property.MutazioneSoggettiva.Intestazione or {} %}
+    {% set _int = _int_raw if _int_raw is mapping else (_int_raw[0] if _int_raw else {}) %}
+    {% endif %}
+    {% set _intestati_raw = _int.Intestato or [] %}
+    {% set _intestati = _intestati_raw if _intestati_raw is sequence and _intestati_raw is not string and _intestati_raw is not mapping else ([_intestati_raw] if _intestati_raw else []) %}
+    {% set _theme_owners = namespace(rows=[]) %}
+    {% for row in _intestati if row is mapping %}
+    {% set _name_raw = row.Nominativo or row.Denominazione or '' %}
+    {% set _name = _name_raw._text or '' if _name_raw is mapping else _name_raw %}
+    {% set _cf_raw = row.CF or row.CodiceFiscale or '' %}
+    {% set _cf = _cf_raw._text or '' if _cf_raw is mapping else _cf_raw %}
+    {% set _rights_raw = row.DirittiReali or {} %}
+    {% set _rights = _rights_raw if _rights_raw is mapping else (_rights_raw[0] if _rights_raw else {}) %}
+    {% set _quota_raw = _rights.Quota or '' %}
+    {% set _quota = _quota_raw._text or '' if _quota_raw is mapping else _quota_raw %}
+    {% set _right_raw = _rights.Descrizione or '' %}
+    {% set _right = _right_raw._text or '' if _right_raw is mapping else _right_raw %}
+    {% set _right_code_raw = _rights.CodiceDiritto or '' %}
+    {% set _right_code = _right_code_raw._text or '' if _right_code_raw is mapping else _right_code_raw %}
+    {% if _right_code %}{% set _right = _right ~ ' (' ~ _right_code ~ ')' %}{% endif %}
+    {% set _ = _theme_owners.rows.append({'denominazione': _name, 'cf': _cf, 'quota': _quota, 'proprieta': _right}) %}
+    {% endfor %}
+
     <h2 class="h5 border-bottom pb-2 mb-3">{% if _is_historical %}Situazione Attuale{% elif _is_synthetic %}Riepilogo Sintetico{% else %}Dati del Fabbricato{% endif %}</h2>
-    <div class="card border-0 shadow-sm mb-4">
-        <div class="card-body">
-            <div class="row g-4">
-                <div class="col-md-7">
-                    {% if _address %}
-                    <p class="mb-2">
-                        <span class="detail-label">Indirizzo</span><br>
-                        <strong>{{ _address }}</strong>
-                    </p>
-                    {% endif %}
-                    <div class="row g-2 mt-1">
-                        <div class="col-sm-6">
-                            <span class="detail-label">Categoria / Classe</span><br>
-                            <span class="badge bg-info text-dark me-1">{{ _cls.Categoria or '-' }}</span>
-                            {% if _cls.Classe %}Cl. {{ _cls.Classe }}{% endif %}
-                            {% if _cls.ZonaCensuaria %} — Zona {{ _cls.ZonaCensuaria }}{% endif %}
-                        </div>
-                        <div class="col-sm-6">
-                            <span class="detail-label">Consistenza</span><br>
-                            <strong>{{ _cons.Valore or '-' }}</strong> {{ _cons.Unita or '' }}
-                            {% if _sup.Totale %}
-                            <br><small class="text-muted">{{ _sup.Totale }} MQ{% if _sup.TotaleE %} / {{ _sup.TotaleE }} escluse{% endif %}</small>
-                            {% endif %}
-                        </div>
-                    </div>
-                </div>
-                <div class="col-md-5">
-                    {% if _cls.RenditaEuro %}
-                    <div class="income-box">
-                        <div class="small mb-1">Rendita Catastale</div>
-                        <div class="income-value">€ {{ _cls.RenditaEuro }}</div>
-                    </div>
-                    {% else %}
-                    <div class="text-muted fst-italic text-center py-3">Rendita non disponibile</div>
-                    {% endif %}
-                </div>
-            </div>
+    {{ visura_per_immobile({
+        'immobili': [{
+            'foglio': _idf.Foglio or doc.foglio,
+            'particella': _idf.ParticellaNum or doc.particella,
+            'subalterno': _idf.Subalterno or doc.subalterno,
+            'indirizzo': _address,
+            'zona_censuaria': _zona,
+            'categoria': _categoria,
+            'classe': _classe,
+            'consistenza': _consistenza,
+            'rendita': _rendita,
+            'partita': _partita,
+            'id_immobile': 'FG ' ~ (_idf.Foglio or doc.foglio or '-') ~ ' PT ' ~ (_idf.ParticellaNum or doc.particella or '-') ~ ' SUB ' ~ (_idf.Subalterno or doc.subalterno or '-'),
+            'intestatari': _theme_owners.rows,
+        }]
+    }) }}
+
+    {% set _current_id = _idf %}
+    {% if _current_id.CodiceComune or _current_id.ProgrId or _current_id.StatoImmobile or _sup_value or _sup_excluded %}
+    <div class="card border-0 bg-light mb-4">
+        <div class="card-body py-2 px-3 d-flex flex-wrap gap-3 small">
+            {% if _current_id.CodiceComune %}<span><span class="text-muted">Codice Comune:</span> <code>{{ _current_id.CodiceComune }}</code></span>{% endif %}
+            {% if _current_id.ProgrId %}<span><span class="text-muted">Progressivo:</span> {{ _current_id.ProgrId }}</span>{% endif %}
+            {% if _current_id.StatoImmobile %}<span><span class="text-muted">Stato:</span> {{ _current_id.StatoImmobile }}</span>{% endif %}
+            {% if _sup_value %}<span><span class="text-muted">Superficie totale:</span> {{ _sup_value }} m²</span>{% endif %}
+            {% if _sup_excluded %}<span><span class="text-muted">Superficie escluse:</span> {{ _sup_excluded }} m²</span>{% endif %}
         </div>
     </div>
+    {% endif %}
+
+    {# Mappali correlati — parcels cross-referenced by this unit #}
+    {% set _mc_raw = _property.MappaliCorrelati or {} %}
+    {% set _mc_src = _mc_raw.IdentificativoCorrelato if _mc_raw is mapping else none %}
+    {% set _mc = _mc_src if _mc_src is sequence and _mc_src is not string and _mc_src is not mapping else ([_mc_src] if _mc_src else []) %}
+    {% if _mc %}
+    <div class="mb-4 small">
+        <span class="text-muted fw-semibold me-2"><i class="fas fa-link me-1"></i>Mappali correlati</span>
+        {% for m in _mc %}
+        {{ cadastral_ref(m.Foglio, m.ParticellaNum) }}{% if m.SezCensuaria %} <span class="text-muted">Sez. {{ m.SezCensuaria }}</span>{% endif %}{% if m.ProgrId %} <span class="text-muted">Prog. {{ m.ProgrId }}</span>{% endif %}{% if not loop.last %}<span class="mx-2 text-muted">·</span>{% endif %}
+        {% endfor %}
+    </div>
+    {% endif %}
+    {% endif %}
+
+    {# ── Storia dell'immobile — identificativi / indirizzo / classamento per periodo ─ #}
+    {% set _storia_raw = _v.StoriaImmobileFabbricati or {} %}
+    {% set _storia_list = _storia_raw if _storia_raw is sequence and _storia_raw is not string and _storia_raw is not mapping else ([_storia_raw] if _storia_raw else []) %}
+    {% set _h = namespace(rows=[], soppressi=[]) %}
+    {% for st in _storia_list if st is mapping %}
+    {% for key, kind in [('DatiIdentificativi', 'Identificativi'), ('DatiIndirizzo', 'Indirizzo'), ('DatiClassamentoF', 'Classamento'), ('SuperficieF', 'Superficie')] %}
+    {% set _blk = st.get(key) or {} %}
+    {% set _items = _blk if _blk is sequence and _blk is not string and _blk is not mapping else ([_blk] if _blk else []) %}
+    {% for it in _items if it is mapping %}
+    {% set _ref = it.IdentificativoDefinitivo or it.IdentificativoDefinitivoRiferimento or {} %}
+    {% set _ref = _ref if _ref is mapping else (_ref[0] if _ref else {}) %}
+    {% set _der = it.DatiDerivantiDa or _ref.DatiDerivantiDa or {} %}
+    {% set _ref_parts = namespace(items=[]) %}
+    {% if _ref.Provincia %}{% set _ = _ref_parts.items.append('Prov. ' ~ _ref.Provincia) %}{% endif %}
+    {% if _ref.Comune %}{% set _ = _ref_parts.items.append(_ref.Comune ~ ((' (' ~ _ref.CodiceComune ~ ')') if _ref.CodiceComune else '')) %}{% elif _ref.CodiceComune %}{% set _ = _ref_parts.items.append('Comune ' ~ _ref.CodiceComune) %}{% endif %}
+    {% if _ref.Foglio %}{% set _ = _ref_parts.items.append('FG ' ~ _ref.Foglio) %}{% endif %}
+    {% if _ref.ParticellaNum %}{% set _ = _ref_parts.items.append('PT ' ~ _ref.ParticellaNum) %}{% endif %}
+    {% if _ref.Subalterno %}{% set _ = _ref_parts.items.append('Sub ' ~ _ref.Subalterno) %}{% endif %}
+    {% if _ref.SezUrbana %}{% set _ = _ref_parts.items.append('Sez. Urbana ' ~ _ref.SezUrbana) %}{% endif %}
+    {% if _ref.SezCensuaria %}{% set _ = _ref_parts.items.append('Sez. Censuaria ' ~ _ref.SezCensuaria) %}{% endif %}
+    {% if _ref.ProgrId %}{% set _ = _ref_parts.items.append('Prog. ' ~ _ref.ProgrId) %}{% endif %}
+    {% set _reference = _ref_parts.items|join(' · ') %}
+    {% if kind == 'Indirizzo' %}
+        {% set _address_history = it.IndirizzoImm or '' %}
+        {% set _detail = _address_history._text or '' if _address_history is mapping else _address_history %}
+    {% elif kind == 'Classamento' %}
+        {% set _details = namespace(items=[]) %}
+        {% set _cat_raw = it.Categoria or '' %}
+        {% set _cat = _cat_raw._text or '' if _cat_raw is mapping else _cat_raw %}
+        {% if _cat|string|replace(':', '')|trim %}{% set _ = _details.items.append(_cat|string|replace(':', '')|trim) %}{% endif %}
+        {% if it.Classe %}{% set _ = _details.items.append('Cl. ' ~ it.Classe) %}{% endif %}
+        {% if it.ZonaCensuaria %}{% set _ = _details.items.append('Zona ' ~ it.ZonaCensuaria) %}{% endif %}
+        {% if it.Consistenza %}
+            {% set _c = it.Consistenza if it.Consistenza is mapping else (it.Consistenza[0] if it.Consistenza else {}) %}
+            {% if _c.Valore or _c.Unita %}{% set _ = _details.items.append('Consistenza ' ~ (_c.Valore or '') ~ ' ' ~ (_c.Unita or '')) %}{% endif %}
+        {% endif %}
+        {% if it.RenditaLire %}{% set _ = _details.items.append('Lire ' ~ it.RenditaLire) %}{% endif %}
+        {% if it.RenditaEuro %}{% set _ = _details.items.append('€ ' ~ it.RenditaEuro) %}{% endif %}
+        {% if it.Partita %}{% set _ = _details.items.append('Partita ' ~ it.Partita) %}{% endif %}
+        {% set _detail = _details.items|join(' · ') %}
+    {% elif kind == 'Superficie' %}
+        {% set _surface = namespace(items=[]) %}
+        {% if it.Totale %}{% set _ = _surface.items.append('Totale ' ~ it.Totale ~ ' m²') %}{% endif %}
+        {% if it.TotaleE %}{% set _ = _surface.items.append('Escluse ' ~ it.TotaleE ~ ' m²') %}{% endif %}
+        {% set _detail = _surface.items|join(' · ') %}
+    {% else %}
+        {% set _detail = '' %}
+    {% endif %}
+    {% set _annotation_raw = _der.Annotazione or {} %}
+    {% set _annotation = _annotation_raw.Descrizione if _annotation_raw is mapping else _annotation_raw %}
+    {% set _derivation = ([_der.Descrizione, _annotation]|select|join(' · ')) %}
+    {% set _h.rows = _h.rows + [{
+        'kind': kind, 'periodo': it.Situazione or _ref.Situazione or '', 'stato': _ref.StatoImmobile or '',
+        'riferimento': _reference, 'derivazione': _derivation, 'detail': _detail,
+    }] %}
+    {% set _alt = _der.AltriImmobili or {} %}
+    {% if _alt is mapping and _alt.IdentificativoDefinitivo %}
+    {% set _alt_ids = _alt.IdentificativoDefinitivo %}
+    {% set _alt_ids = _alt_ids if _alt_ids is sequence and _alt_ids is not string and _alt_ids is not mapping else [_alt_ids] %}
+    {% for a in _alt_ids if a is mapping and a not in _h.soppressi %}
+    {% set _h.soppressi = _h.soppressi + [a] %}
+    {% endfor %}
+    {% endif %}
+    {% endfor %}
+    {% endfor %}
+    {% endfor %}
+
+    {% if _h.rows %}
+    <h2 class="h5 border-bottom pb-2 mb-3">
+        <i class="fas fa-clock-rotate-left text-success me-2"></i>Storia dell'immobile
+        <span class="badge bg-secondary ms-2">{{ _h.rows|length }}</span>
+    </h2>
+    <div class="cat-table-wrap mb-3">
+        <table class="cat-compact-table">
+            <thead>
+                <tr><th>Dati</th><th>Periodo</th><th>Stato</th><th>Riferimento catastale</th><th>Dettaglio</th><th>Derivante da / annotazione</th></tr>
+            </thead>
+            <tbody>
+                {% for r in _h.rows %}
+                <tr>
+                    <td class="text-nowrap">{{ r.kind }}</td>
+                    <td class="text-nowrap small">{{ r.periodo or '—' }}</td>
+                    <td>{% if r.stato %}<span class="badge bg-{{ 'success' if r.stato == 'attuale' else 'secondary' }}">{{ r.stato }}</span>{% else %}—{% endif %}</td>
+                    <td class="small">{{ r.riferimento or '—' }}</td>
+                    <td>{{ r.detail or '—' }}</td>
+                    <td class="small">{{ r.derivazione or '—' }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% endif %}
+
+    {% if _h.soppressi %}
+    <details class="cat-soppressa-disclosure mb-4">
+        <summary class="cat-intestatari-summary text-muted">
+            <i class="fas fa-archive me-1"></i>{{ _h.soppressi|length }}&thinsp;immobili soppressi originari
+        </summary>
+        <p class="small text-muted mt-2 mb-1">Per ulteriori variazioni richiedere le visure storiche dei seguenti immobili soppressi, originari del precedente.</p>
+        <div class="cat-table-wrap">
+            <table class="cat-compact-table">
+                <thead><tr><th>Sub.</th><th>Comune</th><th>Foglio</th><th>Particella</th><th>Sez. Urbana</th><th>Stato</th></tr></thead>
+                <tbody>
+                    {% for a in _h.soppressi %}
+                    <tr class="cat-unit-soppressa">
+                        <td><span class="cat-sub-badge cat-sub-soppressa">{{ a.Subalterno or '—' }}</span></td>
+                        <td>{{ a.Comune or a.CodiceComune or '—' }}</td>
+                        <td class="font-monospace">{{ a.Foglio or '—' }}</td>
+                        <td class="font-monospace">{{ a.ParticellaNum or '—' }}</td>
+                        <td>{{ a.SezUrbana or '—' }}</td>
+                        <td class="text-muted small fst-italic">{{ a.StatoImmobile or '—' }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </details>
     {% endif %}
 
     {# ── Titolarità e storia intestazione — timeline ─────────────────────── #}
@@ -127,56 +314,37 @@ PT <strong>{{ doc.particella or _dr.ParticellaNum or '-' }}</strong>
     </div>
 
     {% else %}
-    {# Fallback: no history — show IntestazioneAttuale directly #}
+    {# Fallback: no history — show IntestazioneAttuale via the theme's owners_section #}
     {% set _int = _property.IntestazioneAttuale or _property.Intestazione or {} %}
     {% if not _int and _property.MutazioneSoggettiva %}
     {% set _int = _property.MutazioneSoggettiva.Intestazione or {} %}
     {% endif %}
-    {% if _int %}
+    {% if _int and _int is mapping %}
     {% set _intestati = _int.Intestato if _int.Intestato is sequence and _int.Intestato is not string and _int.Intestato is not mapping else ([_int.Intestato] if _int.Intestato else []) %}
-    <h2 class="h5 border-bottom pb-2 mb-3">
-        Intestazione Attuale
-        <span class="badge bg-success ms-2">{{ _intestati|length }}</span>
-    </h2>
-    <div class="card border-0 shadow-sm mb-4">
-        <div class="card-body">
-            {% for row in _intestati %}
-            {% set _dr_row = row.DirittiReali if row.DirittiReali is mapping else {} %}
-            <div class="owner-row">
-                <div class="row align-items-center">
-                    <div class="col-md-5">
-                        <h6 class="mb-1">
-                            <i class="fas fa-user me-2"></i>
-                            {{ row.Nominativo if row.Nominativo is string else (row.Nominativo._text or '-') }}
-                        </h6>
-                        <small class="text-muted font-monospace">
-                            {{ row.CF if row.CF is string else (row.CF._text or '-') }}
-                        </small>
-                    </div>
-                    <div class="col-md-4">
-                        {% if _dr_row.Descrizione %}<span class="badge bg-secondary me-1">{{ _dr_row.Descrizione }}</span>{% endif %}
-                        {% if _dr_row.FineDiritto %}<small class="text-muted d-block">Fino al: {{ _dr_row.FineDiritto }}</small>{% endif %}
-                    </div>
-                    <div class="col-md-3 text-end">
-                        {% if _dr_row.Quota %}
-                        <span class="badge bg-success share-badge">
-                            <i class="fas fa-chart-pie me-1"></i>{{ _dr_row.Quota }}
-                        </span>
-                        {% endif %}
-                    </div>
-                </div>
-            </div>
-            {% endfor %}
-        </div>
-    </div>
+    {% set _owners = [] %}
+    {% for row in _intestati %}
+    {% set _dr_row = row.DirittiReali if row.DirittiReali is mapping else {} %}
+    {% set _ = _owners.append({
+        'cognome': row.Nominativo if row.Nominativo is string else (row.Nominativo._text or '-'),
+        'cf': row.CF if row.CF is string else (row.CF._text or ''),
+        'titolarita': _dr_row.Descrizione,
+        'quota': _dr_row.Quota,
+    }) %}
+    {% endfor %}
+    {{ owners_section(_owners) }}
     {% endif %}
     {% endif %}
 
-    {# ── Liquidazione ────────────────────────────────────────────────────── #}
+    {# ── Richiedente ─────────────────────────────────────────────────────── #}
+    {% if (_v.Richiedente or {}).Descrizione %}
+    <p class="small text-muted"><i class="fas fa-user-tag me-1"></i>Richiedente: {{ _v.Richiedente.Descrizione }}</p>
+    {% endif %}
+
+    {# ── Liquidazione (theme) ────────────────────────────────────────────── #}
     {{ liquidazione_row(_v.DatiLiquidazione or {}) }}
 
     {# ── Dati completi (exhaustive dump) ─────────────────────────────────── #}
-    {{ complete_data_section(doc.xml_parsed, accent='#28a745') }}
+    {{ complete_data_section(doc.xml_parsed, accent='#28a745', expanded=True) }}
 
     {# ── Actions ─────────────────────────────────────────────────────────── #}
     <div class="d-flex gap-2 justify-content-center mt-4 mb-4 no-print">

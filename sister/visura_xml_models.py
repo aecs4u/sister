@@ -155,26 +155,28 @@ class BuildingIdentifier(SQLModel, table=True):
 
     __table_args__ = (
         sa.CheckConstraint(
-            "(building_unit_id IS NOT NULL) + (current_state_id IS NOT NULL) + (history_document_id IS NOT NULL) = 1",
+            "(CASE WHEN building_unit_id IS NOT NULL THEN 1 ELSE 0 END) + "
+            "(CASE WHEN current_state_id IS NOT NULL THEN 1 ELSE 0 END) + "
+            "(CASE WHEN history_document_id IS NOT NULL THEN 1 ELSE 0 END) = 1",
             name="ck_building_identifier_one_parent",
         ),
         sa.Index(
             "uq_building_identifier_building_unit_id",
             "building_unit_id",
             unique=True,
-            sqlite_where=sa.text("building_unit_id IS NOT NULL"),
+            postgresql_where=sa.text("building_unit_id IS NOT NULL"),
         ),
         sa.Index(
             "uq_building_identifier_current_state_id",
             "current_state_id",
             unique=True,
-            sqlite_where=sa.text("current_state_id IS NOT NULL"),
+            postgresql_where=sa.text("current_state_id IS NOT NULL"),
         ),
         sa.Index(
             "uq_building_identifier_history_document_id",
             "history_document_id",
             unique=True,
-            sqlite_where=sa.text("history_document_id IS NOT NULL"),
+            postgresql_where=sa.text("history_document_id IS NOT NULL"),
         ),
     )
 
@@ -219,26 +221,28 @@ class BuildingClassification(SQLModel, table=True):
 
     __table_args__ = (
         sa.CheckConstraint(
-            "(building_unit_id IS NOT NULL) + (current_state_id IS NOT NULL) + (history_document_id IS NOT NULL) = 1",
+            "(CASE WHEN building_unit_id IS NOT NULL THEN 1 ELSE 0 END) + "
+            "(CASE WHEN current_state_id IS NOT NULL THEN 1 ELSE 0 END) + "
+            "(CASE WHEN history_document_id IS NOT NULL THEN 1 ELSE 0 END) = 1",
             name="ck_building_classification_one_parent",
         ),
         sa.Index(
             "uq_building_classification_building_unit_id",
             "building_unit_id",
             unique=True,
-            sqlite_where=sa.text("building_unit_id IS NOT NULL"),
+            postgresql_where=sa.text("building_unit_id IS NOT NULL"),
         ),
         sa.Index(
             "uq_building_classification_current_state_id",
             "current_state_id",
             unique=True,
-            sqlite_where=sa.text("current_state_id IS NOT NULL"),
+            postgresql_where=sa.text("current_state_id IS NOT NULL"),
         ),
         sa.Index(
             "uq_building_classification_history_document_id",
             "history_document_id",
             unique=True,
-            sqlite_where=sa.text("history_document_id IS NOT NULL"),
+            postgresql_where=sa.text("history_document_id IS NOT NULL"),
         ),
     )
 
@@ -274,20 +278,21 @@ class BuildingSurface(SQLModel, table=True):
 
     __table_args__ = (
         sa.CheckConstraint(
-            "(building_unit_id IS NOT NULL) + (current_state_id IS NOT NULL) = 1",
+            "(CASE WHEN building_unit_id IS NOT NULL THEN 1 ELSE 0 END) + "
+            "(CASE WHEN current_state_id IS NOT NULL THEN 1 ELSE 0 END) = 1",
             name="ck_building_surface_one_parent",
         ),
         sa.Index(
             "uq_building_surface_building_unit_id",
             "building_unit_id",
             unique=True,
-            sqlite_where=sa.text("building_unit_id IS NOT NULL"),
+            postgresql_where=sa.text("building_unit_id IS NOT NULL"),
         ),
         sa.Index(
             "uq_building_surface_current_state_id",
             "current_state_id",
             unique=True,
-            sqlite_where=sa.text("current_state_id IS NOT NULL"),
+            postgresql_where=sa.text("current_state_id IS NOT NULL"),
         ),
     )
 
@@ -334,7 +339,8 @@ class RelatedParcel(SQLModel, table=True):
 
     __table_args__ = (
         sa.CheckConstraint(
-            "(building_unit_id IS NOT NULL) + (current_state_id IS NOT NULL) = 1",
+            "(CASE WHEN building_unit_id IS NOT NULL THEN 1 ELSE 0 END) + "
+            "(CASE WHEN current_state_id IS NOT NULL THEN 1 ELSE 0 END) = 1",
             name="ck_related_parcel_one_parent",
         ),
     )
@@ -445,7 +451,9 @@ class OwnershipMutation(SQLModel, table=True):
 
     __table_args__ = (
         sa.CheckConstraint(
-            "(document_id IS NOT NULL) + (property_group_id IS NOT NULL) + (land_parcel_id IS NOT NULL) = 1",
+            "(CASE WHEN document_id IS NOT NULL THEN 1 ELSE 0 END) + "
+            "(CASE WHEN property_group_id IS NOT NULL THEN 1 ELSE 0 END) + "
+            "(CASE WHEN land_parcel_id IS NOT NULL THEN 1 ELSE 0 END) = 1",
             name="ck_ownership_mutation_one_parent",
         ),
     )

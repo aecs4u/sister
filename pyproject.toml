@@ -39,7 +39,7 @@ dependencies = [
     "pydantic>=2.10.0",
     "python-dotenv",
     "rich>=13.0",
-    "aiosqlite>=0.19.0",
+    "psycopg[binary]>=3.2.0",
     "sqlmodel>=0.0.8",
     "alembic>=1.13.0",
     "typer>=0.9.0",
@@ -48,12 +48,15 @@ dependencies = [
     "aecs4u-theme>=1.6.0",
     "lxml>=6.1.1",
     "sqlalchemy>=2.0.50",
-    "starlette>=1.2.1",
+    "starlette>=1.6.0",
     "python-multipart>=0.0.32",
     "ezdxf>=1.4.4",
 ]
 
 [project.optional-dependencies]
+floor-plan-ocr = [
+    "ocular[promptflow]",
+]
 dev = [
     "pytest>=7.0",
     "pytest-cov>=4.0",
@@ -72,12 +75,13 @@ Changelog = "https://github.com/aecs4u/sister/blob/main/CHANGELOG.md"
 sister = "sister.cli:run"
 
 [tool.uv.sources]
-aecs4u-auth = { git = "https://github.com/aecs4u/aecs4u-auth.git", branch = "main" }
-aecs4u-domain = { git = "https://github.com/aecs4u/aecs4u-domain.git", branch = "main" }
-aecs4u-email = { git = "https://github.com/aecs4u/aecs4u-email.git", branch = "main" }
-aecs4u-crypto = { git = "https://github.com/aecs4u/aecs4u-crypto.git", branch = "main" }
-aecs4u-theme = { git = "https://github.com/aecs4u/aecs4u-theme.git", branch = "main" }
-aecs4u-workflow = { git = "https://github.com/aecs4u/aecs4u-workflow.git", branch = "main" }
+aecs4u-auth = { workspace = true }
+aecs4u-domain = { workspace = true }
+aecs4u-email = { workspace = true }
+aecs4u-crypto = { workspace = true }
+aecs4u-theme = { workspace = true }
+aecs4u-workflow = { workspace = true }
+ocular = { workspace = true }
 
 [tool.setuptools]
 packages = ["sister"]
@@ -99,6 +103,9 @@ testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_functions = ["test_*"]
 asyncio_mode = "auto"
+markers = [
+    "integration: tests that use developer-local or external service data",
+]
 
 [tool.deptry]
 exclude = ["alembic", "examples", "scripts"]
@@ -110,7 +117,6 @@ python-dotenv  = ["dotenv"]
 [tool.deptry.per_rule_ignores]
 DEP002 = [
     "uvicorn",         # runtime server — invoked via CLI
-    "aiosqlite",       # async SQLite driver, implicit via sqlmodel/aecs4u-auth
     "jinja2",          # templating, implicit via fastapi
     "pytest-cov",      # dev tool in optional-dependencies
     "pytest-asyncio",  # dev tool

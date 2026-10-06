@@ -38,27 +38,21 @@ _DOCUMENTS_DROP = [
 
 
 def _table_exists(table: str) -> bool:
-    conn = op.get_bind()
-    row = conn.execute(
-        sa.text("SELECT count(*) FROM sqlite_master WHERE type='table' AND name=:t"),
-        {"t": table},
-    ).fetchone()
-    return bool(row and row[0])
+    return sa.inspect(op.get_bind()).has_table(table)
 
 
 def _column_exists(table: str, column: str) -> bool:
-    conn = op.get_bind()
-    rows = conn.execute(sa.text(f"PRAGMA table_info({table})")).fetchall()
-    return any(r[1] == column for r in rows)
+    inspector = sa.inspect(op.get_bind())
+    return inspector.has_table(table) and any(col["name"] == column for col in inspector.get_columns(table))
 
 
 def _index_exists(index_name: str) -> bool:
-    conn = op.get_bind()
-    row = conn.execute(
-        sa.text("SELECT count(*) FROM sqlite_master WHERE type='index' AND name=:n"),
-        {"n": index_name},
-    ).fetchone()
-    return bool(row and row[0])
+    inspector = sa.inspect(op.get_bind())
+    return any(
+        index["name"] == index_name
+        for table in inspector.get_table_names()
+        for index in inspector.get_indexes(table)
+    )
 
 
 def upgrade() -> None:
@@ -75,7 +69,7 @@ def upgrade() -> None:
             if _index_exists(idx):
                 op.drop_index(idx, table_name="visura_requests")
 
-        with op.batch_alter_table("visura_requests", recreate="always") as batch_op:
+        with op.batch_alter_table("visura_requests") as batch_op:
             for col in cols_to_drop:
                 batch_op.drop_column(col)
             # Recreate the created_at index (still valid)
@@ -84,7 +78,7 @@ def upgrade() -> None:
     # ── 3. visura_properties: drop old location columns ───────────────────────
     cols_to_drop = [c for c in _PROPERTIES_DROP if _column_exists("visura_properties", c)]
     if cols_to_drop:
-        with op.batch_alter_table("visura_properties", recreate="always") as batch_op:
+        with op.batch_alter_table("visura_properties") as batch_op:
             for col in cols_to_drop:
                 batch_op.drop_column(col)
 
@@ -95,7 +89,7 @@ def upgrade() -> None:
         if _index_exists("idx_documents_lookup"):
             op.drop_index("idx_documents_lookup", table_name="visura_documents")
 
-        with op.batch_alter_table("visura_documents", recreate="always") as batch_op:
+        with op.batch_alter_table("visura_documents") as batch_op:
             for col in cols_to_drop:
                 batch_op.drop_column(col)
 

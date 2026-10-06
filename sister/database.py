@@ -1,4 +1,4 @@
-"""SQLite database layer for sister (SQLModel + async SQLAlchemy).
+"""PostgreSQL database layer for sister (SQLModel + async SQLAlchemy).
 
 Provides persistent storage for visura requests, responses, and structured
 result tables (immobili, intestati). Includes cache lookup for deduplication.
@@ -10,28 +10,17 @@ import hashlib
 import json
 import logging
 import os
-import sqlite3
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Optional
 
-from sqlalchemy import text
+from dotenv import load_dotenv
+from sqlalchemy import column, delete, func, inspect, table, text
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+from sqlalchemy.engine import make_url
 from sqlalchemy.orm import sessionmaker
 from sqlmodel import select
 
-from .cadastral import (
-    CadastralInspection,
-    CadastralLegalEntitySearchEntity,
-    CadastralLegalEntitySearchGeoSummary,
-    CadastralLegalEntitySearchParameter,
-    CadastralLegalEntitySearchProperty,
-    CadastralLocationParameters,
-    CadastralPropertyProperty,
-    CadastralProspectOwner,
-    CadastralProspectProperty,
-    CadastralQuery,
-)
 from .db_models import (
     OWNER_RIGHT_FIELD_MAP,
     OWNER_SUBJECT_FIELD_MAP,
@@ -41,9 +30,6 @@ from .db_models import (
     CadastralLocation,
     CadastralSubject,
     DocumentMetadata,
-    FeedbackConfig,
-    FeedbackConfigItem,
-    FeedbackUnsubscribe,
     GeographicPlace,
     OwnershipRight,
     PageVisit,
@@ -56,81 +42,15 @@ from .db_models import (
     VisuraResponse,
     VisuraResult,
 )
-from .visura_xml_models import (
-    BuildingAddress,
-    BuildingClassification,
-    BuildingCurrentState,
-    BuildingIdentifier,
-    BuildingSurface,
-    DocumentXmlAttribute,
-    DocumentXmlNode,
-    BuildingUnit,
-    DocumentSubject,
-    LandClassification,
-    LandParcel,
-    OwnershipMutation,
-    PropertyGroup,
-    PropertyOwner,
-    RelatedParcel,
-)
-
-# Collect only sister's tables — avoid creating tables from other packages
-# that share the global SQLModel.metadata.
-# workflow_runs / workflow_steps are intentionally excluded: they are owned and
-# created by the opendata project (see opendata/models/workflow.py and the
-# corresponding Alembic migration). Sister queries them via raw SQL but does
-# not define or create the schema.
-# FeedbackConfig / FeedbackConfigItem / FeedbackUnsubscribe are the exception:
-# the model classes now live in aecs4u_domain.feedback (shared with opendata),
-# but sister still owns creating them in its own standalone SQLite DB.
-_SISTER_TABLES = [
-    CadastralLocation.__table__,  # no FK deps — must be first
-    GeographicPlace.__table__,
-    CadastralSubject.__table__,
-    OwnershipRight.__table__,
-    VisuraRequest.__table__,
-    VisuraResponse.__table__,
-    VisuraResult.__table__,
-    VisuraProperty.__table__,
-    VisuraOwner.__table__,
-    PageVisit.__table__,
-    PageVisitFormElement.__table__,
-    PageVisitError.__table__,
-    VisuraDocument.__table__,
-    DocumentMetadata.__table__,
-    DocumentSubject.__table__,
-    DocumentXmlNode.__table__,
-    DocumentXmlAttribute.__table__,
-    PropertyGroup.__table__,
-    BuildingUnit.__table__,
-    BuildingCurrentState.__table__,
-    BuildingIdentifier.__table__,
-    BuildingClassification.__table__,
-    BuildingSurface.__table__,
-    BuildingAddress.__table__,
-    RelatedParcel.__table__,
-    LandParcel.__table__,
-    LandClassification.__table__,
-    OwnershipMutation.__table__,
-    PropertyOwner.__table__,
-    FeedbackConfig.__table__,
-    FeedbackConfigItem.__table__,
-    FeedbackUnsubscribe.__table__,
-    CadastralQuery.__table__,
-    CadastralInspection.__table__,
-    CadastralLocationParameters.__table__,
-    CadastralPropertyProperty.__table__,
-    CadastralProspectProperty.__table__,
-    CadastralProspectOwner.__table__,
-    CadastralLegalEntitySearchParameter.__table__,
-    CadastralLegalEntitySearchEntity.__table__,
-    CadastralLegalEntitySearchGeoSummary.__table__,
-    CadastralLegalEntitySearchProperty.__table__,
-]
 
 logger = logging.getLogger("sister")
 
-DB_PATH = os.getenv("SISTER_DB_PATH", os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "sister.sqlite"))
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+load_dotenv(PROJECT_ROOT / ".env")
+load_dotenv(PROJECT_ROOT.parent / ".env", override=False)
+DATA_ROOT = Path(os.getenv("SISTER_DATA_ROOT", str(PROJECT_ROOT))).expanduser().resolve()
+DATABASE_DSN = os.getenv("DATABASE_DSN")
+DATABASE_REVISION = "20261006_align_postgres_core"
 
 # ---------------------------------------------------------------------------
 # Engine and session
@@ -141,26 +61,36 @@ _db_writable: Optional[bool] = None
 
 
 def is_db_writable() -> bool:
-    """Check if the database file is writable. Cached after first call."""
+    """Return whether persistence is enabled and configured as writable."""
     global _db_writable
     if _db_writable is not None:
         return _db_writable
-    db_path = Path(DB_PATH)
-    if not db_path.exists():
-        _db_writable = os.access(str(db_path.parent), os.W_OK)
-    else:
-        _db_writable = os.access(str(db_path), os.W_OK)
+    if os.getenv("SISTER_DATABASE_READ_ONLY", "").strip().lower() in {"1", "true", "yes", "on"}:
+        _db_writable = False
+        return _db_writable
+    _db_writable = bool(DATABASE_DSN)
     if not _db_writable:
-        logger.warning("Database is read-only: %s — write operations will be skipped", DB_PATH)
+        logger.warning("Database DSN is missing — persistence is unavailable")
     return _db_writable
 
 
 def _get_engine():
     global _engine
     if _engine is None:
-        os.makedirs(os.path.dirname(DB_PATH) or ".", exist_ok=True)
-        url = f"sqlite+aiosqlite:///{DB_PATH}"
-        _engine = create_async_engine(url, echo=False)
+        if not DATABASE_DSN:
+            raise RuntimeError("DATABASE_DSN must be set to a PostgreSQL connection URL")
+        url = make_url(DATABASE_DSN)
+        if url.get_backend_name() != "postgresql":
+            raise RuntimeError("DATABASE_DSN must use PostgreSQL; other database backends are unsupported")
+        if url.drivername in {
+            "postgres",
+            "postgresql",
+            "postgresql+asyncpg",
+            "postgresql+psycopg2",
+            "postgresql+psycopg_async",
+        }:
+            url = url.set(drivername="postgresql+psycopg")
+        _engine = create_async_engine(url, echo=False, pool_pre_ping=True)
     return _engine
 
 
@@ -169,20 +99,34 @@ def _get_session_factory():
 
 
 async def init_db() -> None:
-    """Create sister tables if they don't exist."""
+    """Check the Postgres connection and require the current Alembic schema revision."""
     engine = _get_engine()
-    writable = is_db_writable()
-    async with engine.begin() as conn:
-        if writable:
-
-            def _create_sister_tables(sync_conn):
-                for table in _SISTER_TABLES:
-                    table.create(sync_conn, checkfirst=True)
-
-            await conn.run_sync(_create_sister_tables)
-            await conn.execute(text("PRAGMA journal_mode=WAL"))
-        await conn.execute(text("PRAGMA foreign_keys=ON"))
-    logger.info("Database inizializzato: %s (writable=%s)", DB_PATH, writable)
+    async with engine.connect() as conn:
+        await conn.execute(text("SELECT 1"))
+        table_names = await conn.run_sync(lambda sync_conn: set(inspect(sync_conn).get_table_names()))
+        required_tables = {
+            "cadastral_locations",
+            "visura_requests",
+            "visura_responses",
+            "visura_results",
+            "visura_properties",
+            "visura_owners",
+            "visura_documents",
+            "document_metadata",
+        }
+        missing = sorted(required_tables - table_names)
+        if missing:
+            raise RuntimeError(
+                "PostgreSQL schema is incomplete (missing: " + ", ".join(missing) + "). Run `alembic upgrade head`."
+            )
+        if "alembic_version" not in table_names:
+            raise RuntimeError("PostgreSQL migrations are not installed. Run `alembic upgrade head`.")
+        version = (await conn.execute(text("SELECT version_num FROM alembic_version"))).scalar_one_or_none()
+        if version != DATABASE_REVISION:
+            raise RuntimeError(
+                f"PostgreSQL schema is at {version!r}; expected {DATABASE_REVISION!r}. Run `alembic upgrade head`."
+            )
+    logger.info("Database PostgreSQL inizializzato (writable=%s)", is_db_writable())
 
 
 # ---------------------------------------------------------------------------
@@ -202,7 +146,7 @@ async def find_cached_response(cache_key: str, ttl_seconds: int) -> Optional[dic
     """Find a successful, non-expired response matching the cache key."""
     session_factory = _get_session_factory()
     async with session_factory() as session:
-        cutoff = datetime.now() - timedelta(seconds=ttl_seconds)
+        cutoff = datetime.now(timezone.utc) - timedelta(seconds=ttl_seconds)
         stmt = (
             select(VisuraResponse)
             .join(VisuraRequest)
@@ -338,7 +282,7 @@ async def get_or_create_right(
 ) -> int:
     """Get existing OwnershipRight or create one; return its id.
 
-    Matches NULL fields explicitly (SQLite does not deduplicate NULLs via UNIQUE constraints).
+    Normalizes missing fields to empty strings so equality matches the unique-key representation.
     """
     right_type = right_type or ""
     right_code = right_code or ""
@@ -403,13 +347,13 @@ async def save_request(
             subunit=subalterno or "",
             section=sezione or "",
         )
-        row = VisuraRequest(
-            request_id=request_id,
-            request_type=request_type,
-            location_id=location_id,
-            cache_key=cache_key,
-        )
-        session.add(row)
+        row = await session.get(VisuraRequest, request_id)
+        if row is None:
+            row = VisuraRequest(request_id=request_id, request_type=request_type)
+            session.add(row)
+        row.request_type = request_type
+        row.location_id = location_id
+        row.cache_key = cache_key
         await session.commit()
 
 
@@ -430,13 +374,13 @@ async def save_requests_batch(requests: list[dict]) -> None:
                 subunit=req.get("subalterno") or "",
                 section=req.get("sezione") or "",
             )
-            row = VisuraRequest(
-                request_id=req["request_id"],
-                request_type=req["request_type"],
-                location_id=location_id,
-                cache_key=req.get("cache_key"),
-            )
-            session.add(row)
+            row = await session.get(VisuraRequest, req["request_id"])
+            if row is None:
+                row = VisuraRequest(request_id=req["request_id"], request_type=req["request_type"])
+                session.add(row)
+            row.request_type = req["request_type"]
+            row.location_id = location_id
+            row.cache_key = req.get("cache_key")
         await session.commit()
 
 
@@ -522,6 +466,9 @@ def _parse_page_visits(response_id: str, data: Optional[dict]) -> list[PageVisit
         if item.get("timestamp"):
             try:
                 ts = datetime.fromisoformat(item["timestamp"])
+                if ts.tzinfo is None:
+                    # SQLModel datetime columns store aware values only; page timestamps are naive local time
+                    ts = ts.astimezone()
             except (ValueError, TypeError):
                 pass
         rows.append(
@@ -577,6 +524,7 @@ async def save_response(
     tipo_catasto: str,
     data: Optional[dict] = None,
     error: Optional[str] = None,
+    export: bool = True,
 ) -> None:
     """Persist a response and populate structured tables."""
     session_factory = _get_session_factory()
@@ -600,17 +548,20 @@ async def save_response(
         await session.execute(text("DELETE FROM visura_owners WHERE response_id = :rid"), {"rid": request_id})
         await session.execute(text("DELETE FROM visura_properties WHERE response_id = :rid"), {"rid": request_id})
         await session.execute(text("DELETE FROM visura_results WHERE response_id = :rid"), {"rid": request_id})
-        await session.execute(text("DELETE FROM visura_responses WHERE request_id = :rid"), {"rid": request_id})
-
-        resp = VisuraResponse(
-            request_id=request_id,
-            success=success,
-            cadastre_type=tipo_catasto,
-            data=data,
-            error=error,
-            **_response_summary(data),
-        )
-        session.add(resp)
+        resp = await session.get(VisuraResponse, request_id)
+        if resp is None:
+            resp = VisuraResponse(request_id=request_id, success=success, cadastre_type=tipo_catasto)
+            session.add(resp)
+        resp.success = success
+        resp.cadastre_type = tipo_catasto
+        resp.data = data
+        resp.error = error
+        summary = _response_summary(data)
+        resp.total_results = summary.get("total_results")
+        resp.total_intestati = summary.get("total_intestati")
+        resp.skipped_soppresso = summary.get("skipped_soppresso")
+        resp.subject_query = summary.get("subject_query")
+        resp.created_at = datetime.now(timezone.utc)
         await session.flush()
 
         # Look up request location to inherit province/municipality for property locations
@@ -665,7 +616,8 @@ async def save_response(
         await session.commit()
 
     # Export to outputs/ directory
-    _export_response_file(request_id, success, tipo_catasto, data, error)
+    if export:
+        _export_response_file(request_id, success, tipo_catasto, data, error)
 
 
 OUTPUTS_DIR = os.getenv("SISTER_OUTPUTS_DIR", os.path.join(os.path.dirname(os.path.dirname(__file__)), "outputs"))
@@ -1073,86 +1025,84 @@ async def find_result_rows(
     offset: int = 0,
 ) -> list[dict]:
     """Search single-query responses and workflow runs for the web results page."""
-    if not os.path.exists(DB_PATH):
-        return []
-
     if source not in {"single", "workflow"}:
         source = None
     if status not in {"completed", "partial", "failed", "error", "pending", "running"}:
         status = None
 
-    with sqlite3.connect(DB_PATH) as conn:
-        conn.row_factory = sqlite3.Row
-        single_rows: list[dict] = []
-        if source in (None, "single"):
-            where_clause, params = _build_single_where(
-                provincia,
-                comune,
-                foglio,
-                particella,
-                tipo_catasto,
-                status,
+    single_rows: list[dict] = []
+    if source in (None, "single"):
+        property_count = (
+            select(func.count(VisuraProperty.id))
+            .where(VisuraProperty.response_id == VisuraRequest.request_id)
+            .correlate(VisuraRequest)
+            .scalar_subquery()
+        )
+        owner_count = (
+            select(func.count(VisuraOwner.id))
+            .where(VisuraOwner.response_id == VisuraRequest.request_id)
+            .correlate(VisuraRequest)
+            .scalar_subquery()
+        )
+        stmt = (
+            select(
+                VisuraRequest.request_id.label("request_id"),
+                VisuraRequest.request_type.label("request_type"),
+                CadastralLocation.cadastre_type.label("cadastre_type"),
+                CadastralLocation.province.label("province"),
+                CadastralLocation.municipality.label("municipality"),
+                CadastralLocation.sheet.label("sheet"),
+                CadastralLocation.parcel.label("parcel"),
+                CadastralLocation.section.label("section"),
+                CadastralLocation.subunit.label("subunit"),
+                VisuraRequest.created_at.label("requested_at"),
+                VisuraResponse.success.label("success"),
+                VisuraResponse.error.label("error"),
+                VisuraResponse.created_at.label("responded_at"),
+                VisuraResponse.total_results.label("total_results"),
+                VisuraResponse.total_intestati.label("total_intestati"),
+                property_count.label("property_count"),
+                owner_count.label("owner_count"),
             )
-            sql = """
-                SELECT
-                    req.request_id,
-                    req.request_type,
-                    loc.cadastre_type,
-                    loc.province,
-                    loc.municipality,
-                    loc.sheet,
-                    loc.parcel,
-                    loc.section,
-                    loc.subunit,
-                    req.created_at AS requested_at,
-                    resp.success,
-                    resp.error,
-                    resp.created_at AS responded_at,
-                    resp.total_results,
-                    resp.total_intestati,
-                    (SELECT COUNT(*) FROM visura_properties WHERE response_id = req.request_id) AS property_count,
-                    (SELECT COUNT(*) FROM visura_owners WHERE response_id = req.request_id) AS owner_count
-                FROM visura_requests AS req
-                LEFT JOIN visura_responses AS resp ON req.request_id = resp.request_id
-                LEFT JOIN cadastral_locations AS loc ON req.location_id = loc.id
-            """
-            if where_clause:
-                sql += f" WHERE {where_clause}"
-            for row in conn.execute(sql, params).fetchall():
-                success = bool(row["success"]) if row["success"] is not None else None
-                single_rows.append(
-                    {
-                        "request_id": row["request_id"],
-                        "request_type": row["request_type"],
-                        "source": "single",
-                        "tipo_catasto": row["cadastre_type"],
-                        "provincia": row["province"],
-                        "comune": row["municipality"],
-                        "foglio": row["sheet"],
-                        "particella": row["parcel"],
-                        "sezione": row["section"],
-                        "subalterno": row["subunit"],
-                        "requested_at": row["requested_at"],
-                        "success": success,
-                        "status": _single_result_status(success),
-                        "data": None,
-                        "error": row["error"],
-                        "responded_at": row["responded_at"],
-                        # Keep both the response metadata and the normalized
-                        # extraction counts available to the UI.  Older rows
-                        # may not have response totals, so the DB projections
-                        # are the reliable fallback.
-                        "total_results": row["total_results"],
-                        "total_intestati": row["total_intestati"],
-                        "property_count": row["property_count"] or 0,
-                        "owner_count": row["owner_count"] or 0,
-                    }
-                )
+            .select_from(VisuraRequest)
+            .outerjoin(VisuraResponse, VisuraRequest.request_id == VisuraResponse.request_id)
+            .outerjoin(CadastralLocation, VisuraRequest.location_id == CadastralLocation.id)
+            .where(
+                *_build_single_where(provincia, comune, foglio, particella, tipo_catasto, status)
+            )
+            .order_by(VisuraRequest.created_at.desc())
+        )
+        async with _get_session_factory()() as session:
+            rows = (await session.execute(stmt)).mappings().all()
+        for row in rows:
+            success = bool(row["success"]) if row["success"] is not None else None
+            single_rows.append(
+                {
+                    "request_id": row["request_id"],
+                    "request_type": row["request_type"],
+                    "source": "single",
+                    "tipo_catasto": row["cadastre_type"],
+                    "provincia": row["province"],
+                    "comune": row["municipality"],
+                    "foglio": row["sheet"],
+                    "particella": row["parcel"],
+                    "sezione": row["section"],
+                    "subalterno": row["subunit"],
+                    "requested_at": row["requested_at"],
+                    "success": success,
+                    "status": _single_result_status(success),
+                    "data": None,
+                    "error": row["error"],
+                    "responded_at": row["responded_at"],
+                    "total_results": row["total_results"],
+                    "total_intestati": row["total_intestati"],
+                    "property_count": row["property_count"] or 0,
+                    "owner_count": row["owner_count"] or 0,
+                }
+            )
 
     # workflow_runs no longer live in sister's DB — owned by opendata
-    rows = list(single_rows)
-    rows.sort(key=lambda row: row.get("requested_at") or "", reverse=True)
-    return rows[offset : offset + limit]
+    return single_rows[offset : offset + limit]
 
 
 async def cleanup_old_responses(ttl_seconds: int) -> int:
@@ -1161,27 +1111,56 @@ async def cleanup_old_responses(ttl_seconds: int) -> int:
         return 0
     session_factory = _get_session_factory()
     async with session_factory() as session:
-        cutoff = datetime.now() - timedelta(seconds=ttl_seconds)
+        cutoff = datetime.now(timezone.utc) - timedelta(seconds=ttl_seconds)
 
-        stmt = select(VisuraResponse).where(VisuraResponse.created_at < cutoff)
-        result = await session.execute(stmt)
-        expired = result.scalars().all()
-        deleted = len(expired)
-
-        for resp in expired:
-            await session.delete(resp)
-
-        if deleted:
-            orphan_stmt = select(VisuraRequest).where(
-                VisuraRequest.created_at < cutoff,
-                ~VisuraRequest.request_id.in_(select(VisuraResponse.request_id)),
+        expired_ids = (
+            await session.execute(
+                select(VisuraResponse.request_id).where(VisuraResponse.created_at < cutoff)
             )
-            orphan_result = await session.execute(orphan_stmt)
-            for req in orphan_result.scalars().all():
-                await session.delete(req)
+        ).scalars().all()
+        deleted = len(expired_ids)
+
+        if expired_ids:
+            # Ordered bulk deletes avoid ORM autoflush trying to delete a
+            # response before its unmapped result rows have been removed.
+            page_visit_ids = select(PageVisit.id).where(PageVisit.response_id.in_(expired_ids))
+            document_ids = select(VisuraDocument.id).where(VisuraDocument.response_id.in_(expired_ids))
+            xml_nodes = table("document_xml_nodes", column("id"), column("document_id"))
+            xml_attributes = table("document_xml_attributes", column("node_id"))
+            await session.execute(
+                delete(PageVisitFormElement).where(PageVisitFormElement.page_visit_id.in_(page_visit_ids))
+            )
+            await session.execute(
+                delete(PageVisitError).where(PageVisitError.page_visit_id.in_(page_visit_ids))
+            )
+            await session.execute(delete(PageVisit).where(PageVisit.response_id.in_(expired_ids)))
+            await session.execute(
+                delete(xml_attributes).where(
+                    xml_attributes.c.node_id.in_(
+                        select(xml_nodes.c.id).where(xml_nodes.c.document_id.in_(document_ids))
+                    )
+                )
+            )
+            await session.execute(delete(xml_nodes).where(xml_nodes.c.document_id.in_(document_ids)))
+            await session.execute(delete(DocumentMetadata).where(DocumentMetadata.id.in_(document_ids)))
+            await session.execute(delete(VisuraDocument).where(VisuraDocument.response_id.in_(expired_ids)))
+            await session.execute(delete(VisuraProperty).where(VisuraProperty.response_id.in_(expired_ids)))
+            await session.execute(delete(VisuraOwner).where(VisuraOwner.response_id.in_(expired_ids)))
+            await session.execute(delete(VisuraResult).where(VisuraResult.response_id.in_(expired_ids)))
+            await session.execute(delete(VisuraResponse).where(VisuraResponse.request_id.in_(expired_ids)))
+
+            orphan_ids = (
+                await session.execute(
+                    select(VisuraRequest.request_id).where(
+                        VisuraRequest.created_at < cutoff,
+                        ~VisuraRequest.request_id.in_(select(VisuraResponse.request_id)),
+                    )
+                )
+            ).scalars().all()
+            if orphan_ids:
+                await session.execute(delete(VisuraRequest).where(VisuraRequest.request_id.in_(orphan_ids)))
 
         await session.commit()
-        await session.execute(text("PRAGMA wal_checkpoint(TRUNCATE)"))
         return deleted
 
 
@@ -1225,32 +1204,26 @@ def _build_single_where(
     particella: Optional[str] = None,
     tipo_catasto: Optional[str] = None,
     status: Optional[str] = None,
-) -> tuple[str, list]:
-    """Build WHERE clause + params for single-result queries on visura_requests/responses/cadastral_locations."""
-    conditions: list[str] = []
-    params: list = []
+) -> list:
+    """Build portable ORM filters for single-result queries."""
+    conditions = []
     if provincia:
-        conditions.append("loc.province = ?")
-        params.append(provincia)
+        conditions.append(CadastralLocation.province == provincia)
     if comune:
-        conditions.append("loc.municipality = ?")
-        params.append(comune)
+        conditions.append(CadastralLocation.municipality == comune)
     if foglio:
-        conditions.append("loc.sheet = ?")
-        params.append(str(foglio))
+        conditions.append(CadastralLocation.sheet == str(foglio))
     if particella:
-        conditions.append("loc.parcel = ?")
-        params.append(str(particella))
+        conditions.append(CadastralLocation.parcel == str(particella))
     if tipo_catasto:
-        conditions.append("loc.cadastre_type = ?")
-        params.append(tipo_catasto)
+        conditions.append(CadastralLocation.cadastre_type == tipo_catasto)
     if status == "completed":
-        conditions.append("resp.success = 1")
+        conditions.append(VisuraResponse.success.is_(True))
     elif status in ("failed", "error"):
-        conditions.append("resp.success = 0")
+        conditions.append(VisuraResponse.success.is_(False))
     elif status == "pending":
-        conditions.append("resp.request_id IS NULL")
-    return (" AND ".join(conditions), params)
+        conditions.append(VisuraResponse.request_id.is_(None))
+    return conditions
 
 
 async def count_total_result_rows(
@@ -1263,33 +1236,22 @@ async def count_total_result_rows(
     status: Optional[str] = None,
 ) -> int:
     """Return total count of result rows matching filters, using SQL COUNT(*)."""
-    if not os.path.exists(DB_PATH):
-        return 0
-
     if source not in {"single", "workflow"}:
         source = None
     if status not in {"completed", "partial", "failed", "error", "pending", "running"}:
         status = None
 
-    total = 0
-    with sqlite3.connect(DB_PATH) as conn:
-        if source in (None, "single"):
-            where_clause, params = _build_single_where(
-                provincia,
-                comune,
-                foglio,
-                particella,
-                tipo_catasto,
-                status,
-            )
-            sql = """
-                SELECT count(*) FROM visura_requests AS req
-                LEFT JOIN visura_responses AS resp ON req.request_id = resp.request_id
-                LEFT JOIN cadastral_locations AS loc ON req.location_id = loc.id
-            """
-            if where_clause:
-                sql += f" WHERE {where_clause}"
-            total += conn.execute(sql, params).fetchone()[0] or 0
+    if source not in (None, "single"):
+        return 0
+    stmt = (
+        select(func.count())
+        .select_from(VisuraRequest)
+        .outerjoin(VisuraResponse, VisuraRequest.request_id == VisuraResponse.request_id)
+        .outerjoin(CadastralLocation, VisuraRequest.location_id == CadastralLocation.id)
+        .where(*_build_single_where(provincia, comune, foglio, particella, tipo_catasto, status))
+    )
+    async with _get_session_factory()() as session:
+        total = (await session.execute(stmt)).scalar_one()
 
     # workflow_runs no longer in sister's DB — owned by opendata
     return total
@@ -1304,45 +1266,23 @@ async def count_result_rows(
     source: Optional[str] = None,
 ) -> dict:
     """Return web result stats including single-query requests and workflows."""
-    if not os.path.exists(DB_PATH):
-        return {
-            "total_requests": 0,
-            "total_responses": 0,
-            "successful": 0,
-            "failed": 0,
-            "partial": 0,
-            "pending": 0,
-        }
-
     if source not in {"single", "workflow"}:
         source = None
 
-    with sqlite3.connect(DB_PATH) as conn:
-
-        def _count_single(where_clause: str, params: list) -> int:
-            sql = """
-                SELECT count(*) FROM visura_requests AS req
-                LEFT JOIN visura_responses AS resp ON req.request_id = resp.request_id
-                LEFT JOIN cadastral_locations AS loc ON req.location_id = loc.id
-            """
-            if where_clause:
-                sql += f" WHERE {where_clause}"
-            return conn.execute(sql, params).fetchone()[0] or 0
-
-        # workflow_runs no longer in sister's DB — owned by opendata
-        s_total = s_ok = s_fail = s_pending = 0
-        if source in (None, "single"):
-            base_where, base_params = _build_single_where(provincia, comune, foglio, particella, tipo_catasto)
-            s_total = _count_single(base_where, base_params)
-            s_ok = _count_single(
-                *_build_single_where(provincia, comune, foglio, particella, tipo_catasto, status="completed")
-            )
-            s_fail = _count_single(
-                *_build_single_where(provincia, comune, foglio, particella, tipo_catasto, status="failed")
-            )
-            s_pending = _count_single(
-                *_build_single_where(provincia, comune, foglio, particella, tipo_catasto, status="pending")
-            )
+    s_total = s_ok = s_fail = s_pending = 0
+    if source in (None, "single"):
+        filters = _build_single_where(provincia, comune, foglio, particella, tipo_catasto)
+        stmt = select(
+            func.count().label("total"),
+            func.count().filter(VisuraResponse.success.is_(True)).label("successful"),
+            func.count().filter(VisuraResponse.success.is_(False)).label("failed"),
+            func.count().filter(VisuraResponse.request_id.is_(None)).label("pending"),
+        ).select_from(VisuraRequest).outerjoin(
+            VisuraResponse, VisuraRequest.request_id == VisuraResponse.request_id
+        ).outerjoin(CadastralLocation, VisuraRequest.location_id == CadastralLocation.id).where(*filters)
+        async with _get_session_factory()() as session:
+            counts = (await session.execute(stmt)).one()
+        s_total, s_ok, s_fail, s_pending = counts
 
     return {
         "total_requests": s_total,

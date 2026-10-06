@@ -16,6 +16,17 @@ class _FakeTheme:
         }
 
 
+@pytest.fixture(autouse=True)
+def _stub_unrelated_detail_queries(monkeypatch):
+    """Keep route tests isolated from the configured PostgreSQL database."""
+
+    async def _empty(*_args, **_kwargs):
+        return []
+
+    monkeypatch.setattr(web, "get_db_properties_for_response", _empty)
+    monkeypatch.setattr(web, "get_db_owners_for_response", _empty)
+
+
 def _fake_request():
     return SimpleNamespace(
         app=SimpleNamespace(state=SimpleNamespace(theme_setup=_FakeTheme())),
@@ -665,34 +676,60 @@ async def test_web_results_status_filter_passed_to_count(monkeypatch):
 
 
 class TestCountTotalResultRows:
-    """SQL-based filtered counting."""
+    """SQL-based filtered counting with an isolated session fake."""
+
+    class _QueryResult:
+        def scalar_one(self):
+            return 7
+
+    class _Session:
+        def __init__(self):
+            self.statements = []
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_exc):
+            return None
+
+        async def execute(self, statement):
+            self.statements.append(statement)
+            return TestCountTotalResultRows._QueryResult()
 
     @pytest.mark.asyncio
-    async def test_returns_zero_for_missing_db(self, tmp_path, monkeypatch):
+    async def test_workflow_source_returns_zero_without_querying_sister_db(self, monkeypatch):
         from sister import database
 
-        monkeypatch.setattr(database, "DB_PATH", str(tmp_path / "nonexistent.sqlite"))
-        result = await database.count_total_result_rows()
+        def _unexpected_factory():
+            raise AssertionError("workflow results are owned by opendata")
+
+        monkeypatch.setattr(database, "_get_session_factory", _unexpected_factory)
+        result = await database.count_total_result_rows(source="workflow")
         assert result == 0
 
     @pytest.mark.asyncio
-    async def test_invalid_status_ignored(self, tmp_path, monkeypatch):
+    async def test_invalid_status_is_ignored(self, monkeypatch):
         from sister import database
 
-        monkeypatch.setattr(database, "DB_PATH", str(tmp_path / "test.sqlite"))
-        # Invalid status should be normalized to None (no filter) — both return 0 on empty DB
+        session = self._Session()
+        monkeypatch.setattr(database, "_get_session_factory", lambda: lambda: session)
         total_all = await database.count_total_result_rows()
         total_bogus = await database.count_total_result_rows(status="bogus_status")
-        assert total_all == total_bogus
+        assert total_all == total_bogus == 7
+        assert len(session.statements) == 2
+        assert str(session.statements[0]) == str(session.statements[1])
 
     @pytest.mark.asyncio
-    async def test_invalid_source_ignored(self, tmp_path, monkeypatch):
+    async def test_invalid_source_is_normalized_to_all_sources(self, monkeypatch):
         from sister import database
 
-        monkeypatch.setattr(database, "DB_PATH", str(tmp_path / "test.sqlite"))
+        session = self._Session()
+        monkeypatch.setattr(database, "_get_session_factory", lambda: lambda: session)
         total_all = await database.count_total_result_rows()
         total_bogus = await database.count_total_result_rows(source="bogus_source")
-        assert total_all == total_bogus
+        assert total_all == total_bogus == 7
+        assert len(session.statements) == 2
+        assert str(session.statements[0]) == str(session.statements[1])
 
 
 # ---------------------------------------------------------------------------

@@ -1,6 +1,7 @@
 """Browser lifecycle manager — wraps aecs4u-auth for SISTER portal automation."""
 
 import asyncio
+import inspect
 import logging
 from contextlib import suppress
 from datetime import datetime
@@ -8,6 +9,7 @@ from typing import Optional
 
 from aecs4u_auth.browser import BrowserConfig
 from aecs4u_auth.browser import BrowserManager as AuthBrowserManager
+from aecs4u_auth.browser.page_logger import PageLogger
 from playwright.async_api import Page
 
 from .models import (
@@ -40,10 +42,13 @@ from .utils import (
     run_ricerca_nota,
     run_ricerca_partita,
     run_riepilogo_visure,
+    run_soggetto_documento,
+    run_soggetto_immobili,
     run_visura,
     run_visura_immobile,
     run_visura_persona_giuridica,
     run_visura_soggetto,
+    run_visura_storica,
 )
 
 logger = logging.getLogger("sister")
@@ -59,6 +64,9 @@ _GENERIC_DISPATCHERS = {
     "ispezioni": run_ispezioni,
     "ispezioni_cart": run_ispezioni_cartacee,
     "elaborato_planimetrico": run_elaborato_planimetrico,
+    "visura_storica": run_visura_storica,
+    "soggetto_documento": run_soggetto_documento,
+    "soggetto_immobili": run_soggetto_immobili,
 }
 
 _NOARGS_DISPATCHERS = {
@@ -67,6 +75,31 @@ _NOARGS_DISPATCHERS = {
     "ipotecaria_stato": run_ispezioni_ipotecarie_stato,
     "ipotecaria_elenchi": run_ispezioni_ipotecarie_elenchi,
 }
+
+
+_PARAM_ALIASES = {"sheet": "foglio", "parcel": "particella", "section": "sezione", "subunit": "subalterno"}
+
+
+def _dispatcher_kwargs(dispatcher, request: GenericSisterRequest) -> dict:
+    """Build the keyword arguments for a generic dispatcher from the request.
+
+    Dispatchers take different subsets of (foglio, particella, sezione, ...), and ``params`` may spell a name
+    either in English or Italian, so normalise the aliases and keep only what the dispatcher accepts.
+    """
+    params = dict(request.params or {})
+    for alias, name in _PARAM_ALIASES.items():
+        if alias in params:
+            params.setdefault(name, params.pop(alias))
+    kwargs = {
+        "tipo_catasto": request.cadastre_type,
+        "provincia": request.province,
+        "comune": request.municipality,
+        **params,
+    }
+    accepted = inspect.signature(dispatcher).parameters
+    if any(p.kind is inspect.Parameter.VAR_KEYWORD for p in accepted.values()):
+        return kwargs
+    return {key: value for key, value in kwargs.items() if key in accepted}
 
 
 class BrowserManager:
@@ -124,6 +157,41 @@ class BrowserManager:
         except Exception as e:
             logger.error("Failed to initialize browser: %s", e)
             raise BrowserError(f"Browser initialization failed: {e}") from e
+
+    async def attach_existing_session(self) -> bool:
+        """Adopt an already-authenticated SISTER tab in the shared CDP Chrome, without logging in.
+
+        Returns True when a tab with a valid SISTER session was found and adopted
+        (see ``scripts/ade_login.py`` for how such a tab is created).
+        """
+        from aecs4u_auth.browser.services import get_service
+        from aecs4u_auth.browser.session import AuthenticatedSession
+
+        if not self._auth.config.cdp_endpoint:
+            return False
+        try:
+            if self._auth._browser is None or not self._auth._browser.is_connected():
+                await self._auth.initialize()
+            navigator = get_service("sister")
+            for page in reversed(list(self._auth._context.pages)):
+                if page.is_closed() or "sister3.agenziaentrate.gov.it" not in page.url:
+                    continue
+                # A tab left mid-flow (e.g. on a result page) still holds a live session: send it back to Visure
+                # without logging in; recover_session returns False when the portal redirects to the login.
+                if await navigator.check_session(page) or await navigator.recover_session(
+                    page, PageLogger("attach", base_dir=self._auth.config.page_log_dir)
+                ):
+                    self._auth._auth_page = page
+                    self._auth._session = AuthenticatedSession(
+                        page=page, auth_method=self._auth.config.auth_method, service="sister"
+                    )
+                    self.last_login_time = datetime.now()
+                    logger.info("Sessione SISTER esistente agganciata: %s", page.url)
+                    return True
+        except Exception as e:
+            logger.warning("Impossibile agganciare una sessione SISTER esistente: %s", e)
+        logger.info("Nessuna sessione SISTER esistente nel browser CDP")
+        return False
 
     async def login(self):
         try:
@@ -328,15 +396,7 @@ class BrowserManager:
                     )
                 elif search_type in _GENERIC_DISPATCHERS:
                     dispatcher = _GENERIC_DISPATCHERS[search_type]
-                    result = await dispatcher(
-                        page,
-                        tipo_catasto=request.cadastre_type,
-                        provincia=request.province,
-                        comune=request.municipality,
-                        foglio=request.params.get("sheet") or request.params.get("foglio") if request.params else None,
-                        particella=request.params.get("parcel") or request.params.get("particella") if request.params else None,
-                        **(request.params or {}),
-                    )
+                    result = await dispatcher(page, **_dispatcher_kwargs(dispatcher, request))
                 elif search_type in _NOARGS_DISPATCHERS:
                     dispatcher = _NOARGS_DISPATCHERS[search_type]
                     result = await dispatcher(page)
@@ -408,12 +468,8 @@ class BrowserManager:
             page_logger = PageLogger("download_richieste")
             return await _download_richieste_documents(page, page_logger)
 
-    async def close(self):
-        await self._auth.close()
-        logger.info("Browser chiuso")
-
-    async def graceful_shutdown(self):
-        logger.info("Iniziando shutdown graceful...")
+    async def close_sister_session(self):
+        """Release the session SISTER holds for this user (it allows only one, so a leftover blocks the next login)."""
         try:
             page = self.auth_page
             if page and not page.is_closed():
@@ -424,7 +480,27 @@ class BrowserManager:
                     with suppress(Exception):
                         await page.goto(url, timeout=10000)
                         logger.info("Sessione SISTER chiusa: %s", url)
+            if self._auth.session:
+                self._auth.session.invalidate()
         except Exception as e:
             logger.warning("Errore chiusura sessione SISTER: %s", e)
+
+    async def close(self):
+        await self._auth.close()
+        logger.info("Browser chiuso")
+
+    async def graceful_shutdown(self):
+        logger.info("Iniziando shutdown graceful...")
+        if self.is_cdp:
+            # The session lives in the shared Chrome and is owned by scripts/ade_login.py: a restart or
+            # --reload of this service must only disconnect, never log the user out of SISTER.
+            # close() would click "Torna al portale" and move the tab off the Visure page, so disconnect directly.
+            await self._auth.stop_keepalive()
+            if self._auth._playwright:
+                with suppress(Exception):
+                    await self._auth._playwright.stop()
+            logger.info("Shutdown graceful completato (CDP: sessione SISTER lasciata attiva)")
+            return
+        await self.close_sister_session()
         await self._auth.graceful_shutdown()
         logger.info("Shutdown graceful completato")

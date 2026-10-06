@@ -11,7 +11,7 @@ from typing import Optional
 import structlog
 from aecs4u_email import send_email
 from aecs4u_email.feedback import FeedbackInvitationConfig, render_feedback_invitation
-from fastapi import APIRouter, Header, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException
 from fastapi.responses import HTMLResponse
 from itsdangerous import BadSignature, URLSafeSerializer
 from pydantic import BaseModel, EmailStr
@@ -30,8 +30,11 @@ _api_key = os.getenv("API_KEY")
 
 
 def _require_admin(x_api_key: Optional[str] = Header(default=None, alias="X-API-Key")) -> None:
+    # Fail closed: with no API_KEY configured this used to return silently, and the handlers never actually
+    # depended on it, so /send-invitations (which mails caller-supplied recipients and text from the
+    # organisation's mailbox) was open to the internet (audit SEC-07/SEC-12).
     if not _api_key:
-        return
+        raise HTTPException(status_code=503, detail="Feedback admin disabilitato: API_KEY non configurata")
     if not x_api_key or not secrets.compare_digest(x_api_key, _api_key):
         raise HTTPException(status_code=401, detail="API key non valida")
 
@@ -104,7 +107,7 @@ _UNSUB_PAGE = """<!doctype html><html lang="it"><head><meta charset="utf-8">
 
 
 @router.get("/config")
-async def get_feedback_config(_: None = None):
+async def get_feedback_config(_: None = Depends(_require_admin)):
     cfg = await _get_config()
     return {
         "cc_emails": cfg.cc_emails or [],
@@ -122,7 +125,7 @@ async def get_feedback_config(_: None = None):
 
 
 @router.put("/config")
-async def update_feedback_config(body: FeedbackConfigPayload, _: None = None):
+async def update_feedback_config(body: FeedbackConfigPayload, _: None = Depends(_require_admin)):
     session_factory = _get_session_factory()
     async with session_factory() as session:
         cfg = await session.get(FeedbackConfig, 1)
@@ -153,7 +156,7 @@ async def update_feedback_config(body: FeedbackConfigPayload, _: None = None):
 
 
 @router.post("/send-invitations")
-async def send_feedback_invitations(body: SendInvitationsPayload, _: None = None):
+async def send_feedback_invitations(body: SendInvitationsPayload, _: None = Depends(_require_admin)):
     base = _base_url()
     feedback_url = f"{base}/feedback"
     cfg = await _get_config()

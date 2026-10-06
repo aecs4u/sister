@@ -97,16 +97,16 @@
 
 {# Collapsible card wrapping the exhaustive dump of `data`. Hidden in print.
    `accent` colours the toggle button border to match the document's hero. #}
-{% macro complete_data_section(data, accent='#6c757d') %}
+{% macro complete_data_section(data, accent='#6c757d', expanded=False) %}
 {% if data %}
 <div class="mt-4 mb-4 no-print">
     <button class="btn btn-sm btn-outline-secondary" type="button"
             data-bs-toggle="collapse" data-bs-target="#complete-data"
-            aria-expanded="false" style="border-color: {{ accent }}; color: {{ accent }}">
+            aria-expanded="{{ 'true' if expanded else 'false' }}" style="border-color: {{ accent }}; color: {{ accent }}">
         <i class="fas fa-table-list me-2"></i>Dati completi (tutti i campi)
         <i class="fas fa-chevron-down ms-2 small"></i>
     </button>
-    <div class="collapse mt-3" id="complete-data">
+    <div class="collapse mt-3{% if expanded %} show{% endif %}" id="complete-data">
         <div class="card border-0 shadow-sm">
             <div class="card-body">
                 <p class="text-muted small mb-3">

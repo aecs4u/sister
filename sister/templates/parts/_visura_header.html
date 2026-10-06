@@ -79,12 +79,24 @@
             <i class="fas fa-info-circle text-{{ color }} me-2"></i>Documento
         </h5>
         <ul class="list-unstyled mb-0 small">
+            {% if t.Titolo %}<li class="mb-2"><strong>Visura:</strong> {{ t.Titolo }}</li>{% endif %}
             <li class="mb-2"><strong>Situazione al:</strong>
                 {% set _sal = t.SituazioneAl %}
                 {% if _sal and _sal|length == 8 %}
                 <strong>{{ _sal[:4] }}/{{ _sal[4:6] }}/{{ _sal[6:] }}</strong>
                 {% else %}{{ _sal or '-' }}{% endif %}
             </li>
+            {% if t.TipoServizio %}<li class="mb-2"><strong>Servizio:</strong> {{ t.TipoServizio }}</li>{% endif %}
+            {% if t.TipoVisura %}<li class="mb-2"><strong>Tipo visura:</strong> {{ t.TipoVisura }}</li>{% endif %}
+            {% if t.Data or t.Ora %}
+            <li class="mb-2"><strong>Generata:</strong>
+                {% if t.Data and t.Data|string|length == 8 %}{{ t.Data[:4] }}/{{ t.Data[4:6] }}/{{ t.Data[6:] }}{% else %}{{ t.Data or '' }}{% endif %}
+                {% if t.Ora %}
+                    {% set _ora = t.Ora|string %}
+                    {% if _ora|length == 6 %} {{ _ora[:2] }}:{{ _ora[2:4] }}:{{ _ora[4:6] }}{% else %} {{ _ora }}{% endif %}
+                {% endif %}
+            </li>
+            {% endif %}
             <li class="mb-2"><strong>Protocollo:</strong>
                 {{ dr.Protocollo or '-' }} / {{ dr.Anno or '-' }}
             </li>

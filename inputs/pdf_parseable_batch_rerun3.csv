@@ -1,0 +1,3 @@
+command,provincia,comune,foglio,particella,subalterno,tipo_catasto,sezione,codice_fiscale,identificativo,source_files,scope_note
+elaborato-planimetrico,Ravenna,RAVENNA,103,,,F,,,,elab_plan_RA_FG103_PT1714_T47699_2026.pdf,"SISTER returns extracted result data as JSON, not the original map/plan document."
+elaborato-planimetrico,Ravenna,RAVENNA,104,,,F,,,,elab_plan_RA_FG104_PT2154_T474362_2026.pdf,"SISTER returns extracted result data as JSON, not the original map/plan document."

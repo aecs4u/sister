@@ -25,15 +25,16 @@ depends_on = None
 
 
 def _table_exists(name: str) -> bool:
-    conn = op.get_bind()
-    result = conn.execute(sa.text("SELECT name FROM sqlite_master WHERE type='table' AND name=:n"), {"n": name})
-    return result.fetchone() is not None
+    return sa.inspect(op.get_bind()).has_table(name)
 
 
 def _index_exists(name: str) -> bool:
-    conn = op.get_bind()
-    result = conn.execute(sa.text("SELECT name FROM sqlite_master WHERE type='index' AND name=:n"), {"n": name})
-    return result.fetchone() is not None
+    inspector = sa.inspect(op.get_bind())
+    return any(
+        index["name"] == name
+        for table in inspector.get_table_names()
+        for index in inspector.get_indexes(table)
+    )
 
 
 def upgrade() -> None:

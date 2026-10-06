@@ -2,9 +2,10 @@
 {% from "_timeline.html" import timeline_css, timeline_js, render_timeline %}
 {% from "_nested.html" import complete_data_section %}
 {% from "parts/_hero.html" import hero_section %}
-{% from "parts/_visura_header.html" import visura_location_card, visura_doc_card %}
+{% from "parts/_visura_header.html" import visura_doc_card %}
 {% from "components/table.html" import table_filter_csv_js %}
-{% from "components/cadastral.html" import liquidazione_row %}
+{% from "components/catasto.html" import assets as catasto_assets, location_section, rendita_agr_row,
+    cadastral_ref, liquidazione_row %}
 {% set _v = doc.xml_parsed.VisuraTerreniAttuale or doc.xml_parsed.VisuraTerreniStorica or doc.xml_parsed.VisuraTerreniSintetica or doc.xml_parsed.VisuraTerrenoAttuale or doc.xml_parsed.VisuraTerrenoStorica or doc.xml_parsed.VisuraTerrenoSintetica or doc.xml_parsed.VisuraTerreno or {} %}
 {% set _t = _v.TitoloVisura or {} %}
 {% set _dr = _v.DatiRichiesta or {} %}
@@ -26,6 +27,7 @@
 
 {% block extra_css %}
 {{ super() }}
+{{ catasto_assets() }}
 {{ timeline_css() }}
 <link rel="stylesheet" href="/static/css/pages/visura_terreni_attuale.css">
 {% endblock %}
@@ -45,11 +47,15 @@ PT <strong>{{ doc.particella or _dr.ParticellaNum or '-' }}</strong>
     {# ── Query info ──────────────────────────────────────────────────────── #}
     <div class="row mb-4">
         <div class="col-lg-8 mb-3 mb-lg-0">
-            {{ visura_location_card('warning', _t.Titolo or 'Visura Terreni Attuale', _dr, doc,
-                                    partita=_partita,
-                                    sez_label='Sez. Censuaria',
-                                    sez_value=_dr.SezCensuaria or doc.sezione_urbana,
-                                    provenienza=_t.Provenienza) }}
+            {{ location_section({
+                'provincia': _dr.Provincia or doc.provincia,
+                'comune': _dr.Comune or doc.comune,
+                'sezione': _dr.SezCensuaria or doc.sezione_urbana,
+                'foglio': _dr.Foglio or doc.foglio,
+                'particella': _dr.ParticellaNum or doc.particella,
+                'tipo_catasto': 'T',
+            }) }}
+            {% if _t.Provenienza %}<p class="small text-muted mb-0 mt-n2"><i class="fas fa-landmark me-1"></i>{{ _t.Provenienza }}</p>{% endif %}
         </div>
         <div class="col-lg-4">
             {{ visura_doc_card('warning', _t, _dr, doc) }}
@@ -60,15 +66,16 @@ PT <strong>{{ doc.particella or _dr.ParticellaNum or '-' }}</strong>
     {% for _it in _immobili %}
     {% set _it_iddef = (_it.DatiIdentificativi or {}).IdentificativoDefinitivo or {} %}
 
-    {% if _immobili|length > 1 %}
-    <div class="d-flex align-items-center mt-4 mb-2">
-        <span class="badge bg-warning text-dark me-2">Particella {{ loop.index }}/{{ _immobili|length }}</span>
-        <span class="text-muted small">
-            FG {{ _it_iddef.Foglio or '-' }} · PT {{ _it_iddef.ParticellaNum or '-' }}
-            {% set _p = _it_iddef.Partita if _it_iddef.Partita is string else (_it_iddef.Partita._text if _it_iddef.Partita is mapping else '') %}
-            {% if _p %}· Partita {{ _p }}{% endif %}
-        </span>
+    {% set _p = _it_iddef.Partita if _it_iddef.Partita is string else (_it_iddef.Partita._text if _it_iddef.Partita is mapping else '') %}
+    <div class="d-flex align-items-center flex-wrap gap-2 mt-4 mb-2">
+        {% if _immobili|length > 1 %}<span class="badge bg-warning text-dark">Particella {{ loop.index }}/{{ _immobili|length }}</span>{% endif %}
+        {{ cadastral_ref(_it_iddef.Foglio, _it_iddef.ParticellaNum) }}
+        {% if _p %}<span class="text-muted small">Partita <strong>{{ _p }}</strong></span>{% endif %}
+        {% if _it_iddef.ProgrId %}<span class="text-muted small">Prog. {{ _it_iddef.ProgrId }}</span>{% endif %}
+        {% if _it_iddef.SezCensuaria %}<span class="text-muted small">Sez. {{ _it_iddef.SezCensuaria }}</span>{% endif %}
     </div>
+    {% if (_it_iddef.DatiDerivantiDa or {}).Descrizione %}
+    <p class="small text-muted mb-3"><i class="fas fa-file-signature me-1"></i>Derivante da: {{ _it_iddef.DatiDerivantiDa.Descrizione }}</p>
     {% endif %}
 
     {# Classamento terreni #}
@@ -80,43 +87,22 @@ PT <strong>{{ doc.particella or _dr.ParticellaNum or '-' }}</strong>
 
     <h2 class="h5 border-bottom pb-2 mb-3">Classamento</h2>
 
-    {# Income summary boxes #}
+    {# Income summary (theme: rendita_agr_row) — totals when the parcel has several qualities #}
+    {% set _tot = namespace(dom=0.0, agr=0.0, mq=0) %}
+    {% for r in _rows_list %}
+    {% set _tot.dom = _tot.dom + ((r.RedditoDominicaleEuro or '0')|string|replace('.', '')|replace(',', '.')|float) %}
+    {% set _tot.agr = _tot.agr + ((r.RedditoAgrarioEuro or '0')|string|replace('.', '')|replace(',', '.')|float) %}
+    {% set _tot.mq = _tot.mq + ((r.SuperficieMQ or '0')|string|replace('.', '')|int) %}
+    {% endfor %}
     <div class="row g-3 mb-4">
-        <div class="col-md-4">
-            <div class="income-box-dom">
-                <div class="small mb-1">Reddito Dominicale</div>
-                <div class="income-value">
-                    {% if _rows_list|length == 1 %}
-                    € {{ _rows_list[0].RedditoDominicaleEuro or '-' }}
-                    {% else %}
-                    {{ _rows_list|length }} voci
-                    {% endif %}
-                </div>
-            </div>
-        </div>
-        <div class="col-md-4">
-            <div class="income-box-agr">
-                <div class="small mb-1">Reddito Agrario</div>
-                <div class="income-value">
-                    {% if _rows_list|length == 1 %}
-                    € {{ _rows_list[0].RedditoAgrarioEuro or '-' }}
-                    {% else %}
-                    {{ _rows_list|length }} voci
-                    {% endif %}
-                </div>
-            </div>
+        <div class="col-md-8">
+            {{ rendita_agr_row(('%.2f'|format(_tot.dom))|replace('.', ','), ('%.2f'|format(_tot.agr))|replace('.', ',')) }}
         </div>
         <div class="col-md-4">
             <div class="card border-0 bg-light h-100">
                 <div class="card-body d-flex flex-column justify-content-center text-center">
-                    <span class="detail-label">Superficie Totale</span>
-                    <strong class="fs-5">
-                        {% if _rows_list|length == 1 %}
-                        {{ _rows_list[0].SuperficieMQ or '-' }} MQ
-                        {% else %}
-                        {{ _rows_list|length }} righe
-                        {% endif %}
-                    </strong>
+                    <span class="detail-label">Superficie Totale{% if _rows_list|length > 1 %} ({{ _rows_list|length }} voci){% endif %}</span>
+                    <strong class="fs-5">{{ _tot.mq }} MQ</strong>
                 </div>
             </div>
         </div>
