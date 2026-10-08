@@ -114,6 +114,7 @@ async def richiedi_visura(request: VisuraInput, service: VisuraService, force: b
             visura_requests.append(
                 VisuraRequest(
                     request_id=request_id,
+                    form_fields=request.form_fields,
                     cadastre_type=tipo_catasto,
                     province=request.province,
                     municipality=request.municipality,
@@ -196,6 +197,7 @@ async def richiedi_intestati_immobile(request: VisuraIntestatiInput, service: Vi
 
         intestati_request = VisuraIntestatiRequest(
             request_id=request_id,
+            form_fields=request.form_fields,
             cadastre_type=tipo_catasto,
             province=request.province,
             municipality=request.municipality,
@@ -344,6 +346,7 @@ async def richiedi_visura_soggetto(request: VisuraSoggettoInput, service: Visura
 
         soggetto_request = VisuraSoggettoRequest(
             request_id=request_id,
+            form_fields=request.form_fields,
             fiscal_code=request.fiscal_code,
             cadastre_type=tipo_catasto,
             province=request.province,
@@ -386,6 +389,7 @@ async def richiedi_visura_persona_giuridica(
 
         pnf_request = VisuraPersonaGiuridicaRequest(
             request_id=request_id,
+            form_fields=request.form_fields,
             identifier=request.identifier,
             cadastre_type=tipo_catasto,
             province=request.province,
@@ -426,6 +430,7 @@ async def richiedi_elenco_immobili(request: ElencoImmobiliInput, service: Visura
 
         eimm_request = ElencoImmobiliRequest(
             request_id=request_id,
+            form_fields=request.form_fields,
             province=request.province,
             municipality=request.municipality,
             cadastre_type=tipo_catasto,

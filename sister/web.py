@@ -6,6 +6,7 @@ Auth: landing page is public; /web/* routes require authentication.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import re
@@ -14,6 +15,7 @@ from pathlib import Path
 from threading import Lock
 from typing import Any, Optional
 from urllib.parse import urlencode
+from uuid import uuid4
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
@@ -28,6 +30,7 @@ from .database import (
     get_db_owners_for_response,
     get_db_properties_for_response,
     get_document_by_id,
+    get_document_structured_extraction,
     get_documents_for_response,
     get_indexed_file_metadata,
     get_result_record,
@@ -49,14 +52,32 @@ def _files_base() -> "Path":
     return Path(os.getenv("SISTER_FILES_BASE", str(DATA_ROOT / "documents"))).resolve()
 
 
+def _ispezione_group_key(filename: str) -> str:
+    """Return the shared inspection key for a report and its individual notes."""
+    stem = Path(filename).stem
+    match = re.match(r"^(isp_.+?_T\d+_\d{4})(?:_(?:RP\d+|DOC_.+))?$", stem, re.IGNORECASE)
+    return (match.group(1) if match else stem).casefold()
+
+
 logger = logging.getLogger("sister")
 
 router = APIRouter(tags=["Web UI"])
 
+_missing_pair_job: dict[str, Any] | None = None
+_missing_pair_task: asyncio.Task | None = None
+_missing_pair_job_lock = asyncio.Lock()
+
 
 # Document types that render in a dedicated visura template (so "Apri" is meaningful);
 # others only offer the exhaustive view + download.
-_VIEWABLE_DOC_TYPES = {"visura_fabbricati", "visura_storica", "visura_terreni", "visura_soggetto", "planimetria"}
+_VIEWABLE_DOC_TYPES = {
+    "visura_fabbricati",
+    "visura_storica",
+    "visura_terreni",
+    "visura_soggetto",
+    "planimetria",
+    "ispezione_ipotecaria",
+}
 
 # document_types that are "visure" (excludes visura_soggetto, which lives under Soggetto).
 _VISURA_TYPES = {"visura", "visura_fabbricati", "visura_terreni", "visura_storica"}
@@ -158,6 +179,10 @@ def _collapse_to_logical_docs(docs: list[dict]) -> list[dict]:
     def _logical_key(d: dict):
         rid = d.get("response_id")
         dt = d.get("document_type") or ""
+        if dt == "ispezione_ipotecaria":
+            # Keep each report/RP note independent; only pair alternate formats
+            # that share the same filename stem.
+            return (rid, dt, Path(d.get("filename") or str(d.get("id"))).stem.casefold())
         # Soggetto visure: group by CF + subtype regardless of coordinates.
         # Coordinates on soggetto P7Ms are the first owned property, not the identity key.
         if dt == "visura_soggetto":
@@ -200,7 +225,10 @@ def _collapse_to_logical_docs(docs: list[dict]) -> list[dict]:
         primary["n_files"] = len(ordered)
         primary["n_pdf"] = sum(1 for f in primary["files"] if f["file_format"] == "PDF")
         primary_structured = (primary.get("file_format") or "").upper() in ("P7M", "XML")
-        primary["viewable"] = primary_structured and (primary.get("document_type") or "") in _VIEWABLE_DOC_TYPES
+        is_ispezione = (primary.get("document_type") or "") == "ispezione_ipotecaria"
+        primary["viewable"] = is_ispezione or (
+            primary_structured and (primary.get("document_type") or "") in _VIEWABLE_DOC_TYPES
+        )
         if primary.get("document_type") == "visura_soggetto":
             cf = _extract_cf(primary)
             if cf and len(cf) == 16:
@@ -558,6 +586,19 @@ def _build_document_tree(docs: list[dict]) -> list[dict]:
     # ── Richieste ──────────────────────────────────────────────────────────
     if by_type.get("richieste"):
         tree.append(leaf("richieste", "Richieste", "fa-clock-rotate-left", "secondary", by_type["richieste"]))
+
+    # ── Ispezioni ipotecarie ────────────────────────────────────────────────
+    ispezioni = by_type.get("ispezione_ipotecaria", [])
+    if ispezioni:
+        tree.append(
+            leaf(
+                "ispezione_ipotecaria",
+                "Ispezione ipotecaria",
+                "fa-file-circle-check",
+                "primary",
+                ispezioni,
+            )
+        )
 
     return tree
 
@@ -1662,6 +1703,185 @@ async def web_index(request: Request, user=Depends(_require_auth)):
         recent=recent,
         auth_status=_get_auth_status(),
     )
+
+
+async def _wait_for_missing_pair_response(service, request_id: str, timeout_seconds: int = 3600):
+    deadline = asyncio.get_running_loop().time() + timeout_seconds
+    while asyncio.get_running_loop().time() < deadline:
+        response = await service.get_response(request_id)
+        if response is not None:
+            return response
+        if service.get_request_state(request_id) == "expired":
+            return None
+        await asyncio.sleep(2)
+    return None
+
+
+async def _run_missing_pair_batch(job: dict[str, Any], batch: dict[str, Any], service) -> None:
+    """Submit each deduplicated free visura request, then fetch and index available documents."""
+    from .models import GenericSisterRequest
+    from .missing_pairs import build_missing_pair_batch
+
+    job["status"] = "running"
+    requests = batch["requests"]
+    try:
+        for index, item in enumerate(requests, start=1):
+            if not service.auth_ready:
+                job["error"] = "SISTER browser is no longer authenticated. Sign in and start a new batch."
+                job["status"] = "partial" if job["processed_count"] else "error"
+                break
+
+            job["current"] = item["label"]
+            job["current_index"] = index
+            request_id = f"missing_pair_{uuid4().hex}"
+            sister_request = GenericSisterRequest(
+                request_id=request_id,
+                search_type=item["search_type"],
+                province=item["province"],
+                municipality=item.get("municipality"),
+                cadastre_type=item["cadastre_type"],
+                params=item["params"],
+            )
+            try:
+                submission = await service.add_generic_request(sister_request, force=True)
+                request_id = getattr(submission, "request_id", request_id)
+                job["submitted_count"] += 1
+                response = await _wait_for_missing_pair_response(service, request_id)
+                if response is None:
+                    result_status = "timeout"
+                    error = "No response before the one-hour wait expired"
+                    job["failed_count"] += 1
+                elif response.success:
+                    result_status = "completed"
+                    error = None
+                    job["success_count"] += 1
+                else:
+                    result_status = "error"
+                    error = response.error or "SISTER request failed"
+                    job["failed_count"] += 1
+                job["processed_count"] += 1
+                job["results"].append(
+                    {
+                        "label": item["label"],
+                        "source_files": item["source_files"],
+                        "status": result_status,
+                        "error": error,
+                    }
+                )
+                if result_status == "timeout":
+                    job["error"] = "Stopped after a request timed out; remaining requests were not submitted."
+                    job["status"] = "partial"
+                    break
+            except Exception as exc:
+                job["processed_count"] += 1
+                job["failed_count"] += 1
+                job["results"].append(
+                    {
+                        "label": item["label"],
+                        "source_files": item["source_files"],
+                        "status": "error",
+                        "error": str(exc),
+                    }
+                )
+
+        if job["submitted_count"]:
+            job["current"] = "Downloading available PDF/P7M documents"
+            downloaded = await service.download_richieste_documents()
+            job["downloaded_count"] = len(downloaded)
+
+        remaining = await run_in_threadpool(build_missing_pair_batch, _files_base())
+        job["remaining_pair_count"] = len(remaining["missing_pairs"])
+        job["remaining_pairs"] = remaining["missing_pairs"][:100]
+        if job["status"] == "running":
+            if job["failed_count"]:
+                job["status"] = "completed_with_errors"
+            elif job["remaining_pair_count"]:
+                job["status"] = "completed_with_gaps"
+            else:
+                job["status"] = "completed"
+    except Exception as exc:
+        logger.exception("Missing-pair batch %s failed", job["job_id"])
+        job["error"] = str(exc)
+        job["status"] = "partial" if job["submitted_count"] else "error"
+    finally:
+        job["current"] = None
+        job["finished_at"] = datetime.now().isoformat(timespec="seconds")
+
+
+def _missing_pair_job_view(job: dict[str, Any] | None) -> dict[str, Any]:
+    if not job:
+        return {"status": "idle"}
+    return {
+        key: value
+        for key, value in job.items()
+        if key not in {"_task"}
+    }
+
+
+@router.post("/web/documents/retrieve-missing-pairs", response_class=JSONResponse)
+async def web_retrieve_missing_pairs(request: Request, user=Depends(_require_auth)):
+    """Find missing PDF/P7M pairs and start a free-visura recovery batch."""
+    global _missing_pair_job, _missing_pair_task
+
+    from .main import visura_service
+    from .missing_pairs import build_missing_pair_batch
+
+    batch = await run_in_threadpool(build_missing_pair_batch, _files_base())
+    if batch.get("error"):
+        return JSONResponse({"error": batch["error"]}, status_code=503)
+    async with _missing_pair_job_lock:
+        if _missing_pair_job and _missing_pair_job["status"] in {"queued", "running"}:
+            return JSONResponse(
+                {"error": "A missing-pair batch is already running", "job": _missing_pair_job_view(_missing_pair_job)},
+                status_code=409,
+            )
+        if batch["requests"] and (visura_service is None or not visura_service.auth_ready):
+            return JSONResponse(
+                {
+                    "error": "SISTER browser is not authenticated. Sign in before retrieving missing pairs.",
+                    "missing_pair_count": len(batch["missing_pairs"]),
+                    "request_count": len(batch["requests"]),
+                },
+                status_code=503,
+            )
+
+        job = {
+            "job_id": uuid4().hex,
+            "status": "queued" if batch["requests"] else "completed",
+            "missing_pair_count": len(batch["missing_pairs"]),
+            "request_count": len(batch["requests"]),
+            "excluded_paid_count": batch["excluded_paid"],
+            "skipped_count": len(batch["skipped"]),
+            "skipped_files": batch["skipped"][:100],
+            "processed_count": 0,
+            "submitted_count": 0,
+            "success_count": 0,
+            "failed_count": 0,
+            "downloaded_count": 0,
+            "remaining_pair_count": len(batch["missing_pairs"]),
+            "remaining_pairs": batch["missing_pairs"][:100],
+            "current_index": 0,
+            "current": None,
+            "results": [],
+            "error": None,
+            "created_at": datetime.now().isoformat(timespec="seconds"),
+            "finished_at": None,
+        }
+        if batch["missing_pairs"] and not batch["requests"]:
+            job["message"] = "Missing pairs were found, but none could be mapped to a supported free visura request."
+        elif not batch["missing_pairs"]:
+            job["message"] = "All supported PDF/P7M files already have their counterpart."
+        _missing_pair_job = job
+        if batch["requests"]:
+            _missing_pair_task = asyncio.create_task(_run_missing_pair_batch(job, batch, visura_service))
+
+    return JSONResponse(_missing_pair_job_view(job), status_code=202 if batch["requests"] else 200)
+
+
+@router.get("/web/documents/retrieve-missing-pairs/status", response_class=JSONResponse)
+async def web_retrieve_missing_pairs_status(request: Request, user=Depends(_require_auth)):
+    async with _missing_pair_job_lock:
+        return JSONResponse(_missing_pair_job_view(_missing_pair_job))
 
 
 @router.get("/web/forms", response_class=HTMLResponse)
@@ -2862,12 +3082,24 @@ async def _backfill_document_metadata(base: Path, parsed_by_stem: dict) -> None:
 
     from .database import _get_session_factory, get_or_create_location, is_db_writable
     from .db_models import DocumentMetadata, VisuraDocument
-    from .utils import _parse_visura_xml, _persist_flattened_xml
+    from .utils import _parse_ispezione_ipotecaria_pdf, _parse_visura_xml, _persist_flattened_xml
 
     if not is_db_writable():
         return
 
     session_factory = _get_session_factory()
+
+    # Older scans guessed these filenames as generic visure. Correct their type
+    # even when their metadata rows already exist.
+    async with session_factory() as session:
+        await session.execute(
+            text(
+                "UPDATE visura_documents SET document_type = 'ispezione_ipotecaria' "
+                "WHERE substr(lower(filename), 1, 4) = 'isp_' "
+                "AND document_type <> 'ispezione_ipotecaria'"
+            )
+        )
+        await session.commit()
 
     # Step 1: collect all docs with a file_path but missing document_metadata.
     async with session_factory() as session:
@@ -2921,7 +3153,9 @@ async def _backfill_document_metadata(base: Path, parsed_by_stem: dict) -> None:
         # Parse the file to extract metadata.
         stem = actual.stem
         parsed = parsed_by_stem.get(stem)
-        if parsed is None and actual.suffix.lower() in (".p7m", ".xml"):
+        if actual.suffix.lower() == ".pdf" and actual.name.casefold().startswith("isp_"):
+            parsed = await asyncio.to_thread(_parse_ispezione_ipotecaria_pdf, str(actual))
+        elif parsed is None and actual.suffix.lower() in (".p7m", ".xml"):
             parsed = await asyncio.to_thread(_parse_visura_xml, str(actual))
             if parsed:
                 parsed_by_stem[stem] = parsed
@@ -2970,7 +3204,7 @@ async def web_documents_rescan(request: Request, user=Depends(_require_auth)):
     import asyncio
 
     from .database import get_indexed_file_paths, get_indexed_filenames
-    from .utils import _parse_visura_pdf, _parse_visura_xml, _save_documents_to_db
+    from .utils import _parse_ispezione_ipotecaria_pdf, _parse_visura_pdf, _parse_visura_xml, _save_documents_to_db
 
     base = _files_base()
     if not base.exists():
@@ -2981,6 +3215,7 @@ async def web_documents_rescan(request: Request, user=Depends(_require_auth)):
 
     _EXT_FORMAT = {".pdf": "PDF", ".xml": "XML", ".p7m": "P7M"}
     _NAME_TYPE = [
+        ("isp_", "ispezione_ipotecaria"),
         ("vi_att_fab", "visura_fabbricati"),
         ("vi_sto_fab", "visura_fabbricati"),
         ("vi_att_ter", "visura_terreni"),
@@ -3035,10 +3270,15 @@ async def web_documents_rescan(request: Request, user=Depends(_require_auth)):
             parsed = parsed_by_stem.get(fpath.stem)
             if parsed is None:
                 parsed = await asyncio.to_thread(_parse_visura_xml, str(fpath))
+            if fpath.name.casefold().startswith("isp_"):
+                parsed = dict(parsed or {})
+                parsed["tipo"] = "ispezione_ipotecaria"
         else:
             # PDF: try to inherit metadata from a paired P7M/XML with the same stem
             parsed = parsed_by_stem.get(fpath.stem)
-            if parsed is None:
+            if fpath.name.casefold().startswith("isp_"):
+                parsed = await asyncio.to_thread(_parse_ispezione_ipotecaria_pdf, str(fpath))
+            elif parsed is None:
                 # No paired structured file — parse PDF content directly
                 parsed = await asyncio.to_thread(_parse_visura_pdf, str(fpath))
 
@@ -3123,6 +3363,68 @@ async def web_documents(
                     )
                 # P7M not extractable — fall through to direct download
                 return FileResponse(str(fp), filename=fp.name, media_type="application/octet-stream")
+        if not template and (doc.get("document_type") or "") == "ispezione_ipotecaria" and doc.get("file_path"):
+            from .utils import _parse_ispezione_ipotecaria_pdf
+
+            source = Path(doc["file_path"])
+            if not source.is_file() and doc.get("filename"):
+                candidate = _files_base() / doc["filename"]
+                if candidate.is_file():
+                    source = candidate
+            group_key = _ispezione_group_key(source.name)
+            siblings = []
+            if source.parent.is_dir():
+                siblings = sorted(
+                    (
+                        sibling
+                        for sibling in source.parent.iterdir()
+                        if sibling.is_file()
+                        and sibling.suffix.casefold() == ".pdf"
+                        and sibling.name.casefold().startswith("isp_")
+                        and _ispezione_group_key(sibling.name) == group_key
+                    ),
+                    key=lambda sibling: (
+                        sibling.resolve() != source.resolve(),
+                        "_rp" in sibling.stem.casefold(),
+                        sibling.name.casefold(),
+                    ),
+                )
+            if source.suffix.casefold() == ".pdf" and source.is_file() and source not in siblings:
+                siblings.insert(0, source)
+
+            from .database import get_indexed_file_paths
+
+            indexed_paths = await get_indexed_file_paths()
+            id_by_path = {
+                Path(indexed_path).resolve(): indexed_id
+                for indexed_path, indexed_id in indexed_paths.items()
+                if indexed_path
+            }
+
+            async def _parse_sibling(path: Path) -> dict:
+                parsed = await asyncio.to_thread(_parse_ispezione_ipotecaria_pdf, str(path))
+                file_id = doc.get("id") if path.resolve() == source.resolve() else id_by_path.get(path.resolve())
+                return {
+                    "filename": path.name,
+                    "id": file_id,
+                    "parsed": parsed,
+                    "file_url": (
+                        f"/web/documents/{file_id}/view" if file_id else None
+                    ),
+                    "download_url": f"/web/documents/{file_id}/download" if file_id else None,
+                }
+
+            inspection_documents = await asyncio.gather(*(_parse_sibling(path) for path in siblings))
+            ocular_extraction = await get_document_structured_extraction(int(doc["id"]))
+            return theme.render(
+                "ispezione_ipotecaria.html",
+                request,
+                user=user,
+                doc=doc,
+                inspection_documents=inspection_documents,
+                ocular_extraction=ocular_extraction,
+                request_id=str(doc.get("id") or doc.get("filename") or ""),
+            )
         return _render_doc_from_db(doc, request, theme, user, force_template=template or None)
 
     # Root with no explicit path → hierarchical document index (unless browsing files)
@@ -3262,6 +3564,8 @@ def _safe_dossier_path(path: str) -> "Path":
 @router.get("/web/dossiers/view/{path:path}", response_class=HTMLResponse)
 async def web_dossier_view(request: Request, path: str, user=Depends(_require_auth)):
     """Render a single dossier JSON via the result_detail template."""
+    import json as _json
+
     theme = _get_theme(request)
     target = _safe_dossier_path(path.strip("/"))
     try:
@@ -3587,7 +3891,7 @@ async def web_api_batch(request: Request, user=Depends(_require_auth)):
     async with httpx.AsyncClient(timeout=120) as client:
         for i, row in enumerate(rows):
             try:
-                resp = await client.post(f"{base}{api_path}", json=row)
+                resp = await client.post(f"{base}{api_path}", json=row, headers=_internal_api_headers())
                 results.append({"row": i + 1, "status": "submitted", "data": resp.json()})
             except Exception as e:
                 results.append({"row": i + 1, "status": "error", "error": str(e)})
@@ -3603,45 +3907,69 @@ async def web_api_batch(request: Request, user=Depends(_require_auth)):
 
 @router.post("/web/api/workflow/stream")
 async def web_api_workflow_stream(request: Request, user=Depends(_require_auth)):
-    """SSE proxy for workflow streaming — forwards to opendata's workflow engine."""
-    import httpx
-
+    """Run a multi-step workflow through Sister's own query API and stream progress."""
     body = await request.json()
+    try:
+        from .workflows import prepare_workflow
+
+        plan = prepare_workflow(body)
+    except ValueError as exc:
+        return JSONResponse({"detail": str(exc)}, status_code=422)
+
+    from .workflows import run_workflow_stream
+
+    base_url = os.getenv("VISURA_API_URL") or "http://127.0.0.1:8025"
+    api_key = os.getenv("VISURA_API_KEY") or os.getenv("API_KEY")
 
     async def stream_events():
-        async with httpx.AsyncClient(timeout=600) as client:
-            async with client.stream(
-                "POST",
-                f"{_OPENDATA_API_URL}/catasto/workflow/stream",
-                json=body,
-            ) as resp:
-                buffer = ""
-                async for chunk in resp.aiter_text():
-                    buffer += chunk
-                    while "\n\n" in buffer:
-                        event, buffer = buffer.split("\n\n", 1)
-                        event = event.strip()
-                        if event.startswith("data: "):
-                            yield f"{event}\n\n"
-                # Flush remaining buffer
-                if buffer.strip().startswith("data: "):
-                    yield f"{buffer.strip()}\n\n"
+        async for event in run_workflow_stream(plan, base_url=base_url, api_key=api_key):
+            yield f"data: {event}\n\n"
 
     return StreamingResponse(stream_events(), media_type="text/event-stream")
 
 
+def _internal_api_headers() -> dict:
+    """Headers for the page's calls to the service's own API (it requires X-API-Key when API_KEY is set)."""
+    api_key = os.getenv("API_KEY") or os.getenv("VISURA_API_KEY") or ""
+    return {"X-API-Key": api_key} if api_key else {}
+
+
+def _web_query_command(endpoint: str) -> Optional[str]:
+    """The ``sister query`` command a /web/forms endpoint submits (None for workflows, batch, ipotecaria...)."""
+    from .query_forms import command_for_path
+
+    return command_for_path("/visura/" + endpoint.strip("/")) if endpoint.strip("/") else "search"
+
+
 @router.post("/web/api/{endpoint:path}", response_class=JSONResponse)
 async def web_api_proxy(endpoint: str, request: Request, user=Depends(_require_auth)):
-    """Proxy form submissions to the sister API."""
+    """Submit /web/forms requests: single-step queries go through the CLI's client code, the rest is proxied."""
+    import os
+
     import httpx
+
+    from .client import VisuraAPIError, VisuraClient
 
     body = await request.json()
     base = f"http://localhost:{request.url.port or 8025}"
+    api_key = os.getenv("API_KEY") or os.getenv("VISURA_API_KEY") or ""
+
+    command = _web_query_command(endpoint)
+    if command:
+        force = str(body.pop("force", "")).lower() in ("1", "true", "yes")
+        try:
+            content = await VisuraClient(base_url=base, api_key=api_key).submit(command, body, force=force)
+        except ValueError as exc:
+            return JSONResponse({"detail": str(exc)}, status_code=422)
+        except VisuraAPIError as exc:
+            return JSONResponse({"detail": exc.detail}, status_code=exc.status_code)
+        return JSONResponse(content=content)
 
     async with httpx.AsyncClient(timeout=300, follow_redirects=True) as client:
         resp = await client.post(
             f"{base}/visura/{endpoint}",
             json=body,
+            headers=_internal_api_headers() or None,
         )
     try:
         content = resp.json()
@@ -3658,7 +3986,7 @@ async def web_api_poll(request_id: str, request: Request, user=Depends(_require_
     base = f"http://localhost:{request.url.port or 8025}"
 
     async with httpx.AsyncClient(timeout=120, follow_redirects=True) as client:
-        resp = await client.get(f"{base}/visura/{request_id}")
+        resp = await client.get(f"{base}/visura/{request_id}", headers=_internal_api_headers() or None)
     try:
         content = resp.json()
     except Exception:

@@ -1,0 +1,61 @@
+{
+  "query": "elenco",
+  "outcome": "success",
+  "request": {
+    "provincia": "Ravenna",
+    "comune": "RAVENNA",
+    "foglio": "103",
+    "tipo_catasto": "F"
+  },
+  "response": {
+    "request_id": "elenco_fixture",
+    "tipo_catasto": "F",
+    "status": "completed",
+    "data": {
+      "provincia": "Ravenna",
+      "comune": "RAVENNA",
+      "foglio": "103",
+      "immobili": [
+        {
+          "": "",
+          "Foglio": "RA/103",
+          "Particella": "5",
+          "Subalterno": "",
+          "Zona": "001",
+          "Partita": "",
+          "Rendita": "Euro: 189,80",
+          "Indirizzo": "VIA ASIAGO n. 2 Piano T",
+          "categoria_gruppo": "A"
+        },
+        {
+          "": "",
+          "Foglio": "RA/103",
+          "Particella": "17",
+          "Subalterno": "",
+          "Zona": "001",
+          "Partita": "0001100",
+          "Rendita": "Euro: 503,55",
+          "Indirizzo": "VIA DEL MOLINO n. 16 Piano T-1",
+          "categoria_gruppo": "A"
+        },
+        {
+          "": "",
+          "Foglio": "RA/103",
+          "Particella": "21",
+          "Subalterno": "",
+          "Zona": "001",
+          "Partita": "",
+          "Rendita": "Euro: 890,89",
+          "Indirizzo": "VIA DEL MOLINO n. 8 Piano T-1",
+          "categoria_gruppo": "A"
+        }
+      ],
+      "total_results": 6583
+    },
+    "error": null,
+    "timestamp": "2026-10-06T00:00:00"
+  },
+  "trimmed_lists": {
+    "immobili": 6583
+  }
+}

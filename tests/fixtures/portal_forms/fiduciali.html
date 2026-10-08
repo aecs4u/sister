@@ -1,0 +1,242 @@
+<form name="RicercaPFiducialiForm" method="post" action="/Visure/vpuntifiduciali/RicercaPFiduciali.do" onsubmit="this.ricerca.disabled=true;">
+
+	
+<table>
+	<tbody><tr>
+		<td><label for="tipoCatasto">Catasto:</label></td>
+		<td><strong>Terreni</strong></td>
+	</tr>
+	<tr>
+		
+			
+			<td><label for="comuneCat">Comune: </label></td>
+			<td><select name="comuneCat"><option value="A191#ALFONSINE#0#0">
+					ALFONSINE</option>
+				
+					
+				
+				
+					
+				 
+				 	<option value="A547#BAGNACAVALLO#0#0">
+					BAGNACAVALLO</option>
+				
+					
+				
+				
+					
+				 
+				 	<option value="A551#BAGNARA DI ROMAGNA#0#0">
+					BAGNARA DI ROMAGNA</option>
+				
+					
+				
+				
+					
+				 
+				 	<option value="B188#BRISIGHELLA#0#0">
+					BRISIGHELLA</option>
+				
+					
+				
+				
+					
+				 
+				 	<option value="B982#CASOLA VALSENIO#0#0">
+					CASOLA VALSENIO</option>
+				
+					
+				
+				
+					
+				 
+				 	<option value="C065#CASTEL BOLOGNESE#0#0">
+					CASTEL BOLOGNESE</option>
+				
+					
+				
+				
+					
+				 
+				 	<option value="C553#CERVIA#0#0">
+					CERVIA</option>
+				
+					
+				
+				
+					
+				 
+				 	<option value="C963#CONSELICE#0#0">
+					CONSELICE</option>
+				
+					
+				
+				
+					
+				 
+				 	<option value="D121#COTIGNOLA#0#0">
+					COTIGNOLA</option>
+				
+					
+				
+				
+					
+				 
+				 	<option value="D458#FAENZA#0#0">
+					FAENZA</option>
+				
+					
+				
+				
+					
+				 
+				 	<option value="D829#FUSIGNANO#0#0">
+					FUSIGNANO</option>
+				
+					
+				
+				
+					
+				 
+				 	<option value="E730#LUGO#0#0">
+					LUGO</option>
+				
+					
+				
+				
+					
+				 
+				 	<option value="F029#MASSA LOMBARDA#0#0">
+					MASSA LOMBARDA</option>
+				
+					
+				
+				
+					
+				 
+				 	<option value="H199#RAVENNA#3#0">
+					RAVENNA</option>
+				
+					
+				
+				
+					
+				 
+				 	<option value="H302#RIOLO TERME#0#0">
+					RIOLO TERME</option>
+				
+					
+				
+				
+					
+				 
+				 	<option value="H642#RUSSI#0#0">
+					RUSSI</option>
+				
+					
+				
+				
+					
+				 
+				 	<option value="I196#SANT'AGATA SUL SANTERNO#0#0">
+					SANT'AGATA SUL SANTERNO</option>
+				
+					
+				
+				
+					
+				 
+				 	<option value="I787#SOLAROLO#0#0">
+					SOLAROLO</option></select> <input type="submit" name="selSezione" value="scegli la sezione" style="">
+		</td>
+		<td><label for="sezione">Sezione: </label> 
+			<select name="sezione"></select></td>
+		
+		
+		
+		</tr>
+		<tr>
+		</tr></tbody></table>
+			<fieldset><legend class="blue"><strong>&nbsp;Ricerca per foglio&nbsp;</strong> </legend>
+		<table>
+			<tbody><tr>
+				<td><label for="foglio">Foglio: </label></td>
+				<td><input type="text" name="foglio" maxlength="4" size="4" value="" style=""></td>
+				<td><label for="allegato">Allegato: </label></td>
+				<td><input type="text" name="allegato" maxlength="4" size="4" value="" style=""></td>
+			</tr>
+			<tr>
+			</tr>
+			</tbody></table>
+			<table>
+				<tbody><tr>
+					<td colspan="4"><strong>Eventuali restrizioni</strong></td>
+				</tr>
+				<tr>
+					<td><input type="radio" name="tipoRic" value="1" checked="checked" style=""> <label for="fiduciale"> Punto fiduciale</label></td>
+					<td><label for="fiduciale"> Numero: </label></td>
+					<td colspan="3"><input type="text" name="fiduciale" maxlength="4" size="4" value="" style=""></td>
+				</tr>
+				<tr>
+					<td colspan="4"></td>
+				</tr>
+				<tr>
+					<td><input type="radio" name="tipoRic" value="2" style=""><label for="fiduciale">Attendibilità</label></td>
+					<td><label for="attendMin">Min: </label></td>
+					<td><input type="text" name="attendMin" maxlength="4" size="4" value="" style=""></td>
+					<td><label for="attendMin">Max: </label></td>
+					<td colspan="2"><input type="text" name="attendMax" maxlength="4" size="4" value="" style=""></td>
+				</tr>
+			</tbody></table>
+			</fieldset>
+			<fieldset><legend class="blue"><strong>&nbsp;Ricerca per dominio&nbsp;</strong> </legend>
+			<table>
+				<tbody><tr><td>
+					<input type="radio" name="tipoRic" value="3" style="">
+					<label for="tipoRic">Dominio</label>
+					</td>
+				</tr>
+				<tr>
+					<td>Coordinata:</td>
+					<td>Minima</td>
+					<td>Massima</td>
+				</tr>
+				<tr>
+					<td><label for="allegato">Nord: </label></td>
+					<td><input type="text" name="nordMin" maxlength="16" size="14" value="" style=""></td>
+					<td><input type="text" name="nordMax" maxlength="16" size="14" value="" style=""></td>
+				</tr>
+				<tr>
+					<td><label for="allegato">Est: </label></td>
+					<td><input type="text" name="estMin" maxlength="16" size="14" value="" style=""></td>
+					<td><input type="text" name="estMax" maxlength="16" size="14" value="" style=""></td>
+				</tr>
+			</tbody></table>
+			</fieldset>
+			<input type="radio" name="tipoFile" value="pdf" style="">
+			<strong>Pdf</strong>
+			<input type="radio" name="tipoFile" value="dat" checked="checked" style=""> <strong>Txt</strong>
+	        
+			
+			
+			
+			
+			
+			<table class="cento">
+			<tbody><tr>
+			<td><fieldset><legend class="blue">Motivazione</legend> <br>
+				
+				
+					<label for="listaM">Motivo: </label><input type="text" name="motivoText" maxlength="250" size="40" value="Esplorazione" style="">
+					
+				</fieldset>
+			</td>
+			</tr>
+			</tbody></table>
+			
+			
+			
+			<br> 
+			<p><input type="submit" name="ricerca" value="Ricerca" style="">
+			<input type="submit" name="cancel" value="Pulisci" onclick="bCancel=true;" style=""></p>
+		</form>

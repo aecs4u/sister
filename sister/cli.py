@@ -17,6 +17,7 @@ Usage:
 
 import asyncio
 import csv
+import inspect
 import io
 import json
 import time
@@ -28,6 +29,7 @@ from rich.console import Console
 from rich.table import Table
 
 from .client import VisuraAPIError, VisuraClient
+from .query_forms import QUERY_FORMS, get_query_form, option_flags, param_names, validate_params
 
 app = typer.Typer(
     name="sister",
@@ -201,70 +203,19 @@ def _print_result(result: dict) -> None:
 # =============================================================================
 
 
-@query_app.command()
-def search(
-    provincia: str = typer.Option(..., "--provincia", "-P", help="Province name (e.g. Trieste)"),
-    comune: str = typer.Option(..., "--comune", "-C", help="Municipality name (e.g. TRIESTE)"),
-    foglio: str = typer.Option(..., "--foglio", "-F", help="Sheet number"),
-    particella: str = typer.Option(..., "--particella", "-p", help="Parcel number"),
-    tipo_catasto: Optional[str] = typer.Option(
-        None, "--tipo-catasto", "-t", help="'T' = Terreni, 'F' = Fabbricati (omit for both)"
-    ),
-    sezione: Optional[str] = typer.Option(None, "--sezione", help="Section (optional)"),
-    subalterno: Optional[str] = typer.Option(None, "--subalterno", "-sub", help="Sub-unit (optional)"),
-    output: Optional[str] = typer.Option(None, "--output", "-o", help="Output file path (.json)"),
-    wait: bool = typer.Option(False, "--wait", "-w", help="Wait for results instead of returning immediately"),
-    dry_run: bool = typer.Option(False, "--dry-run", help="Preview request without executing"),
-    force: bool = typer.Option(False, "--force", help="Bypass cache, always submit new request"),
-):
-    """Submit an immobili search on SISTER (POST /visura).
+# ---------------------------------------------------------------------------
+# Single-step queries: every ``sister query <command>`` is generated from sister.query_forms
+# ---------------------------------------------------------------------------
 
-    By default returns the queued request IDs. Use --wait to poll
-    until results are ready.
-    """
-    payload = {
-        "provincia": provincia,
-        "comune": comune,
-        "foglio": foglio,
-        "particella": particella,
-    }
-    if tipo_catasto:
-        payload["tipo_catasto"] = tipo_catasto.upper()
-    if sezione:
-        payload["sezione"] = sezione
-    if subalterno:
-        payload["subalterno"] = subalterno
 
-    client = VisuraClient()
-
-    if dry_run:
-        console.print("[bold yellow]DRY RUN[/bold yellow] — request will not be sent")
-        console.print(f"  POST {client.base_url}/visura")
-        console.print(f"  Body: {json.dumps(payload, ensure_ascii=False)}")
-        return
-
-    try:
-        result = asyncio.run(
-            client.search(
-                provincia=provincia,
-                comune=comune,
-                foglio=foglio,
-                particella=particella,
-                tipo_catasto=tipo_catasto,
-                sezione=sezione,
-                subalterno=subalterno,
-            )
-        )
-    except VisuraAPIError as e:
-        _handle_api_error(e)
-        return
-
-    request_ids = result.get("request_ids", [])
-    status = result.get("status", "unknown")
-
-    console.print(f"[bold green]Request submitted[/bold green] (status: {status})")
+def _report_submission(client: VisuraClient, params: dict, result: dict, wait: bool, output: Optional[str]) -> None:
+    """Print what was submitted and, with --wait, poll every request until it is done."""
+    request_ids = client.request_ids(result)
+    console.print(f"[bold green]Request submitted[/bold green] (status: {result.get('status', 'unknown')})")
     for rid in request_ids:
         console.print(f"  ID: [cyan]{rid}[/cyan]")
+    if params.get("codice_fiscale"):
+        console.print(f"  CF: {params['codice_fiscale'].upper()}  Scope: {result.get('provincia', 'NAZIONALE')}")
 
     if not wait:
         console.print(
@@ -278,7 +229,6 @@ def search(
             _write_output(result, output)
         return
 
-    # --wait: poll each request_id until done
     all_results = {}
     for rid in request_ids:
         console.print(f"\n[dim]Waiting for {rid}...[/dim]")
@@ -289,618 +239,79 @@ def search(
         except TimeoutError as e:
             console.print(f"[yellow]{e}[/yellow]")
         except VisuraAPIError as e:
+            if len(request_ids) == 1:
+                _handle_api_error(e)
             console.print(f"[red]{rid}: HTTP {e.status_code}: {e.detail}[/red]")
-
     if output and all_results:
-        merged = all_results if len(all_results) > 1 else next(iter(all_results.values()))
-        _write_output(merged, output)
+        _write_output(all_results if len(all_results) > 1 else next(iter(all_results.values())), output)
 
 
-@query_app.command()
-def intestati(
-    provincia: str = typer.Option(..., "--provincia", "-P", help="Province name"),
-    comune: str = typer.Option(..., "--comune", "-C", help="Municipality name"),
-    foglio: str = typer.Option(..., "--foglio", "-F", help="Sheet number"),
-    particella: str = typer.Option(..., "--particella", "-p", help="Parcel number"),
-    tipo_catasto: str = typer.Option(..., "--tipo-catasto", "-t", help="'T' = Terreni, 'F' = Fabbricati"),
-    subalterno: Optional[str] = typer.Option(None, "--subalterno", "-sub", help="Sub-unit (required for Fabbricati)"),
-    sezione: Optional[str] = typer.Option(None, "--sezione", help="Section (optional)"),
-    output: Optional[str] = typer.Option(None, "--output", "-o", help="Output file path (.json)"),
-    wait: bool = typer.Option(False, "--wait", "-w", help="Wait for result instead of returning immediately"),
-    dry_run: bool = typer.Option(False, "--dry-run", help="Preview request without executing"),
-    force: bool = typer.Option(False, "--force", help="Bypass cache, always submit new request"),
-):
-    """Submit an owners (intestati) lookup on SISTER (POST /visura/intestati).
+def _run_query_command(command: str, params: dict, wait: bool, output: Optional[str], dry_run: bool, force: bool) -> None:
+    """Shared body of every generated query command: validate → (dry run) → submit → report."""
+    spec = QUERY_FORMS[command]
+    try:
+        validate_params(command, params)
+    except ValueError as e:
+        console.print(f"[bold red]Error:[/bold red] {e}")
+        raise typer.Exit(2)
 
-    For Fabbricati (tipo_catasto=F), --subalterno is required.
-    For Terreni (tipo_catasto=T), --subalterno must not be provided.
-    """
-    tc = tipo_catasto.upper()
-    if tc == "F" and not subalterno:
-        console.print("[red]Error: --subalterno is required for Fabbricati (tipo_catasto=F)[/red]")
-        raise typer.Exit(1)
-    if tc == "T" and subalterno:
-        console.print("[red]Error: --subalterno must not be provided for Terreni (tipo_catasto=T)[/red]")
-        raise typer.Exit(1)
+    client = VisuraClient()
+    if dry_run:
+        console.print("[bold yellow]DRY RUN[/bold yellow] — request will not be sent")
+        console.print(f"  POST {client.base_url}{spec.path}")
+        console.print(f"  Body: {json.dumps(params, ensure_ascii=False)}")
+        return
+    try:
+        result = asyncio.run(client.submit(command, params, force=force))
+    except VisuraAPIError as e:
+        _handle_api_error(e)
+        return
+    _report_submission(client, params, result, wait, output)
 
-    payload = {
-        "provincia": provincia,
-        "comune": comune,
-        "foglio": foglio,
-        "particella": particella,
-        "tipo_catasto": tc,
+
+def _make_query_command(form):
+    """Build the Typer command of a query: one option per parameter of its spec plus the common ones."""
+    parameters: list[inspect.Parameter] = []
+    seen: set[str] = set()
+    for fld in form.fields:
+        if fld.param in seen:
+            continue
+        seen.add(fld.param)
+        flags = option_flags(fld.param)
+        if fld.kind == "checkbox":
+            option, annotation = typer.Option(None, f"{flags[0]}/--no-{flags[0][2:]}", help=fld.help), Optional[bool]
+        elif fld.param in form.required:
+            option, annotation = typer.Option(..., *flags, help=fld.help), str
+        else:
+            option, annotation = typer.Option(None, *flags, help=fld.help), Optional[str]
+        parameters.append(inspect.Parameter(fld.param, inspect.Parameter.KEYWORD_ONLY, default=option, annotation=annotation))
+    common = {
+        "output": (Optional[str], typer.Option(None, "--output", "-o", help="Output file path (.json)")),
+        "wait": (bool, typer.Option(False, "--wait", "-w", help="Wait for the result instead of returning immediately")),
+        "dry_run": (bool, typer.Option(False, "--dry-run", help="Preview the request without sending it")),
+        "force": (bool, typer.Option(False, "--force", help="Bypass the cache, always submit a new request")),
     }
-    if subalterno:
-        payload["subalterno"] = subalterno
-    if sezione:
-        payload["sezione"] = sezione
-
-    client = VisuraClient()
-
-    if dry_run:
-        console.print("[bold yellow]DRY RUN[/bold yellow] — request will not be sent")
-        console.print(f"  POST {client.base_url}/visura/intestati")
-        console.print(f"  Body: {json.dumps(payload, ensure_ascii=False)}")
-        return
-
-    try:
-        result = asyncio.run(
-            client.intestati(
-                provincia=provincia,
-                comune=comune,
-                foglio=foglio,
-                particella=particella,
-                tipo_catasto=tipo_catasto,
-                subalterno=subalterno,
-                sezione=sezione,
-                force=force,
-            )
-        )
-    except VisuraAPIError as e:
-        _handle_api_error(e)
-        return
-
-    request_id = result.get("request_id", "")
-    status = result.get("status", "unknown")
-
-    console.print(f"[bold green]Request submitted[/bold green] (status: {status})")
-    console.print(f"  ID: [cyan]{request_id}[/cyan]")
-
-    if not wait:
-        console.print(f"[dim]Poll result with:[/dim]\n  [bold]sister get {request_id}[/bold]")
-        if output:
-            _write_output(result, output)
-        return
-
-    console.print(f"\n[dim]Waiting for {request_id}...[/dim]")
-    try:
-        res = asyncio.run(client.wait_for_result(request_id))
-        _print_result(res)
-        if output:
-            _write_output(res, output)
-    except TimeoutError as e:
-        console.print(f"[yellow]{e}[/yellow]")
-    except VisuraAPIError as e:
-        _handle_api_error(e)
-
-
-@query_app.command()
-def soggetto(
-    codice_fiscale: str = typer.Option(..., "--cf", "-i", help="Codice fiscale del soggetto"),
-    tipo_catasto: Optional[str] = typer.Option(
-        None, "--tipo-catasto", "-t", help="'T' = Terreni, 'F' = Fabbricati, 'E' = both (default)"
-    ),
-    provincia: Optional[str] = typer.Option(None, "--provincia", "-P", help="Province (omit for national search)"),
-    output: Optional[str] = typer.Option(None, "--output", "-o", help="Output file path (.json)"),
-    wait: bool = typer.Option(False, "--wait", "-w", help="Wait for result instead of returning immediately"),
-    dry_run: bool = typer.Option(False, "--dry-run", help="Preview request without executing"),
-    force: bool = typer.Option(False, "--force", help="Bypass cache, always submit new request"),
-):
-    """National search by codice fiscale on SISTER (POST /visura/soggetto).
-
-    Searches for all properties owned by a subject across Italy.
-    Use --provincia to restrict to a single province.
-    """
-    payload = {"codice_fiscale": codice_fiscale.upper()}
-    if tipo_catasto:
-        payload["tipo_catasto"] = tipo_catasto.upper()
-    if provincia:
-        payload["provincia"] = provincia
-
-    client = VisuraClient()
-
-    if dry_run:
-        console.print("[bold yellow]DRY RUN[/bold yellow] — request will not be sent")
-        console.print(f"  POST {client.base_url}/visura/soggetto")
-        console.print(f"  Body: {json.dumps(payload, ensure_ascii=False)}")
-        return
-
-    try:
-        result = asyncio.run(
-            client.soggetto(
-                codice_fiscale=codice_fiscale,
-                tipo_catasto=tipo_catasto,
-                provincia=provincia,
-                force=force,
-            )
-        )
-    except VisuraAPIError as e:
-        _handle_api_error(e)
-        return
-
-    request_id = result.get("request_id", "")
-    status = result.get("status", "unknown")
-    scope = result.get("provincia", "NAZIONALE")
-
-    console.print(f"[bold green]Request submitted[/bold green] (status: {status})")
-    console.print(f"  ID: [cyan]{request_id}[/cyan]")
-    console.print(f"  CF: {codice_fiscale.upper()}  Scope: {scope}")
-
-    if not wait:
-        console.print(f"[dim]Poll result with:[/dim]\n  [bold]sister get {request_id}[/bold]")
-        if output:
-            _write_output(result, output)
-        return
-
-    console.print(f"\n[dim]Waiting for {request_id}...[/dim]")
-    try:
-        res = asyncio.run(client.wait_for_result(request_id))
-        _print_result(res)
-        if output:
-            _write_output(res, output)
-    except TimeoutError as e:
-        console.print(f"[yellow]{e}[/yellow]")
-    except VisuraAPIError as e:
-        _handle_api_error(e)
-
-
-@query_app.command()
-def azienda(
-    identificativo: str = typer.Option(..., "--id", "-i", help="P.IVA (11 digits) or company name"),
-    tipo_catasto: Optional[str] = typer.Option(
-        None, "--tipo-catasto", "-t", help="'T' = Terreni, 'F' = Fabbricati, 'E' = both (default)"
-    ),
-    provincia: Optional[str] = typer.Option(None, "--provincia", "-P", help="Province (omit for national search)"),
-    output: Optional[str] = typer.Option(None, "--output", "-o", help="Output file path (.json)"),
-    wait: bool = typer.Option(False, "--wait", "-w", help="Wait for result"),
-    dry_run: bool = typer.Option(False, "--dry-run", help="Preview request without executing"),
-    force: bool = typer.Option(False, "--force", help="Bypass cache, always submit new request"),
-):
-    """Search by legal entity (P.IVA or company name) on SISTER (POST /visura/persona-giuridica).
-
-    Searches for all properties owned by a company across Italy.
-    Use --provincia to restrict to a single province.
-    """
-    payload = {"identificativo": identificativo}
-    if tipo_catasto:
-        payload["tipo_catasto"] = tipo_catasto.upper()
-    if provincia:
-        payload["provincia"] = provincia
-
-    client = VisuraClient()
-
-    if dry_run:
-        console.print("[bold yellow]DRY RUN[/bold yellow] — request will not be sent")
-        console.print(f"  POST {client.base_url}/visura/persona-giuridica")
-        console.print(f"  Body: {json.dumps(payload, ensure_ascii=False)}")
-        return
-
-    try:
-        result = asyncio.run(
-            client.persona_giuridica(
-                identificativo=identificativo,
-                tipo_catasto=tipo_catasto,
-                provincia=provincia,
-                force=force,
-            )
-        )
-    except VisuraAPIError as e:
-        _handle_api_error(e)
-        return
-
-    request_id = result.get("request_id", "")
-    status = result.get("status", "unknown")
-    scope = result.get("provincia", "NAZIONALE")
-
-    console.print(f"[bold green]Request submitted[/bold green] (status: {status})")
-    console.print(f"  ID: [cyan]{request_id}[/cyan]")
-    console.print(f"  Identificativo: {identificativo}  Scope: {scope}")
-
-    if not wait:
-        console.print(f"[dim]Poll result with:[/dim]\n  [bold]sister get {request_id}[/bold]")
-        if output:
-            _write_output(result, output)
-        return
-
-    console.print(f"\n[dim]Waiting for {request_id}...[/dim]")
-    try:
-        res = asyncio.run(client.wait_for_result(request_id))
-        _print_result(res)
-        if output:
-            _write_output(res, output)
-    except TimeoutError as e:
-        console.print(f"[yellow]{e}[/yellow]")
-    except VisuraAPIError as e:
-        _handle_api_error(e)
-
-
-@query_app.command()
-def elenco(
-    provincia: str = typer.Option(..., "--provincia", "-P", help="Province name"),
-    comune: str = typer.Option(..., "--comune", "-C", help="Municipality name"),
-    tipo_catasto: Optional[str] = typer.Option(None, "--tipo-catasto", "-t", help="'T' = Terreni, 'F' = Fabbricati"),
-    foglio: Optional[str] = typer.Option(None, "--foglio", "-F", help="Filter by sheet number"),
-    sezione: Optional[str] = typer.Option(None, "--sezione", help="Section (optional)"),
-    output: Optional[str] = typer.Option(None, "--output", "-o", help="Output file path (.json)"),
-    wait: bool = typer.Option(False, "--wait", "-w", help="Wait for result"),
-    dry_run: bool = typer.Option(False, "--dry-run", help="Preview request without executing"),
-    force: bool = typer.Option(False, "--force", help="Bypass cache, always submit new request"),
-):
-    """List all properties in a comune (POST /visura/elenco-immobili).
-
-    Optionally filter by foglio to narrow results.
-    """
-    payload = {"provincia": provincia, "comune": comune}
-    if tipo_catasto:
-        payload["tipo_catasto"] = tipo_catasto.upper()
-    if foglio:
-        payload["foglio"] = foglio
-    if sezione:
-        payload["sezione"] = sezione
-
-    client = VisuraClient()
-
-    if dry_run:
-        console.print("[bold yellow]DRY RUN[/bold yellow] — request will not be sent")
-        console.print(f"  POST {client.base_url}/visura/elenco-immobili")
-        console.print(f"  Body: {json.dumps(payload, ensure_ascii=False)}")
-        return
-
-    try:
-        result = asyncio.run(
-            client.elenco_immobili(
-                provincia=provincia,
-                comune=comune,
-                tipo_catasto=tipo_catasto,
-                foglio=foglio,
-                sezione=sezione,
-                force=force,
-            )
-        )
-    except VisuraAPIError as e:
-        _handle_api_error(e)
-        return
-
-    request_id = result.get("request_id", "")
-    status = result.get("status", "unknown")
-
-    console.print(f"[bold green]Request submitted[/bold green] (status: {status})")
-    console.print(f"  ID: [cyan]{request_id}[/cyan]")
-
-    if not wait:
-        console.print(f"[dim]Poll result with:[/dim]\n  [bold]sister get {request_id}[/bold]")
-        if output:
-            _write_output(result, output)
-        return
-
-    console.print(f"\n[dim]Waiting for {request_id}...[/dim]")
-    try:
-        res = asyncio.run(client.wait_for_result(request_id))
-        _print_result(res)
-        if output:
-            _write_output(res, output)
-    except TimeoutError as e:
-        console.print(f"[yellow]{e}[/yellow]")
-    except VisuraAPIError as e:
-        _handle_api_error(e)
-
-
-# -- generic SISTER search commands (IND, PART, NOTA, EM, EXPM, OOII, FID, ISP, ISPCART) --
-
-
-def _generic_search_command(
-    search_type: str,
-    provincia: str,
-    client: VisuraClient,
-    wait: bool,
-    output: Optional[str],
-    comune: Optional[str] = None,
-    tipo_catasto: Optional[str] = None,
-    **params,
-):
-    """Shared logic for generic SISTER search CLI commands."""
-    try:
-        result = asyncio.run(
-            client.generic_search(
-                search_type=search_type,
-                provincia=provincia,
-                comune=comune,
-                tipo_catasto=tipo_catasto,
-                **params,
-            )
-        )
-    except VisuraAPIError as e:
-        _handle_api_error(e)
-        return
-
-    request_id = result.get("request_id", "")
-    console.print(f"[bold green]Request submitted[/bold green] ({search_type})")
-    console.print(f"  ID: [cyan]{request_id}[/cyan]")
-
-    if not wait:
-        console.print(f"[dim]Poll result with:[/dim]\n  [bold]sister get {request_id}[/bold]")
-        if output:
-            _write_output(result, output)
-        return
-
-    console.print(f"\n[dim]Waiting for {request_id}...[/dim]")
-    try:
-        res = asyncio.run(client.wait_for_result(request_id))
-        _print_result(res)
-        if output:
-            _write_output(res, output)
-    except TimeoutError as e:
-        console.print(f"[yellow]{e}[/yellow]")
-    except VisuraAPIError as e:
-        _handle_api_error(e)
-
-
-@query_app.command()
-def indirizzo(
-    provincia: str = typer.Option(..., "--provincia", "-P", help="Province name"),
-    comune: str = typer.Option(..., "--comune", "-C", help="Municipality name"),
-    indirizzo_str: str = typer.Option(..., "--indirizzo", "-a", help="Street address to search"),
-    tipo_catasto: Optional[str] = typer.Option(None, "--tipo-catasto", "-t", help="T/F"),
-    sezione: Optional[str] = typer.Option(None, "--sezione", help="Section"),
-    output: Optional[str] = typer.Option(None, "--output", "-o", help="Output file"),
-    wait: bool = typer.Option(False, "--wait", "-w", help="Wait for result"),
-    dry_run: bool = typer.Option(False, "--dry-run", help="Preview only"),
-    force: bool = typer.Option(False, "--force", help="Bypass cache, always submit new request"),
-):
-    """Search by street address (IND) on SISTER."""
-    client = VisuraClient()
-    if dry_run:
-        console.print(
-            f"[bold yellow]DRY RUN[/bold yellow] POST /visura/indirizzo  {provincia}/{comune} '{indirizzo_str}'"
-        )
-        return
-    _generic_search_command(
-        "indirizzo", provincia, client, wait, output, comune=comune, tipo_catasto=tipo_catasto, indirizzo=indirizzo_str
-    )
-
-
-@query_app.command()
-def partita(
-    provincia: str = typer.Option(..., "--provincia", "-P", help="Province name"),
-    comune: str = typer.Option(..., "--comune", "-C", help="Municipality name"),
-    partita_num: str = typer.Option(..., "--partita", help="Partita catastale number"),
-    tipo_catasto: Optional[str] = typer.Option(None, "--tipo-catasto", "-t", help="T/F"),
-    output: Optional[str] = typer.Option(None, "--output", "-o", help="Output file"),
-    wait: bool = typer.Option(False, "--wait", "-w", help="Wait for result"),
-    dry_run: bool = typer.Option(False, "--dry-run", help="Preview only"),
-    force: bool = typer.Option(False, "--force", help="Bypass cache, always submit new request"),
-):
-    """Search by partita catastale number (PART) on SISTER."""
-    client = VisuraClient()
-    if dry_run:
-        console.print(f"[bold yellow]DRY RUN[/bold yellow] POST /visura/partita  {provincia}/{comune} P.{partita_num}")
-        return
-    _generic_search_command(
-        "partita", provincia, client, wait, output, comune=comune, tipo_catasto=tipo_catasto, partita=partita_num
-    )
-
-
-@query_app.command()
-def nota(
-    provincia: str = typer.Option(..., "--provincia", "-P", help="Province name"),
-    numero_nota: str = typer.Option(..., "--numero", "-n", help="Note/annotation number"),
-    anno_nota: Optional[str] = typer.Option(None, "--anno", help="Year of the note"),
-    tipo_catasto: Optional[str] = typer.Option(None, "--tipo-catasto", "-t", help="T/F"),
-    output: Optional[str] = typer.Option(None, "--output", "-o", help="Output file"),
-    wait: bool = typer.Option(False, "--wait", "-w", help="Wait for result"),
-    dry_run: bool = typer.Option(False, "--dry-run", help="Preview only"),
-    force: bool = typer.Option(False, "--force", help="Bypass cache, always submit new request"),
-):
-    """Search by annotation/note reference (NOTA) on SISTER."""
-    client = VisuraClient()
-    if dry_run:
-        console.print(f"[bold yellow]DRY RUN[/bold yellow] POST /visura/nota  {provincia} nota={numero_nota}")
-        return
-    _generic_search_command(
-        "nota", provincia, client, wait, output, tipo_catasto=tipo_catasto, numero_nota=numero_nota, anno_nota=anno_nota
-    )
-
-
-@query_app.command()
-def mappa(
-    provincia: str = typer.Option(..., "--provincia", "-P", help="Province name"),
-    comune: str = typer.Option(..., "--comune", "-C", help="Municipality name"),
-    foglio: str = typer.Option(..., "--foglio", "-F", help="Sheet number"),
-    tipo_catasto: Optional[str] = typer.Option(None, "--tipo-catasto", "-t", help="T/F"),
-    output: Optional[str] = typer.Option(None, "--output", "-o", help="Output file"),
-    wait: bool = typer.Option(False, "--wait", "-w", help="Wait for result"),
-    dry_run: bool = typer.Option(False, "--dry-run", help="Preview only"),
-    force: bool = typer.Option(False, "--force", help="Bypass cache, always submit new request"),
-):
-    """View cadastral map data (EM) on SISTER."""
-    client = VisuraClient()
-    if dry_run:
-        console.print(f"[bold yellow]DRY RUN[/bold yellow] POST /visura/mappa  {provincia}/{comune} F.{foglio}")
-        return
-    _generic_search_command(
-        "mappa", provincia, client, wait, output, comune=comune, tipo_catasto=tipo_catasto, foglio=foglio
-    )
-
-
-@query_app.command("export-mappa")
-def export_mappa(
-    provincia: str = typer.Option(..., "--provincia", "-P", help="Province name"),
-    comune: str = typer.Option(..., "--comune", "-C", help="Municipality name"),
-    foglio: str = typer.Option(..., "--foglio", "-F", help="Sheet number"),
-    tipo_catasto: Optional[str] = typer.Option(None, "--tipo-catasto", "-t", help="T/F"),
-    output: Optional[str] = typer.Option(None, "--output", "-o", help="Output file"),
-    wait: bool = typer.Option(False, "--wait", "-w", help="Wait for result"),
-    dry_run: bool = typer.Option(False, "--dry-run", help="Preview only"),
-    force: bool = typer.Option(False, "--force", help="Bypass cache, always submit new request"),
-):
-    """Export cadastral map data (EXPM) on SISTER."""
-    client = VisuraClient()
-    if dry_run:
-        console.print(f"[bold yellow]DRY RUN[/bold yellow] POST /visura/export-mappa  {provincia}/{comune} F.{foglio}")
-        return
-    _generic_search_command(
-        "export_mappa", provincia, client, wait, output, comune=comune, tipo_catasto=tipo_catasto, foglio=foglio
-    )
-
-
-@query_app.command()
-def originali(
-    provincia: str = typer.Option(..., "--provincia", "-P", help="Province name"),
-    comune: str = typer.Option(..., "--comune", "-C", help="Municipality name"),
-    tipo_catasto: Optional[str] = typer.Option(None, "--tipo-catasto", "-t", help="T/F"),
-    foglio: Optional[str] = typer.Option(None, "--foglio", "-F", help="Sheet number"),
-    output: Optional[str] = typer.Option(None, "--output", "-o", help="Output file"),
-    wait: bool = typer.Option(False, "--wait", "-w", help="Wait for result"),
-    dry_run: bool = typer.Option(False, "--dry-run", help="Preview only"),
-    force: bool = typer.Option(False, "--force", help="Bypass cache, always submit new request"),
-):
-    """Retrieve original registration records (OOII) on SISTER."""
-    client = VisuraClient()
-    if dry_run:
-        console.print(f"[bold yellow]DRY RUN[/bold yellow] POST /visura/originali  {provincia}/{comune}")
-        return
-    _generic_search_command(
-        "originali", provincia, client, wait, output, comune=comune, tipo_catasto=tipo_catasto, foglio=foglio
-    )
-
-
-@query_app.command()
-def fiduciali(
-    provincia: str = typer.Option(..., "--provincia", "-P", help="Province name"),
-    comune: str = typer.Option(..., "--comune", "-C", help="Municipality name"),
-    tipo_catasto: Optional[str] = typer.Option(None, "--tipo-catasto", "-t", help="T/F"),
-    foglio: Optional[str] = typer.Option(None, "--foglio", "-F", help="Sheet number"),
-    output: Optional[str] = typer.Option(None, "--output", "-o", help="Output file"),
-    wait: bool = typer.Option(False, "--wait", "-w", help="Wait for result"),
-    dry_run: bool = typer.Option(False, "--dry-run", help="Preview only"),
-    force: bool = typer.Option(False, "--force", help="Bypass cache, always submit new request"),
-):
-    """Retrieve survey reference points (FID) on SISTER."""
-    client = VisuraClient()
-    if dry_run:
-        console.print(f"[bold yellow]DRY RUN[/bold yellow] POST /visura/fiduciali  {provincia}/{comune}")
-        return
-    _generic_search_command(
-        "fiduciali", provincia, client, wait, output, comune=comune, tipo_catasto=tipo_catasto, foglio=foglio
-    )
-
-
-@query_app.command()
-def ispezioni(
-    provincia: str = typer.Option(..., "--provincia", "-P", help="Province name"),
-    comune: str = typer.Option(..., "--comune", "-C", help="Municipality name"),
-    tipo_catasto: Optional[str] = typer.Option(None, "--tipo-catasto", "-t", help="T/F"),
-    foglio: Optional[str] = typer.Option(None, "--foglio", "-F", help="Sheet number"),
-    particella: Optional[str] = typer.Option(None, "--particella", "-p", help="Parcel number"),
-    output: Optional[str] = typer.Option(None, "--output", "-o", help="Output file"),
-    wait: bool = typer.Option(False, "--wait", "-w", help="Wait for result"),
-    dry_run: bool = typer.Option(False, "--dry-run", help="Preview only"),
-    force: bool = typer.Option(False, "--force", help="Bypass cache, always submit new request"),
-):
-    """Search property inspection records (ISP) on SISTER."""
-    client = VisuraClient()
-    if dry_run:
-        console.print(f"[bold yellow]DRY RUN[/bold yellow] POST /visura/ispezioni  {provincia}/{comune}")
-        return
-    _generic_search_command(
-        "ispezioni",
-        provincia,
-        client,
-        wait,
-        output,
-        comune=comune,
-        tipo_catasto=tipo_catasto,
-        foglio=foglio,
-        particella=particella,
-    )
-
-
-@query_app.command("ispezioni-cartacee")
-def ispezioni_cartacee(
-    provincia: str = typer.Option(..., "--provincia", "-P", help="Province name"),
-    comune: str = typer.Option(..., "--comune", "-C", help="Municipality name"),
-    tipo_catasto: Optional[str] = typer.Option(None, "--tipo-catasto", "-t", help="T/F"),
-    foglio: Optional[str] = typer.Option(None, "--foglio", "-F", help="Sheet number"),
-    particella: Optional[str] = typer.Option(None, "--particella", "-p", help="Parcel number"),
-    output: Optional[str] = typer.Option(None, "--output", "-o", help="Output file"),
-    wait: bool = typer.Option(False, "--wait", "-w", help="Wait for result"),
-    dry_run: bool = typer.Option(False, "--dry-run", help="Preview only"),
-    force: bool = typer.Option(False, "--force", help="Bypass cache, always submit new request"),
-):
-    """Search paper inspection records (ISPCART) on SISTER."""
-    client = VisuraClient()
-    if dry_run:
-        console.print(f"[bold yellow]DRY RUN[/bold yellow] POST /visura/ispezioni-cartacee  {provincia}/{comune}")
-        return
-    _generic_search_command(
-        "ispezioni_cart",
-        provincia,
-        client,
-        wait,
-        output,
-        comune=comune,
-        tipo_catasto=tipo_catasto,
-        foglio=foglio,
-        particella=particella,
-    )
-
-
-@query_app.command("elaborato-planimetrico")
-def elaborato_planimetrico(
-    provincia: str = typer.Option(..., "--provincia", "-P", help="Province name"),
-    comune: str = typer.Option(..., "--comune", "-C", help="Municipality name"),
-    foglio: Optional[str] = typer.Option(None, "--foglio", "-F", help="Sheet number"),
-    output: Optional[str] = typer.Option(None, "--output", "-o", help="Output file"),
-    wait: bool = typer.Option(False, "--wait", "-w", help="Wait for result"),
-    dry_run: bool = typer.Option(False, "--dry-run", help="Preview only"),
-    force: bool = typer.Option(False, "--force", help="Bypass cache"),
-):
-    """Retrieve Elaborato Planimetrico (ELPL) on SISTER."""
-    client = VisuraClient()
-    if dry_run:
-        console.print(f"[bold yellow]DRY RUN[/bold yellow] POST /visura/elaborato-planimetrico  {provincia}/{comune}")
-        return
-    _generic_search_command("elaborato_planimetrico", provincia, client, wait, output, comune=comune, foglio=foglio)
-
-
-@query_app.command()
-def riepilogo(
-    output: Optional[str] = typer.Option(None, "--output", "-o", help="Output file"),
-    wait: bool = typer.Option(False, "--wait", "-w", help="Wait for result"),
-    dry_run: bool = typer.Option(False, "--dry-run", help="Preview only"),
-    force: bool = typer.Option(False, "--force", help="Bypass cache"),
-):
-    """View your SISTER query history (Riepilogo Visure)."""
-    client = VisuraClient()
-    if dry_run:
-        console.print("[bold yellow]DRY RUN[/bold yellow] POST /visura/riepilogo-visure")
-        return
-    _generic_search_command("riepilogo_visure", "", client, wait, output)
-
-
-@query_app.command("richieste-sister")
-def richieste_sister(
-    output: Optional[str] = typer.Option(None, "--output", "-o", help="Output file"),
-    wait: bool = typer.Option(False, "--wait", "-w", help="Wait for result"),
-    dry_run: bool = typer.Option(False, "--dry-run", help="Preview only"),
-    force: bool = typer.Option(False, "--force", help="Bypass cache"),
-):
-    """View pending/completed requests on SISTER (Richieste)."""
-    client = VisuraClient()
-    if dry_run:
-        console.print("[bold yellow]DRY RUN[/bold yellow] POST /visura/richieste")
-        return
-    _generic_search_command("richieste", "", client, wait, output)
+    for name, (annotation, option) in common.items():
+        parameters.append(inspect.Parameter(name, inspect.Parameter.KEYWORD_ONLY, default=option, annotation=annotation))
+
+    def command(**kwargs):
+        output, wait, dry_run, force = (kwargs.pop(name) for name in common)
+        params = {
+            name: (("true" if value else "false") if isinstance(value, bool) else str(value))
+            for name, value in kwargs.items()
+            if value is not None
+        }
+        _run_query_command(form.command, params, wait, output, dry_run, force)
+
+    command.__signature__ = inspect.Signature(parameters)
+    command.__annotations__ = {p.name: p.annotation for p in parameters}
+    command.__name__ = form.command.replace("-", "_")
+    command.__doc__ = form.summary
+    return command
+
+
+for _form in QUERY_FORMS.values():
+    query_app.command(_form.command)(_make_query_command(_form))
 
 
 # -- Ispezioni Ipotecarie (paid service) --------------------------------------
@@ -1091,38 +502,7 @@ def ipotecaria_nota(
     )
 
 
-@query_app.command("ipotecaria-stato")
-def ipotecaria_stato(
-    output: Optional[str] = typer.Option(None, "--output", "-o", help="Output file"),
-    wait: bool = typer.Option(False, "--wait", "-w", help="Wait for result"),
-    dry_run: bool = typer.Option(False, "--dry-run", help="Preview only"),
-):
-    """Check Ispezioni Ipotecarie automation status (Stato dell'automazione)."""
-    client = VisuraClient()
-    if dry_run:
-        console.print("[bold yellow]DRY RUN[/bold yellow] POST /visura/ipotecaria-stato")
-        return
-    _generic_search_command("ipotecaria_stato", "", client, wait, output)
-
-
-@query_app.command("ipotecaria-elenchi")
-def ipotecaria_elenchi(
-    output: Optional[str] = typer.Option(None, "--output", "-o", help="Output file"),
-    wait: bool = typer.Option(False, "--wait", "-w", help="Wait for result"),
-    dry_run: bool = typer.Option(False, "--dry-run", help="Preview only"),
-):
-    """View billed lists (Elenchi contabilizzati) from Ispezioni Ipotecarie."""
-    client = VisuraClient()
-    if dry_run:
-        console.print("[bold yellow]DRY RUN[/bold yellow] POST /visura/ipotecaria-elenchi")
-        return
-    _generic_search_command("ipotecaria_elenchi", "", client, wait, output)
-
-
 # -- Workflow presets ---------------------------------------------------------
-
-from .models import WORKFLOW_PRESETS as _PRESETS  # noqa: E402
-
 
 def _run_step(client, label, coro):
     """Run a single workflow step: submit → wait → print."""
@@ -1131,17 +511,30 @@ def _run_step(client, label, coro):
         submit = asyncio.run(coro)
         rid = submit.get("request_id", "")
         rids = submit.get("request_ids", [rid] if rid else [])
-        for r in rids:
-            console.print(f"  ID: [cyan]{r}[/cyan]")
-        results = []
-        for r in rids:
-            res = asyncio.run(client.wait_for_result(r))
-            _print_result(res)
-            results.append(res)
+        results = _wait_for_requests(client, rids)
         return results[0] if len(results) == 1 else results
     except (TimeoutError, VisuraAPIError) as e:
         console.print(f"  [red]{e}[/red]")
         return {"status": "error", "error": str(e)}
+
+
+def _wait_for_requests(client, request_ids, *, show_ids=True):
+    """Wait for every submitted request, retaining per-request failures."""
+    if show_ids:
+        for request_id in request_ids:
+            console.print(f"  ID: [cyan]{request_id}[/cyan]")
+
+    results = []
+    for request_id in request_ids:
+        console.print(f"  [dim]Waiting for {request_id}...[/dim]")
+        try:
+            result = asyncio.run(client.wait_for_result(request_id))
+            _print_result(result)
+        except (TimeoutError, VisuraAPIError) as exc:
+            console.print(f"  [red]{exc}[/red]")
+            result = {"request_id": request_id, "status": "error", "error": str(exc)}
+        results.append(result)
+    return results
 
 
 @query_app.command()
@@ -1149,7 +542,7 @@ def workflow(
     preset: Optional[str] = typer.Option(
         None,
         "--preset",
-        help="Named preset: due-diligence, patrimonio, fondiario, aziendale, storico, indirizzo, cross-reference, full-due-diligence, full-patrimonio, full-aziendale",
+        help="Workflow family: due-diligence, portfolio, fondiario, indirizzo, cross-reference",
     ),
     provincia: Optional[str] = typer.Option(None, "--provincia", "-P", help="Province name"),
     comune: Optional[str] = typer.Option(None, "--comune", "-C", help="Municipality name"),
@@ -1182,6 +575,7 @@ def workflow(
     max_total_steps: int = typer.Option(100, "--max-steps", help="Overall circuit breaker for total step executions"),
     yes: bool = typer.Option(False, "--yes", "-y", help="Auto-confirm paid service costs"),
     include_paid: bool = typer.Option(False, "--include-paid", help="Include paid steps (e.g. ispezione ipotecaria)"),
+    include_history: bool = typer.Option(False, "--history", help="Include historical note and paper-inspection queries"),
     output: Optional[str] = typer.Option(None, "--output", "-o", help="Output file path (.json)"),
     dry_run: bool = typer.Option(False, "--dry-run", help="Preview steps without executing"),
     force: bool = typer.Option(False, "--force", help="Bypass cache, always submit new request"),
@@ -1193,17 +587,12 @@ def workflow(
     With --preset: runs a named sequence of steps automatically.
 
     \b
-    Available presets:
-      due-diligence        search → intestati → ispezioni → elaborato → risk
-      patrimonio           soggetto → drill → address → risk
-      fondiario            elenco → mappa → export → fiduciali → originali → elaborato → risk
-      aziendale            azienda → drill → address → risk
-      storico              search → intestati → nota → ispezioni → originali → elaborato → risk
-      indirizzo            indirizzo → search → intestati → risk
-      cross-reference      soggetto + azienda → cross-property → risk
-      full-due-diligence   multi-hop: seed → owners → portfolios → history → encumbrances → risk
-      full-patrimonio      multi-hop: soggetto → drill → owners → portfolios → history → risk
-      full-aziendale       multi-hop: azienda → drill → owners → portfolios → history → risk
+    Workflow families:
+      due-diligence        parcel checks; add --history for notes and paper inspections
+      portfolio            person (--cf) or company (--azienda) asset investigation
+      fondiario            land survey and cadastral-map records
+      indirizzo            address → property search
+      cross-reference      compare a person's and a company's properties
 
     \b
     Depth modes:
@@ -1215,28 +604,57 @@ def workflow(
     \b
     Examples:
       uv run sister query workflow --preset due-diligence -P Trieste -C TRIESTE -F 9 -p 166
-      uv run sister query workflow --preset patrimonio --cf RSSMRA85M01H501Z
+      uv run sister query workflow --preset due-diligence -P Roma -C ROMA -F 1 -p 1 --history --nota 5678
+      uv run sister query workflow --preset portfolio --cf RSSMRA85M01H501Z
+      uv run sister query workflow --preset portfolio --azienda 02471840997 --depth full
       uv run sister query workflow --preset fondiario -P Roma -C ROMA -F 100
       uv run sister query workflow --preset due-diligence -P Roma -C ROMA -F 1 -p 1 --depth deep --include-paid --yes
-      uv run sister query workflow --preset full-due-diligence -P Roma -C ROMA -F 1 -p 1 --depth full --include-paid --yes --max-paid 5
+      uv run sister query workflow --preset due-diligence -P Roma -C ROMA -F 1 -p 1 --depth full --include-paid --yes --max-paid 5
       uv run sister query workflow -P Trieste -C TRIESTE -F 9 -p 166 --elenco --mappa
     """
     # -- Server-side preset execution ------------------------------------------
 
     if preset:
-        if preset not in _PRESETS:
-            console.print(f"[red]Unknown preset: {preset}[/red]")
-            console.print("[dim]Available: " + ", ".join(_PRESETS.keys()) + "[/dim]")
-            raise typer.Exit(1)
+        from .workflows import prepare_workflow
 
-        p = _PRESETS[preset]
+        try:
+            plan = prepare_workflow(
+                {
+                    "preset": preset,
+                    "provincia": provincia,
+                    "comune": comune,
+                    "foglio": foglio,
+                    "particella": particella,
+                    "tipo_catasto": tipo_catasto,
+                    "sezione": sezione,
+                    "sezione_urbana": None,
+                    "subalterno": subalterno,
+                    "codice_fiscale": codice_fiscale,
+                    "identificativo": azienda_id,
+                    "indirizzo": indirizzo_str,
+                    "numero_nota": numero_nota,
+                    "include_history": include_history,
+                    "depth": depth,
+                    "include_paid_steps": include_paid,
+                    "auto_confirm": yes,
+                    "max_fanout": max_fanout,
+                    "max_owners": max_owners,
+                    "max_properties_per_owner": max_properties_per_owner,
+                    "max_historical_properties": max_historical_properties,
+                    "max_paid_steps": max_paid_steps,
+                    "max_total_steps": max_total_steps,
+                }
+            )
+        except (ValueError, KeyError) as exc:
+            console.print(f"[red]Invalid workflow: {exc}[/red]")
+            raise typer.Exit(1) from exc
 
         if dry_run:
             console.print(
                 f"[bold yellow]DRY RUN[/bold yellow] — POST /visura/workflow (preset={preset}, depth={depth})"
             )
-            console.print(f"  {p['description']}")
-            console.print(f"  Steps: {' → '.join(p['steps'])}")
+            console.print(f"  {plan.description}")
+            console.print(f"  Steps: {' → '.join(plan.steps)}")
             console.print(
                 f"  Depth: [cyan]{depth}[/cyan]  Fanout: [cyan]{max_fanout}[/cyan]  Owners: [cyan]{max_owners}[/cyan]"
             )
@@ -1247,7 +665,7 @@ def workflow(
                 console.print(f"  [yellow]Paid steps enabled (auto_confirm={yes})[/yellow]")
             return
 
-        console.print(f"[bold]Preset: {preset}[/bold] — {p['description']}")
+        console.print(f"[bold]Preset: {preset}[/bold] — {plan.description}")
         console.print(f"[dim]Depth: {depth} | Max fanout: {max_fanout}[/dim]")
 
         client = VisuraClient()
@@ -1265,6 +683,8 @@ def workflow(
                     codice_fiscale=codice_fiscale,
                     identificativo=azienda_id,
                     indirizzo=indirizzo_str,
+                    numero_nota=numero_nota,
+                    include_history=include_history,
                     depth=depth,
                     max_fanout=max_fanout,
                     max_owners=max_owners,
@@ -1360,10 +780,10 @@ def workflow(
 
     # -- Phase: soggetto / azienda (if starting from person/company) ----------
 
-    is_person_start = preset in ("patrimonio", "cross-reference") or (codice_fiscale and not foglio)
-    is_company_start = preset in ("aziendale", "cross-reference") or (azienda_id and not foglio and not codice_fiscale)
+    is_person_start = bool(codice_fiscale and not foglio)
+    is_company_start = bool(azienda_id and not foglio and not codice_fiscale)
 
-    if codice_fiscale and (is_person_start or preset == "cross-reference"):
+    if codice_fiscale and is_person_start:
         console.rule("[bold cyan]Soggetto — National CF search[/bold cyan]")
         all_data["soggetto"] = _run_step(
             client,
@@ -1371,7 +791,7 @@ def workflow(
             client.soggetto(codice_fiscale=codice_fiscale, tipo_catasto=tipo_catasto, provincia=provincia),
         )
 
-    if azienda_id and (is_company_start or preset == "cross-reference"):
+    if azienda_id and is_company_start:
         console.rule("[bold cyan]Azienda — Company search[/bold cyan]")
         all_data["persona_giuridica"] = _run_step(
             client,
@@ -1421,15 +841,9 @@ def workflow(
             )
             request_ids = search_result.get("request_ids", [])
             console.print(f"Submitted {len(request_ids)} request(s)")
-
-            for rid in request_ids:
-                console.print(f"  [dim]Waiting for {rid}...[/dim]")
-                try:
-                    res = asyncio.run(client.wait_for_result(rid))
-                    search_results[rid] = res
-                    _print_result(res)
-                except (TimeoutError, VisuraAPIError) as e:
-                    console.print(f"  [red]{e}[/red]")
+            search_results = dict(
+                zip(request_ids, _wait_for_requests(client, request_ids, show_ids=False))
+            )
         except VisuraAPIError as e:
             console.print(f"[red]Search failed: {e}[/red]")
 
@@ -1443,9 +857,8 @@ def workflow(
     # -- Phase: intestati (if search found immobili) --------------------------
 
     intestati_results = []
-    need_intestati = True  # Custom workflow always includes intestati after search
 
-    if all_immobili and need_intestati and provincia and comune and foglio and particella:
+    if all_immobili and provincia and comune and foglio and particella:
         intestati_targets = []
         for res in search_results.values():
             if res.get("status") != "completed":
@@ -1468,27 +881,28 @@ def workflow(
             console.rule("[bold cyan]Intestati — Ownership[/bold cyan]")
             for tc, sub in intestati_targets:
                 sub_label = f" Sub.{sub}" if sub else ""
-                try:
-                    submit = asyncio.run(
-                        client.intestati(
-                            provincia=provincia,
-                            comune=comune,
-                            foglio=foglio,
-                            particella=particella,
-                            tipo_catasto=tc,
-                            subalterno=sub,
-                            sezione=sezione,
-                        )
-                    )
-                    rid = submit.get("request_id", "")
-                    console.print(f"  [dim]{tc}{sub_label}[/dim] → [cyan]{rid}[/cyan]")
-                    res = asyncio.run(client.wait_for_result(rid))
-                    _print_result(res)
-                    intestati_results.append({"tipo_catasto": tc, "subalterno": sub, "request_id": rid, **res})
-                except (TimeoutError, VisuraAPIError) as e:
-                    console.print(f"  [red]{tc}{sub_label}: {e}[/red]")
+                response = _run_step(
+                    client,
+                    f"{tc}{sub_label}",
+                    client.intestati(
+                        provincia=provincia,
+                        comune=comune,
+                        foglio=foglio,
+                        particella=particella,
+                        tipo_catasto=tc,
+                        subalterno=sub,
+                        sezione=sezione,
+                    ),
+                )
+                responses = response if isinstance(response, list) else [response]
+                for res in responses:
                     intestati_results.append(
-                        {"tipo_catasto": tc, "subalterno": sub, "status": "error", "error": str(e)}
+                        {
+                            "tipo_catasto": tc,
+                            "subalterno": sub,
+                            "request_id": res.get("request_id", ""),
+                            **res,
+                        }
                     )
 
     all_data["intestati_results"] = intestati_results
@@ -1644,66 +1058,6 @@ def workflow(
 # -- batch command (supports all query types) ---------------------------------
 
 # Maps CSV 'command' column values to (client_method_name, required_fields, extra_field_mapping)
-_BATCH_DISPATCHERS = {
-    "search": (
-        "search",
-        ("provincia", "comune", "foglio", "particella"),
-        {"tipo_catasto": "tipo_catasto", "subalterno": "subalterno", "sezione": "sezione"},
-    ),
-    "intestati": (
-        "intestati",
-        ("provincia", "comune", "foglio", "particella", "tipo_catasto"),
-        {"subalterno": "subalterno", "sezione": "sezione"},
-    ),
-    "soggetto": ("soggetto", ("codice_fiscale",), {"tipo_catasto": "tipo_catasto", "provincia": "provincia"}),
-    "azienda": ("persona_giuridica", ("identificativo",), {"tipo_catasto": "tipo_catasto", "provincia": "provincia"}),
-    "elenco": (
-        "elenco_immobili",
-        ("provincia", "comune"),
-        {"tipo_catasto": "tipo_catasto", "foglio": "foglio", "sezione": "sezione"},
-    ),
-    "export-mappa": (
-        "generic_search",
-        ("provincia", "comune", "foglio"),
-        {"tipo_catasto": "tipo_catasto", "particella": "particella"},
-    ),
-    "elaborato-planimetrico": (
-        "generic_search",
-        ("provincia", "comune", "foglio"),
-        {"tipo_catasto": "tipo_catasto", "particella": "particella"},
-    ),
-    "indirizzo": ("generic_search", ("provincia", "comune", "indirizzo"), {"tipo_catasto": "tipo_catasto"}),
-    "partita": ("generic_search", ("provincia", "comune", "partita"), {"tipo_catasto": "tipo_catasto"}),
-    "nota": (
-        "generic_search",
-        ("provincia", "numero_nota"),
-        {"anno_nota": "anno_nota", "tipo_catasto": "tipo_catasto"},
-    ),
-    "mappa": ("generic_search", ("provincia", "comune", "foglio"), {"tipo_catasto": "tipo_catasto"}),
-    "visura-storica": (
-        "generic_search",
-        ("provincia", "comune", "foglio", "particella"),
-        {"tipo_catasto": "tipo_catasto", "subalterno": "subalterno", "sezione": "sezione"},
-    ),
-    # provincia is required by the API; use NAZIONALE for a nationwide subject search
-    "soggetto-documento": (
-        "generic_search",
-        ("provincia", "codice_fiscale"),
-        {"tipo_catasto": "tipo_catasto", "vista": "vista"},
-    ),
-    "soggetto-immobili": (
-        "generic_search",
-        ("provincia", "codice_fiscale"),
-        {"tipo_catasto": "tipo_catasto", "con_intestati": "con_intestati", "azienda": "azienda"},
-    ),
-    "ispezioni": (
-        "generic_search",
-        ("provincia", "comune"),
-        {"tipo_catasto": "tipo_catasto", "foglio": "foglio", "particella": "particella"},
-    ),
-}
-
-
 @query_app.command()
 def batch(
     input_file: str = typer.Option(..., "--input", "-I", help="CSV file with query rows"),
@@ -1711,7 +1065,7 @@ def batch(
         "search",
         "--command",
         "-c",
-        help="Query type: search, intestati, soggetto, azienda, elenco, indirizzo, partita, nota, mappa, export-mappa, elaborato-planimetrico, ispezioni (or 'auto' to read from CSV 'command' column)",
+        help="Query command (any `sister query` single-step command) or 'auto' to read it from the CSV 'command' column",
     ),
     wait: bool = typer.Option(False, "--wait", "-w", help="Wait for each result before submitting the next"),
     output_dir: Optional[str] = typer.Option(None, "--output-dir", "-O", help="Directory — writes one JSON per row"),
@@ -1724,19 +1078,9 @@ def batch(
     Supports all query types. Use --command to set the type for all rows,
     or add a 'command' column in the CSV for per-row dispatch.
 
-    \b
-    Required columns depend on command type:
-      search:     provincia, comune, foglio, particella [,tipo_catasto, subalterno]
-      intestati:  provincia, comune, foglio, particella, tipo_catasto [,subalterno]
-      soggetto:   codice_fiscale [,tipo_catasto, provincia]
-      azienda:    identificativo [,tipo_catasto, provincia]
-      elenco:     provincia, comune [,tipo_catasto, foglio]
-      export-mappa / elaborato-planimetrico: provincia, comune, foglio [,tipo_catasto, particella]
-      indirizzo:  provincia, comune, indirizzo [,tipo_catasto]
-      partita:    provincia, comune, partita [,tipo_catasto]
-      nota:       provincia, numero_nota [,anno_nota, tipo_catasto]
-      mappa:      provincia, comune, foglio [,tipo_catasto]
-      ispezioni:  provincia, comune [,tipo_catasto, foglio, particella]
+    The columns are the parameters of the command (see ``sister query <command> --help``, the same inputs
+    as the SISTER form); columns that are not parameters of the command are ignored, so a CSV can carry
+    extra metadata. Missing required parameters are reported per row.
 
     \b
     Example CSV (search):
@@ -1794,9 +1138,9 @@ def batch(
             for key in ("source_files", "scope_note")
             if row.get(key)
         }
-        dispatcher_info = _BATCH_DISPATCHERS.get(cmd)
+        spec = get_query_form(cmd)
 
-        if not dispatcher_info:
+        if spec is None:
             console.print(f"  [red]({i}/{len(rows)}) Unknown command: {cmd}[/red]")
             err_count += 1
             all_results.append(
@@ -1804,32 +1148,21 @@ def batch(
             )
             continue
 
-        method_name, required_fields, extra_mapping = dispatcher_info
-        missing = [f for f in required_fields if f not in row]
-        if missing:
-            console.print(f"  [red]({i}/{len(rows)}) [{cmd}] Missing fields: {', '.join(missing)}[/red]")
+        # the CSV columns that are parameters of the query (anything else is row metadata)
+        params = {name: row[name] for name in param_names(spec.command) if name in row}
+        try:
+            validate_params(spec.command, params)
+        except ValueError as e:
+            console.print(f"  [red]({i}/{len(rows)}) [{cmd}] {e}[/red]")
             err_count += 1
-            all_results.append(
-                {"row": i, "command": cmd, **input_metadata, "status": "error", "error": f"Missing: {missing}"}
-            )
+            all_results.append({"row": i, "command": cmd, **input_metadata, "status": "error", "error": str(e)})
             continue
 
         label = f"[{cmd}] " + " ".join(f"{k}={v}" for k, v in list(row.items())[:4])
         console.print(f"\n[dim]({i}/{len(rows)})[/dim] {label}")
 
-        # Build kwargs for the client method
-        kwargs = {f: row[f] for f in required_fields}
-        for csv_key, method_key in extra_mapping.items():
-            if csv_key in row:
-                kwargs[method_key] = row[csv_key]
-
-        # For generic_search, inject search_type
-        if method_name == "generic_search":
-            kwargs["search_type"] = cmd
-
         try:
-            method = getattr(client, method_name)
-            result = asyncio.run(method(**kwargs))
+            result = asyncio.run(client.submit(spec.command, params, force=force))
         except VisuraAPIError as e:
             console.print(f"  [red]Submit failed: HTTP {e.status_code}: {e.detail}[/red]")
             err_count += 1
@@ -1913,24 +1246,9 @@ def queries():
     table.add_column("Endpoint", style="white")
     table.add_column("Description")
 
-    rows = [
-        ("query search", "POST", "/visura", "Submit immobili search (Fase 1)"),
-        ("query intestati", "POST", "/visura/intestati", "Submit owners lookup (Fase 2)"),
-        ("query soggetto", "POST", "/visura/soggetto", "National search by codice fiscale"),
-        ("query azienda", "POST", "/visura/persona-giuridica", "Search by P.IVA or company name"),
-        ("query elenco", "POST", "/visura/elenco-immobili", "List all properties in a comune"),
-        ("query indirizzo", "POST", "/visura/indirizzo", "Search by street address"),
-        ("query partita", "POST", "/visura/partita", "Search by partita catastale"),
-        ("query nota", "POST", "/visura/nota", "Search by annotation/note"),
-        ("query mappa", "POST", "/visura/mappa", "View cadastral map data"),
-        ("query export-mappa", "POST", "/visura/export-mappa", "Export cadastral map"),
-        ("query originali", "POST", "/visura/originali", "Original registration records"),
-        ("query fiduciali", "POST", "/visura/fiduciali", "Survey reference points"),
-        ("query ispezioni", "POST", "/visura/ispezioni", "Property inspection records"),
-        ("query ispezioni-cartacee", "POST", "/visura/ispezioni-cart", "Paper inspection records"),
-        ("query elaborato-planimetrico", "POST", "/visura/elaborato-planimetrico", "Planimetric document (ELPL)"),
-        ("query riepilogo", "POST", "/visura/riepilogo-visure", "SISTER query history"),
-        ("query richieste-sister", "POST", "/visura/richieste", "SISTER pending requests"),
+    # one row per single-step query, straight from the spec that also generates the commands
+    rows = [(f"query {form.command}", "POST", form.path, form.summary) for form in QUERY_FORMS.values()]
+    rows += [
         ("query workflow", "—", "search → intestati", "Full two-phase: immobili + intestati"),
         ("query batch", "POST", "/visura (×N)", "Batch search from CSV file"),
         ("get", "GET", "/visura/{request_id}", "Poll for a single result"),

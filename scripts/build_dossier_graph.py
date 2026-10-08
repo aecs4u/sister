@@ -40,7 +40,10 @@ load_dotenv(ROOT.parent / ".env", override=False)
 
 BASE_URL = os.getenv("SISTER_URL", "http://localhost:8025")
 API_KEY = os.getenv("VISURA_API_KEY") or os.getenv("API_KEY", "")
-GRAPHS_DIR = Path(os.getenv("SISTER_DOSSIER_GRAPHS_DIR") or Path(os.getenv("SISTER_FILES_BASE", ROOT / "data")).parent / "dossier_graphs")
+GRAPHS_DIR = Path(
+    os.getenv("SISTER_DOSSIER_GRAPHS_DIR")
+    or Path(os.getenv("SISTER_FILES_BASE", ROOT / "data")).parent / "dossier_graphs"
+)
 
 ID_RE = re.compile(r"^(?:[A-Z0-9]{16}|\d{11})$")
 POLL_SECONDS = 3
@@ -138,7 +141,18 @@ class Graph:
     def add_property(self, row: dict) -> str:
         key = property_key(row)
         node = self.nodes.setdefault(key, {"type": "property", "id": key})
-        for field in ("Catasto", "Ubicazione", "Foglio", "Particella", "Sub", "Classamento", "Classe", "Consistenza", "Rendita", "Partita"):
+        for field in (
+            "Catasto",
+            "Ubicazione",
+            "Foglio",
+            "Particella",
+            "Sub",
+            "Classamento",
+            "Classe",
+            "Consistenza",
+            "Rendita",
+            "Partita",
+        ):
             if row.get(field):
                 node[field] = row[field]
         node["provincia"] = row.get("provincia") or node.get("provincia", "")
@@ -256,7 +270,9 @@ def main() -> int:
     parser.add_argument("--resume", type=Path, help="graph JSON to continue")
     parser.add_argument("--out", type=Path, help="graph JSON to write (default: new file in the graphs folder)")
     parser.add_argument("--max-depth", type=int, default=0, help="stop expanding beyond this depth (0 = no limit)")
-    parser.add_argument("--max-nodes", type=int, default=0, help="stop when the graph has this many nodes (0 = no limit)")
+    parser.add_argument(
+        "--max-nodes", type=int, default=0, help="stop when the graph has this many nodes (0 = no limit)"
+    )
     parser.add_argument("--retry-errors", action="store_true", help="re-queue ids whose expansion failed earlier")
     parser.add_argument("--max-requests", type=int, default=300, help="portal requests in this run (resumable)")
     args = parser.parse_args()

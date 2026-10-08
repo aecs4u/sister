@@ -15,6 +15,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional
 
+from .models import WORKFLOW_PRESETS
+
 
 @dataclass
 class EndpointParam:
@@ -26,6 +28,8 @@ class EndpointParam:
     help_text: Optional[str] = None
     example: Optional[str] = None
     options: Optional[list[tuple[str, str]]] = None
+    # ids of the endpoints that take this parameter (the form shows it only for those)
+    endpoints: tuple[str, ...] = ()
 
 
 @dataclass
@@ -310,6 +314,25 @@ SINGLE_STEP_GROUPS: list[FormGroup] = [
             ),
         ],
         default_endpoint_id="indirizzo",
+    ),
+    FormGroup(
+        id="nota-search",
+        name="Note Search",
+        description="Search the formalities of a nota (Ricerca per nota).",
+        icon="fa-file-signature",
+        color="secondary",
+        category="single",
+        params=[],  # generated from the CLI command, see generate_single_step_params()
+        endpoints=[
+            EndpointOption(
+                id="nota",
+                name="Note Search",
+                path="/visura/nota",
+                method="POST",
+                description="Find properties by nota number and year",
+            ),
+        ],
+        default_endpoint_id="nota",
     ),
     FormGroup(
         id="partita-search",
@@ -622,339 +645,161 @@ _WORKFLOW_CONFIRM = EndpointParam(
     help_text="WARNING: Setting to Yes will automatically confirm paid service costs.",
 )
 
+_WORKFLOW_CODICE_FISCALE = EndpointParam(
+    name="codice_fiscale",
+    label="Codice Fiscale",
+    placeholder="e.g. RSSMRI85E28H501E",
+    example="RSSMRI85E28H501E",
+)
+
+_WORKFLOW_IDENTIFICATIVO = EndpointParam(
+    name="identificativo",
+    label="P.IVA / Company",
+    placeholder="e.g. 02471840997",
+    example="02471840997",
+)
+
+_WORKFLOW_ADDRESS = EndpointParam(
+    name="indirizzo",
+    label="Address",
+    placeholder="e.g. VIA ROMA",
+    help_text="Street name (partial match supported)",
+    example="VIA ROMA",
+)
+
+_WORKFLOW_MAX_PAID_STEPS = EndpointParam(
+    name="max_paid_steps",
+    label="Max Paid Steps",
+    placeholder="3",
+    input_type="text",
+    required=False,
+    help_text="Maximum number of paid ispezione ipotecaria invocations (default: 3)",
+)
+
+_WORKFLOW_HISTORY = EndpointParam(
+    name="include_history",
+    label="Include Historical Records",
+    placeholder="",
+    input_type="select",
+    required=False,
+    options=[("false", "No"), ("true", "Yes — include notes and paper inspections")],
+)
+
+_WORKFLOW_NUMERO_NOTA = EndpointParam(
+    name="numero_nota",
+    label="Note Number",
+    placeholder="Optional; used by historical note lookup",
+    required=False,
+)
+
+_WORKFLOW_PORTFOLIO_CF = EndpointParam(
+    name="codice_fiscale",
+    label="Person's Codice Fiscale",
+    placeholder="e.g. RSSMRI85E28H501E",
+    required=False,
+    example="RSSMRI85E28H501E",
+)
+
+_WORKFLOW_PORTFOLIO_COMPANY = EndpointParam(
+    name="identificativo",
+    label="Company P.IVA / Name",
+    placeholder="e.g. 02471840997",
+    required=False,
+    example="02471840997",
+)
+
+_WORKFLOW_PROPERTY_PARAMS = (_PROVINCIA, _COMUNE, _FOGLIO, _PARTICELLA, _TIPO_CATASTO)
+_WORKFLOW_ENTITY_PARAMS = (_TIPO_CATASTO_TFE, _PROVINCIA_OPT)
+_WORKFLOW_DEPTH_PARAMS = (_WORKFLOW_DEPTH,)
+_WORKFLOW_PAID_PARAMS = (_WORKFLOW_DEPTH, _WORKFLOW_PAID, _WORKFLOW_CONFIRM)
+
+# Preset execution and step descriptions come from aecs4u_workflow.models.
+# This table contains only the web-specific labels, styling, and input fields.
+_WORKFLOW_FORM_SPECS = {
+    "due-diligence": {
+        "name": "Due Diligence",
+        "icon": "fa-file-contract",
+        "color": "primary",
+        "description": "Parcel investigation. Depth selects standard or full multi-hop checks; history can be added when needed.",
+        "flowchart": "due-diligence",
+        "params": (
+            *_WORKFLOW_PROPERTY_PARAMS,
+            _SEZIONE,
+            _SEZIONE_URBANA,
+            _WORKFLOW_HISTORY,
+            _WORKFLOW_NUMERO_NOTA,
+            *_WORKFLOW_PAID_PARAMS,
+            _WORKFLOW_MAX_PAID_STEPS,
+        ),
+    },
+    "portfolio": {
+        "name": "Portfolio Investigation",
+        "icon": "fa-search-dollar",
+        "color": "info",
+        "description": "Search a person's or company's properties, then expand owners and portfolios by depth.",
+        "flowchart": "patrimonio",
+        "params": (
+            _WORKFLOW_PORTFOLIO_CF,
+            _WORKFLOW_PORTFOLIO_COMPANY,
+            *_WORKFLOW_ENTITY_PARAMS,
+            *_WORKFLOW_PAID_PARAMS,
+            _WORKFLOW_MAX_PAID_STEPS,
+        ),
+    },
+    "fondiario": {
+        "name": "Land Survey",
+        "icon": "fa-mountain",
+        "color": "success",
+        "params": (_PROVINCIA, _COMUNE, _FOGLIO_OPT, _TIPO_CATASTO_TF, *_WORKFLOW_DEPTH_PARAMS),
+    },
+    "indirizzo": {
+        "name": "Address Lookup",
+        "icon": "fa-map-marker-alt",
+        "color": "danger",
+        "params": (_PROVINCIA, _COMUNE, _WORKFLOW_ADDRESS, _TIPO_CATASTO, *_WORKFLOW_DEPTH_PARAMS),
+    },
+    "cross-reference": {
+        "name": "Cross-Reference",
+        "icon": "fa-exchange-alt",
+        "color": "dark",
+        "params": (
+            _WORKFLOW_CODICE_FISCALE,
+            _WORKFLOW_IDENTIFICATIVO,
+            *_WORKFLOW_ENTITY_PARAMS,
+            *_WORKFLOW_DEPTH_PARAMS,
+        ),
+    },
+}
+
+
+def _workflow_form_group(preset: str, spec: dict) -> FormGroup:
+    """Build the web form for a shared workflow preset."""
+    description = spec.get("description") or WORKFLOW_PRESETS[preset]["description"]
+    endpoint_id = f"workflow-{preset}"
+    return FormGroup(
+        id=f"wf-{preset}",
+        name=spec["name"],
+        description=description,
+        icon=spec["icon"],
+        color=spec["color"],
+        category="workflow",
+        flowchart=spec.get("flowchart", preset),
+        params=[_PRESET_HIDDEN(preset), *spec["params"]],
+        endpoints=[
+            EndpointOption(
+                id=endpoint_id,
+                name=spec["name"],
+                path="/visura/workflow",
+                method="POST",
+                description=description,
+            )
+        ],
+        default_endpoint_id=endpoint_id,
+    )
+
+
 WORKFLOW_GROUPS: list[FormGroup] = [
-    FormGroup(
-        id="wf-due-diligence",
-        name="Due Diligence",
-        description="Real estate due diligence: search → intestati → ispezioni → elaborato planimetrico. Optional: owner expansion, ipotecaria.",
-        icon="fa-file-contract",
-        color="primary",
-        category="workflow",
-        flowchart="due-diligence",
-        params=[
-            _PRESET_HIDDEN("due-diligence"),
-            _PROVINCIA,
-            _COMUNE,
-            _FOGLIO,
-            _PARTICELLA,
-            _TIPO_CATASTO,
-            _SEZIONE,
-            _SEZIONE_URBANA,
-            _WORKFLOW_DEPTH,
-            _WORKFLOW_PAID,
-            _WORKFLOW_CONFIRM,
-        ],
-        endpoints=[
-            EndpointOption(
-                id="workflow-due-diligence",
-                name="Due Diligence",
-                path="/visura/workflow",
-                method="POST",
-                description="search → intestati → ispezioni → elaborato planimetrico",
-            )
-        ],
-        default_endpoint_id="workflow-due-diligence",
-    ),
-    FormGroup(
-        id="wf-patrimonio",
-        name="Asset Investigation",
-        description="Asset investigation: soggetto → drill-down intestati → address lookup. Optional: owner expansion, ipotecaria.",
-        icon="fa-search-dollar",
-        color="info",
-        category="workflow",
-        flowchart="patrimonio",
-        params=[
-            _PRESET_HIDDEN("patrimonio"),
-            EndpointParam(
-                name="codice_fiscale",
-                label="Codice Fiscale",
-                placeholder="e.g. RSSMRI85E28H501E",
-                example="RSSMRI85E28H501E",
-            ),
-            _TIPO_CATASTO_TFE,
-            _PROVINCIA_OPT,
-            _WORKFLOW_DEPTH,
-            _WORKFLOW_PAID,
-            _WORKFLOW_CONFIRM,
-        ],
-        endpoints=[
-            EndpointOption(
-                id="workflow-patrimonio",
-                name="Asset Investigation",
-                path="/visura/workflow",
-                method="POST",
-                description="soggetto → drill-down intestati per property",
-            )
-        ],
-        default_endpoint_id="workflow-patrimonio",
-    ),
-    FormGroup(
-        id="wf-fondiario",
-        name="Land Survey",
-        description="Land survey: elenco → mappa → export mappa → fiduciali → originali → elaborato planimetrico.",
-        icon="fa-mountain",
-        color="success",
-        category="workflow",
-        flowchart="fondiario",
-        params=[_PRESET_HIDDEN("fondiario"), _PROVINCIA, _COMUNE, _FOGLIO_OPT, _TIPO_CATASTO_TF, _WORKFLOW_DEPTH],
-        endpoints=[
-            EndpointOption(
-                id="workflow-fondiario",
-                name="Land Survey",
-                path="/visura/workflow",
-                method="POST",
-                description="elenco → mappa → export mappa → fiduciali → originali → elaborato",
-            )
-        ],
-        default_endpoint_id="workflow-fondiario",
-    ),
-    FormGroup(
-        id="wf-aziendale",
-        name="Corporate Audit",
-        description="Corporate audit: azienda → drill-down intestati → address lookup. Optional: owner expansion, ipotecaria.",
-        icon="fa-briefcase",
-        color="warning",
-        category="workflow",
-        flowchart="aziendale",
-        params=[
-            _PRESET_HIDDEN("aziendale"),
-            EndpointParam(
-                name="identificativo", label="P.IVA / Company", placeholder="e.g. 02471840997", example="02471840997"
-            ),
-            _TIPO_CATASTO_TFE,
-            _PROVINCIA_OPT,
-            _WORKFLOW_DEPTH,
-            _WORKFLOW_PAID,
-            _WORKFLOW_CONFIRM,
-        ],
-        endpoints=[
-            EndpointOption(
-                id="workflow-aziendale",
-                name="Corporate Audit",
-                path="/visura/workflow",
-                method="POST",
-                description="azienda → drill-down intestati per property",
-            )
-        ],
-        default_endpoint_id="workflow-aziendale",
-    ),
-    FormGroup(
-        id="wf-storico",
-        name="Parcel History",
-        description="Parcel history: search → intestati → nota → ispezioni → originali → elaborato planimetrico. Optional: owner expansion, ipotecaria.",
-        icon="fa-history",
-        color="dark",
-        category="workflow",
-        flowchart="storico",
-        params=[
-            _PRESET_HIDDEN("storico"),
-            _PROVINCIA,
-            _COMUNE,
-            _FOGLIO,
-            _PARTICELLA,
-            _TIPO_CATASTO,
-            _WORKFLOW_DEPTH,
-            _WORKFLOW_PAID,
-            _WORKFLOW_CONFIRM,
-        ],
-        endpoints=[
-            EndpointOption(
-                id="workflow-storico",
-                name="Parcel History",
-                path="/visura/workflow",
-                method="POST",
-                description="search → intestati → nota → ispezioni → originali → elaborato",
-            )
-        ],
-        default_endpoint_id="workflow-storico",
-    ),
-    FormGroup(
-        id="wf-indirizzo",
-        name="Address Lookup",
-        description="Address lookup: indirizzo → search → intestati. Optional: owner expansion.",
-        icon="fa-map-marker-alt",
-        color="danger",
-        category="workflow",
-        flowchart="indirizzo",
-        params=[
-            _PRESET_HIDDEN("indirizzo"),
-            _PROVINCIA,
-            _COMUNE,
-            EndpointParam(
-                name="indirizzo",
-                label="Address",
-                placeholder="e.g. VIA ROMA",
-                help_text="Street name (partial match supported)",
-                example="VIA ROMA",
-            ),
-            _TIPO_CATASTO,
-            _WORKFLOW_DEPTH,
-        ],
-        endpoints=[
-            EndpointOption(
-                id="workflow-indirizzo",
-                name="Address Lookup",
-                path="/visura/workflow",
-                method="POST",
-                description="indirizzo → search → intestati",
-            )
-        ],
-        default_endpoint_id="workflow-indirizzo",
-    ),
-    FormGroup(
-        id="wf-cross-reference",
-        name="Cross-Reference",
-        description="Cross-reference: compare person + company property overlap.",
-        icon="fa-exchange-alt",
-        color="dark",
-        category="workflow",
-        flowchart="cross-reference",
-        params=[
-            _PRESET_HIDDEN("cross-reference"),
-            EndpointParam(
-                name="codice_fiscale",
-                label="Codice Fiscale",
-                placeholder="e.g. RSSMRI85E28H501E",
-                example="RSSMRI85E28H501E",
-            ),
-            EndpointParam(
-                name="identificativo", label="P.IVA / Company", placeholder="e.g. 02471840997", example="02471840997"
-            ),
-            _TIPO_CATASTO_TFE,
-            _PROVINCIA_OPT,
-            _WORKFLOW_DEPTH,
-        ],
-        endpoints=[
-            EndpointOption(
-                id="workflow-cross-reference",
-                name="Cross-Reference",
-                path="/visura/workflow",
-                method="POST",
-                description="soggetto + azienda → cross-property overlap",
-            )
-        ],
-        default_endpoint_id="workflow-cross-reference",
-    ),
-    # --- Multi-hop (full depth) presets ---
-    FormGroup(
-        id="wf-full-due-diligence",
-        name="Full Due Diligence",
-        description="Multi-hop: seed parcel → owners → portfolios → ranked history → encumbrances → risk scoring.",
-        icon="fa-project-diagram",
-        color="primary",
-        category="workflow",
-        flowchart="full-due-diligence",
-        params=[
-            _PRESET_HIDDEN("full-due-diligence"),
-            _PROVINCIA,
-            _COMUNE,
-            _FOGLIO,
-            _PARTICELLA,
-            _TIPO_CATASTO,
-            _SEZIONE,
-            _SEZIONE_URBANA,
-            _WORKFLOW_DEPTH,
-            _WORKFLOW_PAID,
-            _WORKFLOW_CONFIRM,
-            EndpointParam(
-                name="max_paid_steps",
-                label="Max Paid Steps",
-                placeholder="3",
-                input_type="text",
-                required=False,
-                help_text="Maximum number of paid ispezione ipotecaria invocations (default: 3)",
-            ),
-        ],
-        endpoints=[
-            EndpointOption(
-                id="workflow-full-due-diligence",
-                name="Full Due Diligence",
-                path="/visura/workflow",
-                method="POST",
-                description="seed → owners → portfolios → history → encumbrances → risk",
-            )
-        ],
-        default_endpoint_id="workflow-full-due-diligence",
-    ),
-    FormGroup(
-        id="wf-full-patrimonio",
-        name="Full Portfolio Investigation",
-        description="Multi-hop: soggetto → drill-down → owners → portfolios → history → encumbrances → risk scoring.",
-        icon="fa-project-diagram",
-        color="info",
-        category="workflow",
-        flowchart="full-patrimonio",
-        params=[
-            _PRESET_HIDDEN("full-patrimonio"),
-            EndpointParam(
-                name="codice_fiscale",
-                label="Codice Fiscale",
-                placeholder="e.g. RSSMRI85E28H501E",
-                example="RSSMRI85E28H501E",
-            ),
-            _TIPO_CATASTO_TFE,
-            _PROVINCIA_OPT,
-            _WORKFLOW_DEPTH,
-            _WORKFLOW_PAID,
-            _WORKFLOW_CONFIRM,
-            EndpointParam(
-                name="max_paid_steps",
-                label="Max Paid Steps",
-                placeholder="3",
-                input_type="text",
-                required=False,
-                help_text="Maximum number of paid ispezione ipotecaria invocations (default: 3)",
-            ),
-        ],
-        endpoints=[
-            EndpointOption(
-                id="workflow-full-patrimonio",
-                name="Full Portfolio Investigation",
-                path="/visura/workflow",
-                method="POST",
-                description="soggetto → drill → owners → portfolios → history → risk",
-            )
-        ],
-        default_endpoint_id="workflow-full-patrimonio",
-    ),
-    FormGroup(
-        id="wf-full-aziendale",
-        name="Full Corporate Audit",
-        description="Multi-hop: azienda → drill-down → owners → portfolios → history → encumbrances → risk scoring.",
-        icon="fa-project-diagram",
-        color="warning",
-        category="workflow",
-        flowchart="full-aziendale",
-        params=[
-            _PRESET_HIDDEN("full-aziendale"),
-            EndpointParam(
-                name="identificativo", label="P.IVA / Company", placeholder="e.g. 02471840997", example="02471840997"
-            ),
-            _TIPO_CATASTO_TFE,
-            _PROVINCIA_OPT,
-            _WORKFLOW_DEPTH,
-            _WORKFLOW_PAID,
-            _WORKFLOW_CONFIRM,
-            EndpointParam(
-                name="max_paid_steps",
-                label="Max Paid Steps",
-                placeholder="3",
-                input_type="text",
-                required=False,
-                help_text="Maximum number of paid ispezione ipotecaria invocations (default: 3)",
-            ),
-        ],
-        endpoints=[
-            EndpointOption(
-                id="workflow-full-aziendale",
-                name="Full Corporate Audit",
-                path="/visura/workflow",
-                method="POST",
-                description="azienda → drill → owners → portfolios → history → risk",
-            )
-        ],
-        default_endpoint_id="workflow-full-aziendale",
-    ),
+    _workflow_form_group(preset, spec) for preset, spec in _WORKFLOW_FORM_SPECS.items()
 ]
 
 
@@ -965,13 +810,85 @@ WORKFLOW_GROUPS: list[FormGroup] = [
 FORM_GROUPS: list[FormGroup] = SINGLE_STEP_GROUPS + WORKFLOW_GROUPS
 
 
+# ---------------------------------------------------------------------------
+# Single-step parameters: generated from the CLI commands
+# ---------------------------------------------------------------------------
+
+_CATASTO_OPTIONS = [("", "—"), ("T", "Terreni (T)"), ("F", "Fabbricati (F)"), ("E", "Both (E)")]
+_generated = False
+
+
+def _web_param(fld, required: bool, endpoint_id: str) -> EndpointParam:
+    label = fld.param.replace("_", " ").capitalize()
+    options = None
+    input_type = "text"
+    if fld.param == "tipo_catasto":
+        input_type, options = "select", _CATASTO_OPTIONS
+    elif fld.kind in ("select", "radio") and fld.choices:
+        input_type, options = "select", [("", "—")] + [(key, key) for key in fld.choices]
+    elif fld.kind == "checkbox":
+        input_type, options = "select", [("", "—"), ("true", "Yes"), ("false", "No")]
+    return EndpointParam(
+        name=fld.param,
+        label=label,
+        placeholder=fld.help or label,
+        required=required,
+        input_type=input_type,
+        help_text=fld.help or None,
+        options=options,
+        endpoints=(endpoint_id,),
+    )
+
+
+def generate_single_step_params() -> None:
+    """Fill the parameters of every single-step group from the query specs (``sister.query_forms``).
+
+    The spec is the single source: ``sister query <command>`` is generated from it too, so the web form
+    and the CLI offer exactly the same inputs, with the same required ones.
+    """
+    global _generated
+    if _generated:
+        return
+    from .query_forms import QUERY_FORMS, command_for_path
+
+    for group in SINGLE_STEP_GROUPS:
+        merged: dict[str, EndpointParam] = {}
+        for endpoint in group.endpoints:
+            spec = QUERY_FORMS.get(command_for_path(endpoint.path) or "")
+            if spec is None:
+                continue  # e.g. ispezione ipotecaria (paid): its form is defined by hand above
+            seen: set[str] = set()
+            # required parameters first, then the form inputs in portal order
+            leading = [*spec.required, *(name for group in spec.required_any for name in group)]
+            ordered = sorted(
+                spec.fields, key=lambda f: leading.index(f.param) if f.param in leading else len(leading)
+            )
+            for fld in ordered:
+                if fld.param in seen:
+                    continue
+                seen.add(fld.param)
+                param = _web_param(fld, fld.param in spec.required, endpoint.id)
+                if param.name in merged:
+                    old = merged[param.name]
+                    merged[param.name] = EndpointParam(
+                        **{**old.__dict__, "endpoints": old.endpoints + param.endpoints, "required": old.required and param.required}
+                    )
+                else:
+                    merged[param.name] = param
+        if merged:
+            group.params = list(merged.values())
+    _generated = True
+
+
 def get_available_form_groups() -> list[FormGroup]:
     """Return form groups that are available."""
+    generate_single_step_params()
     return [fg for fg in FORM_GROUPS if fg.available]
 
 
 def get_single_step_groups() -> list[FormGroup]:
     """Return single-step form groups."""
+    generate_single_step_params()
     return [fg for fg in FORM_GROUPS if fg.available and fg.category == "single"]
 
 
@@ -982,11 +899,13 @@ def get_workflow_groups() -> list[FormGroup]:
 
 def get_form_group_by_id(group_id: str) -> Optional[FormGroup]:
     """Find a form group by ID."""
+    generate_single_step_params()
     return next((fg for fg in FORM_GROUPS if fg.id == group_id), None)
 
 
 def get_endpoint_by_id(endpoint_id: str) -> Optional[EndpointOption]:
     """Find an endpoint across all form groups."""
+    generate_single_step_params()
     for fg in FORM_GROUPS:
         for ep in fg.endpoints:
             if ep.id == endpoint_id:

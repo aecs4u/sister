@@ -1,0 +1,18 @@
+{
+  "query": "nota",
+  "outcome": "form-rejected",
+  "request": {
+    "provincia": "Ravenna",
+    "numero_nota": "1",
+    "anno_nota": "2020",
+    "tipo_catasto": "F"
+  },
+  "response": {
+    "request_id": "nota_fixture",
+    "tipo_catasto": "F",
+    "status": "error",
+    "data": null,
+    "error": "SISTER ha rifiutato il modulo: Il campo Tipo Nota è obbligatorio.",
+    "timestamp": "2026-10-06T00:00:00"
+  }
+}

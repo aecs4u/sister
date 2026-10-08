@@ -147,6 +147,7 @@ class VisuraClient:
         tipo_catasto: str | None = None,
         sezione: str | None = None,
         subalterno: str | None = None,
+        form_fields: dict[str, Any] | None = None,
         force: bool = False,
     ) -> dict:
         """Submit an immobili search (POST /visura)."""
@@ -162,6 +163,8 @@ class VisuraClient:
             payload["sezione"] = sezione
         if subalterno:
             payload["subalterno"] = subalterno
+        if form_fields:
+            payload["form_fields"] = form_fields
         return await self._request("POST", "/visura", json=payload, force=force)
 
     async def intestati(
@@ -174,6 +177,7 @@ class VisuraClient:
         tipo_catasto: str,
         subalterno: str | None = None,
         sezione: str | None = None,
+        form_fields: dict[str, Any] | None = None,
         force: bool = False,
     ) -> dict:
         """Submit an owners (intestati) lookup (POST /visura/intestati)."""
@@ -188,24 +192,29 @@ class VisuraClient:
             payload["subalterno"] = subalterno
         if sezione:
             payload["sezione"] = sezione
+        if form_fields:
+            payload["form_fields"] = form_fields
         return await self._request("POST", "/visura/intestati", json=payload, force=force)
 
     async def soggetto(
         self,
         *,
-        codice_fiscale: str,
+        codice_fiscale: str | None = None,
         tipo_catasto: str | None = None,
         provincia: str | None = None,
+        form_fields: dict[str, Any] | None = None,
         force: bool = False,
     ) -> dict:
         """Submit a national subject search by codice fiscale (POST /visura/soggetto)."""
-        payload: dict[str, Any] = {
-            "codice_fiscale": codice_fiscale.upper(),
-        }
+        payload: dict[str, Any] = {}
+        if codice_fiscale:
+            payload["codice_fiscale"] = codice_fiscale.upper()
         if tipo_catasto:
             payload["tipo_catasto"] = tipo_catasto.upper()
         if provincia:
             payload["provincia"] = provincia
+        if form_fields:
+            payload["form_fields"] = form_fields
         return await self._request("POST", "/visura/soggetto", json=payload, force=force)
 
     async def persona_giuridica(
@@ -214,6 +223,7 @@ class VisuraClient:
         identificativo: str,
         tipo_catasto: str | None = None,
         provincia: str | None = None,
+        form_fields: dict[str, Any] | None = None,
         force: bool = False,
     ) -> dict:
         """Submit a legal entity search by P.IVA or name (POST /visura/persona-giuridica)."""
@@ -222,6 +232,8 @@ class VisuraClient:
             payload["tipo_catasto"] = tipo_catasto.upper()
         if provincia:
             payload["provincia"] = provincia
+        if form_fields:
+            payload["form_fields"] = form_fields
         return await self._request("POST", "/visura/persona-giuridica", json=payload, force=force)
 
     async def elenco_immobili(
@@ -232,6 +244,7 @@ class VisuraClient:
         tipo_catasto: str | None = None,
         foglio: str | None = None,
         sezione: str | None = None,
+        form_fields: dict[str, Any] | None = None,
         force: bool = False,
     ) -> dict:
         """Submit a property listing request (POST /visura/elenco-immobili)."""
@@ -242,6 +255,8 @@ class VisuraClient:
             payload["foglio"] = foglio
         if sezione:
             payload["sezione"] = sezione
+        if form_fields:
+            payload["form_fields"] = form_fields
         return await self._request("POST", "/visura/elenco-immobili", json=payload, force=force)
 
     async def workflow(
@@ -258,6 +273,8 @@ class VisuraClient:
         codice_fiscale: str | None = None,
         identificativo: str | None = None,
         indirizzo: str | None = None,
+        numero_nota: str | None = None,
+        include_history: bool = False,
         auto_confirm: bool = False,
         include_paid_steps: bool = False,
         depth: str = "standard",
@@ -299,6 +316,10 @@ class VisuraClient:
             payload["identificativo"] = identificativo
         if indirizzo:
             payload["indirizzo"] = indirizzo
+        if numero_nota:
+            payload["numero_nota"] = numero_nota
+        if include_history:
+            payload["include_history"] = True
         if auto_confirm:
             payload["auto_confirm"] = True
         if include_paid_steps:
@@ -369,6 +390,45 @@ class VisuraClient:
     async def get_result(self, request_id: str) -> dict:
         """Poll a single request result (GET /visura/{request_id})."""
         return await self._request("GET", f"/visura/{request_id}")
+
+    async def submit(self, command: str, params: dict[str, Any], *, force: bool = False) -> dict:
+        """Submit one single-step query given its ``sister query`` command name and its parameters.
+
+        The single entry point shared by the CLI, the CLI batch and the ``/web/forms`` page. The query is
+        described by ``sister.query_forms``: its dedicated arguments go to the matching client method, every
+        other parameter is an input of the SISTER form and travels as ``form_fields`` (or as a query
+        parameter for the generic search types). Raises ``ValueError`` for an unknown command or
+        missing/invalid parameters.
+        """
+        from .query_forms import get_query_form, validate_params
+
+        spec = get_query_form(command)
+        if spec is None:
+            raise ValueError(f"comando sconosciuto: {command}")
+        params = {k: v for k, v in params.items() if v not in (None, "")}
+        validate_params(spec.command, params)
+        if spec.method != "generic_search":
+            known = {name: params.pop(name) for name in spec.dedicated if name in params}
+            return await getattr(self, spec.method)(**known, form_fields=params or None, force=force)
+        provincia = params.pop("provincia", None) or "NAZIONALE"
+        comune = params.pop("comune", None)
+        tipo_catasto = params.pop("tipo_catasto", None)
+        return await self.generic_search(
+            search_type=spec.search_type,
+            provincia=provincia,
+            comune=comune,
+            tipo_catasto=tipo_catasto,
+            force=force,
+            **params,
+        )
+
+    @staticmethod
+    def request_ids(result: dict) -> list[str]:
+        """The request ids of a submission response (``request_ids`` for multi-request, else ``request_id``)."""
+        ids = result.get("request_ids")
+        if ids:
+            return list(ids)
+        return [result["request_id"]] if result.get("request_id") else []
 
     async def wait_for_result(
         self,

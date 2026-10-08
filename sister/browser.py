@@ -1,6 +1,7 @@
 """Browser lifecycle manager — wraps aecs4u-auth for SISTER portal automation."""
 
 import asyncio
+import functools
 import inspect
 import logging
 from contextlib import suppress
@@ -26,6 +27,7 @@ from .models import (
 )
 from .utils import (
     extract_all_sezioni,
+    form_context,
     run_consultazione_richieste,
     run_elaborato_planimetrico,
     run_elenco_immobili,
@@ -100,6 +102,22 @@ def _dispatcher_kwargs(dispatcher, request: GenericSisterRequest) -> dict:
     if any(p.kind is inspect.Parameter.VAR_KEYWORD for p in accepted.values()):
         return kwargs
     return {key: value for key, value in kwargs.items() if key in accepted}
+
+
+def _with_form_fields(query):
+    """Expose the request's SISTER form inputs (``form_fields`` / generic ``params``) to the form filler."""
+
+    def decorate(method):
+        @functools.wraps(method)
+        async def wrapper(self, request, *args, **kwargs):
+            name = query(request) if callable(query) else query
+            fields = getattr(request, "form_fields", None) or getattr(request, "params", None) or {}
+            with form_context(name, fields):
+                return await method(self, request, *args, **kwargs)
+
+        return wrapper
+
+    return decorate
 
 
 class BrowserManager:
@@ -233,6 +251,7 @@ class BrowserManager:
     # Execution methods — each acquires the page lock and runs a command
     # ------------------------------------------------------------------
 
+    @_with_form_fields("search")
     async def esegui_visura(self, request: VisuraRequest) -> VisuraResponse:
         try:
             async with self._page_lock:
@@ -274,6 +293,7 @@ class BrowserManager:
                 error=str(e),
             )
 
+    @_with_form_fields("intestati")
     async def esegui_visura_intestati(self, request: VisuraIntestatiRequest) -> VisuraResponse:
         try:
             async with self._page_lock:
@@ -289,7 +309,6 @@ class BrowserManager:
                     extract_intestati=True,
                     subalterno=request.subunit,
                     sezione_urbana=request.urban_section,
-                    target_index=getattr(request, "target_index", None),
                 )
             return VisuraResponse(
                 request_id=request.request_id,
@@ -306,11 +325,17 @@ class BrowserManager:
                 error=str(e),
             )
 
+    @_with_form_fields("soggetto")
     async def esegui_visura_soggetto(self, request: VisuraSoggettoRequest) -> VisuraResponse:
         try:
             async with self._page_lock:
                 page = await self._get_authenticated_page()
-                result = await run_visura_soggetto(page, request.fiscal_code)
+                result = await run_visura_soggetto(
+                    page,
+                    request.fiscal_code,
+                    tipo_catasto=request.cadastre_type or "E",
+                    provincia=request.province,
+                )
             return VisuraResponse(
                 request_id=request.request_id,
                 success=True,
@@ -326,6 +351,7 @@ class BrowserManager:
                 error=str(e),
             )
 
+    @_with_form_fields("azienda")
     async def esegui_visura_persona_giuridica(self, request: VisuraPersonaGiuridicaRequest) -> VisuraResponse:
         try:
             async with self._page_lock:
@@ -351,6 +377,7 @@ class BrowserManager:
                 error=str(e),
             )
 
+    @_with_form_fields("elenco")
     async def esegui_elenco_immobili(self, request: ElencoImmobiliRequest) -> VisuraResponse:
         try:
             async with self._page_lock:
@@ -360,6 +387,7 @@ class BrowserManager:
                     tipo_catasto=request.cadastre_type,
                     provincia=request.province,
                     comune=request.municipality,
+                    foglio=getattr(request, "sheet", None),
                     sezione=getattr(request, "section", None),
                 )
             return VisuraResponse(
@@ -377,6 +405,7 @@ class BrowserManager:
                 error=str(e),
             )
 
+    @_with_form_fields(lambda request: request.search_type)
     async def esegui_generic(self, request: GenericSisterRequest) -> VisuraResponse:
         try:
             async with self._page_lock:

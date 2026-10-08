@@ -1,4 +1,5 @@
 {% extends "_base.html" %}
+{% from "parts/_related_links.html" import related_pages %}
 {% block page_title %}Glossario{% endblock %}
 
 {% block extra_css %}
@@ -22,6 +23,17 @@
 
 <div class="container-fluid">
     <div class="row">
+        <details class="col-12 d-lg-none mb-3">
+            <summary class="btn btn-outline-primary w-100 text-start"><i class="fas fa-list me-2"></i>Indice del glossario</summary>
+            <div class="list-group list-group-flush small border rounded mt-2">
+                <a href="#tipi-documento" class="list-group-item list-group-item-action">Tipi di documento</a>
+                <a href="#sottotipi-visura" class="list-group-item list-group-item-action">Sottotipi di visura</a>
+                <a href="#formati-file" class="list-group-item list-group-item-action">Formati file</a>
+                <a href="#dossier" class="list-group-item list-group-item-action">Dossier</a>
+                <a href="#catasto" class="list-group-item list-group-item-action">Termini catastali</a>
+                <a href="#ipotecario" class="list-group-item list-group-item-action">Termini ipotecari</a>
+            </div>
+        </details>
         {# TOC #}
         <div class="col-lg-3 d-none d-lg-block">
             <div class="card border-0 shadow-sm sticky-top" style="top:1rem">
@@ -291,6 +303,12 @@
                 </div>
             </div>
 
+            {{ related_pages("Esplora i dati nell'app", [
+                ("/web/documents", "Documenti", "Consulta i file catastali indicizzati e le loro schede.", "fa-folder-tree"),
+                ("/web/dossiers", "Dossier", "Apri le risposte complete salvate per le query.", "fa-folder-open"),
+                ("/web/results", "Risultati", "Trova una richiesta e segui i riferimenti ai documenti.", "fa-database"),
+                ("/web/guide", "Guida utente", "Rivedi quando usare le diverse consultazioni.", "fa-book-open")
+            ], "I termini del glossario rimandano alle aree in cui puoi consultare i dati corrispondenti.") }}
         </div>{# /col #}
     </div>{# /row #}
 </div>

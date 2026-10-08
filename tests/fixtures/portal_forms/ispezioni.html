@@ -1,0 +1,207 @@
+<form name="RicercaIMMForm" method="post" action="/Ispezioni/iimm/RicercaIMM.do"> 
+	
+		<fieldset>
+			<legend class="blue">Ricerca per immobili </legend>
+
+			<table>
+				<tbody><tr>
+					<td><label for="denomComune">Comune: </label></td>
+
+					<td colspan="3"><select name="denomComune"><option value=""></option>
+						
+						
+							<option value="A191#RAALFONSINE##">ALFONSINE (RA)</option>
+						
+							<option value="A547#RABAGNACAVALLO##">BAGNACAVALLO (RA)</option>
+						
+							<option value="A551#RABAGNARA DI ROMAGNA##">BAGNARA DI ROMAGNA (RA)</option>
+						
+							<option value="B188#RABRISIGHELLA##">BRISIGHELLA (RA)</option>
+						
+							<option value="B982#RACASOLA VALSENIO##">CASOLA VALSENIO (RA)</option>
+						
+							<option value="C065#RACASTEL BOLOGNESE##">CASTEL BOLOGNESE (RA)</option>
+						
+							<option value="C553#RACERVIA##">CERVIA (RA)</option>
+						
+							<option value="C963#RACONSELICE##">CONSELICE (RA)</option>
+						
+							<option value="D121#RACOTIGNOLA##">COTIGNOLA (RA)</option>
+						
+							<option value="D458#RAFAENZA##">FAENZA (RA)</option>
+						
+							<option value="D829#RAFUSIGNANO##">FUSIGNANO (RA)</option>
+						
+							<option value="E730#RALUGO##">LUGO (RA)</option>
+						
+							<option value="F029#RAMASSA LOMBARDA##">MASSA LOMBARDA (RA)</option>
+						
+							<option value="H199#RARAVENNA##">RAVENNA (RA)</option>
+						
+							<option value="H302#RARIOLO TERME##">RIOLO TERME (RA)</option>
+						
+							<option value="H642#RARUSSI##">RUSSI (RA)</option>
+						
+							<option value="I196#RASANT'AGATA SUL SANTERNO##">SANT'AGATA SUL SANTERNO (RA)</option>
+						
+							<option value="I787#RASOLAROLO##">SOLAROLO (RA)</option></select> <!-- <input type="submit" name="selcomune" value="Visualizza i comuni"> -->
+					</td>
+				</tr><tr>
+					<td><label for="TIPO_CATASTO">Catasto: </label></td>
+
+					<td><select name="tipoCatasto" size="1" style="tipoCatasto"><option value="">-</option>
+						<option value="T">Terreni</option>
+						<option value="F">Fabbricati</option></select></td>
+					<!--  <td><label for="SEZ_CENS">Sezione censuaria: </label></td>
+					<td><input type="text" name="sezCens" maxlength="1" size="1" value=""></td>
+				 		-->
+					<td>
+					<input type="submit" name="selSezione" value="scegli la sezione" style="">				 	
+											</td>
+											<td>
+												<label for="SEZ_CENS">Sezione censuaria: </label> 
+												<select name="sezCens"><option value=""></option></select>
+											</td>
+				
+				</tr>
+			</tbody></table>
+
+			<hr>
+			<table>
+				<tbody><tr>
+					<td><input type="radio" name="tipoIdentificativo" value="0" checked="checked" style=""></td>
+					<td colspan="10"><strong>Identificativo definitivo</strong></td>
+				</tr>
+				<tr>
+					<td></td>
+					<td><label for="SEZ_URB">Sezione urbana: </label></td>
+					<td><input type="text" name="sezUrb" maxlength="3" size="3" value="" style=""></td>
+					<td><label for="FOGLIO">Foglio: </label></td>
+					<td><input type="text" name="foglio" maxlength="4" size="4" value="" style=""></td>
+					<td><label for="PART1">Particella: </label></td>
+					<td colspan="2"><input type="text" name="particella1" maxlength="5" size="5" value="" style="">&nbsp;<input type="text" name="particella2" maxlength="4" size="4" value="" style=""></td>
+					<td><label for="SUB1">Subalterno: </label></td>
+					<td><input type="text" name="subalterno1" maxlength="4" size="4" value="" style=""></td>
+					<td></td>
+				</tr>
+				<tr>
+					<td colspan="11"></td>
+				</tr>
+				<tr>
+					<td><input type="radio" name="tipoIdentificativo" value="1" style=""></td>
+					<td colspan="11"><strong>Identificativo provvisorio</strong></td>
+				</tr>
+				<tr>
+					<td></td>
+					<td><label for="TIPO_DENUNCIA">Tipo denuncia: </label></td>
+
+					<td colspan="3"><select name="tipoDenuncia" size="1" style="tipoDenucia"><option value="">-</option>
+						<option value="P">Protocollo</option>
+						<option value="S">Scheda</option>
+						<option value="V">Denuncia di variazione</option></select></td>
+
+					<td><label for="NUM1">Numero: </label></td>
+					<td><input type="text" name="numero1" maxlength="9" size="9" value="" style="">&nbsp;&nbsp;</td>
+					<td></td>
+					<td><label for="ANNO">Anno: </label></td>
+					<td><input type="text" name="anno" maxlength="4" size="4" value="" style="">&nbsp;</td>
+
+				</tr>
+			</tbody></table>
+
+			</fieldset>
+
+		
+<fieldset>
+ <legend class="blue"><strong>Restrizione per dati delle formalità </strong></legend> 
+
+	  
+	  <table>
+	  <tbody><tr>
+	   <td></td>
+	   <td> 
+	   <label for="dataInizio">Dal: </label>
+						<noscript>
+							<input type="text" name="dataInizio" maxlength="10" size="10" value="" id="dataInizio">						
+						 </noscript>
+						 
+						<input type="text" name="dataInizio" value="" size="10" id="dataInizio" maxlength="10" style=""><input type="image" src="/img/calendario.jpg" onclick="return showCalendar('dataInizio', '%d/%m/%Y');" <label="" for="dataFine" style="">   al:  
+						<noscript>
+							<input type="text" name="dataFine" maxlength="10" size="10" value="" id="dataFine">						
+						 </noscript>
+						 
+						<input type="text" name="dataFine" value="" size="10" id="dataFine" maxlength="10" style=""><input type="image" src="/img/calendario.jpg" onclick="return showCalendar('dataFine', '%d/%m/%Y');" <="" td="" style=""> 
+		</td></tr>
+		<tr>
+	    	<td></td>
+			<td> <label for="TRASCRIZIONI">Trascrizioni: </label> 
+			    <input type="checkbox" name="TRASCRIZIONI" value="T" checked="checked" style="">
+			&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; <label for="ISCRIZIONI">Iscrizioni:
+			</label> <input type="checkbox" name="ISCRIZIONI" value="I" checked="checked" style="">
+			&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; <label for="ANNOTAZIONI">Annotazioni:
+			</label> <input type="checkbox" name="ANNOTAZIONI" value="A" checked="checked" style=""> </td> 
+		</tr>
+
+		<tr>
+			<td></td>
+			<td>
+				<input type="checkbox" name="escl_ipo_canc" value="1" style="">
+				<label for="escl_ipo_canc">Esclusione ipoteche non rinnovate o cancellate</label>
+			</td>
+			<td>	
+				<input type="checkbox" name="escl_trascr_norinn" value="1" style="">
+			    <label for="escl_trascr_norinn">Esclusione trascrizioni non rinnovate</label>  	
+			</td>
+		</tr> 
+
+	</tbody></table>
+			
+
+	 
+</fieldset>
+
+
+
+<div class="indentato">
+    <table class="cento">
+			 <tbody><tr><td colspan="2"><fieldset><legend class="blue"><strong>Richiedente </strong></legend> <br>
+
+			
+	
+	   <label for="trascrizioniF">Richiesta effettuata per conto di: </label> <input type="text" name="richiedente" maxlength="16" size="20" value="" style=""></fieldset></td> 
+	  				</tr>
+				</tbody></table>
+			</div>
+			
+			
+			
+			
+				
+			<table class="cento">
+			<tbody><tr>
+			<td><fieldset><legend class="blue">Motivazione</legend> <br>				
+				
+				
+					<label for="listaM">Motivo: </label><input type="text" name="motivoText" maxlength="80" size="40" value="Esplorazione" style="">
+					
+				
+				</fieldset>
+			</td> 
+			</tr>
+		</tbody></table>
+		
+			
+						
+
+		
+			
+<div>
+		
+		<input type="submit" value="Ricerca" style="">
+		<input type="submit" name="cancel" value="Pulisci" onclick="bCancel=true;" style="">
+		
+		<input type="submit" name="cancel" value="Ultima Ricerca" onclick="bCancel=true;" style="">
+		
+</div>
+		
+</form>

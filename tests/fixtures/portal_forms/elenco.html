@@ -1,0 +1,309 @@
+<form name="ElencoImmForm" method="post" action="/Visure/elencoImm/ElencoImm.do">
+<fieldset>
+<legend class="blue">Elenco immobili &nbsp;</legend> 
+		<table>
+		
+			<tbody><tr>
+			 
+			
+			  <td><label for="tipoCatasto">Catasto:</label></td>
+			  <td colspan="2"><select name="tipoCatasto"><option value="T">Terreni</option>
+				<option value="F">Fabbricati</option></select></td></tr><tr>
+			 
+			  
+			 
+	<td> <label for="comuneCat">Comune: </label></td>
+				<td>
+						
+														
+				 		<select name="comuneCat"><option value="A191#ALFONSINE#0#0">
+								ALFONSINE
+								</option>
+							
+							
+							
+						
+							
+							
+							
+							 
+							 	<option value="A547#BAGNACAVALLO#0#0">
+								BAGNACAVALLO
+								</option>
+							
+							
+							
+						
+							
+							
+							
+							 
+							 	<option value="A551#BAGNARA DI ROMAGNA#0#0">
+								BAGNARA DI ROMAGNA
+								</option>
+							
+							
+							
+						
+							
+							
+							
+							 
+							 	<option value="B188#BRISIGHELLA#0#0">
+								BRISIGHELLA
+								</option>
+							
+							
+							
+						
+							
+							
+							
+							 
+							 	<option value="B982#CASOLA VALSENIO#0#0">
+								CASOLA VALSENIO
+								</option>
+							
+							
+							
+						
+							
+							
+							
+							 
+							 	<option value="C065#CASTEL BOLOGNESE#0#0">
+								CASTEL BOLOGNESE
+								</option>
+							
+							
+							
+						
+							
+							
+							
+							 
+							 	<option value="C553#CERVIA#0#0">
+								CERVIA
+								</option>
+							
+							
+							
+						
+							
+							
+							
+							 
+							 	<option value="C963#CONSELICE#0#0">
+								CONSELICE
+								</option>
+							
+							
+							
+						
+							
+							
+							
+							 
+							 	<option value="D121#COTIGNOLA#0#0">
+								COTIGNOLA
+								</option>
+							
+							
+							
+						
+							
+							
+							
+							 
+							 	<option value="D458#FAENZA#0#0">
+								FAENZA
+								</option>
+							
+							
+							
+						
+							
+							
+							
+							 
+							 	<option value="D829#FUSIGNANO#0#0">
+								FUSIGNANO
+								</option>
+							
+							
+							
+						
+							
+							
+							
+							 
+							 	<option value="E730#LUGO#0#0">
+								LUGO
+								</option>
+							
+							
+							
+						
+							
+							
+							
+							 
+							 	<option value="F029#MASSA LOMBARDA#0#0">
+								MASSA LOMBARDA
+								</option>
+							
+							
+							
+						
+							
+							
+							
+							 
+							 	<option value="H199#RAVENNA#3#0">
+								RAVENNA
+								</option>
+							
+							
+							
+						
+							
+							
+							
+							 
+							 	<option value="H302#RIOLO TERME#0#0">
+								RIOLO TERME
+								</option>
+							
+							
+							
+						
+							
+							
+							
+							 
+							 	<option value="H642#RUSSI#0#0">
+								RUSSI
+								</option>
+							
+							
+							
+						
+							
+							
+							
+							 
+							 	<option value="I196#SANT'AGATA SUL SANTERNO#0#0">
+								SANT'AGATA SUL SANTERNO
+								</option>
+							
+							
+							
+						
+							
+							
+							
+							 
+							 	<option value="I787#SOLAROLO#0#0">
+								SOLAROLO
+								</option></select></td>
+				<td>	<input type="submit" name="selSezione" value="scegli la sezione" style="">				 	
+				</td>
+			<td><label for="sezione">Sezione: </label>
+                			<select name="sezione"></select>					
+				
+				</td> 
+				
+					
+			</tr>
+		</tbody></table>
+	
+	
+	
+<br>	<table>
+		<tbody><tr>
+		
+	 	<td colspan="2"><strong>Identificativo catastale</strong> </td></tr>
+	 	<tr><td><label for="sezUrb">Sezione urbana: </label></td>
+		<td><input type="text" name="sezUrb" maxlength="3" size="3" value="" style=""></td>	
+	 	   <td> <label for="foglio">Foglio: </label>
+		   <input type="text" name="foglio" size="5" value="" style=""> </td>
+		  
+		   <td> <label for="particella" title="inserire il carattere * per visualizzare le strade pubbliche oppure il carattere / per visualizzare le acque esenti da estimo">Particella: </label> 
+		   <input type="text" name="numero" size="5" value="" title="inserire il carattere * per visualizzare le strade pubbliche oppure il carattere / per visualizzare le acque esenti da estimo" style="">
+		   <input type="text" name="denominatore" size="5" value="" style="">  
+		   </td>
+		  
+		
+	  <td> <label for="subanno">Subalterno da: </label> </td>
+		 <td>  <input type="text" name="subannoDal" size="5" value="" style=""></td>
+		    <td>  a:<input type="text" name="subannoAl" size="5" value="" style="">  </td>
+		  
+		</tr> 
+		</tbody></table>
+		<br>
+		<table>
+		<tbody><tr><td><input type="submit" name="selPartita" value="Partita e Categoria" style="">	</td>
+		
+		</tr>
+<tr>
+	 <td><label for="partSpeciale">Partita speciale: </label></td>
+				
+						
+				 <td>		
+				 		<select name="partSpeciale"></select>
+					
+				</td>
+				<td> <label for="categoria">Categoria: </label>
+				</td>
+				<td> 		
+				 		<select name="categoria"></select>
+					
+				</td>
+
+</tr>
+		
+		
+	 	
+		</tbody></table> 
+	
+				
+			
+			
+			<fieldset>
+				<legend class="blue">Richiedente</legend><br>
+				<label for="richiedente">Richiesta effettuata per conto di: </label> 
+				<input type="text" name="richiedente" maxlength="16" size="20" value="" style="">
+			
+			</fieldset>
+			
+			
+
+			
+			
+			
+			
+			<table class="cento">
+			<tbody><tr>
+			<td><fieldset><legend class="blue">Motivazione</legend> <br>
+				
+				
+					<label for="listaM">Motivo: </label><input type="text" name="motivoText" maxlength="250" size="40" value="Esplorazione" style="">
+					
+				</fieldset>
+			</td> 
+			</tr>
+		</tbody></table>
+		
+		
+			
+			<br> 
+		
+		
+</fieldset>
+		<div>
+			
+		    	<input type="submit" name="ricerca" value="Ricerca" style="">
+		    	<input type="submit" name="cancel" value="Pulisci" onclick="bCancel=true;" style="">
+			</div>
+           
+		</form>

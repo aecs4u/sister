@@ -42,9 +42,10 @@ downloads distinct.
 
 ## Source filename links
 
-The normalized file is stored in `SISTER_OUTPUTS_DIR/documents`. A symlink with
+The normalized file is stored in `SISTER_FILES_BASE` (the folder the web UI reads) when it is set, otherwise in
+`SISTER_OUTPUTS_DIR/documents`. A symlink with
 the original SISTER download name, usually `DOC_{id}.p7m`, is stored in the
-sibling `document_links` directory and points to the normalized file. Extracted
+`document_links` directory (`SISTER_DOCUMENT_LINKS_DIR`, default `<outputs>/document_links`) and points to the normalized file. Extracted
 XML files use the same normalized basename as their P7M; a matching
 `DOC_{id}.xml` source link points to that XML as well.
 

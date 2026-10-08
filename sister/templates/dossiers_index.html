@@ -1,4 +1,5 @@
 {% extends "_base.html" %}
+{% from "parts/_related_links.html" import related_pages %}
 {% from "_doc_macros.html" import jump_chips, query_section,
                                    query_subsection, dossier_card, doc_macros_js %}
 {% from "parts/_hero.html" import hero_section %}
@@ -107,6 +108,12 @@
     {% endfor %}
 
     {% endif %}
+    {{ related_pages("Collegamenti correlati", [
+        ("/web/results", "Risultati", "Cercare richieste eseguite e aprire le risposte.", "fa-database"),
+        ("/web/documents", "Documenti", "Consultare i file ufficiali associati alle risposte.", "fa-folder-tree"),
+        ("/web/forms", "Query Forms", "Avviare una nuova ricerca o un workflow.", "fa-clipboard-list"),
+        ("/web/glossary#dossier", "Glossario dossier", "Vedere la differenza tra dossier e documento.", "fa-book")
+    ]) }}
 </div>
 {% endblock %}
 

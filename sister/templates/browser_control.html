@@ -1,5 +1,6 @@
 {% extends "_base.html" %}
 {% from "parts/_hero.html" import hero_section %}
+{% from "parts/_related_links.html" import related_pages %}
 
 {% block page_title %}Browser Control{% endblock %}
 
@@ -123,6 +124,14 @@ Gestisci la sessione Playwright / autenticazione SISTER
 
 </div>{# /row #}
 </div>{# /container #}
+<div class="container-fluid">
+    {{ related_pages("Torna al lavoro", [
+        ("/web/forms", "Query Forms", "Invia una richiesta con la sessione attiva.", "fa-clipboard-list"),
+        ("/web/results", "Risultati", "Segui lo stato e apri le risposte salvate.", "fa-database"),
+        ("/web/guide", "Guida utente", "Consulta istruzioni e passaggi operativi.", "fa-book-open"),
+        ("/web/cheatsheet", "Cheat sheet", "Rivedi rapidamente i dati da preparare.", "fa-bolt")
+    ]) }}
+</div>
 {% endblock %}
 
 {% block extra_js %}

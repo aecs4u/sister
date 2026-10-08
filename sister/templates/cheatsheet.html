@@ -1,4 +1,5 @@
 {% extends "_base.html" %}
+{% from "parts/_related_links.html" import related_pages %}
 {% block page_title %}Cheat Sheet{% endblock %}
 
 {% block extra_css %}
@@ -220,5 +221,11 @@
         </div>
 
     </div>{# /row #}
+    {{ related_pages("Apri gli strumenti collegati", [
+        ("/web/forms", "Query Forms", "Compila una ricerca singola o un workflow.", "fa-clipboard-list"),
+        ("/web/results", "Risultati", "Filtra le richieste eseguite e consulta le risposte.", "fa-database"),
+        ("/web/guide#flussi", "Guida ai flussi", "Leggi le procedure complete per le attività comuni.", "fa-book-open"),
+        ("/web/glossary", "Glossario", "Chiarisci sigle, tipi di documento e termini catastali.", "fa-book")
+    ], "Usa questi collegamenti per passare dal promemoria all'attività o al riferimento di dettaglio.") }}
 </div>
 {% endblock %}

@@ -1,0 +1,73 @@
+{
+  "query": "indirizzo",
+  "outcome": "success",
+  "request": {
+    "provincia": "Ravenna",
+    "comune": "RAVENNA",
+    "indirizzo": "ALAMEIN",
+    "tipo_catasto": "F"
+  },
+  "response": {
+    "request_id": "indirizzo_fixture",
+    "tipo_catasto": "F",
+    "status": "completed",
+    "data": {
+      "provincia": "Ravenna",
+      "comune": "RAVENNA",
+      "indirizzo": "ALAMEIN",
+      "immobili": [
+        {
+          "": "",
+          "Foglio": "RA/103",
+          "Particella": "924",
+          "Sub": "",
+          "Indirizzo": "VIA EL ALAMEIN n. 5 Piano T-1 - 2",
+          "Zona cens": "001",
+          "Categoria": "A02",
+          "Classe": "02",
+          "Consistenza": "7,5 vani",
+          "Rendita": "",
+          "Partita": "",
+          "Altri Dati": "",
+          "indirizzo_trovato": "VIA EL ALAMEIN"
+        },
+        {
+          "": "",
+          "Foglio": "RA/103",
+          "Particella": "943",
+          "Sub": "1",
+          "Indirizzo": "VIA EL ALAMEIN n. 18 Piano T - 1",
+          "Zona cens": "001",
+          "Categoria": "A02",
+          "Classe": "01",
+          "Consistenza": "5,5 vani",
+          "Rendita": "",
+          "Partita": "0016290",
+          "Altri Dati": "",
+          "indirizzo_trovato": "VIA EL ALAMEIN"
+        },
+        {
+          "": "",
+          "Foglio": "RA/103",
+          "Particella": "943",
+          "Sub": "2",
+          "Indirizzo": "VIA EL ALAMEIN n. 18 Piano T - 1",
+          "Zona cens": "001",
+          "Categoria": "A02",
+          "Classe": "01",
+          "Consistenza": "4,5 vani",
+          "Rendita": "",
+          "Partita": "0020933",
+          "Altri Dati": "",
+          "indirizzo_trovato": "VIA EL ALAMEIN"
+        }
+      ],
+      "total_results": 78
+    },
+    "error": null,
+    "timestamp": "2026-10-06T00:00:00"
+  },
+  "trimmed_lists": {
+    "immobili": 78
+  }
+}

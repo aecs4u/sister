@@ -75,8 +75,10 @@ L'autenticazione SPID/CIE è gestita dal pacchetto [`aecs4u-auth`](https://githu
 - Se la particella non esiste nel catasto, il portale restituisce "NESSUNA CORRISPONDENZA TROVATA" e l'API ritorna una lista vuota con il campo `error` valorizzato.
 - Gli immobili con partita "Soppressa" vengono inclusi nei risultati ma senza intestati.
 - **`query mappa`** (EM): la pagina Mappa ha un layout form diverso dagli altri — il selettore del pulsante di invio non corrisponde. Necessita ispezione HTML.
-- **`query ispezioni`** / **`query ispezioni-cartacee`** (ISP/ISPCART): "Passa a Ispezioni" apre un modulo SISTER completamente diverso che richiede un flusso di navigazione dedicato.
-
+- **`query ispezioni`** / **`query ispezioni-cartacee`** (ISP/ISPCART): la navigazione verso il modulo Ispezioni è implementata, ma l'estrazione dei risultati non è verificata (ISP restituisce 0 righe pur registrando un numero di ispezione sul portale; ISPCART non è stata provata sul portale reale).
+- I moduli del portale rifiutano le richieste incomplete con un messaggio ("Il campo … è obbligatorio"): il servizio lo riporta come errore (`SISTER ha rifiutato il modulo: …`). Per i comuni con sezioni (es. Ravenna) servono `--sezione` in `export-mappa`/`originali`, `--particella` in `elaborato-planimetrico`, `--tipo-nota` in `nota`; `elenco` richiede una seconda limitazione oltre al foglio (il servizio elenca per gruppi di categorie).
+- Il CAPTCHA non viene mai risolto automaticamente e **non viene richiesto ogni volta**: quando compare, va inserito nella scheda SISTER (nuovo codice dopo un errore, max 5 tentativi); altrimenti la richiesta passa a `needs_human`.
+- Le richieste sono eseguite una alla volta sulla stessa pagina del portale; modificare file `.py` durante un'esecuzione riavvia il servizio e perde la richiesta in corso (vedi `docs/portal_session.md`).
 ---
 
 ## Architettura
@@ -245,6 +247,20 @@ RESPONSE_MAX_ITEMS=5000           # Massimo risultati in memoria
 RESPONSE_CLEANUP_INTERVAL_SECONDS=60 # Intervallo cleanup cache (secondi)
 ```
 
+### Sessione SISTER
+
+Il servizio **non esegue il login da solo**: si aggancia alla sessione SISTER già aperta in un Chrome condiviso
+(`BROWSER_CDP_ENDPOINT`). Prima di avviare le query:
+
+```bash
+../.venv/bin/python scripts/ade_login.py          # login (approvazione CIE) — lascia aperta la scheda SISTER
+../.venv/bin/python scripts/ade_login.py --close  # chiude una sessione rimasta aperta ("Utente già in sessione")
+```
+
+SISTER consente **una sola sessione per utente** e la chiude dopo circa 30 minuti; il riavvio/reload del servizio
+non fa logout. Dettagli, livelli di ufficio (Nazionale/Provincia) e risoluzione dei problemi:
+[`docs/portal_session.md`](docs/portal_session.md).
+
 ### Variabili server
 
 | Variabile | Obbligatoria | Default | Descrizione |
@@ -256,6 +272,10 @@ RESPONSE_CLEANUP_INTERVAL_SECONDS=60 # Intervallo cleanup cache (secondi)
 | `ADE_SPID_PROVIDER` | | `sielte` | Provider SPID: `sielte`, `aruba`, `poste`, `namirial` |
 | `ADE_OTP_SECRET` | | — | Secret TOTP base32 (per provider con OTP) |
 | `BROWSER_HEADLESS` | | `true` | Esegui browser in modalità headless |
+| `BROWSER_CDP_ENDPOINT` | | — | Chrome condiviso a cui agganciarsi (es. `http://localhost:9222`) |
+| `SISTER_FILES_BASE` | | `<outputs>/documents` | Cartella dei documenti scaricati (letta anche dalla web UI) |
+| `SISTER_DOCUMENT_LINKS_DIR` | | `<outputs>/document_links` | Collegamenti con i nomi originali di SISTER |
+| `SISTER_DOSSIER_GRAPHS_DIR` | | `dossier_graphs/` accanto ai documenti | Grafi proprietari ↔ immobili |
 | `BROWSER_MFA_TIMEOUT` | | `120` | Timeout in secondi per approvazione MFA |
 | `API_KEY` | | non impostata | Se impostata, richiede `X-API-Key` sugli endpoint operativi |
 | `LOG_LEVEL` | | `INFO` | Livello di log su console e file |
@@ -317,18 +337,22 @@ SISTER include un'interfaccia web accessibile al browser, basata su [`aecs4u-the
 
 ### Form di ricerca
 
-La pagina `/web/forms` include 8 gruppi di form:
+La pagina `/web/forms` ha un gruppo di form per ogni query single-step e per i workflow:
 
 1. **Property Search** — ricerca per foglio/particella + intestati
-2. **Person Search** — ricerca nazionale per codice fiscale
-3. **Company Search** — ricerca per P.IVA o denominazione
+2. **Person Search** — codice fiscale oppure cognome e dati di nascita
+3. **Company Search** — P.IVA o denominazione
 4. **Property List** — elenco immobili per comune
-5. **Address Search** — ricerca per indirizzo
-6. **Partita Search** — ricerca per partita catastale
+5. **Address Search**, **Partita Search**, **Note Search** — per indirizzo, partita, nota
+6. **Cadastral Map**, **Elaborato Planimetrico**, **Original Records**, **Inspections**, **Query Summary**
 7. **Workflow** — 10 preset con flowchart SVG interattivo (7 standard + 3 multi-hop: full-due-diligence, full-patrimonio, full-aziendale) e depth selector (light/standard/deep/full)
 8. **Batch Upload** — drop zone per CSV, JSON o XLSX con anteprima e validazione tabella
 
-I form inviano le richieste tramite proxy API (`POST /web/api/*`) e effettuano il polling dei risultati automaticamente.
+**Ogni input del form SISTER ha un parametro**: i parametri di ogni form sono generati dalla stessa definizione dei
+comandi CLI (`sister/query_forms.py`, vedi [`docs/query_forms.md`](docs/query_forms.md)) e sono mostrati solo per
+l'endpoint selezionato.
+
+I form inviano le richieste con lo stesso codice del CLI (`VisuraClient.submit`, tramite `POST /web/api/*`) ed effettuano il polling dei risultati automaticamente.
 
 ---
 
@@ -359,6 +383,11 @@ sister
 │   ├── fiduciali                      # Survey reference points
 │   ├── ispezioni                      # Inspection records (*)
 │   ├── ispezioni-cartacee             # Paper inspection records (*)
+│   ├── elaborato-planimetrico         # Planimetric document (ELPL)
+│   ├── riepilogo / richieste-sister   # SISTER query history / pending requests
+│   ├── visura-storica                 # Historical visura per immobile (Storica Analitica)
+│   ├── soggetto-documento             # Visura per Soggetto document (XML) of a persona fisica
+│   ├── soggetto-immobili              # Properties of a person/company (+ owners with --con-intestati)
 │   ├── workflow                       # Multi-phase with presets
 │   └── batch                          # Batch queries from CSV
 ├── get <request_id>                   # Poll a single result
@@ -407,6 +436,12 @@ uv run sister query intestati \
     -t T --wait
 ```
 
+Ogni comando `sister query <cmd>` ha **un'opzione per ogni input del form SISTER** corrispondente (vedi
+`sister query <cmd> --help`): oltre a provincia, comune, foglio… ci sono richiedente (`--richiedente`), motivo
+(`--motivo`), sezione, sezione urbana, categoria, tipo denuncia, formato mappa, ecc. I comandi sono generati da
+`sister/query_forms.py` ([`docs/query_forms.md`](docs/query_forms.md)); le richieste che richiedono documenti
+chiedono il CAPTCHA nella scheda SISTER.
+
 ### Ricerca soggetto (codice fiscale)
 
 ```bash
@@ -415,6 +450,12 @@ uv run sister query soggetto --cf RSSMRI85E28H501E --wait
 
 # Limitata a una provincia
 uv run sister query soggetto --cf RSSMRI85E28H501E -P Roma --wait -o soggetto.json
+
+# Per cognome e dati di nascita (invece del codice fiscale)
+uv run sister query soggetto --cognome ROSSI --nome MARIO --anno-nascita 1985 --wait
+
+# Immobili di una persona con gli intestati di ciascuno (nessun CAPTCHA)
+uv run sister query soggetto-immobili --cf RSSMRI85E28H501E -P NAZIONALE --con-intestati --wait
 ```
 
 ### Ricerca azienda (P.IVA o denominazione)
@@ -435,6 +476,9 @@ uv run sister query elenco -P Roma -C ROMA -t T --wait
 
 # Filtrato per foglio
 uv run sister query elenco -P Roma -C ROMA -F 100 --wait -o elenco.json
+
+# SISTER chiede un'altra limitazione oltre al foglio: senza --categoria elenca i gruppi A..F
+uv run sister query elenco -P Ravenna -C RAVENNA -F 103 -t F --categoria 'A%' --wait
 ```
 
 ### Altri tipi di ricerca

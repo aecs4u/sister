@@ -1,0 +1,108 @@
+<form name="RicercaNOTAForm" method="POST" action="/IspezioniCartacee/inota/RicercaNota.do">	
+	<fieldset>
+	 <legend class="blue">Dati della Nota</legend>
+			
+	<div class="indentato">
+			<br>
+		  
+			<!--<label for="TIPO_NOTA">Tipo Nota: </label>
+				-->
+				  
+					
+					<label for="TIPO_NOTA">Tipo Nota: </label>
+						<select name="tipoNota"><option value=""></option>
+						<option value="T">Trascrizioni</option>
+						<option value="I">Iscrizioni</option>
+						<option value="A">Annotazioni</option>
+						<option value="PA">Privilegi Agrari</option>
+						<option value="PS">Privilegi Speciali</option>
+						<option value="PM">Privilegi Minerari</option></select>
+						&nbsp;&nbsp;&nbsp;
+					
+					
+			
+			  <input type="radio" name="registro" tabindex="1" value="0" checked="checked" id="reg" style="">		
+				<label for="REG_PART">Registro Particolare n°: </label>
+				<input type="text" name="regPart" maxlength="6" size="6" value="" style="">&nbsp;&nbsp;
+				<input type="text" name="regPartBis" maxlength="3" size="3" value="" style="">&nbsp;&nbsp;&nbsp;
+				
+				
+				<label for="ANNO">Anno: </label>
+						<input type="text" name="annoNotaPart" maxlength="4" size="4" value="" style="">
+				
+			<!--
+					
+						<label for="ANNO">Anno: </label>
+						<input type="text" name="annoNotaPart" maxlength="4" size="4" value="">	
+					
+					
+				-->		
+				<br>
+			</div> <!-- fine indentazione-->
+			
+	<div class="indentato">		<br>	
+		
+	       <input type="radio" name="registro" tabindex="2" value="1" id="registro" style="">				
+		   <label for="REG_GEN">Registro Generale n°: </label>
+		   <input type="text" name="regGen" maxlength="6" size="6" value="" style="">&nbsp;&nbsp;&nbsp;
+		   <label for="ANNOG">Anno: </label>
+		   <input type="text" name="annoNotaGen" maxlength="4" size="4" value="" style="">	
+		  		
+	</div>
+	<div class="indentato">		<br>	
+	
+				
+					<label for="INF_AGGIUNTIVE">Informazioni aggiuntive per l'ufficio (es: numero volume, ecc.): </label>
+						<input type="text" name="informazioniAgg" maxlength="100" size="40" value="" style="">&nbsp;&nbsp;	
+					
+					
+						<input type="checkbox" name="esclAllegati" value="1" style="">
+						<label for="EsclAllegati">Con esclusione degli allegati</label>
+					
+					
+	</div>				
+</fieldset> 
+
+ <!-- fine restrizione nota-->
+
+			
+<div class="indentato">
+            <table class="cento">
+			 <tbody><tr><td><fieldset><legend class="blue">Richiedente </legend> <br>
+	 
+		
+			<label for="trascrizioniF">Richiesta
+			effettuata per conto di: </label> <input type="text" name="richiedente" maxlength="16" size="20" value="" style=""> </fieldset></td> 
+			<!-- fine richiedente indentato--> 
+			
+			<!-- fine richiedente -->
+			
+					</tr>
+				</tbody></table>
+			</div>				     
+		
+			
+			
+			
+			<table class="cento">
+			<tbody><tr>
+			<td><fieldset><legend class="blue">Motivazione</legend> <br>				
+				
+				
+					<label for="listaM">Motivo: </label><input type="text" name="motivoText" maxlength="80" size="40" value="Esplorazione" style="">
+					
+				
+				</fieldset>
+			</td> 
+			</tr>
+		</tbody></table>
+		
+			
+			
+			<p><!-- fine Riutilizzatore indentato--></p>
+			<div>
+		    	<input type="submit" name="ricerca" value="Ricerca Nota" style="">
+		    	<input type="submit" name="ricerca" value="Ricerca Titolo" style="">
+		    	<input type="submit" name="reset" value="Pulisci" style="">
+			</div>
+		</form>

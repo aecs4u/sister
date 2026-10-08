@@ -1,0 +1,39 @@
+{
+  "query": "soggetto",
+  "outcome": "success",
+  "request": {
+    "codice_fiscale": "TSTUSR00A01H501X",
+    "tipo_catasto": "E"
+  },
+  "response": {
+    "request_id": "soggetto_fixture",
+    "tipo_catasto": "E",
+    "status": "completed",
+    "data": {
+      "soggetto": "TSTUSR00A01H501X",
+      "immobili": [
+        {
+          "": "",
+          "Catasto": "F",
+          "Titolarità": "Proprieta' per 1/2",
+          "Ubicazione": "RAVENNA(RA) VIA EL ALAMEIN n. 2 Piano T-1",
+          "Foglio": "RA/103",
+          "Particella": "1714",
+          "Sub": "2",
+          "Classamento": "Zona 1 Cat.A/4",
+          "Classe": "04",
+          "Consistenza": "6 vani",
+          "Rendita": "Euro: 557,77",
+          "Partita": "",
+          "Altri Dati": "",
+          "provincia": "RA",
+          "provincia_nome": "RAVENNA",
+          "visImmSel": "634568#634568#F#RA/103#1714#H199##2# #RAVENNA"
+        }
+      ],
+      "total_results": 1
+    },
+    "error": null,
+    "timestamp": "2026-10-06T00:00:00"
+  }
+}

@@ -2,12 +2,13 @@
 {% from "components/index.html" import page_header, card %}
 {% from "components/job.html" import status_badge, response_summary %}
 {% from "macros/ui_base.html" import no_results %}
+{% from "parts/_related_links.html" import related_pages %}
 {% block page_title %}Workflows{% endblock %}
 
 {% block content %}
 <div class="container-fluid py-4">
     <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-4">
-        {{ page_header("Executed workflows", "Jobs, steps, and extracted responses", icon="fas fa-project-diagram text-primary", wrapper_class="mb-0") }}
+        {{ page_header("OpenData workflows", "Workflow runs recorded by the OpenData service", icon="fas fa-project-diagram text-primary", wrapper_class="mb-0") }}
         <div class="d-flex align-items-center gap-2">
             {% if status %}
             <a href="/web/workflows" class="btn btn-outline-secondary btn-sm"><i class="fas fa-times me-1"></i>Clear filter</a>
@@ -21,6 +22,13 @@
         <strong>Browser {{ auth_status.state }}:</strong> {{ auth_status.message }}
     </div>
     {% endif %}
+
+    <div class="alert alert-info border-0 shadow-sm mb-4">
+        <i class="fas fa-circle-info me-2"></i>
+        Multi-step workflows submitted in <a href="/web/forms">Query Forms</a> run through Sister and show their
+        streamed result in the form response panel. Use <a href="/web/results">Results</a> for saved requests and
+        <a href="/web/documents">Documents</a> for downloaded files.
+    </div>
 
     <!-- Status filter pills -->
     <div class="mb-4">
@@ -72,5 +80,11 @@
     {{ no_results("No executed workflows", "Start a workflow to see its steps and extracted response here.") }}
     <div class="text-center"><a href="/web/forms" class="btn btn-primary">Start a Workflow</a></div>
     {% endif %}
+    {{ related_pages("Continue with related pages", [
+        ("/web/forms", "Query Forms", "Start a single query or submit another multi-step workflow.", "fa-clipboard-list"),
+        ("/web/results?source=workflow", "OpenData workflow results", "Filter saved results to workflow requests.", "fa-database"),
+        ("/web/documents", "Documents", "Browse files downloaded by requests.", "fa-folder-tree"),
+        ("/web/guide#flussi", "User guide", "Review the workflows and preparation steps.", "fa-book-open")
+    ]) }}
 </div>
 {% endblock %}

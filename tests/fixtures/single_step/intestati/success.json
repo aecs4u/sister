@@ -1,0 +1,120 @@
+{
+  "query": "intestati",
+  "outcome": "success",
+  "request": {
+    "provincia": "Ravenna",
+    "comune": "RAVENNA",
+    "foglio": "103",
+    "particella": "1714",
+    "subalterno": "2",
+    "tipo_catasto": "F"
+  },
+  "response": {
+    "request_id": "intestati_fixture",
+    "tipo_catasto": "F",
+    "status": "completed",
+    "data": {
+      "immobili": [
+        {
+          "": "",
+          "Foglio": "RA/103",
+          "Particella": "1714",
+          "Sub": "2",
+          "Indirizzo": "VIA EL ALAMEIN n. 2 Piano T-1",
+          "Zona cens": "001",
+          "Categoria": "A04",
+          "Classe": "04",
+          "Consistenza": "6 vani",
+          "Rendita": "R.Euro:557,77",
+          "Partita": "",
+          "Altri Dati": ""
+        }
+      ],
+      "results": [
+        {
+          "result_index": 1,
+          "immobile": {
+            "": "",
+            "Foglio": "RA/103",
+            "Particella": "1714",
+            "Sub": "2",
+            "Indirizzo": "VIA EL ALAMEIN n. 2 Piano T-1",
+            "Zona cens": "001",
+            "Categoria": "A04",
+            "Classe": "04",
+            "Consistenza": "6 vani",
+            "Rendita": "R.Euro:557,77",
+            "Partita": "",
+            "Altri Dati": ""
+          },
+          "intestati": [
+            {
+              "": "",
+              "Nominativo o denominazione": "ROSSI ROSSI ROSSI a ROSSI (EE) il 01/01/1970",
+              "Codice fiscale": "TSTUSR00A01H501X",
+              "Titolarità": "Proprieta'",
+              "Quota": "1/2",
+              "Altri dati": ""
+            },
+            {
+              "": "",
+              "Nominativo o denominazione": "ROSSI ROSSI ROSSI a ROSSI (RA) il 01/01/1970",
+              "Codice fiscale": "TSTUSR01A01H501X",
+              "Titolarità": "Proprieta'",
+              "Quota": "1/2",
+              "Altri dati": ""
+            }
+          ]
+        }
+      ],
+      "total_results": 1,
+      "intestati": [
+        {
+          "": "",
+          "Nominativo o denominazione": "ROSSI ROSSI ROSSI a ROSSI (EE) il 01/01/1970",
+          "Codice fiscale": "TSTUSR00A01H501X",
+          "Titolarità": "Proprieta'",
+          "Quota": "1/2",
+          "Altri dati": ""
+        },
+        {
+          "": "",
+          "Nominativo o denominazione": "ROSSI ROSSI ROSSI a ROSSI (RA) il 01/01/1970",
+          "Codice fiscale": "TSTUSR01A01H501X",
+          "Titolarità": "Proprieta'",
+          "Quota": "1/2",
+          "Altri dati": ""
+        }
+      ],
+      "skipped_soppresso": 0,
+      "downloaded_pdfs": [
+        {
+          "filename": "vi_att_RA_FG103_PT1714_SUB2_T371547_2026.p7m",
+          "original_filename": "DOC_2061789020.p7m",
+          "path": "/srv/sister/documents/vi_att_RA_FG103_PT1714_SUB2_T371547_2026.p7m",
+          "file_format": "P7M",
+          "file_size": 5349,
+          "oggetto": "VISURA FG. 103 SEZ. URB. RA PART. 1714 SUB. 2 DI ROSSI",
+          "richiesta_del": "06/10/2026 20:10:50",
+          "id_richiesta": "2061789020",
+          "source_link": "/mnt/mobile/srv/sister/document_links/DOC_2061789020.p7m",
+          "extracted_path": "/srv/sister/documents/vi_att_RA_FG103_PT1714_SUB2_T371547_2026.xml"
+        },
+        {
+          "filename": "vs_att_TSTUSR00A01H501X_CF_T371512_2026.p7m",
+          "original_filename": "DOC_2061788971.p7m",
+          "path": "/srv/sister/documents/vs_att_TSTUSR00A01H501X_CF_T371512_2026.p7m",
+          "file_format": "P7M",
+          "file_size": 5514,
+          "oggetto": "VISURA ROSSI ROSSI",
+          "richiesta_del": "06/10/2026 20:10:28",
+          "id_richiesta": "2061788971",
+          "source_link": "/mnt/mobile/srv/sister/document_links/DOC_2061788971.p7m",
+          "extracted_path": "/srv/sister/documents/vs_att_TSTUSR00A01H501X_CF_T371512_2026.xml"
+        }
+      ]
+    },
+    "error": null,
+    "timestamp": "2026-10-06T00:00:00"
+  }
+}

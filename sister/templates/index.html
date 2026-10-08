@@ -46,10 +46,27 @@
                         <a href="/web/results" class="btn btn-outline-primary">
                             <i class="fas fa-database me-2"></i>Browse Results
                         </a>
+                        <a href="/web/documents" class="btn btn-outline-secondary">
+                            <i class="fas fa-folder-tree me-2"></i>Browse Documents
+                        </a>
+                        <a href="/web/dossiers" class="btn btn-outline-secondary">
+                            <i class="fas fa-folder-open me-2"></i>Browse Dossiers
+                        </a>
+                        <button type="button" id="retrieve-missing-pairs" class="btn btn-outline-success"
+                                {% if not auth_status or auth_status.state != 'ready' %}disabled{% endif %}>
+                            <i class="fas fa-file-circle-check me-2"></i>Retrieve missing pairs
+                        </button>
                         <a href="/docs" class="btn btn-outline-secondary" target="_blank">
                             <i class="fas fa-book me-2"></i>API Documentation
                         </a>
                     </div>
+                    <p class="small text-muted mt-3 mb-0">
+                        Finds free visure files missing a PDF or P7M counterpart, submits the needed requests,
+                        then downloads and indexes the available documents. Property requests use Storica Analitica.
+                        Solve any SISTER CAPTCHA in the browser while the batch runs.
+                    </p>
+                    <div id="missing-pairs-status" class="alert alert-info mt-3 mb-0 py-2" role="status"
+                         aria-live="polite" hidden></div>
             {% endcall %}
         </div>
         <div class="col-md-6">
@@ -80,4 +97,135 @@
         </div>
     </div>
 </div>
+{% endblock %}
+
+{% block extra_js %}
+{{ super() }}
+<script>
+(() => {
+    const button = document.getElementById('retrieve-missing-pairs');
+    const statusBox = document.getElementById('missing-pairs-status');
+    if (!button || !statusBox) return;
+
+    const startUrl = '/web/documents/retrieve-missing-pairs';
+    const statusUrl = `${startUrl}/status`;
+    const defaultLabel = button.textContent.trim();
+    let pollTimer = null;
+
+    function render(job) {
+        if (!job || job.status === 'idle') {
+            statusBox.hidden = true;
+            button.disabled = false;
+            button.innerHTML = '<i class="fas fa-file-circle-check me-2"></i>Retrieve missing pairs';
+            return;
+        }
+
+        const active = job.status === 'queued' || job.status === 'running';
+        button.disabled = active;
+        button.innerHTML = active
+            ? '<i class="fas fa-spinner fa-spin me-2"></i>Retrieving pairs…'
+            : '<i class="fas fa-file-circle-check me-2"></i>Retrieve missing pairs';
+        const hasWarning = job.error || ['partial', 'error', 'completed_with_errors', 'completed_with_gaps'].includes(job.status);
+        statusBox.className = `alert ${hasWarning ? 'alert-warning' : (active ? 'alert-info' : 'alert-success')} mt-3 mb-0 py-2`;
+        statusBox.hidden = false;
+
+        const lines = [];
+        if (job.message) lines.push(job.message);
+        else lines.push(`${job.missing_pair_count || 0} missing pairs found across ${job.request_count || 0} requests.`);
+        if (job.current) lines.push(`Current: ${job.current}`);
+        if (job.request_count) {
+            lines.push(`${job.processed_count || 0}/${job.request_count} processed; ${job.success_count || 0} succeeded; ${job.failed_count || 0} failed.`);
+        }
+        if (job.downloaded_count) lines.push(`${job.downloaded_count} document files downloaded and indexed.`);
+        if (job.remaining_pair_count !== undefined && !active) lines.push(`${job.remaining_pair_count} pairs still incomplete.`);
+        if (job.excluded_paid_count) lines.push(`${job.excluded_paid_count} paid documents excluded.`);
+        if (job.skipped_count) lines.push(`${job.skipped_count} unsupported files skipped.`);
+        if (job.error) lines.push(job.error);
+        statusBox.replaceChildren(document.createTextNode(lines.join(' ')));
+
+        if (job.remaining_pairs && job.remaining_pairs.length) {
+            const details = document.createElement('details');
+            details.className = 'mt-2';
+            const summary = document.createElement('summary');
+            const total = job.remaining_pair_count || job.remaining_pairs.length;
+            summary.textContent = `${active ? 'Files being checked' : 'Files still missing a pair'} (${total}${total > job.remaining_pairs.length ? ', first 100 shown' : ''})`;
+            details.appendChild(summary);
+            const list = document.createElement('ul');
+            list.className = 'mb-0 mt-1';
+            for (const pair of job.remaining_pairs) {
+                const item = document.createElement('li');
+                item.textContent = `${pair.stem}: missing ${(pair.missing_formats || []).join(', ')}`;
+                list.appendChild(item);
+            }
+            details.appendChild(list);
+            statusBox.appendChild(details);
+        }
+        if (job.skipped_files && job.skipped_files.length) {
+            const details = document.createElement('details');
+            details.className = 'mt-2';
+            const summary = document.createElement('summary');
+            summary.textContent = `Skipped files (${job.skipped_count || job.skipped_files.length})`;
+            details.appendChild(summary);
+            const list = document.createElement('ul');
+            list.className = 'mb-0 mt-1';
+            for (const skipped of job.skipped_files) {
+                const item = document.createElement('li');
+                item.textContent = `${skipped.stem}: ${skipped.reason}`;
+                list.appendChild(item);
+            }
+            details.appendChild(list);
+            statusBox.appendChild(details);
+        }
+
+        if (active) {
+            clearTimeout(pollTimer);
+            pollTimer = setTimeout(pollStatus, 2500);
+        }
+    }
+
+    async function pollStatus() {
+        try {
+            const response = await fetch(statusUrl, {headers: {'Accept': 'application/json'}});
+            render(await response.json());
+        } catch (error) {
+            statusBox.hidden = false;
+            statusBox.className = 'alert alert-warning mt-3 mb-0 py-2';
+            statusBox.textContent = `Unable to read batch status: ${error.message}`;
+        }
+    }
+
+    button.addEventListener('click', async () => {
+        button.disabled = true;
+        button.innerHTML = '<i class="fas fa-spinner fa-spin me-2"></i>Scanning documents…';
+        statusBox.hidden = true;
+        try {
+            const response = await fetch(startUrl, {
+                method: 'POST',
+                headers: {'Accept': 'application/json'}
+            });
+            const result = await response.json();
+            if (!response.ok) {
+                if (result.job) render(result.job);
+                else {
+                    statusBox.hidden = false;
+                    statusBox.className = 'alert alert-warning mt-3 mb-0 py-2';
+                    statusBox.textContent = result.error || 'Could not start the missing-pair batch.';
+                    button.disabled = false;
+                    button.textContent = defaultLabel;
+                }
+                return;
+            }
+            render(result);
+        } catch (error) {
+            statusBox.hidden = false;
+            statusBox.className = 'alert alert-danger mt-3 mb-0 py-2';
+            statusBox.textContent = `Could not start the missing-pair batch: ${error.message}`;
+            button.disabled = false;
+            button.textContent = defaultLabel;
+        }
+    });
+
+    pollStatus();
+})();
+</script>
 {% endblock %}

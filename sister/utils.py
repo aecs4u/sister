@@ -1,4 +1,6 @@
 import asyncio
+import contextlib
+import contextvars
 import logging
 import os
 import re
@@ -10,6 +12,7 @@ from bs4 import BeautifulSoup
 from playwright.async_api import Page
 
 from .models import CaptchaRequired
+from .query_forms import get_query_form
 
 log = logging.getLogger("sister.utils")
 
@@ -265,6 +268,13 @@ def parse_table(html):
                 cells.append("")
             rows.append(dict(zip(headers, cells)))
     return rows
+
+
+async def _comune_selector(page) -> str:
+    """CSS selector of the comune dropdown: current SISTER forms use ``comuneCat``, older ones ``denomComune``."""
+    if await page.locator("select[name='comuneCat']").count() > 0:
+        return "select[name='comuneCat']"
+    return "select[name='denomComune']"
 
 
 async def find_best_option_match(page, selector, search_text):
@@ -539,7 +549,7 @@ async def run_visura(
         log.warning("Errore selezione tipo catasto: %s", e)
 
     # Trova e seleziona il comune corretto
-    comune_options = await page.locator("select[name='denomComune'] option").all()
+    comune_options = await page.locator(f"{await _comune_selector(page)} option").all()
     available_comuni = []
     for option in comune_options:
         value = await option.get_attribute("value")
@@ -549,7 +559,7 @@ async def run_visura(
 
     log.debug("Comuni disponibili: %d", len(available_comuni))
 
-    comune_value = await find_best_option_match(page, "select[name='denomComune']", comune)
+    comune_value = await find_best_option_match(page, await _comune_selector(page), comune)
 
     if not comune_value:
         raise Exception(
@@ -558,7 +568,7 @@ async def run_visura(
 
     log.info("Comune: [cyan]%s[/cyan]", comune_value)
     try:
-        await page.locator("select[name='denomComune']").select_option(comune_value)
+        await page.locator(await _comune_selector(page)).select_option(comune_value)
     except Exception as e:
         raise Exception(f"Errore selezione comune '{comune_value}': {e}")
 
@@ -979,9 +989,9 @@ async def _resubmit_search_for_immobili_list(
 
     await page.locator("select[name='tipoCatasto']").select_option(tipo_catasto)
 
-    comune_value = await find_best_option_match(page, "select[name='denomComune']", comune)
+    comune_value = await find_best_option_match(page, await _comune_selector(page), comune)
     if comune_value:
-        await page.locator("select[name='denomComune']").select_option(comune_value)
+        await page.locator(await _comune_selector(page)).select_option(comune_value)
 
     await _select_sezione(page, comune, sezione)
 
@@ -1816,6 +1826,154 @@ def _parse_visura_pdf(file_path: str) -> dict | None:
     return result
 
 
+def _parse_ispezione_ipotecaria_pdf(file_path: str) -> dict | None:
+    """Extract searchable data and complete sections from a SISTER inspection PDF."""
+    import re as _re
+    import subprocess
+
+    try:
+        text = subprocess.check_output(
+            ["pdftotext", "-layout", file_path, "-"], stderr=subprocess.DEVNULL, text=True, timeout=30
+        )
+    except Exception as e:
+        log.debug("_parse_ispezione_ipotecaria_pdf: pdftotext failed for %s: %s", file_path, e)
+        return None
+
+    text = text.replace("\x00", "").replace("\x0c", "\n")
+    lines = [line.rstrip() for line in text.splitlines()]
+    searchable = "\n".join(lines)
+    if not searchable.strip():
+        return None
+
+    def _search(pattern: str, source: str = searchable, flags: int = _re.IGNORECASE) -> str | None:
+        match = _re.search(pattern, source, flags)
+        return match.group(1).strip() if match else None
+
+    kind = "ispezione"
+    if _re.search(r"nota\s+di\s+trascrizione", searchable, _re.IGNORECASE):
+        kind = "nota_trascrizione"
+    elif _re.search(r"nota\s+di\s+iscrizione", searchable, _re.IGNORECASE):
+        kind = "nota_iscrizione"
+    elif _re.search(r"nota\s+di\s+annotazione", searchable, _re.IGNORECASE):
+        kind = "nota_annotazione"
+
+    result: dict = {
+        "tipo": "ispezione_ipotecaria",
+        "inspection_document_type": kind,
+        "raw_text": searchable.strip(),
+        "sections": [],
+        "formalities": [],
+    }
+
+    result["inspection_number"] = _search(r"\bn\.\s*T1?\s*(\d+)\s+del\s+\d{2}/\d{2}/\d{4}")
+    result["inspection_date"] = _search(r"\bn\.\s*T1?\s*\d+\s+del\s+(\d{2}/\d{2}/\d{4})")
+    result["office"] = _search(r"Ufficio Provinciale di\s+([^\n-]+)") or _search(
+        r"Direzione Provinciale di\s+([^\n]+)"
+    )
+    result["document_date"] = _search(r"\bData\s+(\d{2}/\d{2}/\d{4})")
+    result["document_time"] = _search(r"\bOra\s+(\d{2}:\d{2}:\d{2})")
+    result["requester"] = _search(r"\bRichiedente\s+([^\n]+)")
+    result["requester_cf"] = _search(r"per conto di\s*\n?\s*([A-Z0-9]{16})")
+    result["inspection_mode"] = _search(r"^(Ispezione telematica[^\n]*)", flags=_re.IGNORECASE | _re.MULTILINE)
+    result["request_reason"] = _search(r"^\s*Motivazione\s+([^\n]+)", flags=_re.IGNORECASE | _re.MULTILINE)
+    result["fee"] = _search(r"Tassa versata\s+([^\n]+)")
+    result["period_from"] = _search(r"Periodo informatizzato dal\s+(\d{2}/\d{2}/\d{4})")
+    result["period_to"] = _search(r"Periodo informatizzato dal\s+\d{2}/\d{2}/\d{4}\s+al\s+(\d{2}/\d{2}/\d{4})")
+
+    municipality = _re.search(
+        r"Comune(?:\s+di)?\s+(?:[A-Z0-9]{4}\s*-\s*)?([A-ZÀ-ÖØ-Ý'’ .-]+?)\s*\(([A-Z]{2})\)",
+        searchable,
+        _re.IGNORECASE,
+    )
+    if municipality:
+        result["comune"] = municipality.group(1).strip(" .-").upper()
+        result["provincia"] = municipality.group(2).upper()
+
+    cadastre = _search(r"Tipo catasto\s*:\s*([^\n]+)") or _search(r"\bCatasto\s+((?:FABBRICATI|TERRENI))")
+    if cadastre:
+        result["tipo_catasto"] = "T" if "terren" in cadastre.casefold() else "F"
+    for field, pattern in (
+        ("foglio", r"\bFoglio\s*:?\s*(\d+)"),
+        ("particella", r"\bParticella\s*:?\s*(\d+)"),
+        ("subalterno", r"\bSubalterno\s*:?\s*(\d+)"),
+        ("sezione_urbana", r"\bSezione urbana\s+([A-Z0-9]+)"),
+    ):
+        value = _search(pattern)
+        if value:
+            result[field] = value
+
+    for field, pattern in (
+        ("registro_generale", r"Registro generale n\.\s*(\d+)"),
+        ("registro_particolare", r"Registro particolare n\.\s*(\d+)"),
+        ("presentazione", r"Presentazione n\.\s*(\d+)\s+del\s+(\d{2}/\d{2}/\d{4})"),
+    ):
+        match = _re.search(pattern, searchable, _re.IGNORECASE)
+        if match:
+            result[field] = " ".join(part.strip() for part in match.groups() if part)
+
+    # Capture the report's formality list, including each line of its description.
+    start_re = _re.compile(
+        r"^\s*(\d+)\.\s+(ISCRIZIONE|TRASCRIZIONE|ANNOTAZIONE)\s+del\s+(\d{2}/\d{2}/\d{4})"
+        r"\s*-\s*Registro Particolare\s+(\d+)\s+Registro Generale\s+(\d+)",
+        _re.IGNORECASE,
+    )
+    starts = [(i, start_re.match(line)) for i, line in enumerate(lines)]
+    starts = [(i, match) for i, match in starts if match]
+    for idx, (line_no, match) in enumerate(starts):
+        end = starts[idx + 1][0] if idx + 1 < len(starts) else len(lines)
+        block = [line.strip() for line in lines[line_no:end] if line.strip()]
+        details = block[1:]
+        official = None
+        repertory = None
+        for line in details:
+            official_match = _re.search(r"Pubblico ufficiale\s+(.+?)\s+Repertorio\s+(.+)$", line, _re.IGNORECASE)
+            if official_match:
+                official = official_match.group(1).strip()
+                repertory = official_match.group(2).strip()
+                break
+        result["formalities"].append(
+            {
+                "number": match.group(1),
+                "type": match.group(2).upper(),
+                "date": match.group(3),
+                "registro_particolare": match.group(4),
+                "registro_generale": match.group(5),
+                "public_official": official,
+                "repertory": repertory,
+                "description": next(
+                    (line for line in details if "derivante da" in line.casefold() or " - " in line), ""
+                ),
+                "details": details,
+            }
+        )
+
+    # Retain all A-D material and also split aligned label/value pairs for easier use.
+    section_re = _re.compile(r"^\s*Sezione\s+([ABCD])\s*[-–]\s*(.+?)\s*$", _re.IGNORECASE)
+    section_starts = [(i, section_re.match(line)) for i, line in enumerate(lines)]
+    section_starts = [(i, match) for i, match in section_starts if match]
+    for idx, (line_no, match) in enumerate(section_starts):
+        end = section_starts[idx + 1][0] if idx + 1 < len(section_starts) else len(lines)
+        section_lines = [line.rstrip() for line in lines[line_no + 1 : end] if line.strip()]
+        fields = []
+        for line in section_lines:
+            pair = _re.match(r"^\s{1,}(.+?)\s{2,}(\S.*)$", line)
+            if pair:
+                label = pair.group(1).strip()
+                value = pair.group(2).strip()
+                if label and value and len(label) <= 90:
+                    fields.append({"label": label, "value": value})
+        result["sections"].append(
+            {
+                "code": match.group(1).upper(),
+                "title": match.group(2).strip(),
+                "content": "\n".join(section_lines),
+                "fields": fields,
+            }
+        )
+
+    return result
+
+
 async def _persist_flattened_xml(session, document_id: int, content: str | None) -> None:
     """Store XML elements and attributes in the relational document tree."""
     if not content:
@@ -1823,7 +1981,7 @@ async def _persist_flattened_xml(session, document_id: int, content: str | None)
 
     from sqlalchemy import delete, select
 
-    from .db_models import DocumentXmlAttribute, DocumentXmlNode
+    from .visura_xml_models import DocumentXmlAttribute, DocumentXmlNode
 
     payload = content.replace("\x00", "").encode("utf-8", "replace")
     try:
@@ -1884,8 +2042,18 @@ async def _save_documents_to_db(documents: list[dict]) -> None:
             subalterno = parsed.get("subalterno", "")
             doc_type = parsed.get("tipo", "")
 
-            # Skip if duplicate exists (same property + document type via location join)
-            if foglio and particella:
+            # Ispezione PDFs are separate records and notes for the same parcel must
+            # not be deduplicated by cadastral coordinates.
+            if doc_type == "ispezione_ipotecaria":
+                existing = await session.execute(
+                    text("SELECT id FROM visura_documents WHERE filename = :name OR file_path = :path LIMIT 1"),
+                    {"name": doc.get("filename", ""), "path": doc.get("path") or ""},
+                )
+                if existing.fetchone():
+                    skipped += 1
+                    continue
+            # Other document types retain the property-level duplicate check.
+            elif foglio and particella:
                 existing = await session.execute(
                     text(
                         "SELECT vd.id FROM visura_documents vd"
@@ -2065,7 +2233,7 @@ async def _extract_visura_immobile_playwright(page) -> dict | None:
     return result or None
 
 
-async def run_visura_soggetto(
+async def _search_soggetto(
     page,
     codice_fiscale,
     tipo_catasto="E",
@@ -2109,25 +2277,28 @@ async def run_visura_soggetto(
     except Exception as e:
         log.warning("Errore selezione tipo catasto: %s", e)
 
-    # STEP 5: Select "Codice Fiscale" radio button and fill the field
-    log.info("Codice fiscale: [cyan]%s[/cyan]", codice_fiscale)
+    # STEP 5: search by codice fiscale, or by cognome/nome/data e luogo di nascita (the other inputs are
+    # filled from the request's form fields, see _apply_form_fields)
+    if codice_fiscale:
+        log.info("Codice fiscale: [cyan]%s[/cyan]", codice_fiscale)
 
-    # Click the Codice Fiscale radio button (field name: selDatiAna, value: CF)
-    cf_radio = page.locator("input[name='selDatiAna'][value='CF']")
-    if await cf_radio.count() == 0:
-        cf_radio = page.locator("input[type='radio'][value='CF']")
-    if await cf_radio.count() == 0:
-        cf_radio = page.locator("input[type='radio']").last
-    await cf_radio.click()
+        # Click the Codice Fiscale radio button (field name: selDatiAna, value: CF_PF)
+        cf_radio = page.locator("input[name='selDatiAna'][value='CF_PF'], input[name='selDatiAna'][value='CF']")
+        if await cf_radio.count() == 0:
+            cf_radio = page.locator("input[type='radio']").last
+        await cf_radio.first.click()
 
-    # Fill the codice fiscale field (field name: cod_fisc_pf)
-    cf_field = page.locator("input[name='cod_fisc_pf']")
-    if await cf_field.count() == 0:
-        cf_field = page.locator("input[name='codFiscale']")
-    if await cf_field.count() == 0:
-        cf_field = page.locator("input[name='codiceFiscale']")
-    await cf_field.click()
-    await cf_field.fill(codice_fiscale.upper())
+        # Fill the codice fiscale field (field name: cod_fisc_pf)
+        cf_field = page.locator("input[name='cod_fisc_pf']")
+        if await cf_field.count() == 0:
+            cf_field = page.locator("input[name='codFiscale']")
+        if await cf_field.count() == 0:
+            cf_field = page.locator("input[name='codiceFiscale']")
+        await cf_field.click()
+        await cf_field.fill(codice_fiscale.upper())
+    else:
+        log.info("Ricerca per dati anagrafici")
+        await page.locator("input[name='selDatiAna'][value='cognome']").check()
 
     # STEP 5.1: Fill richiedente and motivo
     if per_conto_di:
@@ -2141,6 +2312,8 @@ async def run_visura_soggetto(
             motivo_field = page.locator("input[name='motivo']")
         if await motivo_field.count() > 0:
             await motivo_field.fill(motivo)
+
+    await _apply_form_fields(page)
 
     # STEP 6: Submit search
     await page_logger.log(page, "form_compilato")
@@ -2212,6 +2385,22 @@ async def run_visura_soggetto(
         "immobili": immobili,
         "total_results": len(immobili),
     }
+
+
+async def run_visura_soggetto(
+    page,
+    codice_fiscale,
+    tipo_catasto="E",
+    provincia=None,
+    motivo="Esplorazione",
+    per_conto_di=None,
+):
+    """National search by codice fiscale: the properties of the subject in every province.
+
+    Walks search → homonym → province → Immobili (see ``run_soggetto_immobili``); ``motivo`` and
+    ``per_conto_di`` keep their defaults.
+    """
+    return await run_soggetto_immobili(page, codice_fiscale, tipo_catasto=tipo_catasto, provincia=provincia)
 
 
 async def run_visura_persona_giuridica(
@@ -2300,6 +2489,8 @@ async def run_visura_persona_giuridica(
             motivo_field = page.locator("input[name='motivo']")
         if await motivo_field.count() > 0:
             await motivo_field.fill(motivo)
+
+    await _apply_form_fields(page)
 
     # STEP 6: Submit
     await page_logger.log(page, "form_compilato")
@@ -2411,21 +2602,34 @@ async def run_elenco_immobili(
             await foglio_field.fill(str(foglio))
 
     # STEP 5: Submit
+    await _apply_form_fields(page)
     await page_logger.log(page, "form_compilato")
     log.info("Esecuzione elenco immobili...")
-    ricerca_btn = page.locator("input[name='ricerca'][value='Ricerca']")
-    for fallback in (
-        "input[type='submit'][value='Ricerca']",
-        "input[name='scelta'][value='Ricerca']",
-        # Elaborato planimetrico (VisureNew app) submits with "Inoltra", not "Ricerca"
-        "input[type='submit'][name='submit'][value='Inoltra']",
-    ):
-        if await ricerca_btn.count() > 0:
-            break
-        ricerca_btn = page.locator(fallback)
-    await ricerca_btn.click()
+    await _search_button(page).click()
     await page.wait_for_load_state("networkidle", timeout=60000)
     await page_logger.log(page, "risultati_elenco")
+    await _raise_on_form_error(page)
+
+    # SISTER wants a second limitation besides the sheet: list each category group (A..F) in turn
+    if "Inserire un'altra limitazione" in await page.inner_text("body"):
+        log.info("SISTER richiede un'altra limitazione: elenco per gruppo di categorie")
+        grouped: list[dict] = []
+        for group in ("A%", "B%", "C%", "D%", "E%", "F%"):
+            await page.locator("select[name='categoria']").select_option(group)
+            await _search_button(page).click()
+            await page.wait_for_load_state("networkidle", timeout=60000)
+            if "NESSUNA CORRISPONDENZA TROVATA" not in await page.inner_text("body"):
+                grouped.extend({**row, "categoria_gruppo": group[0]} for row in _extract_result_tables(await page.content()))
+            if await page.locator("select[name='categoria']").count() == 0:
+                await page.go_back()
+                await page.wait_for_load_state("networkidle", timeout=60000)
+        return {
+            "provincia": provincia,
+            "comune": comune,
+            "foglio": foglio,
+            "immobili": grouped,
+            "total_results": len(grouped),
+        }
 
     # STEP 6: Check for errors
     page_text = await page.inner_text("body")
@@ -2532,6 +2736,116 @@ async def _navigate_select_province_and_click(page, page_logger, provincia, menu
     await page_logger.log(page, menu_link_name.lower().replace(" ", "_"))
 
 
+_FORM_CONTEXT: contextvars.ContextVar = contextvars.ContextVar("sister_form_context", default=None)
+
+_TRUE_VALUES = {"1", "true", "yes", "si", "sì", "on", "t", "y"}
+
+
+@contextlib.contextmanager
+def form_context(query: str, form_fields: dict | None):
+    """Make the form inputs of a request visible to the form filler while its ``run_*`` function runs."""
+    token = _FORM_CONTEXT.set((query, dict(form_fields or {})))
+    try:
+        yield
+    finally:
+        _FORM_CONTEXT.reset(token)
+
+
+def current_form_fields() -> dict:
+    ctx = _FORM_CONTEXT.get()
+    return ctx[1] if ctx else {}
+
+
+async def _set_control(page, fld, value) -> None:
+    """Set one input of the SISTER form from its parameter value (text, date, select, radio or checkbox).
+
+    An input that is not on the form is ignored; one that is there but hidden or disabled (e.g. a
+    restriction that only exists for a province office) raises, instead of waiting for it to become usable.
+    """
+    base = None
+    for name in fld.portal_names:
+        candidate = f"[name='{name}']"
+        if await page.locator(f"input{candidate}, select{candidate}, textarea{candidate}").count() > 0:
+            base = candidate
+            break
+    if base is None:
+        log.debug("Campo %s (%s) assente nel modulo: ignorato", fld.portal_names, fld.param)
+        return
+    text = str(value).strip()
+    unavailable = Exception(f"Campo '{fld.param}' non disponibile in questo modulo (nascosto o disabilitato)")
+    if fld.kind == "radio":
+        raw = fld.choices.get(text.lower(), text)
+        radio = page.locator(f"input[type='radio']{base}[value='{raw}']")
+        if await radio.count() == 0:
+            raise Exception(f"Valore '{value}' non valido per '{fld.param}' (valori: {', '.join(fld.choices) or raw})")
+        if not await radio.first.is_enabled():
+            raise unavailable
+        await radio.first.check()
+    elif fld.kind == "checkbox":
+        box = page.locator(f"input[type='checkbox']{base}, input[type='radio']{base}").first
+        if not (await box.is_visible() and await box.is_enabled()):
+            raise unavailable
+        if text.lower() in _TRUE_VALUES:
+            await box.check()
+        elif await box.get_attribute("type") == "checkbox":
+            await box.uncheck()
+    elif fld.kind == "select":
+        select = page.locator(f"select{base}").first
+        if not (await select.is_visible() and await select.is_enabled()):
+            raise unavailable
+        raw = fld.choices.get(text.lower())
+        if raw is None:
+            raw = await find_best_option_match(page, f"select{base}", text)
+        if raw is None or await select.locator(f"option[value='{raw}']").count() == 0:
+            raise Exception(f"Valore '{value}' non disponibile per '{fld.param}' in questo modulo")
+        await select.select_option(raw)
+        # dependent dropdowns (e.g. comune di nascita after the provincia) are loaded by the page
+        with contextlib.suppress(Exception):
+            await page.wait_for_load_state("networkidle", timeout=5000)
+    else:
+        usable = []
+        for field_ in await page.locator(f"input{base}, textarea{base}").all():
+            if await field_.is_visible() and await field_.is_enabled():
+                usable.append(field_)
+        if not usable:
+            raise unavailable
+        for field_ in usable:
+            await field_.fill(text)
+
+
+async def _apply_form_fields(page, page_no: int = 1) -> None:
+    """Fill every input of the current query form that the request gave a value for (see query_forms).
+
+    An input that only exists in one mode of a radio (``FormField.requires``) first switches the form to that
+    mode, unless the request chose the other one, which is a conflict.
+    """
+    ctx = _FORM_CONTEXT.get()
+    if not ctx:
+        return
+    query, values = ctx
+    form = get_query_form(query)
+    if form is None:
+        return
+    by_param = {fld.param: fld for fld in form.fields}
+    chosen: dict[str, str] = {}  # mode parameter -> mode value switched to by this call
+    # the inputs that exist in every mode first (a mode switch can hide some of them), then the mode-specific ones
+    mode_params = {f.requires[0] for f in form.fields if f.requires}
+    ordered = sorted(form.fields, key=lambda f: f.requires is not None or f.param in mode_params)
+    for fld in ordered:
+        value = values.get(fld.param)
+        if fld.handled or fld.page != page_no or value is None or value == "":
+            continue
+        if fld.requires:
+            mode_param, mode_value = fld.requires
+            given = str(values.get(mode_param) or "").strip().lower()
+            if given and given != mode_value:
+                raise Exception(f"'{fld.param}' richiede {mode_param}={mode_value} (indicato: {given})")
+            if not given and chosen.get(mode_param) != mode_value:
+                await _set_control(page, by_param[mode_param], mode_value)
+                chosen[mode_param] = mode_value
+        await _set_control(page, fld, value)
+
+
 async def _fill_richiedente_motivo(page, motivo="Esplorazione", per_conto_di=None, sezione_urbana=None):
     """Fill the richiedente, motivo, and sezione urbana fields if present."""
     import os
@@ -2554,27 +2868,69 @@ async def _fill_richiedente_motivo(page, motivo="Esplorazione", per_conto_di=Non
         if await field.count() > 0:
             await field.fill(str(sezione_urbana).upper())
 
+    await _apply_form_fields(page)
+
+
+_FORM_ERROR_RE = re.compile(r"((?:Il campo|La sezione)[^.]{0,80}obbligatori[oa][^.]{0,60}\.)")
+
+
+async def _raise_on_form_error(page) -> None:
+    """Fail loudly when SISTER bounced the form back with a validation message (e.g. "Il campo Foglio è
+    obbligatorio."), instead of reporting an empty successful result."""
+    match = _FORM_ERROR_RE.search(re.sub(r"\s+", " ", await page.inner_text("body")))
+    if match:
+        raise Exception(f"SISTER ha rifiutato il modulo: {match.group(1).strip()}")
+
+
+def _search_button(page):
+    """The submit button of a SISTER search form (the label differs between the web apps)."""
+    return page.locator(
+        "input[name='ricerca'][value='Ricerca'], input[type='submit'][value='Ricerca'], "
+        "input[name='scelta'][value='Ricerca'], "
+        # Elaborato planimetrico (VisureNew app) submits with "Inoltra", not "Ricerca"
+        "input[type='submit'][name='submit'][value='Inoltra']"
+    ).first
+
+
+async def _expand_indirizzi(page, page_logger) -> list[dict]:
+    """Second page of the address search: pick each address found and list its properties."""
+    rows: list[dict] = []
+    total = await page.locator("select[name='indirizzoSel'] option").count()
+    wanted = str(current_form_fields().get("indirizzo_selezionato") or "").strip().upper()
+    for i in range(total):
+        select = page.locator("select[name='indirizzoSel']")
+        if await select.count() == 0:
+            break
+        option = select.locator("option").nth(i)
+        value = await option.get_attribute("value")
+        label = (await option.inner_text()).strip()
+        if wanted and wanted not in label.upper():
+            continue
+        await select.select_option(value)
+        await _apply_form_fields(page, page_no=2)
+        await _search_button(page).click()
+        await page.wait_for_load_state("networkidle", timeout=60000)
+        await _raise_on_form_error(page)
+        await page_logger.log(page, f"indirizzo_{i + 1}")
+        for row in _extract_result_tables(await page.content()):
+            rows.append({**row, "indirizzo_trovato": label})
+        if i + 1 < total:
+            await page.go_back()
+            await page.wait_for_load_state("networkidle", timeout=60000)
+    return rows
+
 
 async def _submit_and_extract(page, page_logger, step_name):
     """Submit a SISTER search form and extract results table."""
     await page_logger.log(page, f"form_compilato_{step_name}")
-    ricerca_btn = page.locator("input[name='ricerca'][value='Ricerca']")
-    for fallback in (
-        "input[type='submit'][value='Ricerca']",
-        "input[name='scelta'][value='Ricerca']",
-        # Elaborato planimetrico (VisureNew app) submits with "Inoltra", not "Ricerca"
-        "input[type='submit'][name='submit'][value='Inoltra']",
-    ):
-        if await ricerca_btn.count() > 0:
-            break
-        ricerca_btn = page.locator(fallback)
-    await ricerca_btn.click()
+    await _search_button(page).click()
     await page.wait_for_load_state("networkidle", timeout=60000)
+    await _raise_on_form_error(page)
     await _wait_for_captcha(page)
     await page_logger.log(page, f"risultati_{step_name}")
 
     page_text = await page.inner_text("body")
-    if "NESSUNA CORRISPONDENZA TROVATA" in page_text:
+    if "NESSUNA CORRISPONDENZA TROVATA" in page_text or "nessun elaborato trovato" in page_text.lower():
         return None
 
     return _extract_result_tables(await page.content())
@@ -2605,10 +2961,10 @@ async def run_ricerca_indirizzo(
     except Exception:
         pass
 
-    comune_value = await find_best_option_match(page, "select[name='denomComune']", comune)
+    comune_value = await find_best_option_match(page, await _comune_selector(page), comune)
     if not comune_value:
         raise Exception(f"Comune '{comune}' non trovato")
-    await page.locator("select[name='denomComune']").select_option(comune_value)
+    await page.locator(await _comune_selector(page)).select_option(comune_value)
 
     await _select_sezione(page, comune, sezione)
 
@@ -2621,6 +2977,8 @@ async def run_ricerca_indirizzo(
     await _fill_richiedente_motivo(page)
 
     results = await _submit_and_extract(page, page_logger, "indirizzo")
+    if not results and await page.locator("select[name='indirizzoSel']").count() > 0:
+        results = await _expand_indirizzi(page, page_logger)
     elapsed = time.time() - time0
     immobili = results or []
     log.info("[green]Ricerca indirizzo completata[/green] in %.1fs — %d risultati", elapsed, len(immobili))
@@ -2655,14 +3013,12 @@ async def run_ricerca_partita(
     except Exception:
         pass
 
-    comune_value = await find_best_option_match(page, "select[name='denomComune']", comune)
+    comune_value = await find_best_option_match(page, await _comune_selector(page), comune)
     if not comune_value:
         raise Exception(f"Comune '{comune}' non trovato")
-    await page.locator("select[name='denomComune']").select_option(comune_value)
+    await page.locator(await _comune_selector(page)).select_option(comune_value)
 
-    partita_field = page.locator("input[name='partita']")
-    if await partita_field.count() == 0:
-        partita_field = page.locator("input[name='numPartita']")
+    partita_field = page.locator("input[name='partita'], input[name='numPart'], input[name='numPartita']").first
     await partita_field.fill(str(partita))
 
     await _fill_richiedente_motivo(page)
@@ -2853,9 +3209,9 @@ async def run_originali_impianto(
     except Exception:
         pass
 
-    comune_value = await find_best_option_match(page, "select[name='denomComune']", comune)
+    comune_value = await find_best_option_match(page, await _comune_selector(page), comune)
     if comune_value:
-        await page.locator("select[name='denomComune']").select_option(comune_value)
+        await page.locator(await _comune_selector(page)).select_option(comune_value)
 
     if foglio:
         foglio_field = page.locator("input[name='foglio']")
@@ -2897,9 +3253,9 @@ async def run_punti_fiduciali(
     except Exception:
         pass
 
-    comune_value = await find_best_option_match(page, "select[name='denomComune']", comune)
+    comune_value = await find_best_option_match(page, await _comune_selector(page), comune)
     if comune_value:
-        await page.locator("select[name='denomComune']").select_option(comune_value)
+        await page.locator(await _comune_selector(page)).select_option(comune_value)
 
     if foglio:
         foglio_field = page.locator("input[name='foglio']")
@@ -3082,6 +3438,7 @@ async def run_elaborato_planimetrico(
     comune,
     tipo_catasto="F",
     foglio=None,
+    particella=None,
 ):
     """Retrieve Elaborato Planimetrico (ELPL) on SISTER.
 
@@ -3110,6 +3467,15 @@ async def run_elaborato_planimetrico(
         f = page.locator("input[name='foglio']")
         if await f.count() > 0:
             await f.fill(str(foglio))
+
+    if particella:
+        # the portal requires the parcel (particella1 = number, particella2 = optional suffix)
+        number, _, suffix = str(particella).partition("/")
+        p1 = page.locator("input[name='particella1']")
+        if await p1.count() > 0:
+            await p1.fill(number)
+            if suffix:
+                await page.locator("input[name='particella2']").fill(suffix)
 
     await _fill_richiedente_motivo(page)
 
@@ -3142,6 +3508,12 @@ async def run_riepilogo_visure(page):
     )
     await page.wait_for_load_state("networkidle", timeout=30000)
     await page_logger.log(page, "riepilogo_visure")
+
+    # The page only shows a search form: fill it (data visura defaults to today) and press "Visualizza"
+    await _apply_form_fields(page)
+    await page.locator("input[type='submit'][name='submit'][value='Visualizza']").click()
+    await page.wait_for_load_state("networkidle", timeout=30000)
+    await page_logger.log(page, "riepilogo_risultati")
 
     # Extract the summary table
     results = _extract_result_tables(await page.content())
@@ -3547,7 +3919,7 @@ async def extract_all_sezioni(page: Page, tipo_catasto: str = "T", max_province:
                     log.warning("Errore selezione tipo catasto per %s: %s", provincia["text"], e)
 
                 # Estrai tutti i comuni per questa provincia
-                comune_options = await page.locator("select[name='denomComune'] option").all()
+                comune_options = await page.locator(f"{await _comune_selector(page)} option").all()
                 comuni_list = []
 
                 for option in comune_options:
@@ -3562,7 +3934,7 @@ async def extract_all_sezioni(page: Page, tipo_catasto: str = "T", max_province:
                     log.debug("Comune %d/%d: %s", j + 1, len(comuni_list), comune["text"])
 
                     try:
-                        await page.locator("select[name='denomComune']").select_option(comune["value"])
+                        await page.locator(await _comune_selector(page)).select_option(comune["value"])
 
                         await page.locator("input[name='selSezione'][value='scegli la sezione']").click()
                         await page.wait_for_load_state("networkidle", timeout=30000)
@@ -3715,12 +4087,12 @@ async def run_visura_immobile(
     await page.locator("select[name='tipoCatasto']").select_option("F")
 
     # Trova e seleziona il comune
-    comune_value = await find_best_option_match(page, "select[name='denomComune']", comune)
+    comune_value = await find_best_option_match(page, await _comune_selector(page), comune)
     if not comune_value:
         raise Exception(f"Comune '{comune}' non trovato")
 
     log.info("Comune: [cyan]%s[/cyan]", comune_value)
-    await page.locator("select[name='denomComune']").select_option(comune_value)
+    await page.locator(await _comune_selector(page)).select_option(comune_value)
 
     await _select_sezione(page, comune, sezione)
 
@@ -3949,7 +4321,7 @@ async def _open_soggetto_province_page(page, identifier, tipo_catasto, provincia
     if azienda:
         found = await run_visura_persona_giuridica(page, identifier, tipo_catasto=tipo_catasto, provincia=provincia)
     else:
-        found = await run_visura_soggetto(page, identifier, tipo_catasto=tipo_catasto, provincia=provincia)
+        found = await _search_soggetto(page, identifier, tipo_catasto=tipo_catasto, provincia=provincia)
     if found.get("error"):
         return False
     # SceltaOmonimi rejects the submit ("Selezionare un Omonimo") unless one homonym is selected

@@ -5,6 +5,7 @@
 {% from "_macros.html" import catasto_badge, param_label, jump_nav,
                                 section_icon, section_border, income_boxes,
                                 doc_accordion, render_workflow_steps %}
+{% from "parts/_related_links.html" import related_pages %}
 {% block page_title %}Result {{ request_id[:20] }}{% endblock %}
 
 {% block extra_css %}
@@ -338,6 +339,13 @@
     </div>
   </div>
   {% endif %}{# /result.data #}
+
+  {{ related_pages("Related pages", [
+      ("/web/results", "All results", "Return to the filtered list of executed requests.", "fa-database"),
+      ("/web/documents", "Documents", "Browse downloaded files linked to responses.", "fa-folder-tree"),
+      ("/web/dossiers", "Dossiers", "Review the complete saved query payloads.", "fa-folder-open"),
+      ("/web/forms", "Submit another query", "Open the single-step and workflow forms.", "fa-clipboard-list")
+  ]) }}
 
   {% else %}
   <div class="alert alert-warning">

@@ -105,6 +105,11 @@ class VisuraRequest(SQLModel):
     subunit: Optional[str] = None
     timestamp: datetime = Field(default_factory=_default_timestamp)
 
+    form_fields: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Altri campi del modulo SISTER (vedi sister.query_forms): richiedente, motivo, ...",
+    )
+
     @field_validator("timestamp", mode="before")
     @classmethod
     def _set_timestamp(cls, v: Optional[datetime]) -> datetime:
@@ -135,6 +140,11 @@ class VisuraIntestatiRequest(SQLModel):
     section: Optional[str] = None
     urban_section: Optional[str] = None
     timestamp: datetime = Field(default_factory=_default_timestamp)
+
+    form_fields: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Altri campi del modulo SISTER (vedi sister.query_forms): richiedente, motivo, ...",
+    )
 
     @field_validator("timestamp", mode="before")
     @classmethod
@@ -203,6 +213,11 @@ class VisuraInput(SQLModel):
         description="'T' = Terreni, 'F' = Fabbricati (se omesso esegue entrambi)",
     )
 
+    form_fields: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Altri campi del modulo SISTER (vedi sister.query_forms): richiedente, motivo, ...",
+    )
+
     @field_validator("cadastre_type", mode="before")
     @classmethod
     def validate_cadastre_type(cls, value: Optional[str]) -> Optional[str]:
@@ -244,6 +259,11 @@ class VisuraIntestatiInput(SQLModel):
     section: Optional[str] = Field(None, validation_alias=AliasChoices("section", "sezione"))
     urban_section: Optional[str] = Field(None, validation_alias=AliasChoices("urban_section", "sezione_urbana"))
 
+    form_fields: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Altri campi del modulo SISTER (vedi sister.query_forms): richiedente, motivo, ...",
+    )
+
     @field_validator("cadastre_type", mode="before")
     @classmethod
     def validate_cadastre_type(cls, value: Optional[str]) -> Optional[str]:
@@ -282,7 +302,13 @@ class VisuraSoggettoInput(SQLModel):
         "provincia": "province",
     }
 
-    fiscal_code: str = Field(..., validation_alias=AliasChoices("fiscal_code", "codice_fiscale"), min_length=11, max_length=16, description="Codice fiscale del soggetto")
+    fiscal_code: Optional[str] = Field(
+        None,
+        validation_alias=AliasChoices("fiscal_code", "codice_fiscale"),
+        min_length=11,
+        max_length=16,
+        description="Codice fiscale del soggetto (in alternativa: cognome e dati di nascita in form_fields)",
+    )
     cadastre_type: Optional[str] = Field(
         None,
         validation_alias=AliasChoices("cadastre_type", "tipo_catasto"),
@@ -290,6 +316,11 @@ class VisuraSoggettoInput(SQLModel):
         description="'T' = Terreni, 'F' = Fabbricati, 'E' = Entrambi (default)",
     )
     province: Optional[str] = Field(None, validation_alias=AliasChoices("province", "provincia"), description="Province (omit for nationwide search)")
+
+    form_fields: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Altri campi del modulo SISTER (vedi sister.query_forms): richiedente, motivo, ...",
+    )
 
     @field_validator("cadastre_type", mode="before")
     @classmethod
@@ -306,6 +337,12 @@ class VisuraSoggettoInput(SQLModel):
     def normalize_fiscal_code(cls, value: str) -> str:
         return value.strip().upper()
 
+    @model_validator(mode="after")
+    def _require_codice_fiscale_or_cognome(self) -> Self:
+        if not self.fiscal_code and not self.form_fields.get("cognome"):
+            raise ValueError("indicare il codice fiscale oppure il cognome")
+        return self
+
 
 class VisuraSoggettoRequest(SQLModel):
     """Internal request for soggetto search"""
@@ -317,10 +354,15 @@ class VisuraSoggettoRequest(SQLModel):
     }
 
     request_id: str
-    fiscal_code: str
+    fiscal_code: Optional[str] = None
     cadastre_type: str = "E"
     province: Optional[str] = None
     timestamp: datetime = Field(default_factory=_default_timestamp)
+
+    form_fields: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Altri campi del modulo SISTER (vedi sister.query_forms): richiedente, motivo, ...",
+    )
 
     @field_validator("timestamp", mode="before")
     @classmethod
@@ -348,6 +390,11 @@ class VisuraPersonaGiuridicaInput(SQLModel):
     )
     province: Optional[str] = Field(None, validation_alias=AliasChoices("province", "provincia"), description="Province (omit for nationwide search)")
 
+    form_fields: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Altri campi del modulo SISTER (vedi sister.query_forms): richiedente, motivo, ...",
+    )
+
     @field_validator("cadastre_type", mode="before")
     @classmethod
     def validate_cadastre_type(cls, value: Optional[str]) -> Optional[str]:
@@ -371,6 +418,11 @@ class VisuraPersonaGiuridicaRequest(SQLModel):
     cadastre_type: str = "E"
     province: Optional[str] = None
     timestamp: datetime = Field(default_factory=_default_timestamp)
+
+    form_fields: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Altri campi del modulo SISTER (vedi sister.query_forms): richiedente, motivo, ...",
+    )
 
     @field_validator("timestamp", mode="before")
     @classmethod
@@ -402,6 +454,11 @@ class ElencoImmobiliInput(SQLModel):
     sheet: Optional[str] = Field(None, validation_alias=AliasChoices("sheet", "foglio"), description="Sheet number (optional, filters by sheet)")
     section: Optional[str] = Field(None, validation_alias=AliasChoices("section", "sezione"), description="Section (optional)")
 
+    form_fields: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Altri campi del modulo SISTER (vedi sister.query_forms): richiedente, motivo, ...",
+    )
+
     @field_validator("cadastre_type", mode="before")
     @classmethod
     def validate_cadastre_type(cls, value: Optional[str]) -> Optional[str]:
@@ -429,6 +486,11 @@ class ElencoImmobiliRequest(SQLModel):
     sheet: Optional[str] = None
     section: Optional[str] = None
     timestamp: datetime = Field(default_factory=_default_timestamp)
+
+    form_fields: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Altri campi del modulo SISTER (vedi sister.query_forms): richiedente, motivo, ...",
+    )
 
     @field_validator("timestamp", mode="before")
     @classmethod

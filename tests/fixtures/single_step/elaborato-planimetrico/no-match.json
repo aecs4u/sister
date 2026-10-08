@@ -1,0 +1,24 @@
+{
+  "query": "elaborato-planimetrico",
+  "outcome": "no-match",
+  "request": {
+    "provincia": "Ravenna",
+    "comune": "RAVENNA",
+    "foglio": "103",
+    "particella": "1714"
+  },
+  "response": {
+    "request_id": "elaborato_planimetrico_fixture",
+    "tipo_catasto": "T",
+    "status": "completed",
+    "data": {
+      "provincia": "Ravenna",
+      "comune": "RAVENNA",
+      "risultati": [],
+      "total_results": 0,
+      "error": "NESSUNA CORRISPONDENZA TROVATA"
+    },
+    "error": null,
+    "timestamp": "2026-10-06T00:00:00"
+  }
+}

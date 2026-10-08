@@ -1,0 +1,273 @@
+<form name="EstrattoMappaForm" method="post" action="/Visure/vmap/EstrattoMappa.do">
+
+<fieldset>
+	<legend class="blue">Tipo Richiesta&nbsp;</legend> 
+	<table>	
+		<tbody><tr>
+			<td><input type="radio" name="tipoRichiesta" value="0" checked="checked" style=""><label for="tipoRichiesta">&nbsp;Attualità</label></td>			
+		</tr>	
+		<tr>
+			<td><input type="radio" name="tipoRichiesta" value="1" style=""><label for="tipoRichiesta">&nbsp;Storica</label></td>
+		</tr>
+	</tbody></table>
+</fieldset>
+
+<fieldset>
+<legend class="blue">Mappa&nbsp;</legend> 
+			
+	<table>
+		
+			<tbody><tr>
+			 
+			  
+			  <td><label for="tipoCatasto">Catasto:</label></td>
+			  <td colspan="2"><strong>Terreni</strong></td>
+			 
+			 
+			  
+	
+			</tr> 
+			<tr><td colspan="2"> <label for="comuneCat">Comune: </label></td>
+				<td>
+				 		<select name="comuneCat"><option value="A191#ALFONSINE#0#0">
+								ALFONSINE
+								</option>
+							
+							
+						
+							
+							
+							 
+							 	<option value="A547#BAGNACAVALLO#0#0">
+								BAGNACAVALLO
+								</option>
+							
+							
+						
+							
+							
+							 
+							 	<option value="A551#BAGNARA DI ROMAGNA#0#0">
+								BAGNARA DI ROMAGNA
+								</option>
+							
+							
+						
+							
+							
+							 
+							 	<option value="B188#BRISIGHELLA#0#0">
+								BRISIGHELLA
+								</option>
+							
+							
+						
+							
+							
+							 
+							 	<option value="B982#CASOLA VALSENIO#0#0">
+								CASOLA VALSENIO
+								</option>
+							
+							
+						
+							
+							
+							 
+							 	<option value="C065#CASTEL BOLOGNESE#0#0">
+								CASTEL BOLOGNESE
+								</option>
+							
+							
+						
+							
+							
+							 
+							 	<option value="C553#CERVIA#0#0">
+								CERVIA
+								</option>
+							
+							
+						
+							
+							
+							 
+							 	<option value="C963#CONSELICE#0#0">
+								CONSELICE
+								</option>
+							
+							
+						
+							
+							
+							 
+							 	<option value="D121#COTIGNOLA#0#0">
+								COTIGNOLA
+								</option>
+							
+							
+						
+							
+							
+							 
+							 	<option value="D458#FAENZA#0#0">
+								FAENZA
+								</option>
+							
+							
+						
+							
+							
+							 
+							 	<option value="D829#FUSIGNANO#0#0">
+								FUSIGNANO
+								</option>
+							
+							
+						
+							
+							
+							 
+							 	<option value="E730#LUGO#0#0">
+								LUGO
+								</option>
+							
+							
+						
+							
+							
+							 
+							 	<option value="F029#MASSA LOMBARDA#0#0">
+								MASSA LOMBARDA
+								</option>
+							
+							
+						
+							
+							
+							 
+							 	<option value="H199#RAVENNA#3#0">
+								RAVENNA
+								</option>
+							
+							
+						
+							
+							
+							 
+							 	<option value="H302#RIOLO TERME#0#0">
+								RIOLO TERME
+								</option>
+							
+							
+						
+							
+							
+							 
+							 	<option value="H642#RUSSI#0#0">
+								RUSSI
+								</option>
+							
+							
+						
+							
+							
+							 
+							 	<option value="I196#SANT'AGATA SUL SANTERNO#0#0">
+								SANT'AGATA SUL SANTERNO
+								</option>
+							
+							
+						
+							
+							
+							 
+							 	<option value="I787#SOLAROLO#0#0">
+								SOLAROLO
+								</option></select>
+					<input type="submit" name="selSezione" value="scegli la sezione" style="">				 	
+
+					&nbsp;&nbsp;&nbsp;
+					<label for="sezione">Sezione: </label>
+						<select name="sezione"></select>					
+					
+				</td>
+				
+			 
+			</tr>
+		</tbody></table>
+		<div id="ricercaAttuale">
+			<table>
+			<tbody><tr>
+			   <td> <label for="foglio">Foglio: </label> </td>
+			   <td colspan="2"> <input type="text" name="foglio" size="5" value="" style=""> </td>  
+			   <td><label for="indirizzo" title="le particelle vanno indicate separate da una virgola">Particelle: </label> 
+			   <input type="text" name="particelle" maxlength="153" size="61" value="" style=""></td>
+				</tr>
+				<tr>
+					<td><label for="interoFoglio">Intero foglio</label></td>
+					<td colspan="2"><input type="checkbox" name="interoFoglio" value="true" style=""></td>
+				</tr>  
+				<tr>
+					<td><label for="mappeLimitrofe">Mappe limitrofe</label></td>
+					<td colspan="2"><input type="checkbox" name="mappeLimitrofe" value="true" style=""></td>
+				</tr>
+				<tr>
+					<td><label for="formato">Formato</label>&nbsp;</td>
+					<td colspan="2">
+						<input type="radio" name="a3" value="3" style="">A3
+						<input type="radio" name="a3" value="4" checked="checked" style="">A4
+						<input type="radio" name="a3" value="0" style="">Scala originaria
+					</td>
+				</tr>
+			</tbody></table>
+		</div>
+	<div id="ricercaStorico" style="display: none;">
+		<table>
+		   <tbody><tr>
+			   <td> <label for="foglio">Foglio: </label> </td>
+			   <td colspan="2"> <input type="text" name="foglioStorico" size="5" value="" style=""> </td> 
+			   <td>
+			   <label for="indirizzo">Particella: </label> 
+			   		<input type="text" name="particellaStorico" size="5" value="" style="">
+			   	</td>
+			   <td>		
+			   		<label for="dataAl">Data al (*):</label>
+						<noscript>
+							<input type="text" name="dataAl" maxlength="10" size="10" value="" id="dataAl">						
+						 </noscript>
+						<input type="text" name="dataAl" value="" size="10" id="dataAl" maxlength="10" style=""><input type="image" src="/img/calendario.jpg" onclick="return showCalendar('dataAl', '%d/%m/%Y');" <="" td="" style="">
+			</td></tr>
+		</tbody></table>
+	</div>
+			
+			
+			
+			
+			<div id="ricercaAttualeMotivazione">	
+				<table class="cento">
+				<tbody><tr>
+				<td><fieldset><legend class="blue">Motivazione</legend> <br>
+					
+					
+						<label for="listaM">Motivo: </label><input type="text" name="motivoText" maxlength="250" size="40" value="Esplorazione" style="">
+						
+					</fieldset>
+				</td>
+				
+				</tr>
+			</tbody></table>
+		</div>
+		
+		
+			
+			<br> 
+<br>
+</fieldset>
+<div id="ricercaStoricoInfo" style="display: none;">
+	<br>(*) Il servizio è disponibile a partire dalla data del 01/01/2014
+</div>
+<br><br>
+	<input type="submit" name="ricerca" value="Inoltra" style=""> 	
+	<input type="submit" name="cancel" value="Pulisci" onclick="bCancel=true;" style="">	
+</form>

@@ -1,0 +1,265 @@
+<form name="RicercaIMMForm" method="post" action="/Visure/vimm/RicercaIMM.do" onsubmit="this.scelta.disabled=true;"> 
+								<fieldset>
+									<legend class="blue"><strong>&nbsp;Ricerca per immobili&nbsp;</strong> </legend>
+									<br>
+									<table>
+										<tbody><tr>
+											<td></td>
+											<td><label for="tipoCatasto">Catasto:</label></td>
+											<td colspan="2">
+												<select name="tipoCatasto"><option value="T">Terreni</option>
+													<option value="F">Fabbricati</option></select>
+											</td>
+										</tr>
+										<tr>
+											<td></td>
+											<td><label for="denomComune">Comune: </label></td>
+											<td>
+											
+						
+										 		<select name="denomComune"><option value="A191#ALFONSINE#0#0">
+																	ALFONSINE
+																</option>
+															
+														
+													
+														
+															
+															
+																<option value="A547#BAGNACAVALLO#0#0">
+																	BAGNACAVALLO
+																</option>
+															
+														
+													
+														
+															
+															
+																<option value="A551#BAGNARA DI ROMAGNA#0#0">
+																	BAGNARA DI ROMAGNA
+																</option>
+															
+														
+													
+														
+															
+															
+																<option value="B188#BRISIGHELLA#0#0">
+																	BRISIGHELLA
+																</option>
+															
+														
+													
+														
+															
+															
+																<option value="B982#CASOLA VALSENIO#0#0">
+																	CASOLA VALSENIO
+																</option>
+															
+														
+													
+														
+															
+															
+																<option value="C065#CASTEL BOLOGNESE#0#0">
+																	CASTEL BOLOGNESE
+																</option>
+															
+														
+													
+														
+															
+															
+																<option value="C553#CERVIA#0#0">
+																	CERVIA
+																</option>
+															
+														
+													
+														
+															
+															
+																<option value="C963#CONSELICE#0#0">
+																	CONSELICE
+																</option>
+															
+														
+													
+														
+															
+															
+																<option value="D121#COTIGNOLA#0#0">
+																	COTIGNOLA
+																</option>
+															
+														
+													
+														
+															
+															
+																<option value="D458#FAENZA#0#0">
+																	FAENZA
+																</option>
+															
+														
+													
+														
+															
+															
+																<option value="D829#FUSIGNANO#0#0">
+																	FUSIGNANO
+																</option>
+															
+														
+													
+														
+															
+															
+																<option value="E730#LUGO#0#0">
+																	LUGO
+																</option>
+															
+														
+													
+														
+															
+															
+																<option value="F029#MASSA LOMBARDA#0#0">
+																	MASSA LOMBARDA
+																</option>
+															
+														
+													
+														
+															
+															
+																<option value="H199#RAVENNA#3#0">
+																	RAVENNA
+																</option>
+															
+														
+													
+														
+															
+															
+																<option value="H302#RIOLO TERME#0#0">
+																	RIOLO TERME
+																</option>
+															
+														
+													
+														
+															
+															
+																<option value="H642#RUSSI#0#0">
+																	RUSSI
+																</option>
+															
+														
+													
+														
+															
+															
+																<option value="I196#SANT'AGATA SUL SANTERNO#0#0">
+																	SANT'AGATA SUL SANTERNO
+																</option>
+															
+														
+													
+														
+															
+															
+																<option value="I787#SOLAROLO#0#0">
+																	SOLAROLO
+																</option></select>
+												<input type="submit" name="selSezione" value="scegli la sezione" style="">				 	
+											</td>
+											<td>
+												<label for="sezione">Sezione: </label> 
+												<select name="sezione"></select>
+											</td>
+										</tr>
+									</tbody></table>
+									<hr>
+									<table>		
+										<tbody><tr>
+											<td><input type="radio" name="tipoIdentificativo" value="d" checked="checked" style=""></td>
+											<td colspan="10"> <strong>Identificativo definitivo</strong></td>
+										</tr>	
+										<tr>
+											<td></td>	
+											<td><label for="sezUrb">Sezione urbana: </label></td>
+											<td><input type="text" name="sezUrb" maxlength="3" size="3" value="" style=""></td>		
+											<td><label for="foglio">Foglio: </label></td>
+											<td><input type="text" name="foglio" maxlength="4" size="4" value="" style=""></td>
+											<td><label for="particella1" title="inserire il carattere * per visualizzare le strade pubbliche oppure il carattere / per visualizzare le acque esenti da estimo">Particella: </label>	</td>			
+											<td colspan="2"><input type="text" name="particella1" maxlength="5" size="5" value="" title="inserire il carattere * per visualizzare le strade pubbliche oppure il carattere / per visualizzare le acque esenti da estimo" style="">&nbsp;<input type="text" name="particella2" maxlength="4" size="4" value="" style=""></td>					
+											<td><label for="subalterno1">Subalterno: </label></td>	
+											<td><input type="text" name="subalterno1" maxlength="4" size="4" value="" style=""></td>	
+										</tr>
+										<tr>
+											<td><input type="radio" name="tipoIdentificativo" value="p" style=""></td>
+											<td colspan="11"> <strong>Identificativo provvisorio</strong></td>
+										</tr>
+										<tr>
+								 			<td></td>
+											<td><label for="tipoDenuncia">Tipo denuncia: </label></td>
+											<td colspan="3">
+												<select name="tipoDenuncia" size="1" style="tipoDenucia"><option value="">-</option>
+													<!--<option value="A">Assente</option>-->
+													<option value="p">Protocollo</option>
+													<option value="s">Scheda</option>
+													<option value="v">Denuncia di variazione</option></select>	
+											</td>
+											<td><label for="numero1">Numero: </label></td>
+											<td><input type="text" name="numero1" maxlength="9" size="9" value="" style="">&nbsp;&nbsp;</td>
+											<td><label for="anno">Anno: </label></td>
+											<td><input type="text" name="anno" maxlength="4" size="4" value="" style="">&nbsp;</td>	
+										</tr>
+									</tbody></table>
+								</fieldset>
+								
+								
+							
+							
+							
+							<fieldset>
+								<legend class="blue">Richiedente</legend><br>
+								<label for="richiedente">Richiesta effettuata per conto di: </label> 
+								<input type="text" name="richiedente" maxlength="16" size="20" value="" style="">
+							
+							</fieldset>
+							
+							
+			
+			
+			
+				<table class="cento">
+					<tbody><tr>
+						<td><fieldset><legend class="blue">Motivazione</legend> <br>
+						
+					
+						<label for="listaM">Motivo: </label><input type="text" name="motivoText" maxlength="250" value="Esplorazione" style="">
+						
+					</fieldset>
+					</td>
+					</tr>
+				</tbody></table>
+			
+		
+					
+			<br> 
+								
+								
+								<table>	
+									<tbody><tr>
+									  <td><input type="submit" name="scelta" value="Ricerca" style=""></td>
+									  <td><input type="submit" name="scelta" value="Visura" style=""></td>
+									  <td><input type="submit" name="scelta" value="Pulisci" style=""></td>
+						
+									  <td><input type="submit" name="scelta" value="Ultima Ricerca" style=""></td>
+						
+									</tr>
+								</tbody></table>
+							</form>

@@ -1,0 +1,18 @@
+{
+  "query": "originali",
+  "outcome": "form-rejected",
+  "request": {
+    "provincia": "Ravenna",
+    "comune": "RAVENNA",
+    "foglio": "103",
+    "tipo_catasto": "F"
+  },
+  "response": {
+    "request_id": "originali_fixture",
+    "tipo_catasto": "F",
+    "status": "error",
+    "data": null,
+    "error": "SISTER ha rifiutato il modulo: La sezione è obbligatoria per il comune specificato.",
+    "timestamp": "2026-10-06T00:00:00"
+  }
+}

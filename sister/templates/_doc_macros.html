@@ -314,7 +314,7 @@
                 <td class="text-end no-print">
                     <div class="btn-group doc-actions" role="group">
                         {% if d.viewable %}
-                        <a href="{{ prefix }}/{{ d.id }}" class="btn btn-outline-{{ color }}" title="Apri visura"><i class="fas fa-eye"></i></a>
+                        <a href="{{ prefix }}/{{ d.id }}" class="btn btn-outline-{{ color }}" title="{{ 'Apri ispezione ipotecaria' if d.document_type == 'ispezione_ipotecaria' else 'Apri visura' }}"><i class="fas fa-eye"></i></a>
                         {% endif %}
                         <a href="{{ prefix }}/{{ d.id }}?template=result_detail" class="btn btn-outline-secondary" title="Dati completi"><i class="fas fa-table-list"></i></a>
                     </div>

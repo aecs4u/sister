@@ -1,0 +1,36 @@
+<form name="RiepilogoVisForm" method="post" action="/Visure/RiepilogoVisure/RiepilogoVis.do">
+								
+								
+<fieldset>
+<legend> <strong>Dati di ricerca</strong></legend><br>
+<input type="hidden" name="titolare" value="NO" style="">		
+
+
+ 
+ 
+	<input type="hidden" name="codiceFiscale" value="" style="">
+    
+ 
+
+<input type="hidden" name="codiceFiscaleTit" value="TSTUSR00A01H501X" style="">
+
+<label for="data"><strong>Data visura</strong></label>:&nbsp;&nbsp;   
+
+			&nbsp;<noscript>
+			<input type="text" name="giorno" maxlength="10" size="10" value="06/10/2026" id="giorno">
+			</noscript>
+			
+			<input type="text" name="giorno" value="06/10/2026" size="10" id="giorno" maxlength="10" style=""><input type="image" src="/img/calendario.jpg" onclick="return showCalendar('giorno', '%d/%m/%Y');" <br="" style=""><br><br>
+<input type="hidden" name="listacom" value="" style="">
+  
+ <label for="richiedente"><strong>&nbsp;Richiedente </strong></label>: &nbsp;&nbsp;
+		 <input type="text" name="richiedente" size="50" value="" id="richiedente" style="">		 		 
+<br><br>  
+</fieldset>
+<div>
+<br><br>
+<input type="submit" name="submit" value="Visualizza" style="">&nbsp;&nbsp;&nbsp;
+<input type="submit" name="submit" value="Stampa" style="">
+<br><br>
+</div>			
+</form>

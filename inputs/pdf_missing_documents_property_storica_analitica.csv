@@ -1,0 +1,5 @@
+command,provincia,comune,foglio,particella,subalterno,tipo_catasto,codice_fiscale,vista,source_files,scope_note
+visura-storica,Palermo,PALERMO,11,1073,5,F,,analitica,vi_att_PA_FG11_PT1073_SUB5_T359387_2026.pdf,Storica Analitica Visura per Immobile; replaces the earlier search-only query per user instruction.
+visura-storica,Palermo,PALERMO,11,1752,1,F,,analitica,vi_att_PA_FG11_PT1752_T403854_2026.pdf,Storica Analitica Visura per Immobile; replaces the earlier search-only query per user instruction.
+visura-storica,Palermo,PALERMO,11,1857,1,F,,analitica,vi_att_PA_FG11_PT1857_SUB1_T374051_2026.pdf,Storica Analitica Visura per Immobile; replaces the earlier search-only query per user instruction.
+visura-storica,Ravenna,RAVENNA,104,2154,,T,,analitica,vi_att_ter_RA_RAVENNA_FG104_PT2154.pdf,Storica Analitica Visura per Immobile; replaces the earlier search-only query per user instruction.

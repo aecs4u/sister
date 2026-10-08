@@ -1,0 +1,150 @@
+<form name="RicercaVisPNFForm" method="post" action="/Visure/vpnf/RicercaVisPNF.do" onsubmit="this.ricerca.disabled=true;">
+			
+
+	
+
+<fieldset>
+<legend class="blue">Ricerca persona giuridica&nbsp;</legend> 
+	<table><tbody><tr><td>		
+	<table>
+		
+			<tbody><tr><td></td><td><label for="tipoCatasto">Catasto:</label></td>
+				<td colspan="2"><select name="tipoCatasto" onchange="checkRestrizioneFogli();" id="tipoCatastoRstrz"><option value="E">Terreni e Fabbricati</option>		
+				<option value="T">Terreni</option>
+				<option value="F">Fabbricati</option></select></td>
+				
+		
+						
+				<td></td><td></td><td></td><td></td></tr>
+				
+				<tr>
+				 
+			  
+	          
+				
+				<input type="hidden" name="comuneCat" value="$" style="">
+				
+			</tr>
+		</tbody></table>
+
+       	<table id="restrizioneFogli" style="display: none;">	
+			<tbody><tr>
+				<td colspan="2"><input type="checkbox" name="abilitaRestrizioniFoglio" value="on" onchange="checkAbilitaRestrizioneFogli(this);" style="">abilita restrizione fogli</td>
+   			</tr>
+			<tr>
+       			<td></td>
+       			<td>
+       				<input type="submit" name="selSezione" value="scegli la sezione" disabled="" style="">
+				</td>
+			
+				<td>
+					<label for="sezione">Sezione: </label> 
+					<select name="sezione" disabled=""></select>
+				</td>
+			
+				<td></td>	
+				<td><label for="sezUrb">Sezione urbana: </label></td>
+				<td><input type="text" name="sezUrb" maxlength="3" size="3" value="" disabled="" style=""></td>		
+				<td><label for="foglio">Foglio: </label></td>
+				<td><input type="text" name="foglio" maxlength="14" size="14" value="" disabled="" style="">
+				<img title="Si possono inserire fino ad un massimo di tre fogli separti dal carattere ','" src="/img/informazioni.gif">
+			</td></tr>
+		</tbody></table>
+		
+		<br><table> 
+		<tbody><tr>
+		   <td> <input type="radio" name="selCfDn" value="denominazione" checked="checked" id="anagrafica" style=""> </td>
+		   <td> <label for="denominazione">Denominazione: </label> </td>
+		   <td><input type="text" name="denominazione" maxlength="150" size="60" value="" style=""></td><td></td>
+		</tr>
+		<tr>
+		   <td></td>
+		   <td><label for="provincia_amm">Provincia : </label></td> 
+		   <td><select name="provincia_amm"><option value=""></option><option value="AG">AG</option><option value="AL">AL</option><option value="AN">AN</option><option value="AO">AO</option><option value="AP">AP</option><option value="AQ">AQ</option><option value="AR">AR</option><option value="AT">AT</option><option value="AV">AV</option><option value="BA">BA</option><option value="BG">BG</option><!-- 111 options in the portal, trimmed --></select>
+			 <input type="submit" name="selcomune" value="Visualizza i comuni" style=""></td> 
+			 </tr>
+			<tr><td></td>
+			<td><label for="sede">Comune: </label> </td>
+			<td><select name="sede"><option value=""></option></select></td> 
+			</tr>
+		
+<tr>
+	 <td></td>   
+	 
+	 
+	 <td colspan="4">
+			<!-- <input type="radio" name="tipo_ispezione" value="R" checked="checked"> -->
+			<label for="tipo_ispezione">Cerca solo i soggetti con dati
+			anagrafici uguali (Ristretta) </label></td>  
+			
+	
+	
+			
+			</tr>
+
+	</tbody></table> 
+			
+
+	<table>
+	  <tbody><tr>	
+	   <td> </td>
+	   </tr>
+	  </tbody></table>
+
+   <table> 
+	 <tbody><tr>	
+	  <td>	 <input type="radio" name="selCfDn" value="CF_PNF" style=""></td>
+	  <td><label for="cod_fisc">Codice Fiscale: </label> </td>
+	  <td><input type="text" name="cod_fisc" maxlength="11" value="" id="cf" style=""></td>
+	</tr>
+  </tbody></table>
+</td></tr></tbody></table>
+</fieldset>
+
+
+
+<br>
+
+
+	
+
+
+<fieldset>
+	<legend class="blue">Richiedente</legend><br>
+	<label for="richiedente">Richiesta effettuata per conto di: </label> 
+	<input type="text" name="richiedente" maxlength="16" size="20" value="" style="">
+
+</fieldset>
+
+
+
+
+	
+	
+	<table class="cento">
+			<tbody><tr>
+			<td><fieldset><legend class="blue">Motivazione</legend> <br>
+				
+				
+					<label for="listaM">Motivo: </label><input type="text" name="motivoText" maxlength="250" size="40" value="Esplorazione" style="">
+					
+				</fieldset>
+			</td>
+			</tr>
+		</tbody></table>
+		
+		
+<br>
+
+<input type="hidden" name="tipoRicerca" value="PNF" style="">
+<input type="hidden" name="forzaRicerca" value="0" style="">
+<input type="hidden" name="ritorno" value="0" style="">
+<input type="hidden" name="forzaCf" value="0" style="">
+			<input type="submit" name="ricerca" value="Ricerca" style=""> 
+			<input type="submit" name="cancel" value="Pulisci" onclick="bCancel=true;" style="">
+			
+			 
+			<input type="submit" name="cancel" value="Ultima Ricerca" onclick="bCancel=true;" style="">  
+						
+	
+</form>

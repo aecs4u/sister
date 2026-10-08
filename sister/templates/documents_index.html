@@ -1,4 +1,5 @@
 {% extends "_base.html" %}
+{% from "parts/_related_links.html" import related_pages %}
 {% from "_doc_macros.html" import jump_chips, query_section,
                                    query_subsection, doc_table, doc_macros_js %}
 
@@ -70,6 +71,12 @@
     {% endfor %}
 
     {% endif %}
+    {{ related_pages("Collegamenti correlati", [
+        ("/web/results", "Risultati", "Risalire dalla richiesta alla risposta salvata.", "fa-database"),
+        ("/web/dossiers", "Dossier", "Esplorare i payload completi delle query.", "fa-folder-open"),
+        ("/web/forms", "Query Forms", "Inviare una nuova ricerca catastale.", "fa-clipboard-list"),
+        ("/web/glossary#formati-file", "Formati e tipi", "Capire le etichette e le coppie PDF, P7M e XML.", "fa-book")
+    ]) }}
 </div>
 {% endblock %}
 

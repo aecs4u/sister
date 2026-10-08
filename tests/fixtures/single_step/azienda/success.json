@@ -1,0 +1,27 @@
+{
+  "query": "azienda",
+  "outcome": "success",
+  "request": {
+    "identificativo": "00000000001",
+    "tipo_catasto": "E"
+  },
+  "response": {
+    "request_id": "azienda_fixture",
+    "tipo_catasto": "E",
+    "status": "completed",
+    "data": {
+      "soggetto": "00000000001",
+      "immobili": [
+        {
+          "": "",
+          "Denominazione": "ROSSI S.R.L.",
+          "Sede": "MONZA (MI)",
+          "Codice Fiscale": "00000000001"
+        }
+      ],
+      "total_results": 1
+    },
+    "error": null,
+    "timestamp": "2026-10-06T00:00:00"
+  }
+}

@@ -1,4 +1,5 @@
 {% extends "_base.html" %}
+{% from "parts/_related_links.html" import related_pages %}
 {% block page_title %}Guida Utente{% endblock %}
 
 {% block extra_css %}
@@ -22,6 +23,21 @@
 
 <div class="container-fluid">
     <div class="row">
+        <details class="col-12 d-lg-none mb-3">
+            <summary class="btn btn-outline-primary w-100 text-start"><i class="fas fa-list me-2"></i>Indice della guida</summary>
+            <div class="list-group list-group-flush small border rounded mt-2">
+                <a href="#cos-e" class="list-group-item list-group-item-action">1. Cos'è SISTER</a>
+                <a href="#chi-lo-usa" class="list-group-item list-group-item-action">2. Chi lo usa</a>
+                <a href="#come-si-entra" class="list-group-item list-group-item-action">3. Come si entra</a>
+                <a href="#prima-attivazione" class="list-group-item list-group-item-action">4. Prima attivazione</a>
+                <a href="#aree-principali" class="list-group-item list-group-item-action">5. Aree principali</a>
+                <a href="#flussi" class="list-group-item list-group-item-action">6. Flussi operativi</a>
+                <a href="#preparazione" class="list-group-item list-group-item-action">7. Cosa preparare</a>
+                <a href="#errori" class="list-group-item list-group-item-action">8. Errori frequenti</a>
+                <a href="#supporto" class="list-group-item list-group-item-action">9. Accesso e supporto</a>
+                <a href="#riepilogo" class="list-group-item list-group-item-action">10. Riepilogo</a>
+            </div>
+        </details>
         {# TOC sidebar #}
         <div class="col-lg-3 d-none d-lg-block">
             <div class="card border-0 shadow-sm sticky-top" style="top:1rem">
@@ -359,6 +375,12 @@
                 </div>
             </div>
 
+            {{ related_pages("Continua la consultazione", [
+                ("/web/forms", "Avvia una ricerca", "Apri i moduli per le query catastali e i workflow.", "fa-clipboard-list"),
+                ("/web/cheatsheet", "Cheat sheet", "Rivedi i passaggi essenziali in forma rapida.", "fa-bolt"),
+                ("/web/glossary", "Glossario", "Consulta i termini catastali, ipotecari e i formati.", "fa-book"),
+                ("/web/documents", "Documenti", "Apri e confronta i file scaricati.", "fa-folder-tree")
+            ], "Passa dalla guida generale agli strumenti pratici dell'app.") }}
         </div>{# /col #}
     </div>{# /row #}
 </div>

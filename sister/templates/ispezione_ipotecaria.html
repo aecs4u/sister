@@ -1,0 +1,275 @@
+{% extends "_base.html" %}
+
+{% block page_title %}Ispezione ipotecaria{% endblock %}
+
+{% block extra_css %}
+{{ super() }}
+<style>
+  .ispezione-text { white-space: pre-wrap; overflow-wrap: anywhere; }
+  .ispezione-field dt { color: var(--bs-secondary-color); font-weight: 500; }
+  .ispezione-field dd { overflow-wrap: anywhere; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="container-fluid py-4">
+  <nav class="mb-3" aria-label="breadcrumb">
+    <ol class="breadcrumb">
+      <li class="breadcrumb-item"><a href="/web/documents">Documenti</a></li>
+      <li class="breadcrumb-item active">Ispezione ipotecaria</li>
+    </ol>
+  </nav>
+
+  {% set summary = namespace(parsed=None) %}
+  {% for item in inspection_documents %}
+    {% if item.parsed and not summary.parsed %}{% set summary.parsed = item.parsed %}{% endif %}
+  {% endfor %}
+
+  <div class="card border-0 shadow-sm mb-4">
+    <div class="card-header">
+      <h1 class="h5 mb-1">Ispezione ipotecaria{% if summary.parsed and summary.parsed.inspection_number %} · T{{ summary.parsed.inspection_number }}{% endif %}</h1>
+      {% if summary.parsed and (summary.parsed.comune or summary.parsed.provincia) %}
+      <div class="small text-muted">{{ summary.parsed.comune or '' }}{% if summary.parsed.provincia %} ({{ summary.parsed.provincia }}){% endif %}</div>
+      {% endif %}
+    </div>
+    <div class="card-body">
+    <div class="d-flex flex-wrap gap-2 mb-3">
+      <span class="badge bg-primary">{{ inspection_documents|length }} file</span>
+      {% if summary.parsed and summary.parsed.formalities %}
+      <span class="badge bg-secondary">{{ summary.parsed.formalities|length }} formalità</span>
+      {% endif %}
+      {% if summary.parsed and summary.parsed.inspection_document_type %}
+      <span class="badge bg-light text-dark border">{{ summary.parsed.inspection_document_type|replace('_', ' ')|title }}</span>
+      {% endif %}
+    </div>
+
+    {% if summary.parsed %}
+    <dl class="row ispezione-field mb-0">
+      {% if summary.parsed.inspection_number %}<dt class="col-sm-3">Numero ispezione</dt><dd class="col-sm-9">T{{ summary.parsed.inspection_number }}</dd>{% endif %}
+      {% if summary.parsed.inspection_date %}<dt class="col-sm-3">Data ispezione</dt><dd class="col-sm-9">{{ summary.parsed.inspection_date }}</dd>{% endif %}
+      {% if summary.parsed.document_date or summary.parsed.document_time %}<dt class="col-sm-3">Generato</dt><dd class="col-sm-9">{{ summary.parsed.document_date or '' }} {{ summary.parsed.document_time or '' }}</dd>{% endif %}
+      {% if summary.parsed.inspection_mode %}<dt class="col-sm-3">Modalità</dt><dd class="col-sm-9">{{ summary.parsed.inspection_mode }}</dd>{% endif %}
+      {% if summary.parsed.tipo_catasto %}<dt class="col-sm-3">Catasto</dt><dd class="col-sm-9">{{ 'Terreni' if summary.parsed.tipo_catasto == 'T' else 'Fabbricati' }}</dd>{% endif %}
+      {% if summary.parsed.foglio or summary.parsed.particella %}<dt class="col-sm-3">Dati catastali</dt><dd class="col-sm-9">Foglio {{ summary.parsed.foglio or '–' }} · Particella {{ summary.parsed.particella or '–' }}{% if summary.parsed.subalterno %} · Subalterno {{ summary.parsed.subalterno }}{% endif %}</dd>{% endif %}
+      {% if summary.parsed.period_from or summary.parsed.period_to %}<dt class="col-sm-3">Periodo informatizzato</dt><dd class="col-sm-9">{{ summary.parsed.period_from or '–' }} – {{ summary.parsed.period_to or '–' }}</dd>{% endif %}
+      {% if summary.parsed.office %}<dt class="col-sm-3">Ufficio</dt><dd class="col-sm-9">{{ summary.parsed.office }}</dd>{% endif %}
+      {% if summary.parsed.requester %}<dt class="col-sm-3">Richiedente</dt><dd class="col-sm-9">{{ summary.parsed.requester }}</dd>{% endif %}
+      {% if summary.parsed.requester_cf %}<dt class="col-sm-3">Codice fiscale richiedente</dt><dd class="col-sm-9 font-monospace">{{ summary.parsed.requester_cf }}</dd>{% endif %}
+      {% if summary.parsed.request_reason %}<dt class="col-sm-3">Motivazione</dt><dd class="col-sm-9">{{ summary.parsed.request_reason }}</dd>{% endif %}
+      {% if summary.parsed.fee %}<dt class="col-sm-3">Tassa versata</dt><dd class="col-sm-9">{{ summary.parsed.fee }}</dd>{% endif %}
+    </dl>
+    {% endif %}
+    </div>
+  </div>
+
+  {% if ocular_extraction %}
+  {% set extraction = ocular_extraction.extraction %}
+  {% set inspection = ocular_extraction.inspection %}
+  <section class="card border-0 shadow-sm mb-4" aria-labelledby="ocular-heading">
+    <div class="card-header d-flex flex-wrap justify-content-between align-items-center gap-2">
+      <div>
+        <h2 class="h5 mb-1" id="ocular-heading">Dati strutturati Ocular</h2>
+        <div class="small text-muted">Risultati salvati nelle tabelle Sister</div>
+      </div>
+      <span class="badge bg-success">{{ extraction.provider or 'Ocular' }}{% if extraction.model %} · {{ extraction.model }}{% endif %}</span>
+    </div>
+    <div class="card-body">
+      <div class="small text-muted mb-3">
+        Schema {{ extraction.schema_name }}{% if extraction.schema_version %} · versione {{ extraction.schema_version }}{% endif %}
+        {% if extraction.run_id %} · run {{ extraction.run_id }}{% endif %}
+        {% if extraction.extracted_at %} · estratto {{ extraction.extracted_at }}{% endif %}
+      </div>
+
+      {% if inspection %}
+      <h3 class="h6">Ispezione e nota</h3>
+      <div class="table-responsive mb-4">
+        <table class="table table-sm table-bordered align-middle">
+          <tbody>
+            <tr><th scope="row">Ispezione</th><td>{{ inspection.inspection_number or '–' }}</td><th scope="row">Data e ora</th><td>{{ inspection.inspection_date or '–' }} {{ inspection.inspection_time or '' }}</td></tr>
+            <tr><th scope="row">Inizio</th><td>{{ inspection.inspection_start or '–' }}</td><th scope="row">Richiedente</th><td>{{ inspection.requester or '–' }}</td></tr>
+            <tr><th scope="row">Ufficio</th><td>{{ inspection.office or '–' }}</td><th scope="row">Servizio</th><td>{{ inspection.service or '–' }}</td></tr>
+            <tr><th scope="row">Tipo nota</th><td>{{ inspection.note_type or '–' }}</td><th scope="row">Presentazione</th><td>{{ inspection.presentazione_numero or '–' }}{% if inspection.presentazione_data %} · {{ inspection.presentazione_data }}{% endif %}</td></tr>
+            <tr><th scope="row">Registri</th><td>Generale {{ inspection.registro_generale or '–' }} · Particolare {{ inspection.registro_particolare or '–' }}</td><th scope="row">Riepilogo</th><td>{{ inspection.unit_count or 0 }} unità · {{ inspection.party_favore_count or 0 }} a favore · {{ inspection.party_contro_count or 0 }} contro</td></tr>
+            {% if inspection.section_a_other_data %}<tr><th scope="row">Altri dati</th><td colspan="3">{{ inspection.section_a_other_data }}</td></tr>{% endif %}
+            {% if inspection.section_d_text %}<tr><th scope="row">Sezione D</th><td colspan="3" class="ispezione-text">{{ inspection.section_d_text }}</td></tr>{% endif %}
+          </tbody>
+        </table>
+      </div>
+      {% endif %}
+
+      {% if ocular_extraction.title %}
+      {% set title = ocular_extraction.title %}
+      <h3 class="h6">Titolo e pubblico ufficiale</h3>
+      <div class="table-responsive mb-4">
+        <table class="table table-sm table-striped align-middle"><thead><tr><th>Tipo</th><th>Descrizione</th><th>Data</th><th>Repertorio</th><th>Notaio</th><th>Sede</th></tr></thead>
+          <tbody><tr><td>{{ title.title_type or '–' }}</td><td>{{ title.description or '–' }}</td><td>{{ title.title_date or '–' }}</td><td>{{ title.repertory_number or '–' }}</td><td>{{ title.notary_name or '–' }}{% if title.notary_fiscal_code %}<div class="font-monospace small">{{ title.notary_fiscal_code }}</div>{% endif %}</td><td>{{ title.notary_location or '–' }}</td></tr></tbody>
+        </table>
+      </div>
+      {% endif %}
+
+      {% if ocular_extraction.lien %}
+      {% set lien = ocular_extraction.lien %}
+      <h3 class="h6">Dati ipoteca</h3>
+      <div class="table-responsive mb-4">
+        <table class="table table-sm table-striped align-middle"><thead><tr><th>Specie</th><th>Derivante da</th><th>Capitale</th><th>Interessi</th><th>Spese</th><th>Totale</th><th>Durata</th><th>Grado</th></tr></thead>
+          <tbody><tr><td>{{ lien.lien_type_original or lien.lien_type or '–' }}</td><td>{{ lien.derived_from_description or lien.derived_from or '–' }}</td><td>{{ lien.principal_euro if lien.principal_euro is not none else '–' }} €</td><td>{{ lien.interest_euro if lien.interest_euro is not none else (lien.annual_interest_rate or '–') }}</td><td>{{ lien.expenses_euro if lien.expenses_euro is not none else '–' }} €</td><td>{{ lien.total_euro if lien.total_euro is not none else '–' }} €</td><td>{{ lien.duration_description or lien.duration_years or '–' }}</td><td>{{ lien.mortgage_rank or '–' }}</td></tr></tbody>
+        </table>
+      </div>
+      {% endif %}
+
+      {% if ocular_extraction.units %}
+      <h3 class="h6">Unità negoziali e immobili</h3>
+      {% for unit in ocular_extraction.units %}
+      <div class="table-responsive mb-3">
+        <table class="table table-sm table-bordered align-middle">
+          <caption class="caption-top fw-semibold">Unità negoziale {{ unit.unit_number or loop.index }}</caption>
+          <thead><tr><th>#</th><th>Comune</th><th>Catasto</th><th>Foglio</th><th>Particella</th><th>Subalterno</th><th>Natura</th><th>Consistenza</th><th>Indirizzo</th></tr></thead>
+          <tbody>
+            {% for property in unit.properties %}
+            <tr><td>{{ property.property_number or loop.index }}</td><td>{{ property.municipality or '–' }}{% if property.municipality_code %}<div class="small text-muted">{{ property.municipality_code }}</div>{% endif %}</td><td>{{ property.cadastre_type or '–' }}{% if property.urban_section %}<div class="small">Sezione {{ property.urban_section }}</div>{% endif %}</td><td>{{ property.sheet or '–' }}</td><td>{{ property.parcel or '–' }}</td><td>{{ property.subunit or '–' }}</td><td>{{ property.nature_description or property.nature or '–' }}</td><td>{% if property.room_count is not none %}{{ property.room_count }} vani{% elif property.area_sqm is not none %}{{ property.area_sqm }} m²{% else %}–{% endif %}</td><td>{{ property.address or '–' }}{% if property.civic_number %}, {{ property.civic_number }}{% endif %}{% if property.floor %}<div class="small">Piano {{ property.floor }}</div>{% endif %}</td></tr>
+            {% else %}<tr><td colspan="9" class="text-muted">Nessun immobile associato</td></tr>{% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% endfor %}
+      {% endif %}
+
+      {% if ocular_extraction.parties %}
+      <h3 class="h6">Soggetti della nota</h3>
+      <div class="table-responsive mb-4">
+        <table class="table table-sm table-striped align-middle">
+          <thead><tr><th>Ruolo</th><th>#</th><th>Soggetto</th><th>Qualità</th><th>Codice fiscale</th><th>Diritto</th><th>Quota</th><th>Unità</th><th>Testo originale</th></tr></thead>
+          <tbody>
+            {% for party in ocular_extraction.parties %}
+            <tr>
+              <td>{{ 'A favore' if party.role == 'a_favore' else 'Contro' }}</td><td>{{ party.subject_number or party.ordinal + 1 }}</td>
+              <td>{% if party.entity_name %}{{ party.entity_name }}{% else %}{{ party.surname or '' }} {{ party.given_name or '' }}{% endif %}{% if party.birth_date or party.birth_place %}<div class="small text-muted">{{ party.birth_date or '' }}{% if party.birth_place %} · {{ party.birth_place }}{% endif %}</div>{% endif %}</td>
+              <td>{{ party.quality or party.raw_quality or '–' }}</td><td class="font-monospace">{{ party.fiscal_code or '–' }}</td><td>{{ party.right_type or party.raw_right_type or '–' }}</td>
+              <td>{% if party.share_numerator is not none or party.share_denominator is not none %}{{ party.share_numerator or 0 }}/{{ party.share_denominator or 0 }}{% else %}{{ party.raw_share or '–' }}{% endif %}</td><td>{{ party.negotiation_unit_reference or '–' }}</td><td>{{ party.raw_quality or '–' }}{% if party.raw_share %}<div>{{ party.raw_share }}</div>{% endif %}{% if party.raw_right_type %}<div>{{ party.raw_right_type }}</div>{% endif %}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% endif %}
+
+      <details>
+        <summary class="small fw-semibold">Payload JSON originale</summary>
+        <pre class="ispezione-text small bg-body-tertiary border rounded p-3 mt-2 mb-0">{{ extraction.structured_data|tojson(indent=2) }}</pre>
+      </details>
+    </div>
+  </section>
+  {% endif %}
+
+  {% if not inspection_documents %}
+  <div class="alert alert-warning">Non sono stati trovati file PDF associati a questa ispezione.</div>
+  {% else %}
+  <div class="accordion shadow-sm" id="ispezione-files">
+    {% for item in inspection_documents %}
+    {% set file_index = loop.index %}
+    {% set parsed = item.parsed %}
+    {% set file_title = parsed.inspection_document_type|replace('_', ' ')|title if parsed and parsed.inspection_document_type else 'Documento' %}
+    <div class="accordion-item">
+      <h2 class="accordion-header" id="ispezione-heading-{{ file_index }}">
+        <button class="accordion-button {{ '' if loop.first else 'collapsed' }}" type="button"
+                data-bs-toggle="collapse" data-bs-target="#ispezione-collapse-{{ file_index }}"
+                aria-expanded="{{ 'true' if loop.first else 'false' }}" aria-controls="ispezione-collapse-{{ file_index }}">
+          <span class="me-2 fw-semibold">{{ file_title }}</span>
+          {% if parsed and parsed.registro_particolare %}<span class="badge bg-secondary me-2">RP {{ parsed.registro_particolare }}</span>{% endif %}
+          <span class="small text-muted text-truncate">{{ item.filename }}</span>
+        </button>
+      </h2>
+      <div id="ispezione-collapse-{{ file_index }}" class="accordion-collapse collapse {{ 'show' if loop.first else '' }}"
+           aria-labelledby="ispezione-heading-{{ file_index }}" data-bs-parent="#ispezione-files">
+        <div class="accordion-body">
+          <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+            <span class="small text-muted font-monospace">{{ item.filename }}</span>
+            <div class="d-flex gap-2">
+              {% if item.file_url %}<a class="btn btn-sm btn-outline-primary" href="{{ item.file_url }}" target="_blank" rel="noopener"><i class="fas fa-file-pdf me-1"></i>Apri PDF</a>{% endif %}
+              {% if item.download_url %}<a class="btn btn-sm btn-outline-secondary" href="{{ item.download_url }}"><i class="fas fa-download me-1"></i>Scarica</a>{% endif %}
+            </div>
+          </div>
+
+          {% if parsed and (parsed.registro_generale or parsed.registro_particolare or parsed.presentazione) %}
+          <dl class="row small mb-3">
+            {% if parsed.registro_generale %}<dt class="col-sm-3">Registro generale</dt><dd class="col-sm-9">{{ parsed.registro_generale }}</dd>{% endif %}
+            {% if parsed.registro_particolare %}<dt class="col-sm-3">Registro particolare</dt><dd class="col-sm-9">{{ parsed.registro_particolare }}</dd>{% endif %}
+            {% if parsed.presentazione %}<dt class="col-sm-3">Presentazione</dt><dd class="col-sm-9">{{ parsed.presentazione }}</dd>{% endif %}
+          </dl>
+          {% endif %}
+
+          {% if parsed and (parsed.inspection_date or parsed.office or parsed.requester or parsed.request_reason or parsed.fee) %}
+          <dl class="row small mb-3">
+            {% if parsed.inspection_date %}<dt class="col-sm-3">Data ispezione</dt><dd class="col-sm-9">{{ parsed.inspection_date }}</dd>{% endif %}
+            {% if parsed.office %}<dt class="col-sm-3">Ufficio</dt><dd class="col-sm-9">{{ parsed.office }}</dd>{% endif %}
+            {% if parsed.requester %}<dt class="col-sm-3">Richiedente</dt><dd class="col-sm-9">{{ parsed.requester }}</dd>{% endif %}
+            {% if parsed.request_reason %}<dt class="col-sm-3">Motivazione</dt><dd class="col-sm-9">{{ parsed.request_reason }}</dd>{% endif %}
+            {% if parsed.fee %}<dt class="col-sm-3">Tassa versata</dt><dd class="col-sm-9">{{ parsed.fee }}</dd>{% endif %}
+          </dl>
+          {% endif %}
+
+          {% if not parsed %}
+          <div class="alert alert-warning mb-0">Il testo del PDF non è stato estratto. Verificare che il file contenga testo selezionabile.</div>
+          {% else %}
+            {% if parsed.formalities %}
+            <h3 class="h6 mb-2">Elenco sintetico delle formalità</h3>
+            <div class="table-responsive mb-4">
+              <table class="table table-sm table-striped align-middle">
+                <thead><tr><th>#</th><th>Tipo</th><th>Data</th><th>Registro particolare</th><th>Registro generale</th><th>Pubblico ufficiale</th><th>Descrizione</th></tr></thead>
+                <tbody>
+                  {% for row in parsed.formalities %}
+                  <tr>
+                    <td>{{ row.number }}</td><td>{{ row.type }}</td><td>{{ row.date }}</td>
+                    <td>{{ row.registro_particolare }}</td><td>{{ row.registro_generale }}</td>
+                    <td>{{ row.public_official or '–' }}</td><td>{{ row.description or '–' }}</td>
+                  </tr>
+                  {% if row.details %}
+                  <tr><td colspan="7"><div class="small text-body-secondary">
+                    {% for detail in row.details %}<div>{{ detail }}</div>{% endfor %}
+                  </div></td></tr>
+                  {% endif %}
+                  {% endfor %}
+                </tbody>
+              </table>
+            </div>
+            {% endif %}
+
+            {% if parsed.sections %}
+            <h3 class="h6 mb-2">Dati della nota</h3>
+            <div class="accordion mb-3" id="ispezione-sections-{{ file_index }}">
+              {% for section in parsed.sections %}
+              {% set section_index = loop.index0 %}
+              <div class="accordion-item">
+                <h4 class="accordion-header" id="ispezione-section-heading-{{ file_index }}-{{ section_index }}">
+                  <button class="accordion-button collapsed py-2" type="button" data-bs-toggle="collapse"
+                          data-bs-target="#ispezione-section-{{ file_index }}-{{ section_index }}">
+                    Sezione {{ section.code }} · {{ section.title }}
+                  </button>
+                </h4>
+                <div id="ispezione-section-{{ file_index }}-{{ section_index }}" class="accordion-collapse collapse">
+                  <div class="accordion-body">
+                    {% if section.fields %}
+                    <dl class="row ispezione-field">
+                      {% for field in section.fields %}<dt class="col-md-4">{{ field.label }}</dt><dd class="col-md-8">{{ field.value }}</dd>{% endfor %}
+                    </dl>
+                    {% endif %}
+                    <h5 class="small fw-semibold">Testo della sezione</h5>
+                    <pre class="ispezione-text small bg-body-tertiary border rounded p-3 mb-0">{{ section.content }}</pre>
+                  </div>
+                </div>
+              </div>
+              {% endfor %}
+            </div>
+            {% endif %}
+
+            <h3 class="h6 mt-4 mb-2">Testo completo estratto dal PDF</h3>
+            <pre class="ispezione-text small bg-body-tertiary border rounded p-3 mb-0">{{ parsed.raw_text }}</pre>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

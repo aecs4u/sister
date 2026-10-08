@@ -35,6 +35,13 @@ from .db_models import (
     PageVisit,
     PageVisitError,
     PageVisitFormElement,
+    MortgageInspection,
+    MortgageInspectionLien,
+    MortgageInspectionParty,
+    MortgageInspectionProperty,
+    MortgageInspectionTitle,
+    MortgageInspectionUnit,
+    StructuredDocumentExtraction,
     VisuraDocument,
     VisuraOwner,
     VisuraProperty,
@@ -50,7 +57,7 @@ load_dotenv(PROJECT_ROOT / ".env")
 load_dotenv(PROJECT_ROOT.parent / ".env", override=False)
 DATA_ROOT = Path(os.getenv("SISTER_DATA_ROOT", str(PROJECT_ROOT))).expanduser().resolve()
 DATABASE_DSN = os.getenv("DATABASE_DSN")
-DATABASE_REVISION = "20261006_align_postgres_core"
+DATABASE_REVISION = "20261009_ocular_structured"
 
 # ---------------------------------------------------------------------------
 # Engine and session
@@ -113,6 +120,13 @@ async def init_db() -> None:
             "visura_owners",
             "visura_documents",
             "document_metadata",
+            "document_structured_extractions",
+            "mortgage_inspections",
+            "mortgage_inspection_titles",
+            "mortgage_inspection_liens",
+            "mortgage_inspection_units",
+            "mortgage_inspection_properties",
+            "mortgage_inspection_parties",
         }
         missing = sorted(required_tables - table_names)
         if missing:
@@ -820,7 +834,11 @@ async def get_documents_for_response(request_id: str, foglio: str = None, partic
         docs.append({
             "id": doc_row.id,
             "response_id": doc_row.response_id,
-            "document_type": doc_row.document_type,
+            "document_type": (
+                "ispezione_ipotecaria"
+                if (doc_row.filename or "").casefold().startswith("isp_")
+                else doc_row.document_type
+            ),
             "file_format": doc_row.file_format,
             "filename": doc_row.filename,
             "file_path": doc_row.file_path,
@@ -858,7 +876,11 @@ async def get_document_by_id(doc_id: int) -> dict | None:
     doc_row, meta, loc = row
     return {
         "id": doc_row.id,
-        "document_type": doc_row.document_type,
+        "document_type": (
+            "ispezione_ipotecaria"
+            if (doc_row.filename or "").casefold().startswith("isp_")
+            else doc_row.document_type
+        ),
         "file_format": doc_row.file_format,
         "filename": doc_row.filename,
         "file_path": doc_row.file_path,
@@ -875,6 +897,69 @@ async def get_document_by_id(doc_id: int) -> dict | None:
         "xml_content": (meta.content or "") if meta else "",
         "created_at": doc_row.created_at.isoformat() if doc_row.created_at else None,
     }
+
+
+async def get_document_structured_extraction(doc_id: int) -> dict | None:
+    """Fetch the latest archived structured payload and its normalized rows."""
+    session_factory = _get_session_factory()
+    async with session_factory() as session:
+        result = await session.execute(
+            select(StructuredDocumentExtraction)
+            .where(StructuredDocumentExtraction.document_id == doc_id)
+            .order_by(StructuredDocumentExtraction.created_at.desc(), StructuredDocumentExtraction.id.desc())
+            .limit(1)
+        )
+        extraction = result.scalar_one_or_none()
+        if extraction is None:
+            return None
+
+        extraction_id = extraction.id
+        inspection = (await session.execute(
+            select(MortgageInspection).where(MortgageInspection.extraction_id == extraction_id)
+        )).scalar_one_or_none()
+        title = (await session.execute(
+            select(MortgageInspectionTitle).where(MortgageInspectionTitle.extraction_id == extraction_id)
+        )).scalar_one_or_none()
+        lien = (await session.execute(
+            select(MortgageInspectionLien).where(MortgageInspectionLien.extraction_id == extraction_id)
+        )).scalar_one_or_none()
+        units = (await session.execute(
+            select(MortgageInspectionUnit)
+            .where(MortgageInspectionUnit.extraction_id == extraction_id)
+            .order_by(MortgageInspectionUnit.unit_number, MortgageInspectionUnit.id)
+        )).scalars().all()
+        parties = (await session.execute(
+            select(MortgageInspectionParty)
+            .where(MortgageInspectionParty.extraction_id == extraction_id)
+            .order_by(MortgageInspectionParty.role, MortgageInspectionParty.ordinal)
+        )).scalars().all()
+        unit_ids = [unit.id for unit in units]
+        properties = []
+        if unit_ids:
+            properties = (await session.execute(
+                select(MortgageInspectionProperty)
+                .where(MortgageInspectionProperty.unit_id.in_(unit_ids))
+                .order_by(MortgageInspectionProperty.unit_id, MortgageInspectionProperty.property_number)
+            )).scalars().all()
+
+        def record(row):
+            return {column.name: getattr(row, column.name) for column in row.__table__.columns}
+
+        properties_by_unit: dict[int, list[dict]] = {}
+        for property_row in properties:
+            properties_by_unit.setdefault(property_row.unit_id, []).append(record(property_row))
+
+        return {
+            "extraction": record(extraction),
+            "inspection": record(inspection) if inspection else None,
+            "title": record(title) if title else None,
+            "lien": record(lien) if lien else None,
+            "units": [
+                {**record(unit), "properties": properties_by_unit.get(unit.id, [])}
+                for unit in units
+            ],
+            "parties": [record(party) for party in parties],
+        }
 
 
 async def get_indexed_file_paths() -> dict[str, int]:
@@ -926,7 +1011,11 @@ async def get_all_documents(limit: int = 100, offset: int = 0) -> list[dict]:
         docs.append({
             "id": doc_row.id,
             "response_id": doc_row.response_id,
-            "document_type": doc_row.document_type,
+            "document_type": (
+                "ispezione_ipotecaria"
+                if (doc_row.filename or "").casefold().startswith("isp_")
+                else doc_row.document_type
+            ),
             "file_format": doc_row.file_format,
             "filename": doc_row.filename,
             "file_size": doc_row.file_size,

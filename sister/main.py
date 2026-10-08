@@ -506,79 +506,55 @@ async def _richiedi_ispezione_ipotecaria(
     return await richiedi_ispezione_ipotecaria(request, service, force=force)
 
 
+@app.post("/visura/workflow")
+async def _execute_workflow(
+    body: dict,
+    _: None = Depends(require_api_key),
+):
+    """Execute a named multi-step workflow using Sister's own query service."""
+    from pydantic import ValidationError
+
+    from .workflows import run_workflow
+
+    try:
+        result = await run_workflow(body)
+    except (ValidationError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return JSONResponse(result, status_code=422 if result.get("event") == "error" else 200)
+
+
 @app.post("/visura/{search_type}")
 async def _richiedi_generic(
+    request: Request,
     search_type: str,
     provincia: str,
     force: bool = False,
-    service: VisuraService = Depends(get_visura_service),
-    _: None = Depends(require_api_key),
     comune: Optional[str] = None,
     tipo_catasto: str = "T",
-    foglio: Optional[str] = None,
-    particella: Optional[str] = None,
-    indirizzo: Optional[str] = None,
-    numero_nota: Optional[str] = None,
-    anno_nota: Optional[str] = None,
-    partita: Optional[str] = None,
-    subalterno: Optional[str] = None,
-    sezione: Optional[str] = None,
-    codice_fiscale: Optional[str] = None,
-    vista: Optional[str] = None,
-    con_intestati: Optional[str] = None,
-    azienda: Optional[str] = None,
+    service: VisuraService = Depends(get_visura_service),
+    _: None = Depends(require_api_key),
 ):
-    valid_types = {
-        "visura-storica",
-        "soggetto-documento",
-        "soggetto-immobili",
-        "indirizzo",
-        "partita",
-        "nota",
-        "mappa",
-        "export-mappa",
-        "originali",
-        "fiduciali",
-        "ispezioni",
-        "ispezioni-cartacee",
-        "elaborato-planimetrico",
-        "riepilogo-visure",
-        "richieste",
-        "ipotecaria-stato",
-        "ipotecaria-elenchi",
-    }
-    normalized = search_type.replace("-", "_")
-    if normalized.replace("_", "-") not in {t.replace("_", "-") for t in valid_types}:
+    """Single-step query by search type (indirizzo, partita, nota, mappa, ...).
+
+    Every other query parameter is an input of the SISTER form: the accepted ones are listed per query in
+    ``sister.query_forms`` (the same spec that generates ``sister query <command>`` and ``/web/forms``).
+    """
+    from .query_forms import QUERY_FORMS
+
+    known_types = {q.search_type for q in QUERY_FORMS.values() if q.method == "generic_search"}
+    name = search_type.replace("_", "-")
+    name = {"ispezioni-cart": "ispezioni-cartacee"}.get(name, name)  # the CLI/older clients say ispezioni_cart
+    if name not in known_types:
         raise HTTPException(status_code=404, detail=f"Search type '{search_type}' not found")
 
-    params = {}
-    if foglio:
-        params["foglio"] = foglio
-    if particella:
-        params["particella"] = particella
-    if indirizzo:
-        params["indirizzo"] = indirizzo
-    if numero_nota:
-        params["numero_nota"] = numero_nota
-    if anno_nota:
-        params["anno_nota"] = anno_nota
-    if partita:
-        params["partita"] = partita
-    if subalterno:
-        params["subalterno"] = subalterno
-    if sezione:
-        params["sezione"] = sezione
-    if codice_fiscale:
-        params["codice_fiscale"] = codice_fiscale
-    if vista:
-        params["vista"] = vista
-    if con_intestati:
-        params["con_intestati"] = con_intestati
-    if azienda:
-        params["azienda"] = azienda
-
+    params = {
+        key: value
+        for key, value in request.query_params.items()
+        if key not in {"provincia", "force", "comune", "tipo_catasto"} and value != ""
+    }
+    internal = {"ispezioni-cartacee": "ispezioni_cart"}.get(name, name.replace("-", "_"))
     return await richiedi_generic_sister(
-        search_type=normalized,
+        search_type=internal,
         provincia=provincia,
         service=service,
         comune=comune,

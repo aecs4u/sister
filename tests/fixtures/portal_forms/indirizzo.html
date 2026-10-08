@@ -1,0 +1,239 @@
+<form name="ricercaIndForm" method="post" action="/Visure/vind/RicercaInd.do" onsubmit="this.ricerca.disabled=true;">
+<fieldset>
+<legend class="blue">Ricerca per indirizzo&nbsp;</legend> 
+	<br><table>
+			<tbody><tr>
+			  <td><label for="tipoCatasto">Catasto:</label></td>
+			  <td colspan="2"><strong>Fabbricati</strong>
+				<input type="hidden" name="tipoCatasto" value="F" style="">
+				</td>
+			  <td></td>
+			  </tr>
+			<tr> 
+			<td><label for="comuneCat">Comune: </label></td>
+			<td>
+					<select name="comuneCat"><option value="A191#ALFONSINE#0#0">
+						ALFONSINE
+					</option>
+					
+											
+   				
+					
+					
+					 
+ 				 	<option value="A547#BAGNACAVALLO#0#0">
+						BAGNACAVALLO
+					</option>
+					
+											
+   				
+					
+					
+					 
+ 				 	<option value="A551#BAGNARA DI ROMAGNA#0#0">
+						BAGNARA DI ROMAGNA
+					</option>
+					
+											
+   				
+					
+					
+					 
+ 				 	<option value="B188#BRISIGHELLA#0#0">
+						BRISIGHELLA
+					</option>
+					
+											
+   				
+					
+					
+					 
+ 				 	<option value="B982#CASOLA VALSENIO#0#0">
+						CASOLA VALSENIO
+					</option>
+					
+											
+   				
+					
+					
+					 
+ 				 	<option value="C065#CASTEL BOLOGNESE#0#0">
+						CASTEL BOLOGNESE
+					</option>
+					
+											
+   				
+					
+					
+					 
+ 				 	<option value="C553#CERVIA#0#0">
+						CERVIA
+					</option>
+					
+											
+   				
+					
+					
+					 
+ 				 	<option value="C963#CONSELICE#0#0">
+						CONSELICE
+					</option>
+					
+											
+   				
+					
+					
+					 
+ 				 	<option value="D121#COTIGNOLA#0#0">
+						COTIGNOLA
+					</option>
+					
+											
+   				
+					
+					
+					 
+ 				 	<option value="D458#FAENZA#0#0">
+						FAENZA
+					</option>
+					
+											
+   				
+					
+					
+					 
+ 				 	<option value="D829#FUSIGNANO#0#0">
+						FUSIGNANO
+					</option>
+					
+											
+   				
+					
+					
+					 
+ 				 	<option value="E730#LUGO#0#0">
+						LUGO
+					</option>
+					
+											
+   				
+					
+					
+					 
+ 				 	<option value="F029#MASSA LOMBARDA#0#0">
+						MASSA LOMBARDA
+					</option>
+					
+											
+   				
+					
+					
+					 
+ 				 	<option value="H199#RAVENNA#3#0">
+						RAVENNA
+					</option>
+					
+											
+   				
+					
+					
+					 
+ 				 	<option value="H302#RIOLO TERME#0#0">
+						RIOLO TERME
+					</option>
+					
+											
+   				
+					
+					
+					 
+ 				 	<option value="H642#RUSSI#0#0">
+						RUSSI
+					</option>
+					
+											
+   				
+					
+					
+					 
+ 				 	<option value="I196#SANT'AGATA SUL SANTERNO#0#0">
+						SANT'AGATA SUL SANTERNO
+					</option>
+					
+											
+   				
+					
+					
+					 
+ 				 	<option value="I787#SOLAROLO#0#0">
+						SOLAROLO
+					</option></select>
+			</td>
+			<td><input type="submit" name="selSezione" value="scegli la sezione" style="">				 	
+				<label for="sezione">Sezione: </label>
+					<select name="sezione"></select>					
+			</td>
+			</tr>
+		
+			<tr>
+		   <td> <label for="toponimo">Toponimo: </label> </td>
+		   <td><select name="toponimo"><option value="0#TUTTI"> TUTTI
+				</option><option value="300#ACCESSO"> ACCESSO
+				</option><option value="301#ACCESSO A CORSO"> ACCESSO A CORSO
+				</option><option value="750#ACCESSO A VIA"> ACCESSO A VIA
+				</option><option value="302#ACCESSO ALLA PIAZZA"> ACCESSO ALLA PIAZZA
+				</option><option value="751#ACCESSO ALLA SALITA"> ACCESSO ALLA SALITA
+				</option><option value="303#ACCESSO ALLA VIA"> ACCESSO ALLA VIA
+				</option><option value="305#ACCESSO PRIVATO"> ACCESSO PRIVATO
+				</option><option value="306#ACCESSO STRADA"> ACCESSO STRADA
+				</option><option value="307#ACCESSO TRAVERSA"> ACCESSO TRAVERSA
+				</option><option value="304#ACCESSO VIALE"> ACCESSO VIALE
+				</option><option value="308#ALLEE"> ALLEE
+				</option><!-- 778 options in the portal, trimmed --></select>
+		  </td><td>  <label for="indirizzo">Indirizzo: </label> 
+		  <input type="text" name="indirizzo" size="50" value="" style=""> </td>
+		</tr>  
+	<tr>
+	<td></td>
+	<td></td>
+	<td>
+	
+	<input type="radio" title="cerca tutti gli indirizzi che contengono l'indirizzo inserito" name="parIntera" value="0" checked="checked" style=""> Parte di parola<br>
+	<input type="radio" title="cerca tutti gli indirizzi con uguale dizione dell'indirizzo inserito" name="parIntera" value="1" style=""> Parola intera
+	 
+	 
+  	 
+	</td></tr>
+ </tbody></table> 
+			
+		
+
+	<fieldset>
+			<legend class="blue">Richiedente</legend><br>
+			<label for="richiedente">Richiesta effettuata per conto di: </label> 
+			<input type="text" name="richiedente" maxlength="16" size="20" value="" style="">
+	</fieldset>
+		
+		
+		
+			
+		
+		<table class="cento">
+		<tbody><tr>
+			<td><fieldset><legend class="blue">Motivazione</legend> <br>
+				
+				
+					<label for="listaM">Motivo: </label><input type="text" name="motivoText" maxlength="250" size="40" value="Esplorazione" style="">
+					
+				</fieldset>
+			</td>
+			</tr>
+		</tbody></table>
+		
+		
+		<br> 
+</fieldset>
+
+	<input type="submit" name="ricerca" value="Ricerca" style=""> 
+	<input type="submit" name="cancel" value="Pulisci" onclick="bCancel=true;" style="">
+</form>

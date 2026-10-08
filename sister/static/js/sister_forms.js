@@ -104,6 +104,23 @@
     });
   });
 
+  // Show only the parameters that the selected endpoint of a form group takes
+  function applyEndpointParams(form) {
+    const groupId = form.dataset.formGroup;
+    const checked = form.querySelector('input[name="endpoint-' + groupId + '"]:checked');
+    const selected = checked ? checked.value : null;
+    form.querySelectorAll('[data-endpoints]').forEach(col => {
+      const used = col.dataset.endpoints.split(' ');
+      col.classList.toggle('d-none', selected !== null && !used.includes(selected));
+    });
+  }
+  document.querySelectorAll('form[data-form-group]').forEach(form => {
+    applyEndpointParams(form);
+    form.querySelectorAll('input[type="radio"][name^="endpoint-"]').forEach(radio => {
+      radio.addEventListener('change', () => applyEndpointParams(form));
+    });
+  });
+
   async function handleFormSubmit(e) {
     e.preventDefault();
     const form = e.target;
@@ -128,10 +145,12 @@
       apiUrl = proxyEndpoint ? '/web/api/' + proxyEndpoint : '/web/api/';
     }
 
-    // Collect form parameters (inputs, selects, and textareas)
+    // Collect form parameters (inputs, selects, and textareas) of the selected endpoint
     const body = {};
     form.querySelectorAll('input[type="text"], input[type="email"], input[type="hidden"], select, textarea').forEach(input => {
       const name = input.name;
+      const col = input.closest('[data-endpoints]');
+      if (col && col.classList.contains('d-none')) return;  // parameter of another endpoint
       if (name && !name.startsWith('endpoint-') && input.value.trim()) {
         body[name] = input.value.trim();
       }
@@ -143,6 +162,9 @@
     }
     if (body.include_paid_steps !== undefined) {
       body.include_paid_steps = body.include_paid_steps === 'true';
+    }
+    if (body.include_history !== undefined) {
+      body.include_history = body.include_history === 'true';
     }
     if (body.max_fanout !== undefined) {
       body.max_fanout = parseInt(body.max_fanout, 10) || 20;

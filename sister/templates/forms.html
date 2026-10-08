@@ -1,4 +1,5 @@
 {% extends "_base.html" %}
+{% from "parts/_related_links.html" import related_pages %}
 {% block page_title %}Query Forms{% endblock %}
 
 {% macro render_grouped_form(form_group, is_first=False) %}
@@ -9,6 +10,12 @@
                 <i class="fas {{ form_group.icon }} text-{{ form_group.color }} me-2"></i>{{ form_group.name }}
             </h4>
             <p class="text-muted mb-0 mt-2">{{ form_group.description }}</p>
+            {% if form_group.category == 'workflow' and form_group.endpoints %}
+            <div class="small mt-2">
+                <span class="badge bg-primary-subtle text-primary-emphasis me-1">Sister workflow</span>
+                <code>{{ form_group.endpoints[0].method }} {{ form_group.endpoints[0].path }}</code>
+            </div>
+            {% endif %}
         </div>
         <div class="card-body">
             <form id="form-{{ form_group.id }}" class="sister-form" data-form-group="{{ form_group.id }}">
@@ -54,7 +61,8 @@
                            name="{{ param.name }}"
                            value="{{ param.example or '' }}">
                     {% else %}
-                    <div class="{% if param.input_type == 'textarea' %}col-12{% else %}col-md-6{% endif %}">
+                    <div class="{% if param.input_type == 'textarea' %}col-12{% else %}col-md-6{% endif %}"
+                         {% if param.endpoints %}data-endpoints="{{ param.endpoints|join(' ') }}"{% endif %}>
                         <label for="param-{{ form_group.id }}-{{ param.name }}" class="form-label">
                             {{ param.label }}
                             {% if param.required %}<span class="text-danger">*</span>{% endif %}
@@ -156,6 +164,12 @@
     <h1 class="mb-4">
         <i class="fas fa-clipboard-list text-primary me-2"></i>Query Forms
     </h1>
+    {{ related_pages("Riferimenti e risultati", [
+        ("/web/guide#flussi", "Guida ai flussi", "Scegli il percorso operativo e prepara i dati necessari.", "fa-book-open"),
+        ("/web/cheatsheet", "Cheat sheet", "Consulta una sintesi dei campi e dei passaggi ricorrenti.", "fa-bolt"),
+        ("/web/glossary", "Glossario", "Cerca il significato di sigle e termini catastali.", "fa-book"),
+        ("/web/results", "Risultati", "Apri le richieste inviate e le risposte salvate.", "fa-database")
+    ], "Dopo l'invio, i risultati e i documenti associati sono raggiungibili dalle rispettive pagine.") }}
 
     <div class="row">
         <!-- Sidebar nav -->
@@ -175,7 +189,7 @@
                         <input type="radio" class="btn-check" name="query-category" id="cat-workflow" value="workflow" autocomplete="off"
                                onchange="toggleQueryCategory('workflow')">
                         <label class="btn btn-outline-primary btn-sm" for="cat-workflow">
-                            <i class="fas fa-project-diagram me-1"></i>Multi Steps
+                            <i class="fas fa-project-diagram me-1"></i>Multi-Step
                         </label>
                     </div>
 
@@ -248,6 +262,18 @@
 
         <!-- Forms -->
         <div class="col-lg-9">
+            <div id="workflow-intro" class="alert alert-info d-none" role="note">
+                <div class="d-flex align-items-start">
+                    <i class="fas fa-circle-info me-2 mt-1"></i>
+                    <div>
+                        <strong>Multi-step workflows run through Sister.</strong>
+                        They do not require the separate opendata workflow service.
+                        Due Diligence combines parcel checks with optional history; Portfolio Investigation
+                        accepts either a person’s codice fiscale or a company identifier. The streamed result stays
+                        in this response panel when the run completes.
+                    </div>
+                </div>
+            </div>
             <div class="tab-content" id="form-group-tabContent">
                 {# Single step forms #}
                 {% for form_group in single_step_groups %}
@@ -402,6 +428,12 @@
             </div>
         </div>
     </div>
+    {{ related_pages("Prossimi passaggi", [
+        ("/web/results", "Risultati", "Controlla stato, risposta e dettagli della richiesta.", "fa-database"),
+        ("/web/browser", "Sessione Browser", "Controlla lo stato della sessione prima di inviare richieste.", "fa-browser"),
+        ("/web/documents", "Documenti", "Apri i file catastali scaricati e indicizzati.", "fa-folder-tree"),
+        ("/web/dossiers", "Dossier", "Esplora le risposte complete archiviate.", "fa-folder-open")
+    ]) }}
 </div>
 
 <script>
@@ -411,6 +443,7 @@ var BATCH_SUPPORTED = new Set(['property-search', 'person-search', 'company-sear
 function toggleQueryCategory(category) {
     document.getElementById('nav-single').classList.toggle('d-none', category !== 'single');
     document.getElementById('nav-workflow').classList.toggle('d-none', category !== 'workflow');
+    document.getElementById('workflow-intro').classList.toggle('d-none', category !== 'workflow');
 
     // Hide flowchart when switching to single step
     if (category === 'single') {

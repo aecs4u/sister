@@ -1,6 +1,7 @@
 {% extends "_base.html" %}
 {% from "components/index.html" import stat_card, page_header, data_table_assets %}
 {% from "macros/ui_base.html" import no_results %}
+{% from "parts/_related_links.html" import related_pages %}
 {% block page_title %}Results{% endblock %}
 
 {% block extra_css %}
@@ -175,6 +176,12 @@
   <div class="text-center"><a href="/web/forms" class="btn btn-primary">Submit a Query</a></div>
   {% endif %}
 
+  {{ related_pages("Continue from a result", [
+      ("/web/forms", "Submit a query", "Start another single step query or workflow.", "fa-clipboard-list"),
+      ("/web/workflows", "OpenData workflows", "Review workflow runs recorded by the OpenData service.", "fa-diagram-project"),
+      ("/web/documents", "Documents", "Browse downloaded cadastral files.", "fa-folder-tree"),
+      ("/web/dossiers", "Dossiers", "Inspect complete saved query responses.", "fa-folder-open")
+  ]) }}
 </div>
 {% endblock %}
 

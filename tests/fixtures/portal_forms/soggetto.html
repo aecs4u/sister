@@ -1,0 +1,140 @@
+<form name="RicercaPFForm" method="post" action="/Visure/vpf/RicercaPF.do" onsubmit="this.ricerca.disabled=true;">
+	<fieldset>
+			<legend class="blue">Ricerca persona fisica </legend>
+			<table>
+				<tbody><tr>
+					<td></td>
+					<td><label for="tipoCatasto">Catasto:</label></td>
+					<td colspan="2"><select name="tipoCatasto" onchange="checkRestrizioneFogli();" id="tipoCatastoRstrz"><option value="E">Terreni e Fabbricati</option>
+						<option value="T">Terreni</option>
+						<option value="F">Fabbricati</option></select></td></tr><tr>
+					<td>
+					
+						
+						
+							<input type="hidden" name="comuneCat" value="$" style="">
+						
+					
+        		</td></tr>
+        	</tbody></table>
+        		
+        	<table id="restrizioneFogli" style="display: none;">	
+ 				<tbody><tr>
+					<td colspan="2"><input type="checkbox" name="abilitaRestrizioniFoglio" value="on" onchange="checkAbilitaRestrizioneFogli(this);" style="">abilita restrizione fogli</td>
+       			</tr>
+				<tr>
+        			<td></td>
+        			<td>
+        				<input type="submit" name="selSezione" value="scegli la sezione" disabled="" style="">
+					</td>
+				
+					<td>
+						<label for="sezione">Sezione: </label> 
+						<select name="sezione" disabled=""></select>
+					</td>
+				
+					<td></td>	
+					<td><label for="sezUrb">Sezione urbana: </label></td>
+					<td><input type="text" name="sezUrb" maxlength="3" size="3" value="" disabled="" style=""></td>		
+					<td><label for="foglio">Foglio: </label></td>
+					<td><input type="text" name="foglio" maxlength="14" size="14" value="" disabled="" style="">
+					<img title="Si possono inserire fino ad un massimo di tre fogli separti dal carattere ','" src="/img/informazioni.gif">
+					</td>		
+				</tr>
+			</tbody></table>
+			<table>
+				<tbody><tr>
+					<td><input type="radio" name="selDatiAna" value="cognome" checked="checked" style=""></td>
+					<td><label for="cognome">Cognome: </label></td>
+					<td><input type="text" name="cognome" maxlength="48" size="28" value="" id="cognome" style=""></td>
+					<td><label for="nome">Nome: </label></td>
+					<td><input type="text" name="nome" maxlength="48" size="28" value="" id="nome" style="">
+					</td>
+				</tr>
+				<tr>
+					<td></td>
+					<td><label for="gg_nascita">Data di nascita: </label></td>
+					<td><input type="text" name="gg_nascita" maxlength="2" size="1" value="" id="giorno" style=""><b>&nbsp;/</b> 
+					<input type="text" name="mm_nascita" maxlength="2" size="1" value="" id="mese" style=""><b>&nbsp;/</b>
+					<input type="text" name="anno_nascita" maxlength="4" size="3" value="" id="anno" style=""></td>
+					<td><label for="sesso">Sesso: </label></td>
+					<td><select name="sesso" size="1" id="sesso"><option value="">&nbsp;&nbsp;</option>
+						<option value="M">M</option>
+						<option value="F">F</option></select></td>
+				</tr>
+
+				<tr>
+					<td></td>
+					<td><label for="provincia_amm_pf">Provincia di nascita: </label></td>
+					<td colspan="3">
+					<select name="provincia_amm_pf"><option value=""></option><option value="AG">AG</option><option value="AL">AL</option><option value="AN">AN</option><option value="AO">AO</option><option value="AP">AP</option><option value="AQ">AQ</option><option value="AR">AR</option><option value="AT">AT</option><option value="AV">AV</option><option value="BA">BA</option><option value="BG">BG</option><!-- 111 options in the portal, trimmed --></select> 
+					<input type="submit" name="selcomune" value="Visualizza i comuni" style="">
+					</td>
+				</tr>
+				<tr>
+					<td></td>
+					<td><label for="luogo_nasc">Comune di nascita: </label></td>
+					<td colspan="3"><select name="luogo_nasc"><option value=""></option></select></td>
+				</tr>
+				<tr>
+					<td></td>
+					
+					
+					<td colspan="4">
+						<img title="persone fisiche i cui dati anagrafici coincidono con quelli inseriti, o il cui nome è contenuto in quello reperito" src="/img/informazioni.gif">
+						 <label for="tipo_ispezione_pf">Cerca solo i soggetti con dati anagrafici uguali (Ristretta) </label></td>
+					
+			 </tr>
+             
+			<tr>
+				<td><input type="radio" name="selDatiAna" value="CF_PF" style=""></td>
+				<td colspan="4"><label for="cod_fisc_pf">Codice Fiscale: </label> 
+				<input type="text" name="cod_fisc_pf" maxlength="16" value="" id="cf" style=""><br></td>
+			</tr>
+	</tbody></table>
+
+			
+</fieldset>
+			
+
+			
+
+
+<fieldset>
+	<legend class="blue">Richiedente</legend><br>
+	<label for="richiedente">Richiesta effettuata per conto di: </label> 
+	<input type="text" name="richiedente" maxlength="16" size="20" value="" style="">
+
+</fieldset>
+
+
+<br>
+		
+			
+			
+			<table class="cento">
+			<tbody><tr>
+			<td><fieldset><legend class="blue">Motivazione</legend> <br>
+				
+				
+				
+					<label for="listaM">Motivo: </label><input type="text" name="motivoText" maxlength="250" size="40" value="Esplorazione" style="">
+					
+				</fieldset>
+			</td>
+			</tr>
+		</tbody></table>
+		
+		
+	<br> 	
+	<p>
+		<input type="hidden" name="forzaCf" value="0" style="">
+		<input type="hidden" name="tipoRicerca" value="PF" style=""> 
+		<input type="hidden" name="ritorno" value="0" style=""> 
+		<input type="submit" name="ricerca" tabindex="1" value="Ricerca" style=""> 
+		<input type="submit" name="cancel" value="Pulisci" onclick="bCancel=true;" style="">
+		
+			  	<input type="submit" name="cancel" value="Ultima Ricerca" onclick="bCancel=true;" style="">  
+					
+				</p>
+</form>

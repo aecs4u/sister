@@ -429,6 +429,7 @@ class VisuraService:
             "parcel",
             "section",
             "subunit",
+            "urban_section",
             "fiscal_code",
             "identifier",
             "search_type",
@@ -438,6 +439,10 @@ class VisuraService:
                 params[attr] = val
         if hasattr(request, "params") and request.params:
             params.update(request.params)
+        # other inputs of the SISTER form change the query, so they are part of the cache key
+        form_fields = getattr(request, "form_fields", None)
+        if form_fields:
+            params.update({f"form_{key}": value for key, value in form_fields.items() if value not in (None, "")})
         return params
 
     async def _check_cache(self, request_type: str, request, force: bool = False) -> Optional[SubmitResult]:

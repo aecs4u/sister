@@ -16,6 +16,7 @@ import sqlalchemy as sa
 from aecs4u_domain.feedback import FeedbackConfig, FeedbackConfigItem, FeedbackUnsubscribe
 from sqlalchemy import JSON as SA_JSON
 from sqlalchemy import Column, Index, Text, UniqueConstraint
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlmodel import Field, Relationship, SQLModel
 
 
@@ -323,7 +324,7 @@ class VisuraDocument(SQLModel, table=True):
 
     id: Optional[int] = Field(default=None, primary_key=True)
     response_id: Optional[str] = Field(default=None, foreign_key="visura_responses.request_id", index=True)
-    document_type: str = Field(default="")  # visura_immobile, visura_soggetto, visura_pnf
+    document_type: str = Field(default="")  # visure, ispezione_ipotecaria, planimetrie, etc.
     file_format: str = Field(default="")  # PDF, XML, P7M
     filename: str = Field(default="")
     file_path: Optional[str] = None
@@ -337,10 +338,10 @@ class VisuraDocument(SQLModel, table=True):
 
 
 class DocumentMetadata(SQLModel, table=True):
-    """Parsed XML header and cadastral location for a visura document (1:1 with visura_documents).
+    """Parsed metadata and optional cadastral location (1:1 with visura_documents).
 
-    Only present for XML/P7M file types — PDF-only documents leave this row absent.
-    Cadastral location is normalised via location_id → cadastral_locations.
+    Cadastral location is normalised via location_id → cadastral_locations; content
+    stores the original XML for structured visura documents when available.
     """
 
     __tablename__ = "document_metadata"
@@ -413,6 +414,168 @@ class DocumentMetadata(SQLModel, table=True):
         "SezCensuaria": "section",  # Terreni
         "TipoCatasto": "cadastre_type",
     }
+
+
+class StructuredDocumentExtraction(SQLModel, table=True):
+    """Immutable source payload and provenance for a structured document extraction."""
+
+    __tablename__ = "document_structured_extractions"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    document_id: int = Field(foreign_key="visura_documents.id", index=True)
+    provider: Optional[str] = None
+    model: Optional[str] = None
+    schema_name: str = Field(default="")
+    schema_version: Optional[str] = None
+    run_id: str = Field(default="")
+    workflow_id: Optional[str] = None
+    output_path: Optional[str] = None
+    extracted_at: Optional[datetime] = None
+    structured_data: dict[str, Any] = Field(sa_column=Column(JSONB, nullable=False))
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+    __table_args__ = (
+        UniqueConstraint("document_id", "schema_name", "run_id", name="uq_structured_extraction_run"),
+        Index("idx_structured_extraction_latest", "document_id", "created_at"),
+    )
+
+
+class MortgageInspection(SQLModel, table=True):
+    """Flattened inspection and note header fields extracted by Ocular."""
+
+    __tablename__ = "mortgage_inspections"
+
+    extraction_id: int = Field(foreign_key="document_structured_extractions.id", primary_key=True)
+    inspection_date: Optional[str] = None
+    inspection_time: Optional[str] = None
+    inspection_number: Optional[str] = None
+    inspection_date_number: Optional[str] = None
+    inspection_start: Optional[str] = None
+    requester: Optional[str] = None
+    tax_paid_euro: Optional[int] = None
+    page_count: Optional[int] = None
+    office: Optional[str] = None
+    service: Optional[str] = None
+    note_type: Optional[str] = None
+    note_timestamp: Optional[str] = None
+    registro_generale: Optional[int] = None
+    registro_particolare: Optional[int] = None
+    presentazione_numero: Optional[int] = None
+    presentazione_data: Optional[str] = None
+    section_a_other_data: Optional[str] = Field(default=None, sa_column=Column(Text))
+    section_d_text: Optional[str] = Field(default=None, sa_column=Column(Text))
+    unit_count: Optional[int] = None
+    party_favore_count: Optional[int] = None
+    party_contro_count: Optional[int] = None
+
+
+class MortgageInspectionTitle(SQLModel, table=True):
+    """Title and notary details from note section A."""
+
+    __tablename__ = "mortgage_inspection_titles"
+
+    extraction_id: int = Field(foreign_key="document_structured_extractions.id", primary_key=True)
+    title_type: Optional[str] = None
+    description: Optional[str] = Field(default=None, sa_column=Column(Text))
+    title_date: Optional[str] = None
+    repertory_number: Optional[str] = None
+    notary_name: Optional[str] = None
+    notary_fiscal_code: Optional[str] = None
+    notary_location: Optional[str] = None
+
+
+class MortgageInspectionLien(SQLModel, table=True):
+    """Mortgage amounts and terms from note section A."""
+
+    __tablename__ = "mortgage_inspection_liens"
+
+    extraction_id: int = Field(foreign_key="document_structured_extractions.id", primary_key=True)
+    lien_type: Optional[str] = None
+    lien_type_original: Optional[str] = None
+    derived_from: Optional[str] = Field(default=None, sa_column=Column(Text))
+    derived_from_code: Optional[str] = None
+    derived_from_description: Optional[str] = Field(default=None, sa_column=Column(Text))
+    principal_euro: Optional[int] = None
+    annual_interest_rate: Optional[str] = None
+    annual_interest_rate_pct: Optional[float] = None
+    semiannual_interest_rate: Optional[str] = None
+    interest_euro: Optional[int] = None
+    expenses_euro: Optional[int] = None
+    total_euro: Optional[int] = None
+    variable_amounts: Optional[bool] = None
+    foreign_currency: Optional[str] = None
+    automatic_increase: Optional[bool] = None
+    resolutive_condition: Optional[bool] = None
+    duration_years: Optional[int] = None
+    duration_description: Optional[str] = None
+    mortgage_rank: Optional[int] = None
+
+
+class MortgageInspectionUnit(SQLModel, table=True):
+    """Negotiation unit from note section B."""
+
+    __tablename__ = "mortgage_inspection_units"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    extraction_id: int = Field(foreign_key="document_structured_extractions.id", index=True)
+    unit_number: Optional[int] = None
+    __table_args__ = (UniqueConstraint("extraction_id", "unit_number", name="uq_mortgage_inspection_unit"),)
+
+
+class MortgageInspectionProperty(SQLModel, table=True):
+    """A cadastral property linked to an inspection negotiation unit."""
+
+    __tablename__ = "mortgage_inspection_properties"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    unit_id: int = Field(foreign_key="mortgage_inspection_units.id", index=True)
+    property_number: Optional[int] = None
+    municipality_code: Optional[str] = None
+    municipality: Optional[str] = None
+    cadastre_type: Optional[str] = None
+    urban_section: Optional[str] = None
+    sheet: Optional[int] = None
+    parcel: Optional[int] = None
+    subunit: Optional[int] = None
+    nature: Optional[str] = None
+    nature_description: Optional[str] = None
+    room_count: Optional[int] = None
+    area_sqm: Optional[float] = None
+    floor: Optional[str] = None
+    address: Optional[str] = None
+    civic_number: Optional[str] = None
+
+
+class MortgageInspectionParty(SQLModel, table=True):
+    """One party in section C, retaining both parsed fields and original text fields."""
+
+    __tablename__ = "mortgage_inspection_parties"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    extraction_id: int = Field(foreign_key="document_structured_extractions.id", index=True)
+    role: str = Field(default="")  # a_favore | contro
+    ordinal: int = Field(default=0)
+    subject_number: Optional[int] = None
+    quality: Optional[str] = None
+    surname: Optional[str] = None
+    given_name: Optional[str] = None
+    birth_date: Optional[str] = None
+    birth_place: Optional[str] = None
+    gender: Optional[str] = None
+    fiscal_code: Optional[str] = None
+    entity_name: Optional[str] = None
+    registered_office: Optional[str] = None
+    mortgage_domicile: Optional[str] = None
+    negotiation_unit_reference: Optional[int] = None
+    right_type: Optional[str] = None
+    share_numerator: Optional[int] = None
+    share_denominator: Optional[int] = None
+    raw_quality: Optional[str] = None
+    raw_share: Optional[str] = None
+    raw_right_type: Optional[str] = None
+    __table_args__ = (
+        UniqueConstraint("extraction_id", "role", "ordinal", name="uq_mortgage_inspection_party"),
+    )
 
 
 OWNER_SUBJECT_FIELD_MAP = {
