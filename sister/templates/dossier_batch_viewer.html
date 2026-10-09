@@ -5,8 +5,8 @@
 
 {% block extra_css %}
 {{ super() }}
-<link rel="stylesheet" href="/static/css/doc_sections.css">
-<link rel="stylesheet" href="/static/css/pages/dossier_batch_viewer.css">
+<link rel="stylesheet" href="/static/css/doc_sections.css?v=20261009a">
+<link rel="stylesheet" href="/static/css/pages/dossier_batch_viewer.css?v=20261009a">
 {% endblock %}
 
 {% block content %}
@@ -49,7 +49,7 @@
     <i class="fas fa-filter text-warning"></i>
     <span>Filtrato su: <strong id="sel-label">–</strong></span>
     <span id="sel-counts" class="text-muted small"></span>
-    <button class="btn btn-sm btn-outline-secondary ms-auto" onclick="resetSelection()">
+    <button class="btn btn-sm btn-outline-secondary ms-auto" data-click="resetSelection">
         <i class="fas fa-xmark me-1"></i>Mostra tutti <kbd>Esc</kbd>
     </button>
 </div>
@@ -61,28 +61,27 @@
         <span>Organizzazioni</span>
         <span class="badge bg-primary" id="t1-count">{{ summary_rows | length }}</span>
         <div class="tbl-section-actions no-print">
-            <button class="btn btn-compact btn-outline-secondary" onclick="exportCsv('t1','organizzazioni')">
+            <button class="btn btn-compact btn-outline-secondary" data-click="exportCsv" data-args='["t1","organizzazioni"]'>
                 <i class="fas fa-file-csv me-1"></i>CSV
             </button>
         </div>
     </div>
     <div class="tbl-filter-bar no-print">
-        <input class="tbl-filter" id="filter-t1" placeholder="Cerca organizzazione, P.IVA, stato…"
-               oninput="filterTable('t1','t1-count',this.value)">
+        <input class="tbl-filter" id="filter-t1" placeholder="Cerca organizzazione, P.IVA, stato…" data-input="filterTable" data-args='["t1","t1-count","@value"]'>
         <span class="text-muted small no-print">↑↓ per navigare</span>
     </div>
     <div class="tbl-scroll" id="scroll-t1">
         <table class="btbl" id="t1">
             <thead>
                 <tr>
-                    <th class="sortable" onclick="sortTable('t1',0)">#<span class="sort-icon"></span></th>
-                    <th class="sortable" onclick="sortTable('t1',1)">Organizzazione<span class="sort-icon"></span></th>
-                    <th class="sortable" onclick="sortTable('t1',2)">P.IVA (input)<span class="sort-icon"></span></th>
-                    <th class="sortable" onclick="sortTable('t1',3)">CF restituito<span class="sort-icon"></span></th>
+                    <th class="sortable" data-click="sortTable" data-args='["t1",0]'>#<span class="sort-icon"></span></th>
+                    <th class="sortable" data-click="sortTable" data-args='["t1",1]'>Organizzazione<span class="sort-icon"></span></th>
+                    <th class="sortable" data-click="sortTable" data-args='["t1",2]'>P.IVA (input)<span class="sort-icon"></span></th>
+                    <th class="sortable" data-click="sortTable" data-args='["t1",3]'>CF restituito<span class="sort-icon"></span></th>
                     <th>Catasto</th>
-                    <th class="sortable" onclick="sortTable('t1',5)">Stato<span class="sort-icon"></span></th>
-                    <th class="sortable" onclick="sortTable('t1',6)">{{ 'Corrisp.' if is_entity_match else 'Immobili' }}<span class="sort-icon"></span></th>
-                    <th class="sortable" onclick="sortTable('t1',7)">Timestamp<span class="sort-icon"></span></th>
+                    <th class="sortable" data-click="sortTable" data-args='["t1",5]'>Stato<span class="sort-icon"></span></th>
+                    <th class="sortable" data-click="sortTable" data-args='["t1",6]'>{{ 'Corrisp.' if is_entity_match else 'Immobili' }}<span class="sort-icon"></span></th>
+                    <th class="sortable" data-click="sortTable" data-args='["t1",7]'>Timestamp<span class="sort-icon"></span></th>
                     <th>Errore</th>
                 </tr>
             </thead>
@@ -90,8 +89,7 @@
                 {% for r in summary_rows %}
                 <tr data-idx="{{ r.idx }}"
                     class="{{ 'row-error' if r.status == 'error' else '' }}"
-                    data-label="{{ r.organization_name | e }}"
-                    onclick="selectIdx(+this.dataset.idx, this.dataset.label)">
+                    data-label="{{ r.organization_name | e }}" data-click="selectIdx" data-args='["@num:dataset.idx","@dataset.label"]'>
                     <td class="text-muted">{{ r.idx + 1 }}</td>
                     <td class="fw-semibold">{{ r.organization_name }}</td>
                     <td class="font-monospace small">{{ r.vat_number }}</td>
@@ -129,30 +127,28 @@
         <span class="text-muted fw-normal small">soggetti corrispondenti restituiti dalla visura persona giuridica</span>
         {% endif %}
         <div class="tbl-section-actions no-print">
-            <button class="btn btn-compact btn-outline-secondary" onclick="exportCsv('t2','{{ 'corrispondenze' if is_entity_match else 'immobili' }}')">
+            <button class="btn btn-compact btn-outline-secondary" data-click="exportCsv" data-args='["t2","{{ "corrispondenze" if is_entity_match else "immobili" }}"]'>
                 <i class="fas fa-file-csv me-1"></i>CSV
             </button>
         </div>
     </div>
     {% if immobili_rows %}
     <div class="tbl-filter-bar no-print">
-        <input class="tbl-filter" id="filter-t2" placeholder="Cerca denominazione, sede, CF…"
-               oninput="filterTable('t2','t2-count',this.value)">
+        <input class="tbl-filter" id="filter-t2" placeholder="Cerca denominazione, sede, CF…" data-input="filterTable" data-args='["t2","t2-count","@value"]'>
     </div>
     <div class="tbl-scroll" id="scroll-t2">
         <table class="btbl" id="t2">
             <thead>
                 <tr>
-                    <th class="sortable" onclick="sortTable('t2',0)">Organizzazione<span class="sort-icon"></span></th>
+                    <th class="sortable" data-click="sortTable" data-args='["t2",0]'>Organizzazione<span class="sort-icon"></span></th>
                     {% for col in immobili_cols %}
-                    <th class="sortable" onclick="sortTable('t2',{{ loop.index }})">{{ col }}<span class="sort-icon"></span></th>
+                    <th class="sortable" data-click="sortTable" data-args='["t2",{{ loop.index }}]'>{{ col }}<span class="sort-icon"></span></th>
                     {% endfor %}
                 </tr>
             </thead>
             <tbody id="t2-tbody">
                 {% for r in immobili_rows %}
-                <tr data-idx="{{ r.idx }}" data-label="{{ r.organization_name | e }}"
-                    onclick="selectIdx(+this.dataset.idx, this.dataset.label)">
+                <tr data-idx="{{ r.idx }}" data-label="{{ r.organization_name | e }}" data-click="selectIdx" data-args='["@num:dataset.idx","@dataset.label"]'>
                     <td class="fw-semibold">{{ r.organization_name }}</td>
                     {% for col in immobili_cols %}<td>{{ r.get(col, '') or '–' }}</td>{% endfor %}
                 </tr>
@@ -170,7 +166,7 @@
 
 {% block extra_js %}
 {{ super() }}
-<script>
+<script nonce="{{ csp_nonce }}">
 (function () {
     let selectedIdx = null;
     let sortState = {};

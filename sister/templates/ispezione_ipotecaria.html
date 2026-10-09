@@ -1,11 +1,12 @@
 {% extends "_base.html" %}
 
-{% block page_title %}Ispezione ipotecaria{% endblock %}
+{% block page_title %}Ispezione ipotecaria{% set _n = namespace(v=None) %}{% for item in inspection_documents %}{% if item.parsed and item.parsed.inspection_number and not _n.v %}{% set _n.v = item.parsed.inspection_number %}{% endif %}{% endfor %}{% if _n.v %} · T{{ _n.v }}{% endif %}{% endblock %}
 
 {% block extra_css %}
 {{ super() }}
 <style>
   .ispezione-text { white-space: pre-wrap; overflow-wrap: anywhere; }
+  .ispezione-fulltext { max-height: 32rem; overflow: auto; }
   .ispezione-field dt { color: var(--bs-secondary-color); font-weight: 500; }
   .ispezione-field dd { overflow-wrap: anywhere; }
 </style>
@@ -53,7 +54,7 @@
       {% if summary.parsed.foglio or summary.parsed.particella %}<dt class="col-sm-3">Dati catastali</dt><dd class="col-sm-9">Foglio {{ summary.parsed.foglio or '–' }} · Particella {{ summary.parsed.particella or '–' }}{% if summary.parsed.subalterno %} · Subalterno {{ summary.parsed.subalterno }}{% endif %}</dd>{% endif %}
       {% if summary.parsed.period_from or summary.parsed.period_to %}<dt class="col-sm-3">Periodo informatizzato</dt><dd class="col-sm-9">{{ summary.parsed.period_from or '–' }} – {{ summary.parsed.period_to or '–' }}</dd>{% endif %}
       {% if summary.parsed.office %}<dt class="col-sm-3">Ufficio</dt><dd class="col-sm-9">{{ summary.parsed.office }}</dd>{% endif %}
-      {% if summary.parsed.requester %}<dt class="col-sm-3">Richiedente</dt><dd class="col-sm-9">{{ summary.parsed.requester }}</dd>{% endif %}
+      {% if summary.parsed.requester %}<dt class="col-sm-3">Richiedente</dt><dd class="col-sm-9">{{ summary.parsed.requester|clean_requester }}</dd>{% endif %}
       {% if summary.parsed.requester_cf %}<dt class="col-sm-3">Codice fiscale richiedente</dt><dd class="col-sm-9 font-monospace">{{ summary.parsed.requester_cf }}</dd>{% endif %}
       {% if summary.parsed.request_reason %}<dt class="col-sm-3">Motivazione</dt><dd class="col-sm-9">{{ summary.parsed.request_reason }}</dd>{% endif %}
       {% if summary.parsed.fee %}<dt class="col-sm-3">Tassa versata</dt><dd class="col-sm-9">{{ summary.parsed.fee }}</dd>{% endif %}
@@ -71,13 +72,15 @@
         <h2 class="h5 mb-1" id="ocular-heading">Dati strutturati Ocular</h2>
         <div class="small text-muted">Risultati salvati nelle tabelle Sister</div>
       </div>
-      <span class="badge bg-success">{{ extraction.provider or 'Ocular' }}{% if extraction.model %} · {{ extraction.model }}{% endif %}</span>
+      <span class="badge bg-success" title="{{ extraction.provider or 'Ocular' }}{% if extraction.model %} · {{ extraction.model }}{% endif %}">Estrazione automatica</span>
     </div>
     <div class="card-body">
       <div class="small text-muted mb-3">
-        Schema {{ extraction.schema_name }}{% if extraction.schema_version %} · versione {{ extraction.schema_version }}{% endif %}
-        {% if extraction.run_id %} · run {{ extraction.run_id }}{% endif %}
-        {% if extraction.extracted_at %} · estratto {{ extraction.extracted_at }}{% endif %}
+        {% if extraction.extracted_at %}Estratto il {{ extraction.extracted_at|it_date }}{% endif %}
+        <details class="d-inline ms-2">
+          <summary class="d-inline">Dettagli tecnici</summary>
+          <span class="d-block mt-1">Schema {{ extraction.schema_name }}{% if extraction.schema_version %} · versione {{ extraction.schema_version }}{% endif %}{% if extraction.provider or extraction.model %} · {{ extraction.provider or '' }}{% if extraction.model %} · {{ extraction.model }}{% endif %}{% endif %}{% if extraction.run_id %} · run {{ extraction.run_id }}{% endif %}</span>
+        </details>
       </div>
 
       {% if inspection %}
@@ -85,10 +88,10 @@
       <div class="table-responsive mb-4">
         <table class="table table-sm table-bordered align-middle">
           <tbody>
-            <tr><th scope="row">Ispezione</th><td>{{ inspection.inspection_number or '–' }}</td><th scope="row">Data e ora</th><td>{{ inspection.inspection_date or '–' }} {{ inspection.inspection_time or '' }}</td></tr>
-            <tr><th scope="row">Inizio</th><td>{{ inspection.inspection_start or '–' }}</td><th scope="row">Richiedente</th><td>{{ inspection.requester or '–' }}</td></tr>
+            <tr><th scope="row">Ispezione</th><td>{{ inspection.inspection_number|inspection_ref }}{% if inspection.inspection_number and inspection.inspection_number != (inspection.inspection_number|inspection_ref) %} <span class="text-muted small" title="Come stampato nel PDF">({{ inspection.inspection_number }})</span>{% endif %}</td><th scope="row">Data e ora</th><td>{{ ((inspection.inspection_date or '') ~ ' ' ~ (inspection.inspection_time or ''))|trim|it_date }}</td></tr>
+            <tr><th scope="row">Inizio</th><td>{{ inspection.inspection_start|it_date }}</td><th scope="row">Richiedente</th><td>{{ inspection.requester|clean_requester }}</td></tr>
             <tr><th scope="row">Ufficio</th><td>{{ inspection.office or '–' }}</td><th scope="row">Servizio</th><td>{{ inspection.service or '–' }}</td></tr>
-            <tr><th scope="row">Tipo nota</th><td>{{ inspection.note_type or '–' }}</td><th scope="row">Presentazione</th><td>{{ inspection.presentazione_numero or '–' }}{% if inspection.presentazione_data %} · {{ inspection.presentazione_data }}{% endif %}</td></tr>
+            <tr><th scope="row">Tipo nota</th><td>{{ inspection.note_type|it_enum }}</td><th scope="row">Presentazione</th><td>{{ inspection.presentazione_numero or '–' }}{% if inspection.presentazione_data %} · {{ inspection.presentazione_data|it_date }}{% endif %}</td></tr>
             <tr><th scope="row">Registri</th><td>Generale {{ inspection.registro_generale or '–' }} · Particolare {{ inspection.registro_particolare or '–' }}</td><th scope="row">Riepilogo</th><td>{{ inspection.unit_count or 0 }} unità · {{ inspection.party_favore_count or 0 }} a favore · {{ inspection.party_contro_count or 0 }} contro</td></tr>
             {% if inspection.section_a_other_data %}<tr><th scope="row">Altri dati</th><td colspan="3">{{ inspection.section_a_other_data }}</td></tr>{% endif %}
             {% if inspection.section_d_text %}<tr><th scope="row">Sezione D</th><td colspan="3" class="ispezione-text">{{ inspection.section_d_text }}</td></tr>{% endif %}
@@ -102,7 +105,7 @@
       <h3 class="h6">Titolo e pubblico ufficiale</h3>
       <div class="table-responsive mb-4">
         <table class="table table-sm table-striped align-middle"><thead><tr><th>Tipo</th><th>Descrizione</th><th>Data</th><th>Repertorio</th><th>Notaio</th><th>Sede</th></tr></thead>
-          <tbody><tr><td>{{ title.title_type or '–' }}</td><td>{{ title.description or '–' }}</td><td>{{ title.title_date or '–' }}</td><td>{{ title.repertory_number or '–' }}</td><td>{{ title.notary_name or '–' }}{% if title.notary_fiscal_code %}<div class="font-monospace small">{{ title.notary_fiscal_code }}</div>{% endif %}</td><td>{{ title.notary_location or '–' }}</td></tr></tbody>
+          <tbody><tr><td>{{ title.title_type|it_enum }}</td><td>{{ title.description or '–' }}</td><td>{{ title.title_date|it_date }}</td><td>{{ title.repertory_number or '–' }}</td><td>{{ title.notary_name or '–' }}{% if title.notary_fiscal_code %}<div class="font-monospace small">{{ title.notary_fiscal_code }}</div>{% endif %}</td><td>{{ title.notary_location or '–' }}</td></tr></tbody>
         </table>
       </div>
       {% endif %}
@@ -112,7 +115,7 @@
       <h3 class="h6">Dati ipoteca</h3>
       <div class="table-responsive mb-4">
         <table class="table table-sm table-striped align-middle"><thead><tr><th>Specie</th><th>Derivante da</th><th>Capitale</th><th>Interessi</th><th>Spese</th><th>Totale</th><th>Durata</th><th>Grado</th></tr></thead>
-          <tbody><tr><td>{{ lien.lien_type_original or lien.lien_type or '–' }}</td><td>{{ lien.derived_from_description or lien.derived_from or '–' }}</td><td>{{ lien.principal_euro if lien.principal_euro is not none else '–' }} €</td><td>{{ lien.interest_euro if lien.interest_euro is not none else (lien.annual_interest_rate or '–') }}</td><td>{{ lien.expenses_euro if lien.expenses_euro is not none else '–' }} €</td><td>{{ lien.total_euro if lien.total_euro is not none else '–' }} €</td><td>{{ lien.duration_description or lien.duration_years or '–' }}</td><td>{{ lien.mortgage_rank or '–' }}</td></tr></tbody>
+          <tbody><tr><td>{{ (lien.lien_type_original or lien.lien_type)|it_enum }}</td><td>{{ lien.derived_from_description or lien.derived_from or '–' }}</td><td>{{ lien.principal_euro|it_money }}</td><td>{{ lien.interest_euro|it_money if lien.interest_euro is not none else (lien.annual_interest_rate or '–') }}</td><td>{{ lien.expenses_euro|it_money }}</td><td>{{ lien.total_euro|it_money }}</td><td>{{ lien.duration_description or lien.duration_years or '–' }}</td><td>{{ lien.mortgage_rank or '–' }}</td></tr></tbody>
         </table>
       </div>
       {% endif %}
@@ -126,7 +129,7 @@
           <thead><tr><th>#</th><th>Comune</th><th>Catasto</th><th>Foglio</th><th>Particella</th><th>Subalterno</th><th>Natura</th><th>Consistenza</th><th>Indirizzo</th></tr></thead>
           <tbody>
             {% for property in unit.properties %}
-            <tr><td>{{ property.property_number or loop.index }}</td><td>{{ property.municipality or '–' }}{% if property.municipality_code %}<div class="small text-muted">{{ property.municipality_code }}</div>{% endif %}</td><td>{{ property.cadastre_type or '–' }}{% if property.urban_section %}<div class="small">Sezione {{ property.urban_section }}</div>{% endif %}</td><td>{{ property.sheet or '–' }}</td><td>{{ property.parcel or '–' }}</td><td>{{ property.subunit or '–' }}</td><td>{{ property.nature_description or property.nature or '–' }}</td><td>{% if property.room_count is not none %}{{ property.room_count }} vani{% elif property.area_sqm is not none %}{{ property.area_sqm }} m²{% else %}–{% endif %}</td><td>{{ property.address or '–' }}{% if property.civic_number %}, {{ property.civic_number }}{% endif %}{% if property.floor %}<div class="small">Piano {{ property.floor }}</div>{% endif %}</td></tr>
+            <tr><td>{{ property.property_number or loop.index }}</td><td>{{ property.municipality or '–' }}{% if property.municipality_code %}<div class="small text-muted">{{ property.municipality_code }}</div>{% endif %}</td><td>{{ property.cadastre_type|it_enum }}{% if property.urban_section %}<div class="small">Sezione {{ property.urban_section }}</div>{% endif %}</td><td>{{ property.sheet or '–' }}</td><td>{{ property.parcel or '–' }}</td><td>{{ property.subunit or '–' }}</td><td>{{ property.nature_description or property.nature or '–' }}</td><td>{% if property.room_count is not none %}{{ property.room_count }} vani{% elif property.area_sqm is not none %}{{ property.area_sqm }} m²{% else %}–{% endif %}</td><td>{{ property.address or '–' }}{% if property.civic_number %}, {{ property.civic_number }}{% endif %}{% if property.floor %}<div class="small">Piano {{ property.floor }}</div>{% endif %}</td></tr>
             {% else %}<tr><td colspan="9" class="text-muted">Nessun immobile associato</td></tr>{% endfor %}
           </tbody>
         </table>
@@ -143,8 +146,8 @@
             {% for party in ocular_extraction.parties %}
             <tr>
               <td>{{ 'A favore' if party.role == 'a_favore' else 'Contro' }}</td><td>{{ party.subject_number or party.ordinal + 1 }}</td>
-              <td>{% if party.entity_name %}{{ party.entity_name }}{% else %}{{ party.surname or '' }} {{ party.given_name or '' }}{% endif %}{% if party.birth_date or party.birth_place %}<div class="small text-muted">{{ party.birth_date or '' }}{% if party.birth_place %} · {{ party.birth_place }}{% endif %}</div>{% endif %}</td>
-              <td>{{ party.quality or party.raw_quality or '–' }}</td><td class="font-monospace">{{ party.fiscal_code or '–' }}</td><td>{{ party.right_type or party.raw_right_type or '–' }}</td>
+              <td>{% if party.entity_name %}{{ party.entity_name }}{% else %}{{ party.surname or '' }} {{ party.given_name or '' }}{% endif %}{% if party.birth_date or party.birth_place %}<div class="small text-muted">{{ party.birth_date|it_date if party.birth_date else '' }}{% if party.birth_place %} · {{ party.birth_place }}{% endif %}</div>{% endif %}</td>
+              <td>{{ (party.quality or party.raw_quality)|it_enum }}</td><td class="font-monospace">{{ party.fiscal_code or '–' }}</td><td>{{ (party.right_type or party.raw_right_type)|it_enum }}</td>
               <td>{% if party.share_numerator is not none or party.share_denominator is not none %}{{ party.share_numerator or 0 }}/{{ party.share_denominator or 0 }}{% else %}{{ party.raw_share or '–' }}{% endif %}</td><td>{{ party.negotiation_unit_reference or '–' }}</td><td>{{ party.raw_quality or '–' }}{% if party.raw_share %}<div>{{ party.raw_share }}</div>{% endif %}{% if party.raw_right_type %}<div>{{ party.raw_right_type }}</div>{% endif %}</td>
             </tr>
             {% endfor %}
@@ -202,7 +205,7 @@
           <dl class="row small mb-3">
             {% if parsed.inspection_date %}<dt class="col-sm-3">Data ispezione</dt><dd class="col-sm-9">{{ parsed.inspection_date }}</dd>{% endif %}
             {% if parsed.office %}<dt class="col-sm-3">Ufficio</dt><dd class="col-sm-9">{{ parsed.office }}</dd>{% endif %}
-            {% if parsed.requester %}<dt class="col-sm-3">Richiedente</dt><dd class="col-sm-9">{{ parsed.requester }}</dd>{% endif %}
+            {% if parsed.requester %}<dt class="col-sm-3">Richiedente</dt><dd class="col-sm-9">{{ parsed.requester|clean_requester }}</dd>{% endif %}
             {% if parsed.request_reason %}<dt class="col-sm-3">Motivazione</dt><dd class="col-sm-9">{{ parsed.request_reason }}</dd>{% endif %}
             {% if parsed.fee %}<dt class="col-sm-3">Tassa versata</dt><dd class="col-sm-9">{{ parsed.fee }}</dd>{% endif %}
           </dl>
@@ -262,8 +265,10 @@
             </div>
             {% endif %}
 
-            <h3 class="h6 mt-4 mb-2">Testo completo estratto dal PDF</h3>
-            <pre class="ispezione-text small bg-body-tertiary border rounded p-3 mb-0">{{ parsed.raw_text }}</pre>
+            <details class="mt-4">
+              <summary class="h6 mb-2">Testo completo estratto dal PDF</summary>
+              <pre class="ispezione-text ispezione-fulltext small bg-body-tertiary border rounded p-3 mb-0">{{ parsed.raw_text }}</pre>
+            </details>
           {% endif %}
         </div>
       </div>

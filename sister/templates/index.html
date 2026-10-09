@@ -7,14 +7,15 @@
 
 {% block content %}
 <div class="container-fluid py-4">
-    {{ page_header("Dashboard", "Executed jobs and extracted responses", icon="fas fa-tachometer-alt text-primary") }}
+    {{ page_header("Dashboard", "Richieste eseguite e risposte estratte", icon="fas fa-tachometer-alt text-primary") }}
 
     {% if auth_status and auth_status.state != 'ready' %}
     <div class="alert alert-{% if auth_status.state == 'connecting' %}info{% else %}warning{% endif %} border-0 shadow-sm mb-4">
         <i class="fas fa-{% if auth_status.state == 'connecting' %}spinner fa-spin{% else %}exclamation-triangle{% endif %} me-2"></i>
-        <strong>Browser {{ auth_status.state }}:</strong> {{ auth_status.message }}
+        <strong>Browser {{ {"idle": "inattivo", "ready": "pronto", "connecting": "in connessione", "unavailable": "non disponibile"}.get(auth_status.state, auth_status.state) }}:</strong> {{ auth_status.message }}
+        {% if can_admin(user) %}<a href="/web/browser" class="alert-link ms-2">Apri il pannello</a>{% endif %}
         {% if auth_status.state == 'unavailable' %}
-        <span class="text-muted ms-2">— Web UI is read-only. Live queries are not available.</span>
+        <span class="text-muted ms-2">— Interfaccia in sola lettura: le query live non sono disponibili.</span>
         {% endif %}
     </div>
     {% endif %}
@@ -22,55 +23,54 @@
     <!-- Stats -->
     <div class="row g-4 mb-4">
         <div class="col-md-3 col-6">
-            {{ stat_card("Executed jobs", stats.total_requests, icon="fa-list-check", color="primary", href="/web/results") }}
+            {{ stat_card("Richieste eseguite", stats.total_requests, icon="fa-list-check", color="primary", href="/web/results") }}
         </div>
         <div class="col-md-3 col-6">
-            {{ stat_card("Successful", stats.successful, icon="fa-check-circle", color="success") }}
+            {{ stat_card("Riuscite", stats.successful, icon="fa-check-circle", color="success", href="/web/results?status=completed") }}
         </div>
         <div class="col-md-3 col-6">
-            {{ stat_card("Failed", stats.failed, icon="fa-times-circle", color="danger") }}
+            {{ stat_card("Fallite", stats.failed, icon="fa-times-circle", color="danger", href="/web/results?status=failed") }}
         </div>
         <div class="col-md-3 col-6">
-            {{ stat_card("Extracted responses", stats.total_responses, icon="fa-database", color="info", href="/web/results?status=completed") }}
+            {{ stat_card("Risposte estratte", stats.total_responses, icon="fa-database", color="info", href="/web/results?status=completed") }}
         </div>
     </div>
 
     <!-- Quick Actions + Recent Activity -->
     <div class="row g-4 mb-4">
         <div class="col-md-6">
-            {% call card("Quick Actions", class="border-0 shadow-sm h-100") %}
+            {% call card("Azioni rapide", class="border-0 shadow-sm h-100") %}
                     <div class="d-grid gap-2">
                         <a href="/web/forms" class="btn btn-primary">
-                            <i class="fas fa-clipboard-list me-2"></i>Submit a Query
+                            <i class="fas fa-clipboard-list me-2"></i>Invia una query
                         </a>
-                        <a href="/web/results" class="btn btn-outline-primary">
-                            <i class="fas fa-database me-2"></i>Browse Results
+                        <a href="/web/results" class="btn btn-outline-secondary">
+                            <i class="fas fa-database me-2"></i>Sfoglia i risultati
                         </a>
                         <a href="/web/documents" class="btn btn-outline-secondary">
-                            <i class="fas fa-folder-tree me-2"></i>Browse Documents
+                            <i class="fas fa-folder-tree me-2"></i>Sfoglia i documenti
                         </a>
                         <a href="/web/dossiers" class="btn btn-outline-secondary">
-                            <i class="fas fa-folder-open me-2"></i>Browse Dossiers
+                            <i class="fas fa-folder-open me-2"></i>Sfoglia i dossier
                         </a>
-                        <button type="button" id="retrieve-missing-pairs" class="btn btn-outline-success"
+                        {% if can_admin(user) %}
+                        <button type="button" id="retrieve-missing-pairs" class="btn btn-outline-secondary"
                                 {% if not auth_status or auth_status.state != 'ready' %}disabled{% endif %}>
-                            <i class="fas fa-file-circle-check me-2"></i>Retrieve missing pairs
+                            <i class="fas fa-file-circle-check me-2"></i>Recupera coppie mancanti
                         </button>
-                        <a href="/docs" class="btn btn-outline-secondary" target="_blank">
-                            <i class="fas fa-book me-2"></i>API Documentation
-                        </a>
+                        {% endif %}
                     </div>
                     <p class="small text-muted mt-3 mb-0">
-                        Finds free visure files missing a PDF or P7M counterpart, submits the needed requests,
-                        then downloads and indexes the available documents. Property requests use Storica Analitica.
-                        Solve any SISTER CAPTCHA in the browser while the batch runs.
+                        Trova le visure libere prive del PDF o del P7M corrispondente, invia le richieste necessarie,
+                        poi scarica e indicizza i documenti disponibili. Le richieste sugli immobili usano la Storica
+                        Analitica. Risolvi l'eventuale CAPTCHA SISTER nel browser mentre il batch è in esecuzione.
                     </p>
                     <div id="missing-pairs-status" class="alert alert-info mt-3 mb-0 py-2" role="status"
                          aria-live="polite" hidden></div>
             {% endcall %}
         </div>
         <div class="col-md-6">
-            {% call card("Executed jobs", subtitle="Latest requests and their extracted responses", class="border-0 shadow-sm h-100") %}
+            {% call card("Richieste eseguite", subtitle="Ultime richieste e relative risposte estratte", class="border-0 shadow-sm h-100") %}
                     {% if recent %}
                     <div class="list-group list-group-flush">
                         {% for r in recent %}
@@ -79,19 +79,19 @@
                                 <div>
                                     {{ status_badge(r.status) }}
                                     <small class="text-muted">{{ r.request_type or '' }}</small>
-                                    <small>{{ r.provincia or '' }}/{{ r.comune or '' }}</small>
+                                    <small>{{ [r.provincia, r.comune]|select|join(' / ') }}</small>
                                 </div>
                                 <small class="text-muted">{{ r.requested_at_display or '' }}</small>
                             </div>
                             <div class="d-flex justify-content-between align-items-center mt-2">
                                 {{ response_summary(r, compact=true) }}
-                                <span class="small text-primary">View response <i class="fas fa-arrow-right ms-1"></i></span>
+                                <span class="small text-primary">Vedi risposta <i class="fas fa-arrow-right ms-1"></i></span>
                             </div>
                         </a>
                         {% endfor %}
                     </div>
                     {% else %}
-                    {{ no_results("No executed jobs", "Submit a query to see its extracted response here.") }}
+                    {{ no_results("Nessuna richiesta eseguita", "Invia una query per vedere qui la risposta estratta.") }}
                     {% endif %}
             {% endcall %}
         </div>
@@ -101,7 +101,7 @@
 
 {% block extra_js %}
 {{ super() }}
-<script>
+<script nonce="{{ csp_nonce }}">
 (() => {
     const button = document.getElementById('retrieve-missing-pairs');
     const statusBox = document.getElementById('missing-pairs-status');
@@ -116,7 +116,7 @@
         if (!job || job.status === 'idle') {
             statusBox.hidden = true;
             button.disabled = false;
-            button.innerHTML = '<i class="fas fa-file-circle-check me-2"></i>Retrieve missing pairs';
+            button.innerHTML = '<i class="fas fa-file-circle-check me-2"></i>Recupera coppie mancanti';
             return;
         }
 
@@ -124,7 +124,7 @@
         button.disabled = active;
         button.innerHTML = active
             ? '<i class="fas fa-spinner fa-spin me-2"></i>Retrieving pairs…'
-            : '<i class="fas fa-file-circle-check me-2"></i>Retrieve missing pairs';
+            : '<i class="fas fa-file-circle-check me-2"></i>Recupera coppie mancanti';
         const hasWarning = job.error || ['partial', 'error', 'completed_with_errors', 'completed_with_gaps'].includes(job.status);
         statusBox.className = `alert ${hasWarning ? 'alert-warning' : (active ? 'alert-info' : 'alert-success')} mt-3 mb-0 py-2`;
         statusBox.hidden = false;

@@ -65,3 +65,6 @@ docker-compose.override.yaml
 /logs
 /outputs
 deploy-config.yaml
+
+# local credential files (hashed or plain) must never be committed
+local_users*.txt

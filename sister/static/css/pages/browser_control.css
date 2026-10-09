@@ -18,3 +18,7 @@
 .log-box .log-ok { color: #3fb950; }
 .log-box .log-warn { color: #d29922; }
 .log-box .log-err { color: #f85149; }
+.log-box { text-align: left; }
+
+/* E2 · state badge: readable text on a neutral tint in both themes (the colour class only draws the border) */
+.state-badge { background-color: var(--bs-tertiary-bg) !important; color: var(--bs-body-color) !important; }

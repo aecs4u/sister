@@ -175,7 +175,7 @@
     const contentDiv = document.getElementById('response-content-' + groupId);
 
     responseDiv.style.display = 'block';
-    statusDiv.innerHTML = '<div class="alert alert-info"><i class="fas fa-spinner fa-spin me-2"></i>Submitting request...</div>';
+    statusDiv.innerHTML = '<div class="alert alert-info"><i class="fas fa-spinner fa-spin me-2"></i>Invio della richiesta…</div>';
     contentDiv.textContent = '';
     var pvContainer = document.getElementById('page-visits-' + groupId);
     if (pvContainer) pvContainer.innerHTML = '';
@@ -220,7 +220,7 @@
         const errors = data.results.filter(r => r.status === 'error').length;
         const alertClass = errors > 0 ? 'alert-warning' : 'alert-success';
         const icon = errors > 0 ? 'fa-exclamation-triangle' : 'fa-check-circle';
-        statusDiv.innerHTML = '<div class="alert ' + alertClass + '"><i class="fas ' + icon + ' me-2"></i>Batch: ' + submitted + ' submitted, ' + errors + ' error(s) out of ' + data.total_rows + ' rows</div>';
+        statusDiv.innerHTML = '<div class="alert ' + alertClass + '"><i class="fas ' + icon + ' me-2"></i>Batch: ' + submitted + ' inviate, ' + errors + ' errori su ' + data.total_rows + ' rows</div>';
         contentDiv.textContent = JSON.stringify(data, null, 2);
         return;
       }
@@ -241,7 +241,7 @@
         return;
       }
 
-      statusDiv.innerHTML = '<div class="alert alert-info"><i class="fas fa-spinner fa-spin me-2"></i>Queued. Polling for results... (' + requestIds.join(', ') + ')</div>';
+      statusDiv.innerHTML = '<div class="alert alert-info"><i class="fas fa-spinner fa-spin me-2"></i>In coda. Attendo i risultati… (' + requestIds.join(', ') + ')</div>';
 
       // Poll each request_id
       const allResults = {};
@@ -352,7 +352,7 @@
           let parts = [];
           if (completed) parts.push(completed + ' completed');
           if (running) parts.push(running + ' running');
-          if (failed) parts.push(failed + ' failed');
+          if (failed) parts.push(failed + ' fallite');
           if (skipped) parts.push(skipped + ' skipped');
           statusDiv.innerHTML = '<div class="alert alert-info"><i class="fas fa-spinner fa-spin me-2"></i>'
             + '<strong>Workflow</strong> — ' + parts.join(', ')
@@ -364,14 +364,14 @@
           const icon = (s.failed || 0) > 0 ? 'fa-exclamation-triangle' : 'fa-check-circle';
           let html = '<div class="alert ' + alertClass + '"><i class="fas ' + icon + ' me-2"></i>';
           html += '<strong>Workflow: ' + (evt.preset || '') + '</strong> — ';
-          html += (s.completed || 0) + ' completed, ' + (s.failed || 0) + ' failed, ' + (s.skipped || 0) + ' skipped';
+          html += (s.completed || 0) + ' completate, ' + (s.failed || 0) + ' fallite, ' + (s.skipped || 0) + ' saltate';
           if ((s.properties || 0) > 0 || (s.owners || 0) > 0) html += ' | ' + (s.properties || 0) + ' properties, ' + (s.owners || 0) + ' owners';
           if ((s.risk_flags || 0) > 0) html += ' | <span class="text-warning">' + (s.risk_flags || 0) + ' risk flag(s)</span>';
           html += '</div>';
           statusDiv.innerHTML = html;
           contentDiv.textContent = JSON.stringify(evt, null, 2);
         } else if (evt.event === 'error') {
-          statusDiv.innerHTML = '<div class="alert alert-danger"><i class="fas fa-times-circle me-2"></i>' + (evt.error || 'Unknown error') + '</div>';
+          statusDiv.innerHTML = '<div class="alert alert-danger"><i class="fas fa-times-circle me-2"></i>' + (evt.error || 'Errore sconosciuto') + '</div>';
         }
       }
     }
@@ -574,7 +574,7 @@
       const collapseId = accId + '-' + idx;
       const stepLabel = visit._workflow_step ? '<span class="badge bg-info me-1">' + visit._workflow_step + '</span>' : '';
       const reqLabel = visit._request_id ? '<span class="badge bg-secondary me-1">' + visit._request_id.substring(0, 20) + '</span>' : '';
-      const errorBadge = visit.errors && visit.errors.length ? '<span class="badge bg-danger ms-1">' + visit.errors.length + ' error(s)</span>' : '';
+      const errorBadge = visit.errors && visit.errors.length ? '<span class="badge bg-danger ms-1">' + visit.errors.length + ' errori</span>' : '';
       const urlShort = visit.url ? visit.url.replace(/https?:\/\/[^/]+/, '') : '';
 
       html += '<div class="accordion-item">';
@@ -698,7 +698,7 @@
             const csv = XLSX.utils.sheet_to_csv(ws);
             callback(null, csv);
           } catch (err) {
-            callback('Error parsing XLSX: ' + err.message, null);
+            callback('Errore nella lettura del file XLSX: ' + err.message, null);
           }
         };
         reader.readAsArrayBuffer(file);
@@ -707,15 +707,11 @@
       if (typeof XLSX !== 'undefined') {
         doParseXLSX();
       } else {
-        // Lazy-load SheetJS — try multiple CDNs
-        const cdns = [
-          'https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js',
-          'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js',
-          'https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js',
-        ];
+        // Lazy-load SheetJS (self-hosted copy)
+        const cdns = ['/static/vendor/xlsx-0.18.5/xlsx.full.min.js'];  // self-hosted (CSP: script-src 'self')
         function tryLoad(idx) {
           if (idx >= cdns.length) {
-            callback('Error: Could not load XLSX library from any CDN.', null);
+            callback('Errore: impossibile caricare la libreria XLSX.', null);
             return;
           }
           const script = document.createElement('script');
@@ -735,7 +731,7 @@
           const data = JSON.parse(e.target.result);
           const rows = Array.isArray(data) ? data : (data.data || data.results || [data]);
           if (!rows.length || typeof rows[0] !== 'object') {
-            callback('Error: JSON must be an array of objects', null);
+            callback('Errore: il JSON deve essere un array di oggetti', null);
             return;
           }
           const headers = Object.keys(rows[0]);
@@ -750,7 +746,7 @@
           });
           callback(null, lines.join('\n'));
         } catch (err) {
-          callback('Error parsing JSON: ' + err.message, null);
+          callback('Errore nella lettura del JSON: ' + err.message, null);
         }
       };
       reader.readAsText(file);
@@ -827,11 +823,11 @@
   // --- Field validation rules ---
   // Validator for P.IVA / VAT number: must be exactly 11 digits
   function validatePIVA(val) {
-    if (!val) return { valid: false, msg: 'Required — P.IVA must be 11 digits' };
+    if (!val) return { valid: false, msg: 'Obbligatorio — la P.IVA deve avere 11 cifre' };
     const cleaned = val.replace(/[\s\-\.]/g, '');
     if (/^\d{11}$/.test(cleaned)) return { valid: true, cleaned: cleaned };
-    if (/^\d+$/.test(cleaned) && cleaned.length !== 11) return { valid: false, msg: 'P.IVA must be exactly 11 digits (got ' + cleaned.length + ')' };
-    return { valid: false, msg: 'P.IVA must be 11 digits, got: "' + val + '"' };
+    if (/^\d+$/.test(cleaned) && cleaned.length !== 11) return { valid: false, msg: 'La P.IVA deve avere esattamente 11 cifre (trovate ' + cleaned.length + ')' };
+    return { valid: false, msg: 'La P.IVA deve avere 11 cifre, trovato: "' + val + '"' };
   }
 
   // Validator for CF: 16-char alphanumeric
@@ -840,17 +836,17 @@
     const cleaned = val.replace(/[\s\-]/g, '').toUpperCase();
     if (/^[A-Z]{6}\d{2}[A-Z]\d{2}[A-Z]\d{3}[A-Z]$/.test(cleaned)) return { valid: true, cleaned: cleaned };
     if (/^\d{11}$/.test(cleaned)) return { valid: true, cleaned: cleaned }; // P.IVA also accepted as CF
-    return { valid: false, msg: 'Invalid format (expected 16-char CF e.g. RSSMRI85E28H501E or 11-digit P.IVA)' };
+    return { valid: false, msg: 'Formato non valido (atteso CF di 16 caratteri, es. RSSMRI85E28H501E, o P.IVA di 11 cifre)' };
   }
 
   // Validator for identificativo: P.IVA, CF, or company name
   function validateIdentificativo(val) {
-    if (!val) return { valid: false, msg: 'Required — enter P.IVA, CF, or company name' };
+    if (!val) return { valid: false, msg: 'Obbligatorio — inserisci P.IVA, CF o denominazione' };
     const cleaned = val.replace(/[\s\-\.]/g, '');
     if (/^\d{11}$/.test(cleaned)) return { valid: true, cleaned: cleaned };
     if (/^[A-Z0-9]{16}$/i.test(cleaned)) return { valid: true, cleaned: cleaned.toUpperCase() };
     if (val.length >= 3) return { valid: true, cleaned: val.trim() }; // company name
-    return { valid: false, msg: 'Must be P.IVA (11 digits), CF (16 chars), or company name (3+ chars)' };
+    return { valid: false, msg: 'Deve essere una P.IVA (11 cifre), un CF (16 caratteri) o una denominazione (almeno 3 caratteri)' };
   }
 
   const FIELD_VALIDATORS = {
@@ -883,25 +879,25 @@
       if (!val) return { valid: true, cleaned: '' };
       const cleaned = val.replace(/[\s\-]/g, '');
       if (/^\d+$/.test(cleaned)) return { valid: true, cleaned: cleaned };
-      return { valid: false, msg: 'Must be numeric' };
+      return { valid: false, msg: 'Deve essere numerico' };
     },
     'particella': function(val) {
       if (!val) return { valid: true, cleaned: '' };
       const cleaned = val.replace(/[\s\-]/g, '');
       if (/^\d+$/.test(cleaned)) return { valid: true, cleaned: cleaned };
-      return { valid: false, msg: 'Must be numeric' };
+      return { valid: false, msg: 'Deve essere numerico' };
     },
     'subalterno': function(val) {
       if (!val) return { valid: true, cleaned: '' };
       const cleaned = val.replace(/[\s\-]/g, '');
       if (/^\d+$/.test(cleaned)) return { valid: true, cleaned: cleaned };
-      return { valid: false, msg: 'Must be numeric' };
+      return { valid: false, msg: 'Deve essere numerico' };
     },
     'tipo_catasto': function(val) {
       if (!val) return { valid: true, cleaned: '' };
       const upper = val.trim().toUpperCase();
       if (['T', 'F', 'E', 'TF'].includes(upper)) return { valid: true, cleaned: upper };
-      return { valid: false, msg: 'Must be T, F, or E' };
+      return { valid: false, msg: 'Deve essere T, F o E' };
     },
     'indirizzo': function(val) {
       if (!val) return { valid: true, cleaned: '' };
@@ -911,7 +907,7 @@
       if (!val) return { valid: true, cleaned: '' };
       const cleaned = val.replace(/[\s\-]/g, '');
       if (/^\d+$/.test(cleaned)) return { valid: true, cleaned: cleaned };
-      return { valid: false, msg: 'Must be numeric' };
+      return { valid: false, msg: 'Deve essere numerico' };
     },
   };
 
@@ -955,7 +951,7 @@
     const text = textarea.value.trim();
     if (!text) {
       previewDiv.classList.add('d-none');
-      alert('No CSV data to validate. Paste data or drop a file.');
+      alert('Nessun dato CSV da verificare. Incolla i dati o trascina un file.');
       return;
     }
 
@@ -1033,11 +1029,11 @@
         const css = document.createElement('link');
         css.id = 'tabulator-css';
         css.rel = 'stylesheet';
-        css.href = 'https://unpkg.com/tabulator-tables@6.3.1/dist/css/tabulator_bootstrap5.min.css';
+        css.href = '/static/vendor/tabulator-6.3.1/css/tabulator_bootstrap5.min.css';
         document.head.appendChild(css);
       }
       const script = document.createElement('script');
-      script.src = 'https://unpkg.com/tabulator-tables@6.3.1/dist/js/tabulator.min.js';
+      script.src = '/static/vendor/tabulator-6.3.1/js/tabulator.min.js';
       script.onload = function() { renderTabulatorPreview(groupId, headers, dataRows, validCount, errorCount, skippedCount); };
       script.onerror = function() { renderFallbackTable(groupId, tableEl, headers, dataRows, validCount, errorCount, skippedCount); };
       document.head.appendChild(script);
@@ -1077,11 +1073,11 @@
     });
 
     columns.push({
-      title: 'Status', field: '_status', width: 90, hozAlign: 'center', headerSort: false,
+      title: 'Stato', field: '_status', width: 90, hozAlign: 'center', headerSort: false,
       formatter: function(cell) {
         const hasErrors = cell.getRow().getData()._hasErrors;
         return hasErrors
-          ? '<span class="badge bg-danger">Error</span>'
+          ? '<span class="badge bg-danger">Errore</span>'
           : '<span class="badge bg-success">OK</span>';
       },
     });
@@ -1122,7 +1118,7 @@
     const previewDiv = document.getElementById('csv-preview-' + groupId);
     let html = '<thead class="table-light"><tr><th>#</th>';
     headers.forEach(h => { html += '<th>' + escapeHtml(toTitleCase(h)) + '</th>'; });
-    html += '<th>Status</th></tr></thead><tbody>';
+    html += '<th>Stato</th></tr></thead><tbody>';
 
     dataRows.forEach(r => {
       const cls = r.hasErrors ? 'table-danger' : '';
@@ -1136,7 +1132,7 @@
           html += '<td>' + escapeHtml(val || '') + '</td>';
         }
       });
-      html += '<td>' + (r.hasErrors ? '<span class="badge bg-danger">Error</span>' : '<span class="badge bg-success">OK</span>') + '</td>';
+      html += '<td>' + (r.hasErrors ? '<span class="badge bg-danger">Errore</span>' : '<span class="badge bg-success">OK</span>') + '</td>';
       html += '</tr>';
     });
     html += '</tbody>';
@@ -1151,8 +1147,8 @@
     const existing = container.querySelector('.csv-summary');
     if (existing) existing.remove();
 
-    const parts = [validCount + ' valid'];
-    if (errorCount > 0) parts.push(errorCount + ' error(s)');
+    const parts = [validCount + ' validi'];
+    if (errorCount > 0) parts.push(errorCount + ' errori');
     if (skippedCount > 0) parts.push(skippedCount + ' skipped');
     parts.push(totalRows + ' total');
 
@@ -1357,7 +1353,7 @@
         html += '<td class="small text-muted">' + sampleText + '</td>';
         html += '<td class="text-center"><i class="fas fa-arrow-right text-muted"></i></td>';
         html += '<td><select class="form-select form-select-sm batch-map-select" data-csv-col="' + escapeHtml(col) + '">';
-        html += '<option value="">(skip this column)</option>';
+        html += '<option value="">(ignora questa colonna)</option>';
         apiFields.forEach(f => {
           const selected = (f === autoField) ? ' selected' : '';
           html += '<option value="' + f + '"' + selected + '>' + toTitleCase(f) + '</option>';
@@ -1437,8 +1433,8 @@
         const cls = errorCount > 0 ? 'warning' : 'success';
         const icon = errorCount > 0 ? 'fa-exclamation-triangle' : 'fa-check-circle';
         summaryDiv.innerHTML = '<div class="alert alert-' + cls + ' py-2"><i class="fas ' + icon + ' me-2"></i>' +
-          validCount + ' valid &middot; ' + errorCount + ' error(s) &middot; ' +
-          batchWizard._validatedRows.length + ' total rows</div>';
+          validCount + ' validi &middot; ' + errorCount + ' errori &middot; ' +
+          batchWizard._validatedRows.length + ' righe totali</div>';
       }
 
       // Render Tabulator with mapped fields
@@ -1472,7 +1468,7 @@
           });
         });
         columns.push({
-          title: 'Errors', field: '_errorText', minWidth: 200, headerSort: false,
+          title: 'Errori', field: '_errorText', minWidth: 200, headerSort: false,
           formatter: 'html',
           accessorData: function(value, data) {
             const errs = data._errors || {};
@@ -1481,7 +1477,7 @@
           },
         });
         columns.push({
-          title: 'Status', field: '_status', width: 90, hozAlign: 'center', headerSort: false,
+          title: 'Stato', field: '_status', width: 90, hozAlign: 'center', headerSort: false,
           formatter: 'html',
         });
 
@@ -1497,7 +1493,7 @@
             _hasErrors: r.hasErrors,
             _errorText: errMsgs.length ? errMsgs.join('<br>') : '',
             _status: r.hasErrors
-              ? '<span class="badge bg-danger">Error</span>'
+              ? '<span class="badge bg-danger">Errore</span>'
               : '<span class="badge bg-success">OK</span>',
           };
         });
@@ -1517,11 +1513,11 @@
       if (typeof Tabulator === 'undefined') {
         if (!document.getElementById('tabulator-css')) {
           const css = document.createElement('link'); css.id = 'tabulator-css'; css.rel = 'stylesheet';
-          css.href = 'https://unpkg.com/tabulator-tables@6.3.1/dist/css/tabulator_bootstrap5.min.css';
+          css.href = '/static/vendor/tabulator-6.3.1/css/tabulator_bootstrap5.min.css';
           document.head.appendChild(css);
         }
         const s = document.createElement('script');
-        s.src = 'https://unpkg.com/tabulator-tables@6.3.1/dist/js/tabulator.min.js';
+        s.src = '/static/vendor/tabulator-6.3.1/js/tabulator.min.js';
         s.onload = doRender; document.head.appendChild(s);
       } else { doRender(); }
     },
@@ -1535,10 +1531,10 @@
       const div = document.getElementById('batch-confirm-summary');
       if (div) {
         div.innerHTML =
-          '<p class="mb-2"><strong>Query type:</strong> ' + escapeHtml(toTitleCase(cmd.replace(/-/g, ' '))) + '</p>' +
-          '<p class="mb-2"><strong>Total rows:</strong> ' + rows.length + '</p>' +
-          '<p class="mb-2"><span class="badge bg-success">' + valid + ' valid</span> ' +
-          (errors > 0 ? '<span class="badge bg-danger">' + errors + ' errors</span>' : '') + '</p>';
+          '<p class="mb-2"><strong>Tipo di query:</strong> ' + escapeHtml(toTitleCase(cmd.replace(/-/g, ' '))) + '</p>' +
+          '<p class="mb-2"><strong>Righe totali:</strong> ' + rows.length + '</p>' +
+          '<p class="mb-2"><span class="badge bg-success">' + valid + ' validi</span> ' +
+          (errors > 0 ? '<span class="badge bg-danger">' + errors + ' errori</span>' : '') + '</p>';
       }
 
       const skipCheck = document.getElementById('batch-skip-errors');
@@ -1560,7 +1556,7 @@
       const rows = batchWizard._validatedRows.filter(r => !(skipErrors && skipErrors.checked && r.hasErrors));
 
       if (!rows.length) {
-        alert('No rows to submit.');
+        alert('Nessuna riga da inviare.');
         return;
       }
 

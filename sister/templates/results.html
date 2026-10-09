@@ -2,11 +2,13 @@
 {% from "components/index.html" import stat_card, page_header, data_table_assets %}
 {% from "macros/ui_base.html" import no_results %}
 {% from "parts/_related_links.html" import related_pages %}
-{% block page_title %}Results{% endblock %}
+{% block page_title %}Risultati{% endblock %}
 
 {% block extra_css %}
 {{ super() }}
-{{ data_table_assets() }}
+<link rel="stylesheet" href="/static/vendor/tabulator-6.3.1/css/tabulator_bootstrap5.min.css">
+<link rel="stylesheet" href="/static/aecs4u-theme/css/data-table.css{{ theme_asset_v|default('') }}">
+<script src="/static/vendor/tabulator-6.3.1/js/tabulator.min.js"></script>
 {% endblock %}
 
 {% block content %}
@@ -14,38 +16,41 @@
 
   {# ── Page header ─────────────────────────────────────────────────────────── #}
   <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-4">
-    {{ page_header("Executed jobs", "Browse completed jobs and their extracted responses", icon="fas fa-list-check text-primary", wrapper_class="mb-0") }}
+    {{ page_header("Richieste eseguite", "Sfoglia le richieste completate e le risposte estratte", icon="fas fa-list-check text-primary", wrapper_class="mb-0") }}
     <div class="d-flex align-items-center gap-3">
       {% if current_count %}
       <span class="text-muted small">
-        Showing {{ offset + 1 }}&ndash;{{ offset + current_count }} of {{ total_count }}
-        result{% if total_count != 1 %}s{% endif %}
+        Mostrate {{ offset + 1 }}&ndash;{{ offset + current_count }} di {{ total_count }}
+        risultat{{ 'o' if total_count == 1 else 'i' }}
       </span>
       {% endif %}
+      {% if can_admin(user) %}
       <form method="post" action="/web/results/refresh" class="d-inline" id="import-outputs-form">
+        {{ csrf_input() }}
         <button type="submit" class="btn btn-outline-primary btn-sm">
-          <i class="fas fa-file-import me-1"></i>Import Outputs
+          <i class="fas fa-file-import me-1"></i>Importa output
         </button>
       </form>
+      {% endif %}
     </div>
   </div>
 
   {# ── Dashboard stats ──────────────────────────────────────────────────────── #}
   <div class="row g-3 mb-4">
     <div class="col-lg col-md-4 col-6">
-      {{ stat_card('Executed jobs', stats.total_requests, icon='fa-list-check', color='primary', href=stats_urls.total) }}
+      {{ stat_card('Richieste eseguite', stats.total_requests, icon='fa-list-check', color='primary', href=stats_urls.total) }}
     </div>
     <div class="col-lg col-md-4 col-6">
-      {{ stat_card('Completed', stats.successful, icon='fa-check-circle', color='success', href=stats_urls.completed) }}
+      {{ stat_card('Completate', stats.successful, icon='fa-check-circle', color='success', href=stats_urls.completed) }}
     </div>
     <div class="col-lg col-md-4 col-6">
-      {{ stat_card('Partial', stats.partial or 0, icon='fa-adjust', color='warning', href=stats_urls.partial) }}
+      {{ stat_card('Parziali', stats.partial or 0, icon='fa-adjust', color='warning', href=stats_urls.partial) }}
     </div>
     <div class="col-lg col-md-4 col-6">
-      {{ stat_card('Failed', stats.failed, icon='fa-times-circle', color='danger', href=stats_urls.failed) }}
+      {{ stat_card('Fallite', stats.failed, icon='fa-times-circle', color='danger', href=stats_urls.failed) }}
     </div>
     <div class="col-lg col-md-4 col-6">
-      {{ stat_card('Pending', stats.pending, icon='fa-hourglass-half', color='warning', href=stats_urls.pending) }}
+      {{ stat_card('In attesa', stats.pending, icon='fa-hourglass-half', color='warning', href=stats_urls.pending) }}
     </div>
   </div>
 
@@ -83,31 +88,31 @@
         <div class="col-lg-2 col-md-3 col-6">
           <label for="filter-tipo-catasto" class="form-label form-label-sm mb-1">Catasto</label>
           <select class="form-select form-select-sm" name="tipo_catasto" id="filter-tipo-catasto">
-            <option value="">All types</option>
+            <option value="">Tutti i tipi</option>
             <option value="T" {% if tipo_catasto == 'T' %}selected{% endif %}>Terreni (T)</option>
             <option value="F" {% if tipo_catasto == 'F' %}selected{% endif %}>Fabbricati (F)</option>
             <option value="E" {% if tipo_catasto == 'E' %}selected{% endif %}>Entrambi (E)</option>
           </select>
         </div>
         <div class="col-lg-2 col-md-3 col-6">
-          <label for="filter-source" class="form-label form-label-sm mb-1">Source</label>
+          <label for="filter-source" class="form-label form-label-sm mb-1">Origine</label>
           <select class="form-select form-select-sm" name="source" id="filter-source">
-            <option value="">All sources</option>
-            <option value="single"   {% if source == 'single'   %}selected{% endif %}>Single</option>
+            <option value="">Tutte le origini</option>
+            <option value="single"   {% if source == 'single'   %}selected{% endif %}>Singola</option>
             <option value="workflow" {% if source == 'workflow' %}selected{% endif %}>Workflow</option>
           </select>
         </div>
         <div class="col-lg-2 col-md-3 col-6">
-          <label for="filter-status" class="form-label form-label-sm mb-1">Status</label>
+          <label for="filter-status" class="form-label form-label-sm mb-1">Stato</label>
           <select class="form-select form-select-sm" name="status" id="filter-status">
-            <option value="">All statuses</option>
-            {% for val, lbl in [('completed','Completed'),('partial','Partial'),('failed','Failed'),('error','Error'),('running','Running'),('pending','Pending')] %}
+            <option value="">Tutti gli stati</option>
+            {% for val, lbl in [('completed','Completate'),('partial','Parziali'),('failed','Fallite'),('error','Errore'),('running','In corso'),('pending','In attesa')] %}
             <option value="{{ val }}" {% if status == val %}selected{% endif %}>{{ lbl }}</option>
             {% endfor %}
           </select>
         </div>
         <div class="col-lg-1 col-md-2 col-6">
-          <label for="filter-limit" class="form-label form-label-sm mb-1">Rows</label>
+          <label for="filter-limit" class="form-label form-label-sm mb-1">Righe</label>
           <select class="form-select form-select-sm" name="limit" id="filter-limit">
             {% if limit not in (10, 25, 50, 100, 200) %}
             <option value="{{ limit }}" selected>{{ limit }}</option>
@@ -120,11 +125,11 @@
 
         <div class="col-lg-auto col-md-3 col-6 d-flex gap-2">
           <button type="submit" class="btn btn-primary btn-sm">
-            <i class="fas fa-filter me-1"></i>Filter
+            <i class="fas fa-filter me-1"></i>Filtra
           </button>
           {% if provincia or comune or foglio or particella or tipo_catasto or source or status %}
           <a href="/web/results" class="btn btn-outline-secondary btn-sm">
-            <i class="fas fa-times me-1"></i>Clear
+            <i class="fas fa-times me-1"></i>Azzera
           </a>
           {% endif %}
         </div>
@@ -133,14 +138,14 @@
       {# Active filter chips #}
       {% if active_filters %}
       <div class="d-flex flex-wrap align-items-center gap-2 mt-3">
-        <span class="small text-muted">Active filters</span>
+        <span class="small text-muted">Filtri attivi</span>
         {% for filter in active_filters %}
         <span class="badge rounded-pill text-bg-light border filter-chip">
           <span>{{ filter.label }}: {{ filter.value }}</span>
-          <a href="{{ filter.remove_url }}" class="btn-close" aria-label="Remove {{ filter.label }} filter"></a>
+          <a href="{{ filter.remove_url }}" class="btn-close" aria-label="Rimuovi il filtro {{ filter.label }}"></a>
         </span>
         {% endfor %}
-        <a href="/web/results" class="small text-decoration-none">Clear all</a>
+        <a href="/web/results" class="small text-decoration-none">Rimuovi tutti</a>
       </div>
       {% endif %}
     </div>
@@ -176,18 +181,18 @@
   <div class="text-center"><a href="/web/forms" class="btn btn-primary">Submit a Query</a></div>
   {% endif %}
 
-  {{ related_pages("Continue from a result", [
-      ("/web/forms", "Submit a query", "Start another single step query or workflow.", "fa-clipboard-list"),
-      ("/web/workflows", "OpenData workflows", "Review workflow runs recorded by the OpenData service.", "fa-diagram-project"),
-      ("/web/documents", "Documents", "Browse downloaded cadastral files.", "fa-folder-tree"),
-      ("/web/dossiers", "Dossiers", "Inspect complete saved query responses.", "fa-folder-open")
+  {{ related_pages("Continua da un risultato", [
+      ("/web/forms", "Invia una query", "Avvia un'altra query a passo singolo o un workflow.", "fa-clipboard-list"),
+      ("/web/workflows", "Workflow OpenData", "Consulta le esecuzioni dei workflow registrate dal servizio OpenData.", "fa-diagram-project"),
+      ("/web/documents", "Documenti", "Sfoglia i file catastali scaricati.", "fa-folder-tree"),
+      ("/web/dossiers", "Dossier", "Esamina le risposte complete salvate.", "fa-folder-open")
   ]) }}
 </div>
 {% endblock %}
 
 {% block extra_js %}
 {{ super() }}
-<script>
+<script nonce="{{ csp_nonce }}">
 (function() {
     'use strict';
     var importForm = document.getElementById("import-outputs-form");
@@ -234,11 +239,18 @@
         {% endfor %}
     ];
 
-    new Tabulator(el, {
+    // "RAVENNA" / "ravenna" / "Ravenna" -> "Ravenna" (provincia and comune arrive in mixed case)
+    function titleCase(cell) {
+        var v = cell.getValue();
+        if (!v || v === "-") return v || "-";
+        return String(v).toLowerCase().replace(/(^|[\s'-])([a-zà-ÿ])/g, function(_, sep, ch) { return sep + ch.toUpperCase(); });
+    }
+
+    var table = new Tabulator(el, {
         data: data,
         layout: "fitDataFill",
         movableColumns: true,
-        placeholder: "No data",
+        placeholder: "Nessun dato",
         height: "auto",
         maxHeight: "600px",
         rowClick: function(e, row) {
@@ -248,8 +260,8 @@
         },
         columns: [
             {title: "#", field: "row_num", sorter: "number", width: 55, hozAlign: "center"},
-            {title: "Request ID", field: "request_id_short",
-             headerFilter: "input", headerFilterPlaceholder: "filter...",
+            {title: "ID richiesta", field: "request_id_short",
+             headerFilter: "input", headerFilterPlaceholder: "filtra…",
              formatter: function(cell) {
                  var d = cell.getRow().getData();
                  var base = d.source === "workflow" ? "/web/workflows/" : "/web/results/";
@@ -261,21 +273,21 @@
                  link.appendChild(code);
                  return link;
              }, cellClick: function(e) { e.stopPropagation(); }},
-            {title: "Source", field: "source", width: 95, hozAlign: "center",
+            {title: "Origine", field: "source", width: 150, hozAlign: "center",
              headerFilter: "list",
-             headerFilterParams: {values: {"": "All", "single": "Single", "workflow": "Workflow"}},
+             headerFilterParams: {values: {"": "Tutte", "single": "Singola", "workflow": "Workflow"}},
              formatter: function(cell) {
                  var v = cell.getValue();
                  var link = document.createElement("a");
                  var span = document.createElement("span");
                  link.href = filterUrl("source", v || "single");
                  span.className = v === "workflow" ? "badge bg-primary" : "badge bg-secondary";
-                 span.textContent = v === "workflow" ? "Workflow" : "Single";
+                 span.textContent = v === "workflow" ? "Workflow" : "Singola";
                  link.appendChild(span);
                  return link;
              }, cellClick: function(e) { e.stopPropagation(); }},
-            {title: "Type", field: "request_type",
-             headerFilter: "input", headerFilterPlaceholder: "filter...",
+            {title: "Tipo", field: "request_type",
+             headerFilter: "input", headerFilterPlaceholder: "filtra…",
              formatter: function(cell) {
                  var d = cell.getRow().getData();
                  var span = document.createElement("span");
@@ -286,16 +298,16 @@
                  return span;
              }},
             {title: "Cat.", field: "tipo_catasto",
-             headerFilter: "input", headerFilterPlaceholder: "filter...", width: 70, hozAlign: "center"},
-            {title: "Provincia", field: "provincia",
-             headerFilter: "input", headerFilterPlaceholder: "filter..."},
-            {title: "Comune", field: "comune",
-             headerFilter: "input", headerFilterPlaceholder: "filter..."},
+             headerFilter: "input", headerFilterPlaceholder: "filtra…", width: 104, hozAlign: "center"},
+            {title: "Provincia", field: "provincia", formatter: titleCase,
+             headerFilter: "input", headerFilterPlaceholder: "filtra…"},
+            {title: "Comune", field: "comune", formatter: titleCase,
+             headerFilter: "input", headerFilterPlaceholder: "filtra…"},
             {title: "F.", field: "foglio",
-             headerFilter: "input", headerFilterPlaceholder: "filter...", width: 65, hozAlign: "center"},
+             headerFilter: "input", headerFilterPlaceholder: "filtra…", width: 104, hozAlign: "center"},
             {title: "P.", field: "particella",
-             headerFilter: "input", headerFilterPlaceholder: "filter...", width: 65, hozAlign: "center"},
-            {title: "Imm.", field: "property_count", sorter: "number", width: 70, hozAlign: "center",
+             headerFilter: "input", headerFilterPlaceholder: "filtra…", width: 104, hozAlign: "center"},
+            {title: "Imm.", field: "property_count", sorter: "number", width: 104, hozAlign: "center",
              headerTooltip: "Immobili (DB)",
              formatter: function(cell) {
                  var v = cell.getValue();
@@ -305,7 +317,7 @@
                  badge.textContent = v;
                  return badge;
              }},
-            {title: "Int.", field: "owner_count", sorter: "number", width: 70, hozAlign: "center",
+            {title: "Int.", field: "owner_count", sorter: "number", width: 104, hozAlign: "center",
              headerTooltip: "Intestati (DB)",
              formatter: function(cell) {
                  var v = cell.getValue();
@@ -315,33 +327,33 @@
                  badge.textContent = v;
                  return badge;
              }},
-            {title: "Extracted response", field: "extracted_results", sorter: "number", minWidth: 170,
-             headerTooltip: "Counts extracted from the response",
+            {title: "Risposta estratta", field: "extracted_results", sorter: "number", minWidth: 170,
+             headerTooltip: "Conteggi estratti dalla risposta",
              formatter: function(cell) {
                  var d = cell.getRow().getData();
                  var wrap = document.createElement("span");
                  wrap.className = "small text-muted";
                  wrap.innerHTML = '<i class="fas fa-table-list text-primary me-1"></i>' +
-                     d.extracted_results + ' results · ' + d.extracted_owners + ' owners';
+                     d.extracted_results + ' risultati · ' + d.extracted_owners + ' intestati';
                  return wrap;
              }},
-            {title: "Status", field: "status", width: 115, hozAlign: "center",
+            {title: "Stato", field: "status", width: 130, hozAlign: "center",
              headerFilter: "list",
-             headerFilterParams: {values: {"":"All","completed":"Completed","partial":"Partial","failed":"Failed","error":"Error","pending":"Pending","running":"Running"}},
+             headerFilterParams: {values: {"":"Tutti","completed":"Completata","partial":"Parziale","failed":"Fallita","error":"Errore","pending":"In attesa","running":"In corso"}},
              formatter: function(cell) {
                  var v = cell.getValue();
                  var link = document.createElement("a");
                  var span = document.createElement("span");
                  link.href = filterUrl("status", v || "pending");
-                 var map = {completed:["bg-success","Completed"],failed:["bg-danger","Failed"],error:["bg-danger","Failed"],partial:["bg-warning text-dark","Partial"],running:["bg-info text-dark","Running"]};
-                 var m = map[v] || ["bg-secondary","Pending"];
+                 var map = {completed:["bg-success","Completata"],failed:["bg-danger","Fallita"],error:["bg-danger","Fallita"],partial:["bg-warning text-dark","Parziale"],running:["bg-info text-dark","In corso"]};
+                 var m = map[v] || ["bg-secondary","In attesa"];
                  span.className = "badge " + m[0];
                  span.textContent = m[1];
                  link.appendChild(span);
                  return link;
              }, cellClick: function(e) { e.stopPropagation(); }},
-            {title: "Date", field: "requested_at", sorter: "string",
-             headerFilter: "input", headerFilterPlaceholder: "filter...",
+            {title: "Data", field: "requested_at", sorter: "string",
+             headerFilter: "input", headerFilterPlaceholder: "filtra…",
              formatter: function(cell) {
                  var d = cell.getRow().getData();
                  var wrap = document.createElement("div");
@@ -352,12 +364,23 @@
                      wrap.appendChild(document.createElement("br"));
                      var resp = document.createElement("small");
                      resp.className = "text-muted";
-                     resp.textContent = "Resp. " + d.responded_at;
+                     resp.textContent = "Risp. " + d.responded_at;
                      wrap.appendChild(resp);
                  }
                  return wrap;
              }},
         ],
+    });
+
+    // Give each header filter an accessible name (Tabulator renders them unlabelled).
+    table.on("tableBuilt", function() {
+        el.querySelectorAll(".tabulator-col").forEach(function(col) {
+            var title = col.querySelector(".tabulator-col-title");
+            var label = "Filtra per " + (title ? title.textContent.trim() : "column");
+            col.querySelectorAll(".tabulator-header-filter input, .tabulator-header-filter select").forEach(function(c) {
+                c.setAttribute("aria-label", label);
+            });
+        });
     });
 })();
 </script>

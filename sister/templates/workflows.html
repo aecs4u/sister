@@ -3,15 +3,15 @@
 {% from "components/job.html" import status_badge, response_summary %}
 {% from "macros/ui_base.html" import no_results %}
 {% from "parts/_related_links.html" import related_pages %}
-{% block page_title %}Workflows{% endblock %}
+{% block page_title %}Workflow{% endblock %}
 
 {% block content %}
 <div class="container-fluid py-4">
     <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-4">
-        {{ page_header("OpenData workflows", "Workflow runs recorded by the OpenData service", icon="fas fa-project-diagram text-primary", wrapper_class="mb-0") }}
+        {{ page_header("Workflow OpenData", "Esecuzioni dei workflow registrate dal servizio OpenData", icon="fas fa-project-diagram text-primary", wrapper_class="mb-0") }}
         <div class="d-flex align-items-center gap-2">
             {% if status %}
-            <a href="/web/workflows" class="btn btn-outline-secondary btn-sm"><i class="fas fa-times me-1"></i>Clear filter</a>
+            <a href="/web/workflows" class="btn btn-outline-secondary btn-sm"><i class="fas fa-times me-1"></i>Rimuovi filtro</a>
             {% endif %}
         </div>
     </div>
@@ -23,20 +23,28 @@
     </div>
     {% endif %}
 
+    {% if opendata_down %}
+    <div class="alert alert-warning border-0 shadow-sm mb-4" role="status">
+        <i class="fas fa-plug-circle-xmark me-2"></i>
+        <span class="alert-text"><strong>Servizio OpenData non raggiungibile.</strong> L'elenco dei workflow non è disponibile
+        al momento; la pagina riprova automaticamente dopo qualche secondo.</span>
+    </div>
+    {% endif %}
+
     <div class="alert alert-info border-0 shadow-sm mb-4">
         <i class="fas fa-circle-info me-2"></i>
-        Multi-step workflows submitted in <a href="/web/forms">Query Forms</a> run through Sister and show their
-        streamed result in the form response panel. Use <a href="/web/results">Results</a> for saved requests and
-        <a href="/web/documents">Documents</a> for downloaded files.
+        <span class="alert-text">I workflow multi-step inviati da <a href="/web/forms">Query</a> passano da Sister e mostrano il risultato in
+        streaming nel pannello di risposta. Usa <a href="/web/results">Risultati</a> per le richieste salvate e
+        <a href="/web/documents">Documenti</a> per i file scaricati.</span>
     </div>
 
     <!-- Status filter pills -->
-    <div class="mb-4">
-        <a href="/web/workflows" class="btn btn-sm {% if not status %}btn-primary{% else %}btn-outline-secondary{% endif %} me-1">All</a>
-        <a href="/web/workflows?status=completed" class="btn btn-sm {% if status == 'completed' %}btn-success{% else %}btn-outline-success{% endif %} me-1">Completed</a>
-        <a href="/web/workflows?status=partial" class="btn btn-sm {% if status == 'partial' %}btn-warning{% else %}btn-outline-warning{% endif %} me-1">Partial</a>
-        <a href="/web/workflows?status=running" class="btn btn-sm {% if status == 'running' %}btn-info{% else %}btn-outline-info{% endif %} me-1">Running</a>
-        <a href="/web/workflows?status=failed" class="btn btn-sm {% if status == 'failed' %}btn-danger{% else %}btn-outline-danger{% endif %} me-1">Failed</a>
+    <div class="status-pills mb-4" role="group" aria-label="Filtra per stato">
+        <a href="/web/workflows" class="btn btn-sm {% if not status %}btn-primary{% else %}btn-outline-secondary{% endif %}">Tutti</a>
+        <a href="/web/workflows?status=completed" class="btn btn-sm {% if status == 'completed' %}btn-success{% else %}btn-outline-success{% endif %}">Completati</a>
+        <a href="/web/workflows?status=partial" class="btn btn-sm {% if status == 'partial' %}btn-warning{% else %}btn-outline-warning{% endif %}">Parziali</a>
+        <a href="/web/workflows?status=running" class="btn btn-sm {% if status == 'running' %}btn-info{% else %}btn-outline-info{% endif %}">In corso</a>
+        <a href="/web/workflows?status=failed" class="btn btn-sm {% if status == 'failed' %}btn-danger{% else %}btn-outline-danger{% endif %}">Falliti</a>
     </div>
 
     {% if runs %}
@@ -77,14 +85,14 @@
         {% endfor %}
     </div>
     {% else %}
-    {{ no_results("No executed workflows", "Start a workflow to see its steps and extracted response here.") }}
-    <div class="text-center"><a href="/web/forms" class="btn btn-primary">Start a Workflow</a></div>
+    {{ no_results("Nessun workflow eseguito", "Avvia un workflow per vedere qui i passaggi e la risposta estratta.") }}
+    <div class="text-center"><a href="/web/forms" class="btn btn-primary">Avvia un workflow</a></div>
     {% endif %}
-    {{ related_pages("Continue with related pages", [
-        ("/web/forms", "Query Forms", "Start a single query or submit another multi-step workflow.", "fa-clipboard-list"),
-        ("/web/results?source=workflow", "OpenData workflow results", "Filter saved results to workflow requests.", "fa-database"),
-        ("/web/documents", "Documents", "Browse files downloaded by requests.", "fa-folder-tree"),
-        ("/web/guide#flussi", "User guide", "Review the workflows and preparation steps.", "fa-book-open")
+    {{ related_pages("Continua con le pagine correlate", [
+        ("/web/forms", "Query", "Avvia una query singola o un altro workflow multi-step.", "fa-clipboard-list"),
+        ("/web/results?source=workflow", "Risultati dei workflow OpenData", "Filtra i risultati salvati sulle richieste di workflow.", "fa-database"),
+        ("/web/documents", "Documenti", "Sfoglia i file scaricati dalle richieste.", "fa-folder-tree"),
+        ("/web/guide#flussi", "Guida utente", "Rivedi i workflow e i passaggi di preparazione.", "fa-book-open")
     ]) }}
 </div>
 {% endblock %}

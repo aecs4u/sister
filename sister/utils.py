@@ -1872,7 +1872,7 @@ def _parse_ispezione_ipotecaria_pdf(file_path: str) -> dict | None:
     )
     result["document_date"] = _search(r"\bData\s+(\d{2}/\d{2}/\d{4})")
     result["document_time"] = _search(r"\bOra\s+(\d{2}:\d{2}:\d{2})")
-    result["requester"] = _search(r"\bRichiedente\s+([^\n]+)")
+    result["requester"] = _search(r"\bRichiedente\s+(.+?)(?=\s+Tassa\s+versata\b|\n|$)")
     result["requester_cf"] = _search(r"per conto di\s*\n?\s*([A-Z0-9]{16})")
     result["inspection_mode"] = _search(r"^(Ispezione telematica[^\n]*)", flags=_re.IGNORECASE | _re.MULTILINE)
     result["request_reason"] = _search(r"^\s*Motivazione\s+([^\n]+)", flags=_re.IGNORECASE | _re.MULTILINE)

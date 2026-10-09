@@ -8,8 +8,8 @@
 
 {% block extra_css %}
 {{ super() }}
-<link rel="stylesheet" href="/static/css/doc_sections.css">
-<link rel="stylesheet" href="/static/css/pages/dossiers_index.css">
+<link rel="stylesheet" href="/static/css/doc_sections.css?v=20261009a">
+<link rel="stylesheet" href="/static/css/pages/dossiers_index.css?v=20261009a">
 {% endblock %}
 
 {% block content %}
@@ -69,8 +69,8 @@
             </select>
         </label>
         <div class="d-flex gap-2 ms-lg-auto">
-            <button type="button" onclick="toggleAllSections(true)" class="btn btn-sm btn-outline-secondary"><i class="fas fa-angles-down me-1" aria-hidden="true"></i>Espandi</button>
-            <button type="button" onclick="toggleAllSections(false)" class="btn btn-sm btn-outline-secondary"><i class="fas fa-angles-up me-1" aria-hidden="true"></i>Riduci</button>
+            <button type="button" data-click="toggleAllSections" data-args='[true]' class="btn btn-sm btn-outline-secondary"><i class="fas fa-angles-down me-1" aria-hidden="true"></i>Espandi</button>
+            <button type="button" data-click="toggleAllSections" data-args='[false]' class="btn btn-sm btn-outline-secondary"><i class="fas fa-angles-up me-1" aria-hidden="true"></i>Riduci</button>
             <button id="dossier-export-csv" type="button" class="btn btn-sm btn-outline-success"><i class="fas fa-file-csv me-1" aria-hidden="true"></i>CSV</button>
         </div>
         <span id="dossier-result-count" class="small text-muted" role="status" aria-live="polite"></span>
@@ -111,7 +111,7 @@
     {{ related_pages("Collegamenti correlati", [
         ("/web/results", "Risultati", "Cercare richieste eseguite e aprire le risposte.", "fa-database"),
         ("/web/documents", "Documenti", "Consultare i file ufficiali associati alle risposte.", "fa-folder-tree"),
-        ("/web/forms", "Query Forms", "Avviare una nuova ricerca o un workflow.", "fa-clipboard-list"),
+        ("/web/forms", "Query", "Avviare una nuova ricerca o un workflow.", "fa-clipboard-list"),
         ("/web/glossary#dossier", "Glossario dossier", "Vedere la differenza tra dossier e documento.", "fa-book")
     ]) }}
 </div>
@@ -119,8 +119,8 @@
 
 {% block extra_js %}
 {{ super() }}
-{{ doc_macros_js() }}
-<script>
+{{ doc_macros_js(csp_nonce) }}
+<script nonce="{{ csp_nonce }}">
 (function () {
     var search = document.getElementById('dossier-search');
     if (!search) return;

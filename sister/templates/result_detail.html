@@ -11,7 +11,7 @@
 {% block extra_css %}
 {{ super() }}
 {{ data_table_assets() }}
-<link rel="stylesheet" href="/static/css/pages/result_detail.css">
+<link rel="stylesheet" href="/static/css/pages/result_detail.css?v=20261009a">
 {% endblock %}
 
 {# ── Local macro: request parameters card body ─────────────────────────────── #}
@@ -360,7 +360,7 @@
 
 {% block extra_js %}
 {{ super() }}
-<script>
+<script nonce="{{ csp_nonce }}">
 (function() {
     'use strict';
 

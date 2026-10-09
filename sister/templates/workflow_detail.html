@@ -267,7 +267,7 @@
 
 {% block extra_js %}
 {{ super() }}
-<script>
+<script nonce="{{ csp_nonce }}">
 (function() {
     'use strict';
     var commonOpts = {

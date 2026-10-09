@@ -4,7 +4,7 @@
 
 {% block extra_css %}
 {{ super() }}
-<link rel="stylesheet" href="/static/css/pages/cheatsheet.css">
+<link rel="stylesheet" href="/static/css/pages/cheatsheet.css?v=20261009a">
 {% endblock %}
 
 {% block content %}
@@ -222,7 +222,7 @@
 
     </div>{# /row #}
     {{ related_pages("Apri gli strumenti collegati", [
-        ("/web/forms", "Query Forms", "Compila una ricerca singola o un workflow.", "fa-clipboard-list"),
+        ("/web/forms", "Query", "Compila una ricerca singola o un workflow.", "fa-clipboard-list"),
         ("/web/results", "Risultati", "Filtra le richieste eseguite e consulta le risposte.", "fa-database"),
         ("/web/guide#flussi", "Guida ai flussi", "Leggi le procedure complete per le attività comuni.", "fa-book-open"),
         ("/web/glossary", "Glossario", "Chiarisci sigle, tipi di documento e termini catastali.", "fa-book")

@@ -55,6 +55,9 @@ class VisuraService:
         self.pending_request_ids: set[str] = set()
         self.expired_request_ids: Dict[str, datetime] = {}
         self.response_ttl_seconds = self._parse_positive_int_env("RESPONSE_TTL_SECONDS", 6 * 3600)
+        # Database retention is NOT the cache TTL: saved results stay in the database (documented as permanent) unless
+        # DB_RETENTION_SECONDS > 0 is set explicitly. 0 (default) = keep forever.
+        self.db_retention_seconds = self._parse_retention_env("DB_RETENTION_SECONDS")
         self.response_max_items = self._parse_positive_int_env("RESPONSE_MAX_ITEMS", 5000)
         self.processing = False
         self._worker_task: Optional[asyncio.Task] = None
@@ -193,7 +196,11 @@ class VisuraService:
         if auth_task is not None and not auth_task.done():
             return {"state": "connecting", "mode": mode, "message": "Authentication in progress..."}
         if self.processing:
-            return {"state": "idle", "mode": mode, "message": "Browser not started — use the control panel to start"}
+            return {
+                "state": "idle",
+                "mode": mode,
+                "message": "Browser non avviato — usa il pannello di controllo per avviarlo",
+            }
         return {"state": "unavailable", "mode": mode, "message": "Browser not initialized"}
 
     # ------------------------------------------------------------------
@@ -296,15 +303,24 @@ class VisuraService:
     # Cache and response store
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _parse_retention_env(name: str) -> int:
+        """Non-negative integer from the environment; unset/invalid/negative -> 0 (keep forever)."""
+        try:
+            return max(0, int(os.getenv(name, "0")))
+        except ValueError:
+            logger.warning("%s non valido: uso 0 (nessuna cancellazione dal database)", name)
+            return 0
+
     async def _periodic_cleanup(self):
         from .database import is_db_writable
 
         try:
             while self.processing:
                 self._cleanup_response_store()
-                if is_db_writable():
+                if self.db_retention_seconds > 0 and is_db_writable():
                     try:
-                        deleted = await cleanup_old_responses(self.response_ttl_seconds)
+                        deleted = await cleanup_old_responses(self.db_retention_seconds)
                         if deleted:
                             logger.info("Cleanup database: rimossi %d record scaduti", deleted)
                     except Exception as e:

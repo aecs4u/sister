@@ -4,7 +4,7 @@
 {% block extra_css %}
 {{ super() }}
 {% if has_geojson %}<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">{% endif %}
-<link rel="stylesheet" href="/static/css/pages/planimetria.css">
+<link rel="stylesheet" href="/static/css/pages/planimetria.css?v=20261009a">
 {% endblock %}
 
 {% block content %}
@@ -103,8 +103,8 @@
 {% if has_geojson %}
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/proj4js/2.11.0/proj4.js"></script>
-<script src="/static/js/planimetria_geojson.js"></script>
+<script src="/static/js/planimetria_geojson.js?v=20261009a"></script>
 {% else %}
-<script src="/static/js/planimetria_cad.js"></script>
+<script src="/static/js/planimetria_cad.js?v=20261009a"></script>
 {% endif %}
 {% endblock %}

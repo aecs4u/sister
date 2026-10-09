@@ -3,11 +3,13 @@
 .q-section-header {
     display: flex; align-items: center; gap: .5rem;
     padding: .65rem 1rem; cursor: pointer; user-select: none;
-    background: var(--bs-light); border: 1px solid var(--bs-border-color); border-radius: .45rem;
+    background: var(--bs-tertiary-bg); border: 1px solid var(--bs-border-color); border-radius: .45rem;
     border-left: 5px solid var(--q-color, var(--bs-secondary-color)); font-size: 1.05rem;
-    width: 100%; text-align: left; color: inherit; font-family: inherit;
+    width: 100%; text-align: left; color: var(--bs-body-color); font-family: inherit; min-width: 0;
 }
 .q-section-header:hover { background: var(--bs-secondary-bg); }
+.q-section-header > *, .q-sub-header > * { min-width: 0; }
+.q-section-header h3, .q-sub-header h3, .q-section-header .h6, .q-sub-header .h6 { overflow-wrap: anywhere; }
 .q-section-body { padding: .5rem 0 .25rem 1.4rem; border-left: 2px dashed var(--bs-border-color); margin-left: 1.2rem; }
 .q-sub { margin-bottom: 1rem; }
 .q-sub-header {
@@ -17,7 +19,7 @@
     border-left: 3px solid var(--q-color, var(--bs-secondary-color)); font-size: .93rem;
     width: 100%; text-align: left; color: inherit; font-family: inherit;
 }
-.q-sub-header:hover { background: var(--bs-light); }
+.q-sub-header:hover { background: var(--bs-tertiary-bg); }
 .q-sub-body { padding: .5rem 0 .25rem 1.2rem; }
 .dossier-card { transition: box-shadow .15s, transform .15s; }
 .dossier-card:hover { box-shadow: 0 .4rem 1rem rgba(0,0,0,.1); transform: translateY(-2px); }
@@ -49,3 +51,8 @@
     .no-print { display: none !important; }
     .q-section-body, .q-sub-body { display: block !important; }
 }
+
+/* Large archives (Documents): off-screen sections skip layout/paint but stay in the DOM, so find-in-page, print and
+   the filter/CSV scripts keep working. --q-size is the section's estimated height (rows x ~130px) so the scrollbar does
+   not jump; `auto` then remembers the real height once a section has been rendered. */
+.q-sub:has(.doc-table) { content-visibility: auto; contain-intrinsic-size: auto var(--q-size, 520px); }

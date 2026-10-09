@@ -443,18 +443,18 @@ FLAGS: dict[str, tuple[str, ...]] = {
 }
 
 _EXTRA_HELP = {
-    "provincia": "Province name: selects the SISTER office (omit for a national search)",
-    "tipo_catasto": "T = Terreni, F = Fabbricati, E = both (this form has no catasto input)",
-    "foglio": "Sheet number (not an input of this form)",
-    "comune": "Municipality (not an input of this form)",
-    "particella": "Parcel number (not an input of this form)",
+    "provincia": "Nome della provincia: seleziona l'ufficio SISTER (ometti per una ricerca nazionale)",
+    "tipo_catasto": "T = Terreni, F = Fabbricati, E = entrambi (questa maschera non ha il campo catasto)",
+    "foglio": "Numero di foglio (non è un campo di questa maschera)",
+    "comune": "Comune (non è un campo di questa maschera)",
+    "particella": "Numero di particella (non è un campo di questa maschera)",
 }
 
 _P = ("provincia", "comune")
 # command -> (summary, API path, client method, search_type, dedicated args, required, required_any)
 _META: dict[str, tuple] = {
     "search": (
-        "Submit an immobili search on SISTER (POST /visura).",
+        "Invia una ricerca immobili su SISTER (POST /visura).",
         "/visura",
         "search",
         "",
@@ -463,7 +463,7 @@ _META: dict[str, tuple] = {
         (),
     ),
     "intestati": (
-        "Submit an owners (intestati) lookup on SISTER (POST /visura/intestati).",
+        "Invia una ricerca degli intestati su SISTER (POST /visura/intestati).",
         "/visura/intestati",
         "intestati",
         "",
@@ -472,7 +472,7 @@ _META: dict[str, tuple] = {
         (),
     ),
     "soggetto": (
-        "National search by codice fiscale on SISTER (POST /visura/soggetto).",
+        "Ricerca nazionale per codice fiscale su SISTER (POST /visura/soggetto).",
         "/visura/soggetto",
         "soggetto",
         "",
@@ -481,7 +481,7 @@ _META: dict[str, tuple] = {
         (("codice_fiscale", "cognome"),),
     ),
     "azienda": (
-        "Search by legal entity (P.IVA or company name) on SISTER (POST /visura/persona-giuridica).",
+        "Ricerca per persona giuridica (P.IVA o denominazione) su SISTER (POST /visura/persona-giuridica).",
         "/visura/persona-giuridica",
         "persona_giuridica",
         "",
@@ -490,7 +490,7 @@ _META: dict[str, tuple] = {
         (),
     ),
     "elenco": (
-        "List all properties in a comune (POST /visura/elenco-immobili).",
+        "Elenca tutti gli immobili di un comune (POST /visura/elenco-immobili).",
         "/visura/elenco-immobili",
         "elenco_immobili",
         "",
@@ -499,7 +499,7 @@ _META: dict[str, tuple] = {
         (),
     ),
     "indirizzo": (
-        "Search by street address (IND) on SISTER.",
+        "Ricerca per indirizzo (IND) su SISTER.",
         "/visura/indirizzo",
         "generic_search",
         "indirizzo",
@@ -508,7 +508,7 @@ _META: dict[str, tuple] = {
         (),
     ),
     "partita": (
-        "Search by partita catastale number (PART) on SISTER.",
+        "Ricerca per numero di partita catastale (PART) su SISTER.",
         "/visura/partita",
         "generic_search",
         "partita",
@@ -517,7 +517,7 @@ _META: dict[str, tuple] = {
         (),
     ),
     "nota": (
-        "Search by annotation/note reference (NOTA) on SISTER.",
+        "Ricerca per riferimento nota/annotazione (NOTA) su SISTER.",
         "/visura/nota",
         "generic_search",
         "nota",
@@ -526,7 +526,7 @@ _META: dict[str, tuple] = {
         (),
     ),
     "mappa": (
-        "View cadastral map data (EM) on SISTER.",
+        "Visualizza i dati della mappa catastale (EM) su SISTER.",
         "/visura/mappa",
         "generic_search",
         "mappa",
@@ -535,7 +535,7 @@ _META: dict[str, tuple] = {
         (),
     ),
     "export-mappa": (
-        "Export cadastral map data (EXPM) on SISTER.",
+        "Esporta i dati della mappa catastale (EXPM) su SISTER.",
         "/visura/export-mappa",
         "generic_search",
         "export-mappa",
@@ -544,7 +544,7 @@ _META: dict[str, tuple] = {
         (),
     ),
     "originali": (
-        "Retrieve original registration records (OOII) on SISTER.",
+        "Recupera gli originali di impianto (OOII) su SISTER.",
         "/visura/originali",
         "generic_search",
         "originali",
@@ -553,7 +553,7 @@ _META: dict[str, tuple] = {
         (),
     ),
     "fiduciali": (
-        "Retrieve survey reference points (FID) on SISTER.",
+        "Recupera i punti fiduciali (FID) su SISTER.",
         "/visura/fiduciali",
         "generic_search",
         "fiduciali",
@@ -562,7 +562,7 @@ _META: dict[str, tuple] = {
         (),
     ),
     "ispezioni": (
-        "Search property inspection records (ISP) on SISTER.",
+        "Cerca le ispezioni immobiliari (ISP) su SISTER.",
         "/visura/ispezioni",
         "generic_search",
         "ispezioni",
@@ -571,7 +571,7 @@ _META: dict[str, tuple] = {
         (),
     ),
     "ispezioni-cartacee": (
-        "Search paper inspection records (ISPCART) on SISTER.",
+        "Cerca le ispezioni cartacee (ISPCART) su SISTER.",
         "/visura/ispezioni-cartacee",
         "generic_search",
         "ispezioni-cartacee",
@@ -580,7 +580,7 @@ _META: dict[str, tuple] = {
         (),
     ),
     "elaborato-planimetrico": (
-        "Retrieve Elaborato Planimetrico (ELPL) on SISTER.",
+        "Recupera l'elaborato planimetrico (ELPL) su SISTER.",
         "/visura/elaborato-planimetrico",
         "generic_search",
         "elaborato-planimetrico",
@@ -589,7 +589,7 @@ _META: dict[str, tuple] = {
         (),
     ),
     "riepilogo": (
-        "View your SISTER query history (Riepilogo Visure).",
+        "Consulta lo storico delle query SISTER (Riepilogo visure).",
         "/visura/riepilogo-visure",
         "generic_search",
         "riepilogo-visure",

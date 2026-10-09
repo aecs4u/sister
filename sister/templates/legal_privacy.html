@@ -1,0 +1,11 @@
+{% extends "legal/privacy.html" %}
+{# The theme's privacy policy plus two fixes it does not ship: wide tables scroll instead of overflowing small screens, and
+   heading levels are normalised (sister_a11y.js). #}
+{% block extra_css %}
+{{ super() }}
+<style>.legal-page table.data-table { display: block; max-width: 100%; overflow-x: auto; }</style>
+{% endblock %}
+{% block extra_js %}
+{{ super() }}
+<script src="/static/js/sister_a11y.js?v=20261009f" defer></script>
+{% endblock %}

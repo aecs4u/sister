@@ -33,19 +33,19 @@ from .query_forms import QUERY_FORMS, get_query_form, option_flags, param_names,
 
 app = typer.Typer(
     name="sister",
-    help="SISTER cadastral visura service CLI",
+    help="CLI del servizio di visure catastali SISTER",
     no_args_is_help=True,
 )
 query_app = typer.Typer(
     name="query",
-    help="Submit cadastral queries (search, intestati, workflow, batch)",
+    help="Invia query catastali (ricerca, intestati, workflow, batch)",
     no_args_is_help=True,
 )
 app.add_typer(query_app, name="query")
 
 db_app = typer.Typer(
     name="db",
-    help="Database management (init, migrate, status)",
+    help="Gestione del database (init, migrate, status)",
     no_args_is_help=True,
 )
 app.add_typer(db_app, name="db")
@@ -72,21 +72,21 @@ def _write_output(data: dict | list, path: str) -> None:
 
 @app.command("floor-plan-validate")
 def floor_plan_validate(
-    visura: Path = typer.Option(..., "--visura", help="JSON file containing the SISTER visura response/data"),
-    floor_plan: Path = typer.Option(..., "--floor-plan", help="Floor-plan PDF or image"),
-    calibration: Optional[Path] = typer.Option(None, "--calibration", help="JSON calibration file"),
-    rooms: Optional[Path] = typer.Option(None, "--rooms", help="JSON file containing rooms/polygons"),
-    property_index: int = typer.Option(0, "--property-index", min=0, help="Property in data.immobili to compare"),
+    visura: Path = typer.Option(..., "--visura", help="File JSON con la risposta/i dati della visura SISTER"),
+    floor_plan: Path = typer.Option(..., "--floor-plan", help="PDF o immagine della planimetria"),
+    calibration: Optional[Path] = typer.Option(None, "--calibration", help="File JSON di calibrazione"),
+    rooms: Optional[Path] = typer.Option(None, "--rooms", help="File JSON con locali/poligoni"),
+    property_index: int = typer.Option(0, "--property-index", min=0, help="Immobile in data.immobili da confrontare"),
     visura_area_m2: Optional[float] = typer.Option(
-        None, "--visura-area-m2", min=0, help="Override the cadastral surface extracted from the JSON"
+        None, "--visura-area-m2", min=0, help="Sostituisce la superficie catastale estratta dal JSON"
     ),
-    tolerance_m2: float = typer.Option(1.0, "--tolerance-m2", min=0, help="Absolute tolerance in square metres"),
+    tolerance_m2: float = typer.Option(1.0, "--tolerance-m2", min=0, help="Tolleranza assoluta in metri quadrati"),
     tolerance_percent: float = typer.Option(
-        0.05, "--tolerance-percent", min=0, help="Relative tolerance (0.05 = 5%%)"
+        0.05, "--tolerance-percent", min=0, help="Tolleranza relativa (0.05 = 5%%)"
     ),
-    output: Optional[Path] = typer.Option(None, "--output", "-o", help="Write the validation result to JSON"),
+    output: Optional[Path] = typer.Option(None, "--output", "-o", help="Scrive il risultato della validazione in JSON"),
 ):
-    """Validate a cadastral visura surface against Ocular's floor-plan estimate."""
+    """Confronta la superficie catastale di una visura con la stima della planimetria di Ocular."""
     try:
         from .floor_plan import FloorPlanFeatureUnavailable, validate_visura_against_floor_plan
 
@@ -286,10 +286,10 @@ def _make_query_command(form):
             option, annotation = typer.Option(None, *flags, help=fld.help), Optional[str]
         parameters.append(inspect.Parameter(fld.param, inspect.Parameter.KEYWORD_ONLY, default=option, annotation=annotation))
     common = {
-        "output": (Optional[str], typer.Option(None, "--output", "-o", help="Output file path (.json)")),
-        "wait": (bool, typer.Option(False, "--wait", "-w", help="Wait for the result instead of returning immediately")),
-        "dry_run": (bool, typer.Option(False, "--dry-run", help="Preview the request without sending it")),
-        "force": (bool, typer.Option(False, "--force", help="Bypass the cache, always submit a new request")),
+        "output": (Optional[str], typer.Option(None, "--output", "-o", help="Percorso del file di output (.json)")),
+        "wait": (bool, typer.Option(False, "--wait", "-w", help="Attende il risultato invece di tornare subito")),
+        "dry_run": (bool, typer.Option(False, "--dry-run", help="Mostra la richiesta senza inviarla")),
+        "force": (bool, typer.Option(False, "--force", help="Ignora la cache e invia sempre una nuova richiesta")),
     }
     for name, (annotation, option) in common.items():
         parameters.append(inspect.Parameter(name, inspect.Parameter.KEYWORD_ONLY, default=option, annotation=annotation))
@@ -392,18 +392,18 @@ def _ipotecaria_command(
 
 @query_app.command("ipotecaria-immobile")
 def ipotecaria_immobile(
-    provincia: str = typer.Option(..., "--provincia", "-P", help="Province name"),
-    comune: Optional[str] = typer.Option(None, "--comune", "-C", help="Municipality name"),
-    foglio: Optional[str] = typer.Option(None, "--foglio", "-F", help="Sheet number"),
-    particella: Optional[str] = typer.Option(None, "--particella", "-p", help="Parcel number"),
+    provincia: str = typer.Option(..., "--provincia", "-P", help="Nome della provincia"),
+    comune: Optional[str] = typer.Option(None, "--comune", "-C", help="Nome del comune"),
+    foglio: Optional[str] = typer.Option(None, "--foglio", "-F", help="Numero di foglio"),
+    particella: Optional[str] = typer.Option(None, "--particella", "-p", help="Numero di particella"),
     tipo_catasto: Optional[str] = typer.Option(None, "--tipo-catasto", "-t", help="'T' = Terreni, 'F' = Fabbricati"),
-    output: Optional[str] = typer.Option(None, "--output", "-o", help="Output file"),
-    wait: bool = typer.Option(False, "--wait", "-w", help="Wait for result"),
-    dry_run: bool = typer.Option(False, "--dry-run", help="Preview only"),
-    force: bool = typer.Option(False, "--force", help="Bypass cache"),
-    yes: bool = typer.Option(False, "--yes", "-y", help="Auto-confirm cost without prompting"),
+    output: Optional[str] = typer.Option(None, "--output", "-o", help="File di output"),
+    wait: bool = typer.Option(False, "--wait", "-w", help="Attendi il risultato"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Solo anteprima"),
+    force: bool = typer.Option(False, "--force", help="Ignora la cache"),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Conferma il costo senza chiedere"),
 ):
-    """Ispezione Ipotecaria by property (immobile). PAID SERVICE."""
+    """Ispezione ipotecaria per immobile. SERVIZIO A PAGAMENTO."""
     client = VisuraClient()
     if dry_run:
         console.print("[bold yellow]DRY RUN[/bold yellow] POST /visura/ispezione-ipotecaria (immobile)")
@@ -424,15 +424,15 @@ def ipotecaria_immobile(
 
 @query_app.command("ipotecaria-persona")
 def ipotecaria_persona(
-    provincia: str = typer.Option(..., "--provincia", "-P", help="Province name"),
+    provincia: str = typer.Option(..., "--provincia", "-P", help="Nome della provincia"),
     codice_fiscale: str = typer.Option(..., "--cf", help="Codice fiscale"),
-    output: Optional[str] = typer.Option(None, "--output", "-o", help="Output file"),
-    wait: bool = typer.Option(False, "--wait", "-w", help="Wait for result"),
-    dry_run: bool = typer.Option(False, "--dry-run", help="Preview only"),
-    force: bool = typer.Option(False, "--force", help="Bypass cache"),
-    yes: bool = typer.Option(False, "--yes", "-y", help="Auto-confirm cost without prompting"),
+    output: Optional[str] = typer.Option(None, "--output", "-o", help="File di output"),
+    wait: bool = typer.Option(False, "--wait", "-w", help="Attendi il risultato"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Solo anteprima"),
+    force: bool = typer.Option(False, "--force", help="Ignora la cache"),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Conferma il costo senza chiedere"),
 ):
-    """Ispezione Ipotecaria by person (codice fiscale). PAID SERVICE."""
+    """Ispezione ipotecaria per persona (codice fiscale). SERVIZIO A PAGAMENTO."""
     client = VisuraClient()
     if dry_run:
         console.print("[bold yellow]DRY RUN[/bold yellow] POST /visura/ispezione-ipotecaria (persona_fisica)")
@@ -450,15 +450,15 @@ def ipotecaria_persona(
 
 @query_app.command("ipotecaria-azienda")
 def ipotecaria_azienda(
-    provincia: str = typer.Option(..., "--provincia", "-P", help="Province name"),
-    identificativo: str = typer.Option(..., "--id", help="P.IVA or company name"),
-    output: Optional[str] = typer.Option(None, "--output", "-o", help="Output file"),
-    wait: bool = typer.Option(False, "--wait", "-w", help="Wait for result"),
-    dry_run: bool = typer.Option(False, "--dry-run", help="Preview only"),
-    force: bool = typer.Option(False, "--force", help="Bypass cache"),
-    yes: bool = typer.Option(False, "--yes", "-y", help="Auto-confirm cost without prompting"),
+    provincia: str = typer.Option(..., "--provincia", "-P", help="Nome della provincia"),
+    identificativo: str = typer.Option(..., "--id", help="P.IVA o denominazione"),
+    output: Optional[str] = typer.Option(None, "--output", "-o", help="File di output"),
+    wait: bool = typer.Option(False, "--wait", "-w", help="Attendi il risultato"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Solo anteprima"),
+    force: bool = typer.Option(False, "--force", help="Ignora la cache"),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Conferma il costo senza chiedere"),
 ):
-    """Ispezione Ipotecaria by company (P.IVA or name). PAID SERVICE."""
+    """Ispezione ipotecaria per società (P.IVA o denominazione). SERVIZIO A PAGAMENTO."""
     client = VisuraClient()
     if dry_run:
         console.print("[bold yellow]DRY RUN[/bold yellow] POST /visura/ispezione-ipotecaria (persona_giuridica)")
@@ -476,16 +476,16 @@ def ipotecaria_azienda(
 
 @query_app.command("ipotecaria-nota")
 def ipotecaria_nota(
-    provincia: str = typer.Option(..., "--provincia", "-P", help="Province name"),
-    numero_nota: str = typer.Option(..., "--numero", "-n", help="Note number"),
-    anno_nota: Optional[str] = typer.Option(None, "--anno", help="Note year"),
-    output: Optional[str] = typer.Option(None, "--output", "-o", help="Output file"),
-    wait: bool = typer.Option(False, "--wait", "-w", help="Wait for result"),
-    dry_run: bool = typer.Option(False, "--dry-run", help="Preview only"),
-    force: bool = typer.Option(False, "--force", help="Bypass cache"),
-    yes: bool = typer.Option(False, "--yes", "-y", help="Auto-confirm cost without prompting"),
+    provincia: str = typer.Option(..., "--provincia", "-P", help="Nome della provincia"),
+    numero_nota: str = typer.Option(..., "--numero", "-n", help="Numero nota"),
+    anno_nota: Optional[str] = typer.Option(None, "--anno", help="Anno nota"),
+    output: Optional[str] = typer.Option(None, "--output", "-o", help="File di output"),
+    wait: bool = typer.Option(False, "--wait", "-w", help="Attendi il risultato"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Solo anteprima"),
+    force: bool = typer.Option(False, "--force", help="Ignora la cache"),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Conferma il costo senza chiedere"),
 ):
-    """Ispezione Ipotecaria by note reference. PAID SERVICE."""
+    """Ispezione ipotecaria per riferimento nota. SERVIZIO A PAGAMENTO."""
     client = VisuraClient()
     if dry_run:
         console.print("[bold yellow]DRY RUN[/bold yellow] POST /visura/ispezione-ipotecaria (nota)")
@@ -542,45 +542,63 @@ def workflow(
     preset: Optional[str] = typer.Option(
         None,
         "--preset",
-        help="Workflow family: due-diligence, portfolio, fondiario, indirizzo, cross-reference",
+        help="Famiglia di workflow: due-diligence, portfolio, fondiario, indirizzo, cross-reference",
     ),
-    provincia: Optional[str] = typer.Option(None, "--provincia", "-P", help="Province name"),
-    comune: Optional[str] = typer.Option(None, "--comune", "-C", help="Municipality name"),
-    foglio: Optional[str] = typer.Option(None, "--foglio", "-F", help="Sheet number"),
-    particella: Optional[str] = typer.Option(None, "--particella", "-p", help="Parcel number"),
+    provincia: Optional[str] = typer.Option(None, "--provincia", "-P", help="Nome della provincia"),
+    comune: Optional[str] = typer.Option(None, "--comune", "-C", help="Nome del comune"),
+    foglio: Optional[str] = typer.Option(None, "--foglio", "-F", help="Numero di foglio"),
+    particella: Optional[str] = typer.Option(None, "--particella", "-p", help="Numero di particella"),
     tipo_catasto: Optional[str] = typer.Option(
-        None, "--tipo-catasto", "-t", help="'T' = Terreni, 'F' = Fabbricati (omit for both)"
+        None, "--tipo-catasto", "-t", help="'T' = Terreni, 'F' = Fabbricati (ometti per entrambi)"
     ),
-    sezione: Optional[str] = typer.Option(None, "--sezione", help="Section (optional)"),
-    subalterno: Optional[str] = typer.Option(None, "--subalterno", "-sub", help="Limit intestati to this sub-unit"),
-    codice_fiscale: Optional[str] = typer.Option(None, "--cf", help="Codice fiscale for soggetto search"),
-    azienda_id: Optional[str] = typer.Option(None, "--azienda", help="P.IVA or company name"),
-    indirizzo_str: Optional[str] = typer.Option(None, "--indirizzo", "-a", help="Street address"),
-    numero_nota: Optional[str] = typer.Option(None, "--nota", help="Note/annotation number"),
-    with_elenco: bool = typer.Option(False, "--elenco", help="List all properties in the comune"),
-    with_mappa: bool = typer.Option(False, "--mappa", help="Fetch cadastral map data"),
-    with_ispezioni: bool = typer.Option(False, "--ispezioni", help="Fetch inspection records"),
-    with_fiduciali: bool = typer.Option(False, "--fiduciali", help="Fetch survey reference points"),
-    with_originali: bool = typer.Option(False, "--originali", help="Fetch original registration records"),
-    with_nota: bool = typer.Option(False, "--with-nota", help="Fetch annotation/note data"),
-    with_ispezioni_cart: bool = typer.Option(False, "--ispezioni-cart", help="Fetch paper inspection records"),
-    depth: str = typer.Option("standard", "--depth", "-d", help="Workflow depth: light, standard, deep, full"),
-    max_fanout: int = typer.Option(20, "--max-fanout", help="Max properties/owners to fan out to per step"),
-    max_owners: int = typer.Option(10, "--max-owners", help="Max owners to expand in owner_expand"),
+    sezione: Optional[str] = typer.Option(None, "--sezione", help="Sezione (facoltativa)"),
+    subalterno: Optional[str] = typer.Option(
+        None, "--subalterno", "-sub",
+        help="Limita gli intestati a questo subalterno",
+    ),
+    codice_fiscale: Optional[str] = typer.Option(None, "--cf", help="Codice fiscale per la ricerca soggetto"),
+    azienda_id: Optional[str] = typer.Option(None, "--azienda", help="P.IVA o denominazione"),
+    indirizzo_str: Optional[str] = typer.Option(None, "--indirizzo", "-a", help="Indirizzo"),
+    numero_nota: Optional[str] = typer.Option(None, "--nota", help="Numero nota/annotazione"),
+    with_elenco: bool = typer.Option(False, "--elenco", help="Elenca tutti gli immobili del comune"),
+    with_mappa: bool = typer.Option(False, "--mappa", help="Recupera i dati della mappa catastale"),
+    with_ispezioni: bool = typer.Option(False, "--ispezioni", help="Recupera le ispezioni"),
+    with_fiduciali: bool = typer.Option(False, "--fiduciali", help="Recupera i punti fiduciali"),
+    with_originali: bool = typer.Option(False, "--originali", help="Recupera gli originali di impianto"),
+    with_nota: bool = typer.Option(False, "--with-nota", help="Recupera i dati di note/annotazioni"),
+    with_ispezioni_cart: bool = typer.Option(False, "--ispezioni-cart", help="Recupera le ispezioni cartacee"),
+    depth: str = typer.Option("standard", "--depth", "-d", help="Profondità del workflow: light, standard, deep, full"),
+    max_fanout: int = typer.Option(
+        20, "--max-fanout",
+        help="Numero massimo di immobili/intestati da espandere per passo",
+    ),
+    max_owners: int = typer.Option(10, "--max-owners", help="Numero massimo di intestati da espandere in owner_expand"),
     max_properties_per_owner: int = typer.Option(
-        20, "--max-properties-per-owner", help="Max properties per owner in portfolio drill"
+        20, "--max-properties-per-owner", help="Numero massimo di immobili per intestatario nell'analisi del patrimonio"
     ),
-    max_historical_properties: int = typer.Option(5, "--max-history", help="Max properties to run history bundle on"),
-    max_paid_steps: int = typer.Option(3, "--max-paid", help="Max paid step invocations (ispezione ipotecaria)"),
-    max_total_steps: int = typer.Option(100, "--max-steps", help="Overall circuit breaker for total step executions"),
-    yes: bool = typer.Option(False, "--yes", "-y", help="Auto-confirm paid service costs"),
-    include_paid: bool = typer.Option(False, "--include-paid", help="Include paid steps (e.g. ispezione ipotecaria)"),
-    include_history: bool = typer.Option(False, "--history", help="Include historical note and paper-inspection queries"),
-    output: Optional[str] = typer.Option(None, "--output", "-o", help="Output file path (.json)"),
-    dry_run: bool = typer.Option(False, "--dry-run", help="Preview steps without executing"),
-    force: bool = typer.Option(False, "--force", help="Bypass cache, always submit new request"),
+    max_historical_properties: int = typer.Option(
+        5, "--max-history",
+        help="Numero massimo di immobili su cui eseguire il pacchetto storico",
+    ),
+    max_paid_steps: int = typer.Option(
+        3, "--max-paid",
+        help="Numero massimo di passaggi a pagamento (ispezione ipotecaria)",
+    ),
+    max_total_steps: int = typer.Option(100, "--max-steps", help="Limite complessivo di esecuzioni dei passaggi"),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Conferma automaticamente i costi dei servizi a pagamento"),
+    include_paid: bool = typer.Option(
+        False, "--include-paid",
+        help="Includi i passaggi a pagamento (es. ispezione ipotecaria)",
+    ),
+    include_history: bool = typer.Option(
+        False, "--history",
+        help="Includi le query storiche su note e ispezioni cartacee",
+    ),
+    output: Optional[str] = typer.Option(None, "--output", "-o", help="Percorso del file di output (.json)"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Mostra i passaggi senza eseguirli"),
+    force: bool = typer.Option(False, "--force", help="Ignora la cache e invia sempre una nuova richiesta"),
 ):
-    """Multi-phase workflow with optional preset.
+    """Workflow multi-fase con preset facoltativo.
 
     \b
     Without --preset: runs search → intestati plus any flags you enable.
@@ -1060,20 +1078,23 @@ def workflow(
 # Maps CSV 'command' column values to (client_method_name, required_fields, extra_field_mapping)
 @query_app.command()
 def batch(
-    input_file: str = typer.Option(..., "--input", "-I", help="CSV file with query rows"),
+    input_file: str = typer.Option(..., "--input", "-I", help="File CSV con le righe delle query"),
     command: str = typer.Option(
         "search",
         "--command",
         "-c",
-        help="Query command (any `sister query` single-step command) or 'auto' to read it from the CSV 'command' column",
+        help=(
+            "Comando di query (qualsiasi comando a passo singolo di `sister query`)"
+            " oppure 'auto' per leggerlo dalla colonna 'command' del CSV"
+        ),
     ),
-    wait: bool = typer.Option(False, "--wait", "-w", help="Wait for each result before submitting the next"),
-    output_dir: Optional[str] = typer.Option(None, "--output-dir", "-O", help="Directory — writes one JSON per row"),
-    output: Optional[str] = typer.Option(None, "--output", "-o", help="Single output file (all results merged)"),
-    dry_run: bool = typer.Option(False, "--dry-run", help="Preview rows without executing"),
-    force: bool = typer.Option(False, "--force", help="Bypass cache, always submit new request"),
+    wait: bool = typer.Option(False, "--wait", "-w", help="Attende ogni risultato prima di inviare il successivo"),
+    output_dir: Optional[str] = typer.Option(None, "--output-dir", "-O", help="Cartella — scrive un JSON per riga"),
+    output: Optional[str] = typer.Option(None, "--output", "-o", help="File di output unico (tutti i risultati uniti)"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Mostra le righe senza eseguirle"),
+    force: bool = typer.Option(False, "--force", help="Ignora la cache e invia sempre una nuova richiesta"),
 ):
-    """Submit multiple queries from a CSV file.
+    """Invia più query da un file CSV.
 
     Supports all query types. Use --command to set the type for all rows,
     or add a 'command' column in the CSV for per-row dispatch.
@@ -1239,7 +1260,7 @@ def batch(
 
 @app.command()
 def queries():
-    """List available sister endpoints."""
+    """Elenca gli endpoint disponibili di sister."""
     table = Table(title="Visura API endpoints", header_style="bold cyan")
     table.add_column("Command", style="cyan", no_wrap=True)
     table.add_column("Method", style="dim", no_wrap=True)
@@ -1268,10 +1289,10 @@ def queries():
 
 @app.command("get")
 def get_result(
-    request_id: str = typer.Argument(help="Request ID to retrieve"),
-    output: Optional[str] = typer.Option(None, "--output", "-o", help="Output file path (.json)"),
+    request_id: str = typer.Argument(help="ID della richiesta da recuperare"),
+    output: Optional[str] = typer.Option(None, "--output", "-o", help="Percorso del file di output (.json)"),
 ):
-    """Get the result of a visura request by ID (GET /visura/{request_id}).
+    """Recupera il risultato di una richiesta di visura tramite ID (GET /visura/{request_id}).
 
     Returns the current status: processing, completed, error, or expired.
     """
@@ -1291,12 +1312,18 @@ def get_result(
 
 @app.command("wait")
 def wait_cmd(
-    request_id: str = typer.Argument(help="Request ID to wait for"),
-    timeout: Optional[float] = typer.Option(None, "--timeout", "-T", help="Max seconds to wait (default: from env)"),
-    interval: Optional[float] = typer.Option(None, "--interval", help="Seconds between polls (default: from env)"),
-    output: Optional[str] = typer.Option(None, "--output", "-o", help="Output file path (.json)"),
+    request_id: str = typer.Argument(help="ID della richiesta da attendere"),
+    timeout: Optional[float] = typer.Option(
+        None, "--timeout", "-T",
+        help="Secondi massimi di attesa (predefinito: da env)",
+    ),
+    interval: Optional[float] = typer.Option(
+        None, "--interval",
+        help="Secondi tra un controllo e l'altro (predefinito: da env)",
+    ),
+    output: Optional[str] = typer.Option(None, "--output", "-o", help="Percorso del file di output (.json)"),
 ):
-    """Poll a request until it completes or times out.
+    """Controlla una richiesta finché non termina o scade il tempo.
 
     Continuously polls GET /visura/{request_id} until status is
     'completed' or 'error', then prints the result.
@@ -1329,17 +1356,17 @@ def wait_cmd(
 
 @app.command()
 def requests(
-    provincia: Optional[str] = typer.Option(None, "--provincia", "-P", help="Filter by province"),
-    comune: Optional[str] = typer.Option(None, "--comune", "-C", help="Filter by municipality"),
-    foglio: Optional[str] = typer.Option(None, "--foglio", "-F", help="Filter by sheet number"),
-    particella: Optional[str] = typer.Option(None, "--particella", "-p", help="Filter by parcel"),
-    tipo_catasto: Optional[str] = typer.Option(None, "--tipo-catasto", "-t", help="Filter by type (T/F)"),
-    status: Optional[str] = typer.Option(None, "--status", "-s", help="Filter: completed, pending, failed"),
-    limit: int = typer.Option(50, "--limit", "-n", help="Max results to return"),
-    offset: int = typer.Option(0, "--offset", help="Offset for pagination"),
-    output: Optional[str] = typer.Option(None, "--output", "-o", help="Output file path (.json)"),
+    provincia: Optional[str] = typer.Option(None, "--provincia", "-P", help="Filtra per provincia"),
+    comune: Optional[str] = typer.Option(None, "--comune", "-C", help="Filtra per comune"),
+    foglio: Optional[str] = typer.Option(None, "--foglio", "-F", help="Filtra per foglio"),
+    particella: Optional[str] = typer.Option(None, "--particella", "-p", help="Filtra per particella"),
+    tipo_catasto: Optional[str] = typer.Option(None, "--tipo-catasto", "-t", help="Filtra per tipo (T/F)"),
+    status: Optional[str] = typer.Option(None, "--status", "-s", help="Filtro: completed, pending, failed"),
+    limit: int = typer.Option(50, "--limit", "-n", help="Numero massimo di risultati"),
+    offset: int = typer.Option(0, "--offset", help="Offset per la paginazione"),
+    output: Optional[str] = typer.Option(None, "--output", "-o", help="Percorso del file di output (.json)"),
 ):
-    """List all requests and their status from the database.
+    """Elenca tutte le richieste e il loro stato dal database.
 
     Shows both requests that have a response (completed/failed) and those
     still pending. Use --status to filter.
@@ -1435,16 +1462,16 @@ def requests(
 
 @app.command()
 def history(
-    provincia: Optional[str] = typer.Option(None, "--provincia", "-P", help="Filter by province"),
-    comune: Optional[str] = typer.Option(None, "--comune", "-C", help="Filter by municipality"),
-    foglio: Optional[str] = typer.Option(None, "--foglio", "-F", help="Filter by sheet number"),
-    particella: Optional[str] = typer.Option(None, "--particella", "-p", help="Filter by parcel"),
-    tipo_catasto: Optional[str] = typer.Option(None, "--tipo-catasto", "-t", help="Filter by type (T/F)"),
-    limit: int = typer.Option(50, "--limit", "-n", help="Max results to return"),
-    offset: int = typer.Option(0, "--offset", help="Offset for pagination"),
-    output: Optional[str] = typer.Option(None, "--output", "-o", help="Output file path (.json)"),
+    provincia: Optional[str] = typer.Option(None, "--provincia", "-P", help="Filtra per provincia"),
+    comune: Optional[str] = typer.Option(None, "--comune", "-C", help="Filtra per comune"),
+    foglio: Optional[str] = typer.Option(None, "--foglio", "-F", help="Filtra per foglio"),
+    particella: Optional[str] = typer.Option(None, "--particella", "-p", help="Filtra per particella"),
+    tipo_catasto: Optional[str] = typer.Option(None, "--tipo-catasto", "-t", help="Filtra per tipo (T/F)"),
+    limit: int = typer.Option(50, "--limit", "-n", help="Numero massimo di risultati"),
+    offset: int = typer.Option(0, "--offset", help="Offset per la paginazione"),
+    output: Optional[str] = typer.Option(None, "--output", "-o", help="Percorso del file di output (.json)"),
 ):
-    """Query visura response history from the database."""
+    """Interroga lo storico delle risposte di visura nel database."""
     client = VisuraClient()
 
     try:
@@ -1504,7 +1531,7 @@ def history(
 
 @app.command()
 def health():
-    """Check sister service health (GET /health)."""
+    """Verifica lo stato del servizio sister (GET /health)."""
     client = VisuraClient()
 
     try:
@@ -1556,7 +1583,7 @@ def health():
 
 @db_app.command("init")
 def db_init():
-    """Initialize database and run all migrations."""
+    """Inizializza il database ed esegue tutte le migrazioni."""
     import os
 
     from alembic.config import Config
@@ -1571,7 +1598,7 @@ def db_init():
 
 @db_app.command("migrate")
 def db_migrate():
-    """Run pending Alembic migrations."""
+    """Esegue le migrazioni Alembic in sospeso."""
     import os
 
     from alembic.config import Config
@@ -1586,7 +1613,7 @@ def db_migrate():
 
 @db_app.command("status")
 def db_status():
-    """Show current database migration revision."""
+    """Mostra la revisione corrente delle migrazioni del database."""
     import os
 
     from alembic.config import Config

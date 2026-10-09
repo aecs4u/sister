@@ -152,7 +152,7 @@
 
 
 {% macro timeline_js() %}
-<script>
+<script nonce="{{ csp_nonce }}">
 (function () {
     /* Extract embedded date from DatiDerivantiDaMutazSogg free text.
        Matches DD/MM/YYYY first, then bare 4-digit years. */

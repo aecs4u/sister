@@ -4,7 +4,7 @@
 
 {% block extra_css %}
 {{ super() }}
-<link rel="stylesheet" href="/static/css/pages/glossary.css">
+<link rel="stylesheet" href="/static/css/pages/glossary.css?v=20261009a">
 {% endblock %}
 
 {% block content %}
@@ -209,7 +209,7 @@
                     <div class="col-md-6">
                         <div class="card border-0 bg-light h-100">
                             <div class="card-body small">
-                                <h6 class="fw-semibold">Cosa contiene un dossier</h6>
+                                <h3 class="h6 fw-semibold">Cosa contiene un dossier</h3>
                                 <ul class="mb-0">
                                     <li>Tipo di richiesta (visura, soggetto, intestati, …)</li>
                                     <li>Parametri della query (provincia, foglio, particella, CF, …)</li>
@@ -223,7 +223,7 @@
                     <div class="col-md-6">
                         <div class="card border-0 bg-light h-100">
                             <div class="card-body small">
-                                <h6 class="fw-semibold">Dossier vs Documento</h6>
+                                <h3 class="h6 fw-semibold">Dossier vs Documento</h3>
                                 <ul class="mb-0">
                                     <li>Il <strong>dossier</strong> è la risposta JSON della singola richiesta SISTER</li>
                                     <li>Il <strong>documento</strong> (PDF/P7M/XML) è il file ufficiale scaricato che accompagna la risposta</li>

@@ -2,10 +2,16 @@
 
 import importlib
 import logging
+import os
 import sys
 import types
 
 import pytest
+
+# The web routes fail closed (see sister.web._require_auth). Tests that exercise them without a login opt into the
+# documented dev switch explicitly instead of depending on whatever the developer's .env says; tests that check the
+# enforcement itself (tests/test_web_auth.py) override it per test. Must be set before ``sister.main`` is imported.
+os.environ.setdefault("REQUIRE_AUTHENTICATION", "false")
 
 # ---------------------------------------------------------------------------
 # Stub heavy optional dependencies that may not be installed in CI

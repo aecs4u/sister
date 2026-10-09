@@ -63,18 +63,18 @@ class FormGroup:
 
 _TIPO_CATASTO = EndpointParam(
     name="tipo_catasto",
-    label="Cadastre Type",
-    placeholder="Select type",
+    label="Tipo catasto",
+    placeholder="Seleziona il tipo",
     input_type="select",
     required=False,
     options=[("", "Both (T+F)"), ("T", "Terreni (T)"), ("F", "Fabbricati (F)")],
-    help_text="T = Land, F = Buildings. Leave blank for both.",
+    help_text="T = Terreni, F = Fabbricati. Lascia vuoto per entrambi.",
 )
 
 _TIPO_CATASTO_TF = EndpointParam(
     name="tipo_catasto",
-    label="Cadastre Type",
-    placeholder="Select type",
+    label="Tipo catasto",
+    placeholder="Seleziona il tipo",
     input_type="select",
     required=False,
     options=[("T", "Terreni (T)"), ("F", "Fabbricati (F)")],
@@ -82,8 +82,8 @@ _TIPO_CATASTO_TF = EndpointParam(
 
 _TIPO_CATASTO_TFE = EndpointParam(
     name="tipo_catasto",
-    label="Cadastre Type",
-    placeholder="Select type",
+    label="Tipo catasto",
+    placeholder="Seleziona il tipo",
     input_type="select",
     required=False,
     options=[("", "Both (E)"), ("T", "Terreni (T)"), ("F", "Fabbricati (F)")],
@@ -91,77 +91,80 @@ _TIPO_CATASTO_TFE = EndpointParam(
 
 _PROVINCIA = EndpointParam(
     name="provincia",
-    label="Province",
-    placeholder="e.g. Roma",
-    help_text="Province name",
+    label="Provincia",
+    placeholder="es. Roma",
+    help_text="Nome della provincia",
     example="Roma",
 )
 
 _COMUNE = EndpointParam(
     name="comune",
-    label="Municipality",
-    placeholder="e.g. ROMA",
-    help_text="Municipality name (uppercase)",
+    label="Comune",
+    placeholder="es. ROMA",
+    help_text="Nome del comune (maiuscolo)",
     example="ROMA",
 )
 
 _FOGLIO = EndpointParam(
     name="foglio",
-    label="Sheet (Foglio)",
-    placeholder="e.g. 100",
+    label="Foglio",
+    placeholder="es. 100",
     example="100",
 )
 
 _PARTICELLA = EndpointParam(
     name="particella",
-    label="Parcel (Particella)",
-    placeholder="e.g. 50",
+    label="Particella",
+    placeholder="es. 50",
     example="50",
 )
 
 _SEZIONE = EndpointParam(
     name="sezione",
-    label="Section (Sezione)",
-    placeholder="e.g. A, B, C",
+    label="Sezione",
+    placeholder="es. A, B, C",
     required=False,
-    help_text="Census section code for multi-section comuni (e.g. A = RAVENNA, C = SAVIO). Leave blank if not applicable.",
+    help_text=(
+        "Codice sezione censuaria per i comuni con più sezioni (es. A = RAVENNA, C = SAVIO). "
+        "Lascia vuoto se non applicabile."
+    ),
 )
 
 _SEZIONE_URBANA = EndpointParam(
     name="sezione_urbana",
-    label="Urban Section (Sezione Urbana)",
-    placeholder="e.g. RA",
+    label="Sezione urbana",
+    placeholder="es. RA",
     required=False,
-    help_text="2-3 char urban section code for Fabbricati (e.g. RA, PA)",
+    help_text="Codice sezione urbana di 2-3 caratteri per i Fabbricati (es. RA, PA)",
 )
 
 _SUBALTERNO = EndpointParam(
     name="subalterno",
-    label="Sub-unit (Subalterno)",
-    placeholder="e.g. 3",
+    label="Subalterno",
+    placeholder="es. 3",
     required=False,
-    help_text="Required for Fabbricati intestati",
+    help_text="Obbligatorio per gli intestati dei Fabbricati",
 )
 
 _PROVINCIA_OPT = EndpointParam(
     name="provincia",
-    label="Province",
-    placeholder="Leave blank for national search",
+    label="Provincia",
+    placeholder="Lascia vuoto per la ricerca nazionale",
     required=False,
-    help_text="Omit for nationwide search",
+    help_text="Ometti per la ricerca nazionale",
 )
 
 _FOGLIO_OPT = EndpointParam(
     name="foglio",
-    label="Sheet",
-    placeholder="Required for property presets",
+    label="Foglio",
+    placeholder="Obbligatorio per i preset immobiliari",
     required=False,
 )
 
 _PARTICELLA_OPT = EndpointParam(
     name="particella",
-    label="Parcel",
-    placeholder="Required for property presets",
+    label="Particella",
+    placeholder="Obbligatorio per i preset immobiliari",
     required=False,
 )
 
@@ -173,8 +176,8 @@ _PARTICELLA_OPT = EndpointParam(
 SINGLE_STEP_GROUPS: list[FormGroup] = [
     FormGroup(
         id="property-search",
-        name="Property Search",
-        description="Search for properties by cadastral coordinates (sheet + parcel).",
+        name="Ricerca immobili",
+        description="Cerca gli immobili per dati catastali (foglio + particella).",
         icon="fa-search",
         color="primary",
         category="single",
@@ -182,25 +185,25 @@ SINGLE_STEP_GROUPS: list[FormGroup] = [
         endpoints=[
             EndpointOption(
                 id="visura",
-                name="Property Data",
+                name="Dati immobile",
                 path="/visura",
                 method="POST",
-                description="Find all properties on a parcel (Fase 1)",
+                description="Trova tutti gli immobili di una particella (Fase 1)",
             ),
             EndpointOption(
                 id="intestati",
-                name="Owner Lookup",
+                name="Ricerca intestatari",
                 path="/visura/intestati",
                 method="POST",
-                description="Get owners for a specific property (Fase 2)",
+                description="Trova gli intestatari di un immobile specifico (Fase 2)",
             ),
         ],
         default_endpoint_id="visura",
     ),
     FormGroup(
         id="person-search",
-        name="Person Search",
-        description="National search by codice fiscale.",
+        name="Ricerca persona",
+        description="Ricerca nazionale per codice fiscale.",
         icon="fa-user",
         color="info",
         category="single",
@@ -208,8 +211,8 @@ SINGLE_STEP_GROUPS: list[FormGroup] = [
             EndpointParam(
                 name="codice_fiscale",
                 label="Codice Fiscale",
-                placeholder="e.g. RSSMRI85E28H501E",
-                help_text="16-character tax code",
+                placeholder="es. RSSMRI85E28H501E",
+                help_text="Codice fiscale di 16 caratteri",
                 example="RSSMRI85E28H501E",
             ),
             _TIPO_CATASTO_TFE,
@@ -218,27 +221,27 @@ SINGLE_STEP_GROUPS: list[FormGroup] = [
         endpoints=[
             EndpointOption(
                 id="soggetto",
-                name="Person Search",
+                name="Ricerca persona",
                 path="/visura/soggetto",
                 method="POST",
-                description="National search by codice fiscale",
+                description="Ricerca nazionale per codice fiscale",
             ),
         ],
         default_endpoint_id="soggetto",
     ),
     FormGroup(
         id="company-search",
-        name="Company Search",
-        description="Search by P.IVA or company name.",
+        name="Ricerca società",
+        description="Cerca per P.IVA o denominazione.",
         icon="fa-building",
         color="warning",
         category="single",
         params=[
             EndpointParam(
                 name="identificativo",
-                label="P.IVA or Company Name",
-                placeholder="e.g. 02471840997",
-                help_text="Enter 11-digit P.IVA or company denomination",
+                label="P.IVA o denominazione società",
+                placeholder="es. 02471840997",
+                help_text="Inserisci la P.IVA di 11 cifre o la denominazione della società",
                 example="02471840997",
             ),
             _TIPO_CATASTO_TFE,
@@ -247,18 +250,18 @@ SINGLE_STEP_GROUPS: list[FormGroup] = [
         endpoints=[
             EndpointOption(
                 id="persona-giuridica",
-                name="Company Search",
+                name="Ricerca società",
                 path="/visura/persona-giuridica",
                 method="POST",
-                description="Search by P.IVA or denomination",
+                description="Cerca per P.IVA o denominazione",
             ),
         ],
         default_endpoint_id="persona-giuridica",
     ),
     FormGroup(
         id="property-list",
-        name="Property List",
-        description="List all properties in a municipality.",
+        name="Elenco immobili",
+        description="Elenca tutti gli immobili di un comune.",
         icon="fa-list",
         color="success",
         category="single",
@@ -268,8 +271,8 @@ SINGLE_STEP_GROUPS: list[FormGroup] = [
             _TIPO_CATASTO_TF,
             EndpointParam(
                 name="foglio",
-                label="Sheet (Foglio)",
-                placeholder="Optional — filter by sheet",
+                label="Foglio",
+                placeholder="Facoltativo — filtra per foglio",
                 required=False,
             ),
             _SEZIONE,
@@ -277,18 +280,18 @@ SINGLE_STEP_GROUPS: list[FormGroup] = [
         endpoints=[
             EndpointOption(
                 id="elenco-immobili",
-                name="Property List",
+                name="Elenco immobili",
                 path="/visura/elenco-immobili",
                 method="POST",
-                description="List all properties in a municipality",
+                description="Elenca tutti gli immobili di un comune",
             ),
         ],
         default_endpoint_id="elenco-immobili",
     ),
     FormGroup(
         id="address-search",
-        name="Address Search",
-        description="Search properties by street address.",
+        name="Ricerca per indirizzo",
+        description="Cerca gli immobili per indirizzo.",
         icon="fa-map-marker-alt",
         color="danger",
         category="single",
@@ -298,27 +301,27 @@ SINGLE_STEP_GROUPS: list[FormGroup] = [
             _TIPO_CATASTO_TF,
             EndpointParam(
                 name="indirizzo",
-                label="Address",
-                placeholder="e.g. VIA ROMA",
-                help_text="Street name (partial match supported)",
+                label="Indirizzo",
+                placeholder="es. VIA ROMA",
+                help_text="Nome della via (ricerca parziale)",
                 example="VIA ROMA",
             ),
         ],
         endpoints=[
             EndpointOption(
                 id="indirizzo",
-                name="Address Search",
+                name="Ricerca per indirizzo",
                 path="/visura/indirizzo",
                 method="POST",
-                description="Find properties at a given address",
+                description="Trova gli immobili a un indirizzo",
             ),
         ],
         default_endpoint_id="indirizzo",
     ),
     FormGroup(
         id="nota-search",
-        name="Note Search",
-        description="Search the formalities of a nota (Ricerca per nota).",
+        name="Ricerca nota",
+        description="Cerca le formalità di una nota (ricerca per nota).",
         icon="fa-file-signature",
         color="secondary",
         category="single",
@@ -326,18 +329,18 @@ SINGLE_STEP_GROUPS: list[FormGroup] = [
         endpoints=[
             EndpointOption(
                 id="nota",
-                name="Note Search",
+                name="Ricerca nota",
                 path="/visura/nota",
                 method="POST",
-                description="Find properties by nota number and year",
+                description="Trova gli immobili per numero e anno della nota",
             ),
         ],
         default_endpoint_id="nota",
     ),
     FormGroup(
         id="partita-search",
-        name="Partita Search",
-        description="Search by partita catastale number.",
+        name="Ricerca partita",
+        description="Cerca per numero di partita catastale.",
         icon="fa-hashtag",
         color="secondary",
         category="single",
@@ -347,26 +350,26 @@ SINGLE_STEP_GROUPS: list[FormGroup] = [
             _TIPO_CATASTO_TF,
             EndpointParam(
                 name="partita",
-                label="Partita Number",
-                placeholder="e.g. 12345",
-                help_text="Cadastral partita number",
+                label="Numero di partita",
+                placeholder="es. 12345",
+                help_text="Numero di partita catastale",
             ),
         ],
         endpoints=[
             EndpointOption(
                 id="partita",
-                name="Partita Search",
+                name="Ricerca partita",
                 path="/visura/partita",
                 method="POST",
-                description="Search by partita catastale number",
+                description="Cerca per numero di partita catastale",
             ),
         ],
         default_endpoint_id="partita",
     ),
     FormGroup(
         id="mappa",
-        name="Cadastral Map",
-        description="View cadastral map data for a foglio.",
+        name="Mappa catastale",
+        description="Visualizza i dati della mappa catastale di un foglio.",
         icon="fa-map",
         color="dark",
         category="single",
@@ -376,8 +379,8 @@ SINGLE_STEP_GROUPS: list[FormGroup] = [
             _FOGLIO,
             EndpointParam(
                 name="particella",
-                label="Parcel (optional)",
-                placeholder="e.g. 50",
+                label="Particella (facoltativa)",
+                placeholder="es. 50",
                 required=False,
             ),
             _SEZIONE,
@@ -385,25 +388,25 @@ SINGLE_STEP_GROUPS: list[FormGroup] = [
         endpoints=[
             EndpointOption(
                 id="mappa",
-                name="Map View",
+                name="Visualizza mappa",
                 path="/visura/mappa",
                 method="POST",
-                description="View cadastral map data (EM)",
+                description="Visualizza i dati della mappa catastale (EM)",
             ),
             EndpointOption(
                 id="export-mappa",
-                name="Export Map",
+                name="Esporta mappa",
                 path="/visura/export-mappa",
                 method="POST",
-                description="Export cadastral map data (EXPM)",
+                description="Esporta i dati della mappa catastale (EXPM)",
             ),
         ],
         default_endpoint_id="mappa",
     ),
     FormGroup(
         id="elaborato-planimetrico",
-        name="Elaborato Planimetrico",
-        description="Retrieve planimetric document for a property.",
+        name="Elaborato planimetrico",
+        description="Recupera l'elaborato planimetrico di un immobile.",
         icon="fa-drafting-compass",
         color="dark",
         category="single",
@@ -411,18 +414,18 @@ SINGLE_STEP_GROUPS: list[FormGroup] = [
         endpoints=[
             EndpointOption(
                 id="elaborato-planimetrico",
-                name="Elaborato Planimetrico",
+                name="Elaborato planimetrico",
                 path="/visura/elaborato-planimetrico",
                 method="POST",
-                description="Planimetric document (ELPL)",
+                description="Elaborato planimetrico (ELPL)",
             ),
         ],
         default_endpoint_id="elaborato-planimetrico",
     ),
     FormGroup(
         id="originali-impianto",
-        name="Original Records",
-        description="Original registration records and survey points.",
+        name="Originali di impianto",
+        description="Originali di impianto e punti fiduciali.",
         icon="fa-archive",
         color="dark",
         category="single",
@@ -430,25 +433,25 @@ SINGLE_STEP_GROUPS: list[FormGroup] = [
         endpoints=[
             EndpointOption(
                 id="originali",
-                name="Original Records",
+                name="Originali di impianto",
                 path="/visura/originali",
                 method="POST",
-                description="Original registration records (OOII)",
+                description="Originali di impianto (OOII)",
             ),
             EndpointOption(
                 id="fiduciali",
-                name="Survey Points",
+                name="Punti fiduciali",
                 path="/visura/fiduciali",
                 method="POST",
-                description="Survey reference points (FID)",
+                description="Punti fiduciali (FID)",
             ),
         ],
         default_endpoint_id="originali",
     ),
     FormGroup(
         id="ispezioni",
-        name="Inspections",
-        description="Property inspection records (digital and paper).",
+        name="Ispezioni",
+        description="Ispezioni immobiliari (digitali e cartacee).",
         icon="fa-clipboard-check",
         color="dark",
         category="single",
@@ -456,33 +459,36 @@ SINGLE_STEP_GROUPS: list[FormGroup] = [
         endpoints=[
             EndpointOption(
                 id="ispezioni",
-                name="Digital Inspections",
+                name="Ispezioni digitali",
                 path="/visura/ispezioni",
                 method="POST",
-                description="Property inspection records (ISP)",
+                description="Ispezioni immobiliari (ISP)",
             ),
             EndpointOption(
                 id="ispezioni-cartacee",
-                name="Paper Inspections",
+                name="Ispezioni cartacee",
                 path="/visura/ispezioni-cartacee",
                 method="POST",
-                description="Paper inspection records (ISPCART)",
+                description="Ispezioni cartacee (ISPCART)",
             ),
         ],
         default_endpoint_id="ispezioni",
     ),
     FormGroup(
         id="ispezione-ipotecaria",
-        name="Ispezione Ipotecaria",
-        description="Paid property inspection (search by property, person, company, or note). Incurs a cost per query.",
+        name="Ispezione ipotecaria",
+        description=(
+            "Ispezione immobiliare a pagamento (per immobile, persona, società o nota). "
+            "Ogni richiesta ha un costo."
+        ),
         icon="fa-file-invoice-dollar",
         color="danger",
         category="single",
         params=[
             EndpointParam(
                 name="tipo_ricerca",
-                label="Search Type",
-                placeholder="Select search type",
+                label="Tipo di ricerca",
+                placeholder="Seleziona il tipo di ricerca",
                 input_type="select",
                 required=True,
                 options=[
@@ -491,84 +497,84 @@ SINGLE_STEP_GROUPS: list[FormGroup] = [
                     ("persona_giuridica", "Company (Persona Giuridica)"),
                     ("nota", "Note (Nota)"),
                 ],
-                help_text="Type of inspection search",
+                help_text="Tipo di ricerca ispezione",
             ),
             _PROVINCIA,
             EndpointParam(
                 name="comune",
-                label="Municipality",
-                placeholder="e.g. ROMA",
+                label="Comune",
+                placeholder="es. ROMA",
                 required=False,
-                help_text="Municipality name (for immobile search)",
+                help_text="Nome del comune (per la ricerca immobile)",
             ),
             _TIPO_CATASTO_TF,
             EndpointParam(
                 name="codice_fiscale",
                 label="Codice Fiscale",
-                placeholder="e.g. RSSMRI85E28H501E",
+                placeholder="es. RSSMRI85E28H501E",
                 required=False,
-                help_text="For persona_fisica search",
+                help_text="Per la ricerca persona fisica",
             ),
             EndpointParam(
                 name="identificativo",
-                label="P.IVA / Company",
-                placeholder="e.g. 02471840997",
+                label="P.IVA / società",
+                placeholder="es. 02471840997",
                 required=False,
-                help_text="For persona_giuridica search",
+                help_text="Per la ricerca persona giuridica",
             ),
             EndpointParam(
                 name="foglio",
-                label="Sheet (Foglio)",
-                placeholder="e.g. 100",
+                label="Foglio",
+                placeholder="es. 100",
                 required=False,
-                help_text="For immobile search",
+                help_text="Per la ricerca immobile",
             ),
             EndpointParam(
                 name="particella",
-                label="Parcel (Particella)",
-                placeholder="e.g. 50",
+                label="Particella",
+                placeholder="es. 50",
                 required=False,
-                help_text="For immobile search",
+                help_text="Per la ricerca immobile",
             ),
             EndpointParam(
                 name="numero_nota",
-                label="Note Number",
-                placeholder="e.g. 12345",
+                label="Numero nota",
+                placeholder="es. 12345",
                 required=False,
-                help_text="For nota search",
+                help_text="Per la ricerca nota",
             ),
             EndpointParam(
                 name="anno_nota",
-                label="Note Year",
-                placeholder="e.g. 2024",
+                label="Anno nota",
+                placeholder="es. 2024",
                 required=False,
-                help_text="For nota search",
+                help_text="Per la ricerca nota",
             ),
             EndpointParam(
                 name="auto_confirm",
-                label="Auto-confirm cost",
+                label="Conferma automatica del costo",
                 placeholder="",
                 input_type="select",
                 required=False,
-                options=[("false", "No — show cost first"), ("true", "Yes — auto-approve")],
-                help_text="WARNING: Setting to Yes will automatically confirm the cost and charge your account.",
+                options=[("false", "No — mostra prima il costo"), ("true", "Sì — approva automaticamente")],
+                help_text="ATTENZIONE: con «Sì» il costo viene confermato automaticamente e addebitato sul tuo conto.",
             ),
         ],
         endpoints=[
             EndpointOption(
                 id="ispezione-ipotecaria",
-                name="Ispezione Ipotecaria",
+                name="Ispezione ipotecaria",
                 path="/visura/ispezione-ipotecaria",
                 method="POST",
-                description="Paid property inspection (requires cost confirmation)",
+                description="Ispezione immobiliare a pagamento (richiede la conferma del costo)",
             ),
         ],
         default_endpoint_id="ispezione-ipotecaria",
     ),
     FormGroup(
         id="riepilogo",
-        name="Query Summary",
-        description="View your SISTER query history and pending requests.",
+        name="Riepilogo query",
+        description="Consulta lo storico delle query SISTER e le richieste in sospeso.",
         icon="fa-history",
         color="secondary",
         category="single",
@@ -576,17 +582,17 @@ SINGLE_STEP_GROUPS: list[FormGroup] = [
         endpoints=[
             EndpointOption(
                 id="riepilogo-visure",
-                name="Query Summary",
+                name="Riepilogo query",
                 path="/visura/riepilogo-visure",
                 method="POST",
-                description="Your SISTER query history (Riepilogo Visure)",
+                description="Storico delle query SISTER (Riepilogo visure)",
             ),
             EndpointOption(
                 id="richieste",
-                name="Pending Requests",
+                name="Richieste in sospeso",
                 path="/visura/richieste",
                 method="POST",
-                description="Pending/completed SISTER requests (Richieste)",
+                description="Richieste SISTER in sospeso o completate",
             ),
         ],
         default_endpoint_id="riepilogo-visure",
@@ -612,98 +618,101 @@ def _PRESET_HIDDEN(preset_name):
 
 _WORKFLOW_DEPTH = EndpointParam(
     name="depth",
-    label="Depth",
-    placeholder="Select depth",
+    label="Profondità",
+    placeholder="Seleziona la profondità",
     input_type="select",
     required=False,
     options=[
         ("light", "Light — core steps only"),
-        ("standard", "Standard — with enrichment"),
+        ("standard", "Standard — con arricchimento"),
         ("deep", "Deep — owner expansion + paid"),
         ("full", "Full — multi-hop graph expansion"),
     ],
-    help_text="Controls which steps run. Full adds portfolio drill-down, history bundles, and paid encumbrance checks.",
+    help_text=(
+        "Controlla quali passaggi vengono eseguiti. "
+        "«Full» aggiunge l'analisi del patrimonio, i pacchetti storici e le verifiche ipotecarie a pagamento."
+    ),
 )
 
 _WORKFLOW_PAID = EndpointParam(
     name="include_paid_steps",
-    label="Include Paid Steps",
+    label="Includi i passaggi a pagamento",
     placeholder="",
     input_type="select",
     required=False,
     options=[("false", "No"), ("true", "Yes — include paid inspections")],
-    help_text="Enable paid ispezione ipotecaria steps (requires Deep or Full depth).",
+    help_text="Abilita i passaggi a pagamento di ispezione ipotecaria (richiede profondità Deep o Full).",
 )
 
 _WORKFLOW_CONFIRM = EndpointParam(
     name="auto_confirm",
-    label="Auto-confirm Cost",
+    label="Conferma automatica del costo",
     placeholder="",
     input_type="select",
     required=False,
-    options=[("false", "No — show cost first"), ("true", "Yes — auto-approve")],
-    help_text="WARNING: Setting to Yes will automatically confirm paid service costs.",
+    options=[("false", "No — mostra prima il costo"), ("true", "Sì — approva automaticamente")],
+    help_text="ATTENZIONE: con «Sì» i costi dei servizi a pagamento vengono confermati automaticamente.",
 )
 
 _WORKFLOW_CODICE_FISCALE = EndpointParam(
     name="codice_fiscale",
     label="Codice Fiscale",
-    placeholder="e.g. RSSMRI85E28H501E",
+    placeholder="es. RSSMRI85E28H501E",
     example="RSSMRI85E28H501E",
 )
 
 _WORKFLOW_IDENTIFICATIVO = EndpointParam(
     name="identificativo",
-    label="P.IVA / Company",
-    placeholder="e.g. 02471840997",
+    label="P.IVA / società",
+    placeholder="es. 02471840997",
     example="02471840997",
 )
 
 _WORKFLOW_ADDRESS = EndpointParam(
     name="indirizzo",
-    label="Address",
-    placeholder="e.g. VIA ROMA",
-    help_text="Street name (partial match supported)",
+    label="Indirizzo",
+    placeholder="es. VIA ROMA",
+    help_text="Nome della via (ricerca parziale)",
     example="VIA ROMA",
 )
 
 _WORKFLOW_MAX_PAID_STEPS = EndpointParam(
     name="max_paid_steps",
-    label="Max Paid Steps",
+    label="Passaggi a pagamento (max)",
     placeholder="3",
     input_type="text",
     required=False,
-    help_text="Maximum number of paid ispezione ipotecaria invocations (default: 3)",
+    help_text="Numero massimo di ispezioni ipotecarie a pagamento (predefinito: 3)",
 )
 
 _WORKFLOW_HISTORY = EndpointParam(
     name="include_history",
-    label="Include Historical Records",
+    label="Includi i dati storici",
     placeholder="",
     input_type="select",
     required=False,
-    options=[("false", "No"), ("true", "Yes — include notes and paper inspections")],
+    options=[("false", "No"), ("true", "Sì — includi note e ispezioni cartacee")],
 )
 
 _WORKFLOW_NUMERO_NOTA = EndpointParam(
     name="numero_nota",
-    label="Note Number",
-    placeholder="Optional; used by historical note lookup",
+    label="Numero nota",
+    placeholder="Facoltativo; usato dalla ricerca storica delle note",
     required=False,
 )
 
 _WORKFLOW_PORTFOLIO_CF = EndpointParam(
     name="codice_fiscale",
-    label="Person's Codice Fiscale",
-    placeholder="e.g. RSSMRI85E28H501E",
+    label="Codice fiscale della persona",
+    placeholder="es. RSSMRI85E28H501E",
     required=False,
     example="RSSMRI85E28H501E",
 )
 
 _WORKFLOW_PORTFOLIO_COMPANY = EndpointParam(
     name="identificativo",
-    label="Company P.IVA / Name",
-    placeholder="e.g. 02471840997",
+    label="P.IVA / denominazione società",
+    placeholder="es. 02471840997",
     required=False,
     example="02471840997",
 )
@@ -713,6 +722,17 @@ _WORKFLOW_ENTITY_PARAMS = (_TIPO_CATASTO_TFE, _PROVINCIA_OPT)
 _WORKFLOW_DEPTH_PARAMS = (_WORKFLOW_DEPTH,)
 _WORKFLOW_PAID_PARAMS = (_WORKFLOW_DEPTH, _WORKFLOW_PAID, _WORKFLOW_CONFIRM)
 
+# Italian descriptions for the presets that have none of their own (the package texts are English).
+_WORKFLOW_DESCRIPTIONS_IT = {
+    "fondiario": (
+        "Indagine fondiaria: elenco → mappa → export → fiduciali → originali → elaborato → punteggio di rischio"
+    ),
+    "indirizzo": (
+        "Ricerca per indirizzo: indirizzo → ricerca → intestati → espansione intestatari → punteggio di rischio"
+    ),
+    "cross-reference": "Incrocio dati: soggetto + società → immobili in comune → punteggio di rischio",
+}
+
 # Preset execution and step descriptions come from aecs4u_workflow.models.
 # This table contains only the web-specific labels, styling, and input fields.
 _WORKFLOW_FORM_SPECS = {
@@ -720,7 +740,10 @@ _WORKFLOW_FORM_SPECS = {
         "name": "Due Diligence",
         "icon": "fa-file-contract",
         "color": "primary",
-        "description": "Parcel investigation. Depth selects standard or full multi-hop checks; history can be added when needed.",
+        "description": (
+            "Indagine su una particella. La profondità sceglie tra verifiche standard e multi-hop complete; "
+            "lo storico si può aggiungere se serve."
+        ),
         "flowchart": "due-diligence",
         "params": (
             *_WORKFLOW_PROPERTY_PARAMS,
@@ -733,10 +756,13 @@ _WORKFLOW_FORM_SPECS = {
         ),
     },
     "portfolio": {
-        "name": "Portfolio Investigation",
+        "name": "Indagine patrimoniale",
         "icon": "fa-search-dollar",
         "color": "info",
-        "description": "Search a person's or company's properties, then expand owners and portfolios by depth.",
+        "description": (
+            "Cerca gli immobili di una persona o di una società, poi espande intestatari e patrimoni "
+            "in base alla profondità."
+        ),
         "flowchart": "patrimonio",
         "params": (
             _WORKFLOW_PORTFOLIO_CF,
@@ -747,19 +773,19 @@ _WORKFLOW_FORM_SPECS = {
         ),
     },
     "fondiario": {
-        "name": "Land Survey",
+        "name": "Indagine fondiaria",
         "icon": "fa-mountain",
         "color": "success",
         "params": (_PROVINCIA, _COMUNE, _FOGLIO_OPT, _TIPO_CATASTO_TF, *_WORKFLOW_DEPTH_PARAMS),
     },
     "indirizzo": {
-        "name": "Address Lookup",
+        "name": "Ricerca per indirizzo",
         "icon": "fa-map-marker-alt",
         "color": "danger",
         "params": (_PROVINCIA, _COMUNE, _WORKFLOW_ADDRESS, _TIPO_CATASTO, *_WORKFLOW_DEPTH_PARAMS),
     },
     "cross-reference": {
-        "name": "Cross-Reference",
+        "name": "Incrocio dati",
         "icon": "fa-exchange-alt",
         "color": "dark",
         "params": (
@@ -774,7 +800,9 @@ _WORKFLOW_FORM_SPECS = {
 
 def _workflow_form_group(preset: str, spec: dict) -> FormGroup:
     """Build the web form for a shared workflow preset."""
-    description = spec.get("description") or WORKFLOW_PRESETS[preset]["description"]
+    description = (
+        spec.get("description") or _WORKFLOW_DESCRIPTIONS_IT.get(preset) or WORKFLOW_PRESETS[preset]["description"]
+    )
     endpoint_id = f"workflow-{preset}"
     return FormGroup(
         id=f"wf-{preset}",

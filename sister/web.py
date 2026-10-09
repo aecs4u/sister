@@ -10,6 +10,7 @@ import asyncio
 import logging
 import os
 import re
+import time
 from datetime import datetime
 from pathlib import Path
 from threading import Lock
@@ -61,7 +62,16 @@ def _ispezione_group_key(filename: str) -> str:
 
 logger = logging.getLogger("sister")
 
-router = APIRouter(tags=["Web UI"])
+# The UI is authored in Italian: pin <html lang="it"> and the theme's own strings to Italian unless the visitor chose
+# a language explicitly (?lang= or the language cookie). Without this the theme follows Accept-Language.
+
+
+async def _pin_content_locale(request: Request) -> None:
+    if "lang" not in request.query_params and "language" not in request.cookies:
+        request.state.locale = "it"
+
+
+router = APIRouter(tags=["Web UI"], dependencies=[Depends(_pin_content_locale)])
 
 _missing_pair_job: dict[str, Any] | None = None
 _missing_pair_task: asyncio.Task | None = None
@@ -1235,18 +1245,78 @@ def _get_user(request: Request):
         return None
 
 
-async def _require_auth(request: Request):
-    """Dependency: require authenticated user or redirect to login."""
+async def _optional_user(request: Request):
+    """The signed-in user on pages that are public but personalised (sidebar, admin links); None when anonymous."""
     try:
         from aecs4u_auth.dependencies import get_current_user
 
         return await get_current_user(request)
     except Exception:
-        # Auth not configured or user not authenticated — allow in dev mode
-        user = _get_user(request)
-        if user:
-            return user
-        return None
+        return _get_user(request)
+
+
+def _auth_required() -> bool:
+    """True unless auth is explicitly disabled with REQUIRE_AUTHENTICATION=false (dev only)."""
+    return os.getenv("REQUIRE_AUTHENTICATION", "true").lower() not in ("false", "0", "no")
+
+
+_auth_disabled_warned = False
+
+
+async def _require_auth(request: Request):
+    """Dependency: require an authenticated user; fail closed.
+
+    Page navigations (Accept: text/html) are redirected to the login page, everything else gets a
+    401 JSON response. Only an explicit ``REQUIRE_AUTHENTICATION=false`` lets anonymous requests
+    through (logged once); an auth backend that cannot be loaded never does.
+    """
+    global _auth_disabled_warned
+    from fastapi import HTTPException
+
+    try:
+        from aecs4u_auth.dependencies import RedirectToLogin, get_current_user
+    except ImportError as exc:
+        if _auth_required():
+            logger.error("aecs4u-auth non disponibile con REQUIRE_AUTHENTICATION attivo: %s", exc)
+            raise HTTPException(status_code=503, detail="Authentication backend unavailable") from exc
+        return _get_user(request)
+
+    try:
+        return await get_current_user(request)
+    except HTTPException:
+        if not _auth_required():
+            if not _auth_disabled_warned:
+                _auth_disabled_warned = True
+                logger.warning("REQUIRE_AUTHENTICATION=false: le rotte /web/* accettano richieste anonime")
+            return _get_user(request)
+        if "text/html" in request.headers.get("accept", "") and request.method == "GET":
+            raise RedirectToLogin(return_url=str(request.url))
+        raise
+
+
+def _is_admin(user) -> bool:
+    """Operators may drive the portal session (opt-in via SISTER_ADMIN_USERS; everybody is one with auth disabled)."""
+    if not _auth_required():
+        return True
+    if not os.getenv("SISTER_ADMIN_USERS", "").strip():
+        return True  # admin gating is opt-in: no admins configured -> every authenticated user (see main.py)
+    from jinja2 import Undefined
+
+    if user is None or isinstance(user, Undefined):  # templates rendered without a user (public pages)
+        return False
+    if getattr(user, "is_superuser", False) or str(getattr(user, "role", "")).lower() == "admin":
+        return True
+    has_role = getattr(user, "has_role", None)
+    return bool(callable(has_role) and has_role("admin"))
+
+
+async def _require_admin(request: Request, user=Depends(_require_auth)):
+    """Dependency for operational actions (Browser Control, imports, rescans): authenticated *and* admin."""
+    from fastapi import HTTPException
+
+    if not _is_admin(user):
+        raise HTTPException(status_code=403, detail="Admin role required")
+    return user
 
 
 def _build_url(path: str, **params) -> str:
@@ -1819,7 +1889,7 @@ def _missing_pair_job_view(job: dict[str, Any] | None) -> dict[str, Any]:
 
 
 @router.post("/web/documents/retrieve-missing-pairs", response_class=JSONResponse)
-async def web_retrieve_missing_pairs(request: Request, user=Depends(_require_auth)):
+async def web_retrieve_missing_pairs(request: Request, user=Depends(_require_admin)):
     """Find missing PDF/P7M pairs and start a free-visura recovery batch."""
     global _missing_pair_job, _missing_pair_task
 
@@ -1899,7 +1969,7 @@ async def web_forms(request: Request, user=Depends(_require_auth)):
 
 
 @router.post("/web/results/refresh", response_class=HTMLResponse)
-async def web_results_refresh(request: Request, user=Depends(_require_auth)):
+async def web_results_refresh(request: Request, user=Depends(_require_admin)):
     """Import exported response JSON files into the configured database."""
     import importlib.util
     from pathlib import Path
@@ -2071,17 +2141,52 @@ async def web_results(
     )
 
 
+# OpenData owns workflow storage and is a separate service. It must never be able to stall a page: calls get a short
+# connect timeout and a total budget, and after a failure the service is not probed again for a while (circuit breaker),
+# so a down or hung OpenData costs one fast failure instead of seconds on every page view.
+_OPENDATA_CONNECT_TIMEOUT = 1.0
+_OPENDATA_TOTAL_TIMEOUT = 4.0
+_OPENDATA_BACKOFF_SECONDS = 30.0
+_opendata_down_until = 0.0
+
+
+def opendata_available() -> bool:
+    """False while the circuit breaker is open (OpenData failed recently)."""
+    return time.monotonic() >= _opendata_down_until
+
+
+async def _opendata_get(path: str, params: Optional[dict] = None, *, client_factory=None):
+    """GET *path* on OpenData. Returns the response, or None when the service is down/unreachable/backing off."""
+    global _opendata_down_until
+    if not opendata_available():
+        return None
+    try:
+        # Everything that can fail (importing/constructing the HTTP client included) stays inside the try: OpenData
+        # being unusable must degrade the page, not break it.
+        if client_factory is None:
+            import httpx
+
+            client_factory = httpx.AsyncClient
+            timeout = httpx.Timeout(_OPENDATA_TOTAL_TIMEOUT, connect=_OPENDATA_CONNECT_TIMEOUT)
+        else:
+            timeout = _OPENDATA_TOTAL_TIMEOUT
+        async with client_factory(timeout=timeout) as client:
+            return await asyncio.wait_for(
+                client.get(f"{_OPENDATA_API_URL}{path}", params=params), timeout=_OPENDATA_TOTAL_TIMEOUT
+            )
+    except Exception as exc:  # connection refused, timeout, DNS, ...
+        _opendata_down_until = time.monotonic() + _OPENDATA_BACKOFF_SECONDS
+        logger.warning(
+            "OpenData non raggiungibile (%s): nuovo tentativo tra %ds", type(exc).__name__, _OPENDATA_BACKOFF_SECONDS
+        )
+        return None
+
+
 async def get_workflow_result_record(request_id: str) -> Optional[dict]:
     """Fetch a workflow run from opendata (returns None on miss or error)."""
-    import httpx
-
-    try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            resp = await client.get(f"{_OPENDATA_API_URL}/catasto/workflow/runs/{request_id}")
-            if resp.status_code == 200:
-                return resp.json()
-    except Exception as exc:
-        logger.warning("Could not fetch workflow %s from opendata: %s", request_id, exc)
+    resp = await _opendata_get(f"/catasto/workflow/runs/{request_id}")
+    if resp is not None and resp.status_code == 200:
+        return resp.json()
     return None
 
 
@@ -2185,18 +2290,12 @@ async def web_result_detail(request: Request, request_id: str, user=Depends(_req
 
 async def find_workflow_runs(status: Optional[str] = None, limit: int = 50, offset: int = 0) -> list[dict]:
     """Fetch workflow runs from opendata (returns empty list on error)."""
-    import httpx
-
     params: dict[str, Any] = {"limit": limit, "offset": offset}
     if status:
         params["status"] = status
-    try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            resp = await client.get(f"{_OPENDATA_API_URL}/catasto/workflow/runs", params=params)
-            if resp.status_code == 200:
-                return resp.json().get("runs", [])
-    except Exception as exc:
-        logger.warning("Could not fetch workflow runs from opendata: %s", exc)
+    resp = await _opendata_get("/catasto/workflow/runs", params)
+    if resp is not None and resp.status_code == 200:
+        return resp.json().get("runs", [])
     return []
 
 
@@ -2227,6 +2326,7 @@ async def web_workflows(
         status=status,
         limit=limit,
         offset=offset,
+        opendata_down=not opendata_available(),
         auth_status=_get_auth_status(),
     )
 
@@ -2271,11 +2371,18 @@ async def web_workflow_detail(request: Request, workflow_id: str, user=Depends(_
     )
 
 
+@router.get("/profile", response_class=HTMLResponse)
+async def web_profile(request: Request, user=Depends(_require_auth)):
+    """Signed-in user's profile (target of the header user menu)."""
+    theme = _get_theme(request)
+    return theme.render("profile.html", request, user=user or _get_user(request))
+
+
 @router.get("/web/about", response_class=HTMLResponse)
 async def web_about(request: Request):
     """About page (public)."""
     theme = _get_theme(request)
-    user = _get_user(request)
+    user = await _optional_user(request)
     return theme.render("about.html", request, user=user)
 
 
@@ -2283,8 +2390,8 @@ async def web_about(request: Request):
 async def web_privacy(request: Request):
     """Privacy policy (public)."""
     theme = _get_theme(request)
-    user = _get_user(request)
-    return theme.render("legal/privacy.html", request, user=user)
+    user = await _optional_user(request)
+    return theme.render("legal_privacy.html", request, user=user)
 
 
 @router.get("/privacy", include_in_schema=False)
@@ -2297,7 +2404,7 @@ async def privacy_redirect():
 async def web_guide(request: Request):
     """User guide for the SISTER portal."""
     theme = _get_theme(request)
-    user = _get_user(request)
+    user = await _optional_user(request)
     return theme.render("guide.html", request, user=user)
 
 
@@ -2305,7 +2412,7 @@ async def web_guide(request: Request):
 async def web_cheatsheet(request: Request):
     """Quick-reference cheat sheet for SISTER."""
     theme = _get_theme(request)
-    user = _get_user(request)
+    user = await _optional_user(request)
     return theme.render("cheatsheet.html", request, user=user)
 
 
@@ -2313,7 +2420,7 @@ async def web_cheatsheet(request: Request):
 async def web_glossary(request: Request):
     """Glossary of document types and cadastral terms."""
     theme = _get_theme(request)
-    user = _get_user(request)
+    user = await _optional_user(request)
     return theme.render("glossary.html", request, user=user)
 
 
@@ -3199,7 +3306,7 @@ async def _backfill_document_metadata(base: Path, parsed_by_stem: dict) -> None:
 
 
 @router.post("/web/documents/rescan", response_class=HTMLResponse)
-async def web_documents_rescan(request: Request, user=Depends(_require_auth)):
+async def web_documents_rescan(request: Request, user=Depends(_require_admin)):
     """Scan the documents directory for files not yet indexed in the DB and register them."""
     import asyncio
 
@@ -3639,7 +3746,7 @@ async def web_dossiers(request: Request, path: str = "", download: str = "", use
 
 
 @router.get("/web/browser", response_class=HTMLResponse)
-async def web_browser(request: Request, user=Depends(_require_auth)):
+async def web_browser(request: Request, user=Depends(_require_admin)):
     """Browser session control panel."""
     from .main import visura_service
 
@@ -3695,7 +3802,7 @@ async def web_browser_status(request: Request, user=Depends(_require_auth)):
 
 
 @router.post("/web/browser/start", response_class=JSONResponse)
-async def web_browser_start(request: Request, user=Depends(_require_auth)):
+async def web_browser_start(request: Request, user=Depends(_require_admin)):
     from .main import visura_service
 
     if visura_service is None:
@@ -3705,7 +3812,7 @@ async def web_browser_start(request: Request, user=Depends(_require_auth)):
 
 
 @router.post("/web/browser/stop", response_class=JSONResponse)
-async def web_browser_stop(request: Request, force: bool = False, user=Depends(_require_auth)):
+async def web_browser_stop(request: Request, force: bool = False, user=Depends(_require_admin)):
     from .main import visura_service
 
     if visura_service is None:
@@ -3715,7 +3822,7 @@ async def web_browser_stop(request: Request, force: bool = False, user=Depends(_
 
 
 @router.post("/web/browser/restart", response_class=JSONResponse)
-async def web_browser_restart(request: Request, user=Depends(_require_auth)):
+async def web_browser_restart(request: Request, user=Depends(_require_admin)):
     from .main import visura_service
 
     if visura_service is None:
@@ -3725,7 +3832,7 @@ async def web_browser_restart(request: Request, user=Depends(_require_auth)):
 
 
 @router.post("/web/browser/launch-chrome", response_class=JSONResponse)
-async def web_browser_launch_chrome(request: Request, user=Depends(_require_auth)):
+async def web_browser_launch_chrome(request: Request, user=Depends(_require_admin)):
     """Launch Google Chrome with CDP if not already running, then start the browser session."""
     import asyncio
     import os

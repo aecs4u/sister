@@ -68,6 +68,33 @@ uv run sister db init
 - uvicorn runs with `--reload` over every `*.py` (also `scripts/`, `tests/`): editing Python while a batch/crawler
   runs restarts the service and drops the request in flight. A restart does **not** log out (CDP mode).
 - Operational endpoints need `X-API-Key` when `API_KEY` is set (CLI: `VISURA_API_KEY`).
+- Web UI (`/web/*`, `/profile`) **fails closed** (`sister/web.py::_require_auth`): browsers are redirected to `/auth/login?next=…`,
+  other clients get 401. Only an explicit `REQUIRE_AUTHENTICATION=false` (dev) lets anonymous requests through; `.env` is `true`
+  and `tests/conftest.py` sets the switch for the suite. Local logins: `local_users.txt` (outside the repo).
+- **Templates must not use inline event handlers** (`onclick="..."`): the CSP blocks them (`script-src` needs the per-request nonce,
+  no `'unsafe-inline'`). Use `data-click|change|input|dragover|dragleave|drop="fn.path"` (+ `data-args='[...]'`, see
+  `static/js/sister_actions.js`) and put `nonce="{{ csp_nonce }}"` on every inline `<script>` (macros take it as a parameter).
+  Fonts and all JS/CSS libraries are self-hosted (`sister/static/vendor/`); do not add CDN URLs (CSP `connect-src`/`script-src` are `'self'`).
+- Hardening: CSRF for cookie-authenticated browser requests (`sister/csrf.py`, token derived from the auth cookie; the
+  `csrf_token`/`csrf_input()` template helpers and `static/js/sister_csrf.js` add it), per-path rate limits (`/auth/*` 20/min,
+  rest 600/min, per socket peer), nonce-based CSP outside `/docs` (`sister/security.py`), opt-in admin gating via
+  `SISTER_ADMIN_USERS` (Browser Control, imports, rescans), hashed passwords in `local_users.txt` (`scripts/hash_local_password.py`).
+  Sign-in/out/password-help pages are SISTER's own (`sister/auth_pages.py`), mounted before the package's.
+- Front-end assets are self-hosted in `sister/static/vendor/` (official Bootstrap 5.3.2, Font Awesome 6.5.0, Tabulator 6.3.1,
+  Chart.js 4.4.4 — do not use crowdaction's trimmed CSS copies). No third-party requests remain (fonts included).
+- `OPENDATA_API_URL` (workflow storage, separate service) is called with a 1 s connect / 4 s total timeout and a 30 s circuit
+  breaker (`web._opendata_get`); when it is down `/web/workflows` shows a notice instead of stalling.
+- Environment: keep `httpx` below 1.0 (`pyproject.toml` pins `<1`; 1.0 pre-releases have no `AsyncClient` and break `VisuraClient`).
+  Test baseline 2026-10-09 (`/opt/venv/.aecs4u_venv/bin/python -m pytest -p no:logfire --continue-on-collection-errors`):
+  690 passed, 24 failed, 83 errors (browser dispatch, client contract, ontology, 1 DB test, 3 workflow tests, missing `fresh_db`).
+- The interactive API docs (`/docs`, `/redoc`, `/openapi.json`) require sign-in like the web UI (`main._docs_auth`); `/health` stays public.
+- Saved results are kept in the database indefinitely. `RESPONSE_TTL_SECONDS` (6 h) only governs the in-memory cache; deleting
+  database rows is opt-in via `DB_RETENTION_SECONDS` (default 0 = never). (It used to reuse the cache TTL, which silently purged
+  jobs/responses older than 6 h every minute.) After switching `DATABASE_DSN` to an empty database, rebuild jobs/responses from
+  `outputs/` with the admin "Importa output" button on `/web/results`; it is idempotent.
+- Static files: SISTER's own `/static` assets revalidate via ETag (no long cache); only versioned `aecs4u-theme` assets are immutable.
+  Presentation formatting (dates, money, enum labels) lives in `sister/display.py` as Jinja filters.
+- UI audit and its fixes: `docs/ui_audit_2026-10-09.md` (§1b = what changed / what is left, mostly in the aecs4u-auth/theme packages).
 - Each query sets its SISTER office through `_set_office` (NAZIONALE for persons/companies, the province for
   property queries) and verifies it; a multi-step flow calls it again to change level.
 

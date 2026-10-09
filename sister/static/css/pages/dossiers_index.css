@@ -1,5 +1,5 @@
 /* Page styles for templates/dossiers_index.html. */
-.page-hero { background: linear-gradient(135deg, #6f42c1 0%, #5a32a3 100%); }
+.page-hero { background: linear-gradient(135deg, #495057 0%, #212529 100%); }  /* same banner as Documents */
 .dossier-search-wrap { min-width: min(100%, 20rem); max-width: 32rem; }
 .dossier-title, .dossier-peer-title {
     display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2;

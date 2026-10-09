@@ -7,8 +7,8 @@
 
 {% block extra_css %}
 {{ super() }}
-<link rel="stylesheet" href="/static/css/doc_sections.css">
-<link rel="stylesheet" href="/static/css/pages/documents_index.css">
+<link rel="stylesheet" href="/static/css/doc_sections.css?v=20261009a">
+<link rel="stylesheet" href="/static/css/pages/documents_index.css?v=20261009a">
 {% endblock %}
 
 {% block content %}
@@ -30,16 +30,19 @@
                 </p>
             </div>
             <div class="d-flex gap-2 mt-3 mt-md-0">
-                <button onclick="toggleAllSections(true)" class="btn btn-outline-light"><i class="fas fa-angles-down me-2"></i>Espandi</button>
-                <button onclick="toggleAllSections(false)" class="btn btn-outline-light"><i class="fas fa-angles-up me-2"></i>Riduci</button>
+                <button data-click="toggleAllSections" data-args='[true]' class="btn btn-outline-light"><i class="fas fa-angles-down me-2"></i>Espandi</button>
+                <button data-click="toggleAllSections" data-args='[false]' class="btn btn-outline-light"><i class="fas fa-angles-up me-2"></i>Riduci</button>
                 <a href="/web/dossiers" class="btn btn-outline-light"><i class="fas fa-folder-open me-2"></i>Dossier</a>
                 <a href="/web/documents?view=map" class="btn btn-outline-light"><i class="fas fa-map-location-dot me-2"></i>Mappa</a>
+                {% if can_admin(user) %}
                 <form method="post" action="/web/documents/rescan" class="d-inline">
+                    {{ csrf_input() }}
                     <button type="submit" class="btn btn-outline-warning"><i class="fas fa-rotate me-2"></i>Aggiorna</button>
                 </form>
-                <button onclick="exportNamed(this)" class="btn btn-outline-success"><i class="fas fa-file-export me-2"></i>Esporta con nomi</button>
+                {% endif %}
+                <button data-click="exportNamed" data-args='["@this"]' class="btn btn-outline-success"><i class="fas fa-file-export me-2"></i>Esporta con nomi</button>
                 <a href="/web/documents?view=files" class="btn btn-outline-light"><i class="fas fa-hard-drive me-2"></i>Sfoglia file</a>
-                <button onclick="window.print()" class="btn btn-outline-light"><i class="fas fa-print me-2"></i>Stampa</button>
+                <button data-click="sisterActions.print" class="btn btn-outline-light"><i class="fas fa-print me-2"></i>Stampa</button>
             </div>
         </div>
     </div>
@@ -74,7 +77,7 @@
     {{ related_pages("Collegamenti correlati", [
         ("/web/results", "Risultati", "Risalire dalla richiesta alla risposta salvata.", "fa-database"),
         ("/web/dossiers", "Dossier", "Esplorare i payload completi delle query.", "fa-folder-open"),
-        ("/web/forms", "Query Forms", "Inviare una nuova ricerca catastale.", "fa-clipboard-list"),
+        ("/web/forms", "Query", "Inviare una nuova ricerca catastale.", "fa-clipboard-list"),
         ("/web/glossary#formati-file", "Formati e tipi", "Capire le etichette e le coppie PDF, P7M e XML.", "fa-book")
     ]) }}
 </div>
@@ -82,8 +85,8 @@
 
 {% block extra_js %}
 {{ super() }}
-{{ doc_macros_js() }}
-<script>
+{{ doc_macros_js(csp_nonce) }}
+<script nonce="{{ csp_nonce }}">
 async function exportNamed(btn) {
     btn.disabled = true;
     const icon = btn.querySelector('i');

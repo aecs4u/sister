@@ -127,3 +127,134 @@
 .chip-plan  { background: #f8d7da; color: #58151c; border: 1px solid #f1aeb5; }
 .chip-eln   { background: #d2f4ea; color: #0a3622; border: 1px solid #a3cfbb; }
 .chip-other { background: #f8f9fa; color: #495057; border: 1px solid #dee2e6; }
+
+/* ═══ UI audit fixes (docs/ui_audit_2026-10-09.md) ═════════════════════════ */
+
+/* C2–C4 · Bootstrap's .bg-light / .bg-white do not flip in dark mode */
+[data-bs-theme="dark"] .bg-light:not(.badge),
+[data-bs-theme="dark"] .card-header.bg-light,
+[data-bs-theme="dark"] .card.bg-light { background-color: var(--bs-tertiary-bg) !important; color: var(--bs-body-color); }
+[data-bs-theme="dark"] .text-dark:not(.badge) { color: var(--bs-body-color) !important; }
+[data-bs-theme="dark"] .btn-close { filter: invert(1) grayscale(100%) brightness(200%); }
+
+/* C1 · Tabulator (tabulator_bootstrap5 hard-codes a light palette) */
+[data-bs-theme="dark"] .tabulator,
+[data-bs-theme="dark"] .tabulator .tabulator-header,
+[data-bs-theme="dark"] .tabulator .tabulator-header .tabulator-col,
+[data-bs-theme="dark"] .tabulator .tabulator-tableholder .tabulator-table,
+[data-bs-theme="dark"] .tabulator-row,
+[data-bs-theme="dark"] .tabulator-row .tabulator-cell,
+[data-bs-theme="dark"] .tabulator .tabulator-footer {
+    background-color: var(--bs-body-bg); color: var(--bs-body-color); border-color: var(--bs-border-color);
+}
+[data-bs-theme="dark"] .tabulator-row.tabulator-row-even,
+[data-bs-theme="dark"] .tabulator-row.tabulator-row-even .tabulator-cell { background-color: var(--bs-tertiary-bg); }
+[data-bs-theme="dark"] .tabulator .tabulator-header .tabulator-col .tabulator-header-filter input,
+[data-bs-theme="dark"] .tabulator .tabulator-header .tabulator-col .tabulator-header-filter select {
+    background-color: var(--bs-body-bg); color: var(--bs-body-color); border: 1px solid var(--bs-border-color);
+}
+[data-bs-theme="dark"] .tabulator-row:hover,
+[data-bs-theme="dark"] .tabulator-row:hover .tabulator-cell { background-color: rgba(var(--bs-primary-rgb, 13, 110, 253), .18); }
+.tabulator .tabulator-header .tabulator-col .tabulator-header-filter input,
+.tabulator .tabulator-header .tabulator-col .tabulator-header-filter select { min-width: 3.5rem; width: 100%; }
+.tabulator-row .tabulator-cell { white-space: nowrap; }
+#tabulator-results .tabulator-row { min-height: 0; }
+
+/* D1–D3 · hero toolbars and pill rows must wrap on narrow screens */
+.page-hero .d-flex { flex-wrap: wrap; }
+.page-hero .btn { white-space: nowrap; }
+.page-hero h1 { overflow-wrap: anywhere; }
+@media (max-width: 575.98px) { .page-hero .btn { flex: 1 1 auto; } }
+.status-pills { display: flex; flex-wrap: wrap; gap: .25rem; }
+
+/* D5 · header action buttons never wrap onto two lines */
+.navbar .btn, header .btn { white-space: nowrap; }
+
+/* F4 · the theme makes every .alert a flex row, which turns inline <a>/<strong>/<em> into separate columns.
+   SISTER alerts are "icon + running text": lay them out as normal flow unless they opt into d-flex. */
+.alert:not(.d-flex) { display: block; }
+.alert > .alert-text { flex: 1 1 auto; min-width: 0; }
+
+/* E2 · contrast: help text, outline pills and badges (WCAG AA) */
+.form-text, .sister-form .form-text { color: var(--bs-secondary-color) !important; }
+[data-bs-theme="light"] .btn-outline-warning { --bs-btn-color: #8a6500; --bs-btn-border-color: #b58100; --bs-btn-hover-color: #000; }
+[data-bs-theme="light"] .btn-outline-info { --bs-btn-color: #087990; --bs-btn-border-color: #0aa2c0; --bs-btn-hover-color: #000; }
+[data-bs-theme="light"] .btn-outline-success { --bs-btn-color: #146c43; }
+[data-bs-theme="light"] .btn-outline-danger { --bs-btn-color: #b02a37; }
+.badge.bg-success, .card-header.bg-success { background-color: #146c43 !important; color: #fff !important; }
+.badge.bg-primary, .card-header.bg-primary { background-color: #3451c7 !important; color: #fff !important; }
+.badge.bg-danger { background-color: #b02a37 !important; color: #fff !important; }
+.badge.bg-secondary, .card-header.bg-secondary { background-color: #565e64 !important; color: #fff !important; }
+.text-muted { color: var(--bs-secondary-color) !important; }
+.badge, .glossary .badge { font-size: .75rem; }
+
+/* E4 · bigger hit areas for compact controls and footer links */
+.form-check-input { width: 1.15rem; height: 1.15rem; }
+footer a { display: inline-block; padding: .2rem 0; min-height: 24px; }
+.tabulator-cell a { display: inline-block; padding: .15rem 0; }
+
+/* B2 · the theme's user menu links to pages SISTER does not have */
+.dropdown-item[href="/notifications"], .dropdown-item[href="/settings"] { display: none; }
+
+/* D2/D4 · long unbreakable titles must not stretch the grid (Dossiers) */
+.dossier-card, .dossier-card .card-body, .dossier-entry, .q-section-body .row > *, .q-sub-body .row > * { min-width: 0; }
+.dossier-title, .dossier-peer-title, .dossier-ident, .q-section-header, .q-sub-header { overflow-wrap: anywhere; word-break: break-word; }
+.dossier-card .d-flex > div { min-width: 0; }
+
+/* Long monospace filenames / italics inside alerts and accordion bodies (Documents detail, Glossary) */
+.accordion-body .font-monospace, .accordion-body .text-truncate { overflow-wrap: anywhere; min-width: 0; }
+.alert em, .alert code { overflow-wrap: anywhere; }
+.glossary .table-responsive, .gl-section table { max-width: 100%; }
+
+/* D5 · compact header on phones (logo, language, theme and user menu must fit in 375px) */
+@media (max-width: 575.98px) {
+    .navbar-actions { gap: .25rem !important; }
+    .navbar-actions .btn { padding-left: .4rem; padding-right: .4rem; }
+    .navbar-actions .language-selector .btn span:not([aria-hidden]),
+    .navbar-actions [aria-label^="Seleziona lingua"] span:not([aria-hidden]) { display: none; }
+    .user-menu-btn { padding-left: .25rem !important; padding-right: .25rem !important; }
+}
+
+/* Auth pages: no hamburger/"Sign In" chrome that points at the page you are already on */
+body.sidebar-hidden:has(#loginForm) .navbar-actions a[href^="/auth/login"],
+body.sidebar-hidden:has(#loginForm) #sidebarToggle { display: none; }
+
+/* F5 · Results grid: compact rows (cells hold a chip and a badge, not paragraphs) */
+#tabulator-results .tabulator-row .tabulator-cell { padding-top: .3rem; padding-bottom: .3rem; height: auto; }
+#tabulator-results .tabulator-row { min-height: 0; }
+/* F8 · tiles that are links keep the card look */
+a.feature-card:hover { border-color: var(--bs-primary); }
+
+/* E4 · links inside tables get a 24px-high hit area */
+.doc-table td a:not(.btn), .dossier-card a:not(.btn) { display: inline-block; padding: .2rem 0; min-height: 24px; }
+
+/* D7 · scroll cue for wide tables: edge shadows appear while there is more to scroll (see sister_a11y.js) */
+.scroll-hint-wrap { position: relative; }
+.scroll-hint-wrap::before, .scroll-hint-wrap::after {
+    content: ""; position: absolute; top: 0; bottom: 0; width: 18px; pointer-events: none; z-index: 2;
+    opacity: 0; transition: opacity .15s;
+}
+.scroll-hint-wrap::before { left: 0; background: linear-gradient(to right, rgba(0,0,0,.22), transparent); }
+.scroll-hint-wrap::after { right: 0; background: linear-gradient(to left, rgba(0,0,0,.22), transparent); }
+.scroll-hint-wrap.can-scroll-left::before, .scroll-hint-wrap.can-scroll-right::after { opacity: 1; }
+@media print { .scroll-hint-wrap::before, .scroll-hint-wrap::after { display: none; } }
+
+/* F1 · one header language. Reference pages (Documents, Dossiers, Browser Control, Guide, Cheat Sheet, Glossary, detail
+   pages) used a dark gradient banner while the data pages use a plain header; the banner now renders as the same plain
+   header (28px / 500 title, muted subtitle) in both themes. Specificity ([data-bs-theme] .page-hero) beats the per-page
+   gradient rules. */
+[data-bs-theme] .page-hero { background: none; color: var(--bs-body-color); padding: 1.5rem 0 0; margin-bottom: 1rem; }
+[data-bs-theme] .page-hero h1, [data-bs-theme] .page-hero .display-6 { font-size: 1.75rem; font-weight: 500; margin-bottom: .25rem; }
+[data-bs-theme] .page-hero .lead { font-size: 1rem; font-weight: 400; color: var(--bs-secondary-color); }
+[data-bs-theme] .page-hero .opacity-75 { opacity: 1 !important; }
+[data-bs-theme] .page-hero .breadcrumb-item.active, [data-bs-theme] .page-hero .text-white { color: var(--bs-secondary-color) !important; }
+[data-bs-theme] .page-hero .breadcrumb a, [data-bs-theme] .page-hero .text-white-50 { color: var(--bs-link-color) !important; }
+[data-bs-theme] .page-hero .breadcrumb-item + .breadcrumb-item::before { color: var(--bs-secondary-color); }
+[data-bs-theme] .page-hero .btn-outline-light {
+    --bs-btn-color: var(--bs-body-color); --bs-btn-border-color: var(--bs-border-color);
+    --bs-btn-hover-color: var(--bs-body-color); --bs-btn-hover-bg: var(--bs-tertiary-bg);
+    --bs-btn-hover-border-color: var(--bs-secondary-color);
+    --bs-btn-active-color: var(--bs-body-color); --bs-btn-active-bg: var(--bs-secondary-bg);
+}
+/* F1 · dark theme: the default link colour is too dark on the dark page for the small breadcrumb text (3.4:1) */
+[data-bs-theme="dark"] .page-hero .breadcrumb a, [data-bs-theme="dark"] .page-hero .text-white-50 { color: #9fb1ff !important; }

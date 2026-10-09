@@ -7,7 +7,7 @@
 
 {% block extra_css %}
 {{ super() }}
-<link rel="stylesheet" href="/static/css/pages/visura_soggetto_immobili.css">
+<link rel="stylesheet" href="/static/css/pages/visura_soggetto_immobili.css?v=20261009a">
 {% endblock %}
 
 {% block content %}
@@ -134,8 +134,8 @@ Dettaglio proprietà — <strong>{{ soggetto.immobili|length }}</strong> immobil
 
 {% block extra_js %}
 {{ super() }}
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
-<script>
+<script src="/static/vendor/chart.js-4.4.4/chart.umd.min.js"></script>
+<script nonce="{{ csp_nonce }}">
 (function () {
     {% if data.risultato.soggetti %}
     var immobili = {{ (data.risultato.soggetti[0].immobili) | tojson }};

@@ -3,8 +3,8 @@
 
 {% block extra_css %}
 {{ super() }}
-<link rel="stylesheet" href="/static/css/doc_sections.css">
-<link rel="stylesheet" href="/static/css/pages/documents_map.css">
+<link rel="stylesheet" href="/static/css/doc_sections.css?v=20261009a">
+<link rel="stylesheet" href="/static/css/pages/documents_map.css?v=20261009a">
 {% endblock %}
 
 {% macro _chip(d) %}
@@ -60,7 +60,7 @@
                 <form method="post" action="/web/documents/rescan" class="d-inline">
                     <button type="submit" class="btn btn-outline-warning no-print"><i class="fas fa-rotate me-2"></i>Aggiorna</button>
                 </form>
-                <button onclick="window.print()" class="btn btn-outline-light no-print"><i class="fas fa-print me-2"></i>Stampa</button>
+                <button data-click="sisterActions.print" class="btn btn-outline-light no-print"><i class="fas fa-print me-2"></i>Stampa</button>
             </div>
         </div>
     </div>
@@ -84,10 +84,10 @@
     </a>
     {% endif %}
     <div class="ms-auto d-flex gap-2 align-items-center">
-        <button class="btn btn-sm btn-outline-secondary" onclick="toggleAll(true)">
+        <button class="btn btn-sm btn-outline-secondary" data-click="toggleAll" data-args='[true]'>
             <i class="fas fa-expand me-1"></i>Espandi tutto
         </button>
-        <button class="btn btn-sm btn-outline-secondary" onclick="toggleAll(false)">
+        <button class="btn btn-sm btn-outline-secondary" data-click="toggleAll" data-args='[false]'>
             <i class="fas fa-compress me-1"></i>Comprimi tutto
         </button>
     </div>
@@ -249,7 +249,7 @@
 
 {% block extra_js %}
 {{ super() }}
-<script>
+<script nonce="{{ csp_nonce }}">
 // Sync chevron with Bootstrap collapse events
 document.querySelectorAll('[data-bs-toggle="collapse"]').forEach(function(trigger) {
     var target = document.querySelector(trigger.getAttribute('data-bs-target'));

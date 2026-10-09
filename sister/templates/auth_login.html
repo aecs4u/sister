@@ -1,0 +1,59 @@
+{% extends "auth_base.html" %}
+{% block auth_page_title %}Accesso — SISTER{% endblock %}
+{% block auth_title %}Accedi a SISTER{% endblock %}
+{% block auth_subtitle %}Servizio per l'estrazione di dati catastali{% endblock %}
+
+{% block auth_card %}
+<div class="card-modern auth-card">
+    <div class="card-body p-4">
+        {# method=post: without JavaScript the credentials still never end up in the URL #}
+        <form id="loginForm" method="post" action="/auth/login" novalidate>
+            <input type="hidden" name="next" value="{{ next_url }}">
+
+            <div class="mb-3">
+                <label for="username" class="form-label">Nome utente</label>
+                <input type="text" class="form-control" id="username" name="username" required autofocus
+                       autocomplete="username" autocapitalize="none" spellcheck="false" aria-describedby="loginError">
+            </div>
+
+            <div class="mb-3">
+                <label for="password" class="form-label">Password</label>
+                <div class="input-group">
+                    <input type="password" class="form-control" id="password" name="password" required
+                           autocomplete="current-password" aria-describedby="loginError">
+                    <button type="button" class="btn btn-outline-secondary" id="togglePassword"
+                            aria-controls="password" aria-pressed="false" aria-label="Mostra la password">
+                        <i class="fas fa-eye" aria-hidden="true"></i>
+                    </button>
+                </div>
+            </div>
+
+            <div id="loginError" class="alert alert-danger d-none" role="alert" tabindex="-1"></div>
+
+            <div class="d-grid mb-3">
+                <button type="submit" class="btn btn-primary" id="loginSubmit">
+                    <span class="btn-text">Accedi</span>
+                    <span class="btn-spinner d-none">
+                        <span class="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true"></span>Accesso in corso…
+                    </span>
+                </button>
+            </div>
+
+            <p class="text-center small mb-0">
+                <a href="/auth/forgot-password" class="text-decoration-none">Password dimenticata?</a>
+            </p>
+        </form>
+    </div>
+</div>
+{% endblock %}
+
+{% block auth_footer %}
+<div class="text-center mt-3 small text-body-secondary">
+    <a href="/web/privacy" class="text-decoration-none">Privacy</a> ·
+    <a href="/landing" class="text-decoration-none">Informazioni su SISTER</a>
+</div>
+{% endblock %}
+
+{% block auth_scripts %}
+<script src="/static/js/sister_login.js?v=20261009a" defer></script>
+{% endblock %}

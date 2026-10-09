@@ -1,35 +1,35 @@
 {% extends "_base.html" %}
-{% block page_title %}About{% endblock %}
+{% block page_title %}Informazioni{% endblock %}
 
 {% block content %}
 <div class="container py-5">
-    <h1 class="mb-4"><i class="fas fa-info-circle text-primary me-2"></i>About SISTER</h1>
+    <h1 class="mb-4"><i class="fas fa-info-circle text-primary me-2"></i>Informazioni su SISTER</h1>
 
     <div class="row">
         <div class="col-lg-8">
             <div class="card border-0 shadow-sm mb-4">
                 <div class="card-body">
-                    <h3>What is SISTER?</h3>
-                    <p>SISTER is an automated cadastral data extraction service that queries the Italian Land Registry
-                    (<strong>Agenzia delle Entrate — SISTER Portal</strong>) via browser automation.</p>
+                    <h2 class="h3">Che cos'è SISTER?</h2>
+                    <p>SISTER è un servizio di estrazione automatica di dati catastali che interroga il catasto italiano
+                    (<strong>Agenzia delle Entrate — portale SISTER</strong>) tramite automazione del browser.</p>
 
-                    <p>It provides:</p>
+                    <p>Offre:</p>
                     <ul>
-                        <li><strong>REST API</strong> — FastAPI-based HTTP endpoints for programmatic access</li>
-                        <li><strong>CLI</strong> — <code>sister</code> command-line tool with 16+ query types</li>
-                        <li><strong>Web UI</strong> — This dashboard for interactive queries and result browsing</li>
+                        <li><strong>API REST</strong> — endpoint HTTP basati su FastAPI per l'accesso programmatico</li>
+                        <li><strong>CLI</strong> — strumento da riga di comando <code>sister</code> con oltre 16 tipi di query</li>
+                        <li><strong>Interfaccia web</strong> — questa dashboard per le query interattive e la consultazione dei risultati</li>
                     </ul>
 
-                    <h4 class="mt-4">Available Search Types</h4>
+                    <h3 class="h4 mt-4">Tipi di ricerca disponibili</h3>
                     <div class="row g-2">
-                        <div class="col-md-6"><i class="fas fa-search text-primary me-2"></i>Property Search (Immobili)</div>
-                        <div class="col-md-6"><i class="fas fa-users text-primary me-2"></i>Owner Lookup (Intestati)</div>
-                        <div class="col-md-6"><i class="fas fa-user text-info me-2"></i>Person Search (Soggetto)</div>
-                        <div class="col-md-6"><i class="fas fa-building text-warning me-2"></i>Company Search (Azienda)</div>
-                        <div class="col-md-6"><i class="fas fa-list text-success me-2"></i>Property List (Elenco)</div>
-                        <div class="col-md-6"><i class="fas fa-map-marker-alt text-danger me-2"></i>Address Search</div>
-                        <div class="col-md-6"><i class="fas fa-hashtag text-secondary me-2"></i>Partita Search</div>
-                        <div class="col-md-6"><i class="fas fa-project-diagram text-dark me-2"></i>Automated Workflows</div>
+                        <div class="col-md-6"><i class="fas fa-search text-primary me-2"></i>Ricerca immobili</div>
+                        <div class="col-md-6"><i class="fas fa-users text-primary me-2"></i>Ricerca intestatari</div>
+                        <div class="col-md-6"><i class="fas fa-user text-info me-2"></i>Ricerca persona (Soggetto)</div>
+                        <div class="col-md-6"><i class="fas fa-building text-warning me-2"></i>Ricerca società (Azienda)</div>
+                        <div class="col-md-6"><i class="fas fa-list text-success me-2"></i>Elenco immobili</div>
+                        <div class="col-md-6"><i class="fas fa-map-marker-alt text-danger me-2"></i>Ricerca per indirizzo</div>
+                        <div class="col-md-6"><i class="fas fa-hashtag text-secondary me-2"></i>Ricerca partita</div>
+                        <div class="col-md-6"><i class="fas fa-project-diagram text-dark me-2"></i>Workflow automatici</div>
                     </div>
                 </div>
             </div>
@@ -38,25 +38,25 @@
         <div class="col-lg-4">
             <div class="card border-0 shadow-sm">
                 <div class="card-header bg-primary text-white">
-                    <h5 class="mb-0"><i class="fas fa-link me-2"></i>Links</h5>
+                    <h2 class="h5 mb-0"><i class="fas fa-link me-2"></i>Collegamenti</h2>
                 </div>
                 <div class="list-group list-group-flush">
                     <a href="/docs" class="list-group-item list-group-item-action" target="_blank">
-                        <i class="fas fa-book me-2"></i>API Documentation
+                        <i class="fas fa-book me-2"></i>Documentazione API
                     </a>
                     <a href="https://github.com/aecs4u/sister" class="list-group-item list-group-item-action" target="_blank">
-                        <i class="fab fa-github me-2"></i>GitHub Repository
+                        <i class="fab fa-github me-2"></i>Repository GitHub
                     </a>
                     <a href="https://aecs4u.com" class="list-group-item list-group-item-action" target="_blank">
-                        <i class="fas fa-globe me-2"></i>AECS4U Website
+                        <i class="fas fa-globe me-2"></i>Sito AECS4U
                     </a>
                 </div>
             </div>
 
             <div class="card border-0 shadow-sm mt-3">
                 <div class="card-body text-center">
-                    <p class="text-muted mb-2">Developed by</p>
-                    <h5>AECS4U Srl</h5>
+                    <p class="text-muted mb-2">Sviluppato da</p>
+                    <h2 class="h5">AECS4U Srl</h2>
                     <p class="text-muted small mb-0">info@aecs4u.com</p>
                 </div>
             </div>

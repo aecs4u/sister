@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import hashlib
 import json
 import sys
 from datetime import datetime
@@ -63,6 +64,14 @@ def _completed_at(run: dict[str, Any]) -> datetime | None:
     value = run.get("completed_at") or run.get("updated_at")
     if not value:
         return None
+
+
+def _file_hash_prefix(path: Path, length: int = 8) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()[:length]
     try:
         return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
     except ValueError:
@@ -81,11 +90,11 @@ async def import_extraction(document_id: int, structured_path: Path) -> int:
 
     run_path = structured_path.parents[1] / "runs" / run_id / "run.json"
     run = _read_json(run_path) if run_path.is_file() else {}
-    source_file = Path(str(data.get("source_file") or "")).name
-    if not source_file:
-        raise ValueError("Structured JSON does not contain source_file")
-
     schema_name = str(provenance.get("schema_name") or "ocular_structured")
+    source_file = Path(str(data.get("source_file") or "")).name
+    is_mortgage_inspection = schema_name == "ispezione_ipotecaria_schema" or (
+        "ispezione" in data and "nota" in data
+    )
     schema_metadata = provenance.get("schema_metadata") or {}
     schema_version = data.get("$schema_version") or schema_metadata.get("version")
     workflow_id = run.get("workflow_id") or run.get("mode")
@@ -109,11 +118,18 @@ async def import_extraction(document_id: int, structured_path: Path) -> int:
         )).scalar_one_or_none()
         if document is None:
             raise ValueError(f"Sister document {document_id} does not exist")
-        if Path(document.filename or "").name != source_file:
-            raise ValueError(
-                f"Ocular source file {source_file!r} does not match Sister document filename "
-                f"{document.filename!r}"
+        if source_file and Path(document.filename or "").name != source_file:
+            output_root_hash = structured_path.parents[1].name
+            content_hash_matches = (
+                document.file_path
+                and Path(document.file_path).is_file()
+                and output_root_hash == _file_hash_prefix(Path(document.file_path))
             )
+            if not content_hash_matches:
+                raise ValueError(
+                    f"Ocular source file {source_file!r} does not match Sister document filename "
+                    f"{document.filename!r} or its content hash"
+                )
 
         extraction = (await session.execute(
             select(StructuredDocumentExtraction).where(
@@ -160,30 +176,31 @@ async def import_extraction(document_id: int, structured_path: Path) -> int:
         await session.flush()
         extraction_id = extraction.id
 
-        session.add(MortgageInspection(
-            extraction_id=extraction_id,
-            inspection_date=_string(inspection_data.get("data")),
-            inspection_time=_string(inspection_data.get("ora")),
-            inspection_number=_string(inspection_data.get("numero")),
-            inspection_date_number=_string(inspection_data.get("data_numero")),
-            inspection_start=_string(inspection_data.get("inizio_ispezione")),
-            requester=_string(inspection_data.get("richiedente")),
-            tax_paid_euro=_integer(inspection_data.get("tassa_versata_euro")),
-            page_count=_integer(inspection_data.get("pagine")),
-            office=_string(office.get("ufficio_provinciale")),
-            service=_string(office.get("servizio")),
-            note_type=_string(note.get("tipo_nota")),
-            note_timestamp=_string(note.get("utc_timestamp")),
-            registro_generale=_integer(note.get("registro_generale")),
-            registro_particolare=_integer(note.get("registro_particolare")),
-            presentazione_numero=_integer(note.get("presentazione_numero")),
-            presentazione_data=_string(note.get("presentazione_data")),
-            section_a_other_data=_string(section_a.get("altri_dati")),
-            section_d_text=_string(section_d.get("testo")),
-            unit_count=_integer(summary.get("unita_negoziali")),
-            party_favore_count=_integer(summary.get("soggetti_a_favore")),
-            party_contro_count=_integer(summary.get("soggetti_contro")),
-        ))
+        if is_mortgage_inspection:
+            session.add(MortgageInspection(
+                extraction_id=extraction_id,
+                inspection_date=_string(inspection_data.get("data")),
+                inspection_time=_string(inspection_data.get("ora")),
+                inspection_number=_string(inspection_data.get("numero")),
+                inspection_date_number=_string(inspection_data.get("data_numero")),
+                inspection_start=_string(inspection_data.get("inizio_ispezione")),
+                requester=_string(inspection_data.get("richiedente")),
+                tax_paid_euro=_integer(inspection_data.get("tassa_versata_euro")),
+                page_count=_integer(inspection_data.get("pagine")),
+                office=_string(office.get("ufficio_provinciale")),
+                service=_string(office.get("servizio")),
+                note_type=_string(note.get("tipo_nota")),
+                note_timestamp=_string(note.get("utc_timestamp")),
+                registro_generale=_integer(note.get("registro_generale")),
+                registro_particolare=_integer(note.get("registro_particolare")),
+                presentazione_numero=_integer(note.get("presentazione_numero")),
+                presentazione_data=_string(note.get("presentazione_data")),
+                section_a_other_data=_string(section_a.get("altri_dati")),
+                section_d_text=_string(section_d.get("testo")),
+                unit_count=_integer(summary.get("unita_negoziali")),
+                party_favore_count=_integer(summary.get("soggetti_a_favore")),
+                party_contro_count=_integer(summary.get("soggetti_contro")),
+            ))
 
         if title_data:
             session.add(MortgageInspectionTitle(

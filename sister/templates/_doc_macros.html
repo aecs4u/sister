@@ -14,7 +14,7 @@
      file_chips(d, prefix)         — attachment chips (P7M/XML + PDF)
 
    Shared JS helper:
-     doc_macros_js()               — filter + CSV JS for .doc-table elements
+     doc_macros_js(csp_nonce)     — filter + CSV JS for .doc-table elements
 
    Import example:
    {% from "_doc_macros.html" import jump_chips,
@@ -58,7 +58,7 @@
    Usage:  {% call query_subsection(sg) %}...body...{% endcall %}
    ─────────────────────────────────────────────────────────────────────────── #}
 {% macro query_subsection(sg, expanded=True) %}
-<div class="q-sub" style="--q-color: var(--bs-{{ sg.color }})">
+<div class="q-sub" style="--q-color: var(--bs-{{ sg.color }}); --q-size: {{ 170 + (sg.count or 0) * 130 }}px">
     <button type="button" class="q-sub-header" data-bs-toggle="collapse"
             data-bs-target="#q-sub-{{ sg.key }}" aria-expanded="{{ 'true' if expanded else 'false' }}"
             aria-controls="q-sub-{{ sg.key }}">
@@ -80,9 +80,9 @@
 <div class="card border-0 shadow-sm dossier-card border-start border-3 border-{{ 'danger' if d.ok is sameas false else color }}">
     <div class="card-body pb-2">
         <div class="d-flex justify-content-between align-items-start gap-2">
-            <h3 class="h6 mb-0 dossier-title flex-grow-1" title="{{ d.title }}">
+            <h2 class="h6 mb-0 dossier-title flex-grow-1" title="{{ d.title }}">
                 <i class="fas fa-link text-{{ color }} me-1"></i>{{ d.title }}
-            </h3>
+            </h2>
             {% if d.ok is not none %}
             <span class="badge bg-{{ 'success' if d.ok else 'danger' }} flex-shrink-0">{{ 'OK' if d.ok else 'Errore' }}</span>
             {% endif %}
@@ -159,9 +159,9 @@
 <div class="card border-0 shadow-sm dossier-card border-start border-3 border-{{ 'danger' if d.ok is sameas false else color }}">
     <div class="card-body pb-2">
         <div class="d-flex justify-content-between align-items-start gap-2">
-            <h3 class="h6 mb-0 dossier-title flex-grow-1" title="{{ d.title }}">
+            <h2 class="h6 mb-0 dossier-title flex-grow-1" title="{{ d.title }}">
                 <i class="fas {{ 'fa-file-circle-xmark' if d.ok is sameas false else ('fa-file-circle-check' if d.ok is sameas true else 'fa-file-lines') }} text-{{ 'danger' if d.ok is sameas false else color }} me-1"></i>{{ d.title }}
-            </h3>
+            </h2>
             {% if d.ok is not none %}
             <span class="badge bg-{{ 'success' if d.ok else 'danger' }} flex-shrink-0">{{ 'OK' if d.ok else 'Errore' }}</span>
             {% endif %}
@@ -231,9 +231,11 @@
    (/web/documents or /web/dossiers). `show_location` toggles the Ubicazione
    column (hidden inside a property dossier where it is redundant).
    `is_soggetto` replaces Ubicazione/Dati Catastali/Catasto with CF/VAT columns. #}
+{% set _doc_table_seq = namespace(n=0) %}
 {% macro doc_table(table_id, docs, color, prefix='/web/documents', show_location=True, is_soggetto=False) %}
+{% set _doc_table_seq.n = _doc_table_seq.n + 1 %}
 <div class="table-responsive">
-    <table class="table table-hover table-sm mb-0 doc-table" id="doc-table-{{ table_id }}">
+    <table class="table table-hover table-sm mb-0 doc-table" id="doc-table-{{ table_id }}-{{ _doc_table_seq.n }}">
         <thead class="table-light">
             <tr>
                 <th>Oggetto</th>
@@ -327,8 +329,8 @@
 {% endmacro %}
 
 {# Shared filter + CSV-export JS for all .doc-table elements (call once per page). #}
-{% macro doc_macros_js() %}
-<script>
+{% macro doc_macros_js(nonce='') %}
+<script nonce="{{ nonce }}">
 function toggleAllSections(expand) {
     document.querySelectorAll('[id^="q-body-"], [id^="q-sub-"]').forEach(function(el) {
         var collapse = bootstrap.Collapse.getOrCreateInstance(el, {toggle: false});

@@ -2,8 +2,11 @@
 
 {% block title %}SISTER - {% block page_title %}{% endblock %}{% endblock %}
 
+{% block language_switcher %}{# the UI is authored in Italian: no switcher that would change nothing #}{% endblock %}
+
 {% block extra_css %}
-<link rel="stylesheet" href="/static/css/sister.css">
+<meta name="csrf-token" content="{{ csrf_token(request) }}">
+<link rel="stylesheet" href="/static/css/sister.css?v=20261009a">
 {% endblock %}
 
 {% block sidebar_content %}
@@ -11,7 +14,7 @@
     <button class="sidebar-group-header" type="button" aria-expanded="true">
         <span class="sidebar-group-label">
             <i class="fas fa-compass"></i>
-            Navigation
+            Navigazione
         </span>
         <i class="fas fa-chevron-down toggle-icon ms-auto"></i>
     </button>
@@ -25,39 +28,41 @@
         <div class="nav-item">
             <a class="nav-link{% if '/web/forms' in request.url.path %} active{% endif %}" href="/web/forms">
                 <i class="fas fa-clipboard-list"></i>
-                <span>Query Forms</span>
+                <span>Query</span>
             </a>
         </div>
         <div class="nav-item">
             <a class="nav-link{% if '/web/results' in request.url.path %} active{% endif %}" href="/web/results">
                 <i class="fas fa-database"></i>
-                <span>Results</span>
+                <span>Risultati</span>
             </a>
         </div>
         <div class="nav-item">
             <a class="nav-link{% if '/web/workflows' in request.url.path %} active{% endif %}" href="/web/workflows">
                 <i class="fas fa-diagram-project"></i>
-                <span>OpenData Workflows</span>
+                <span>Workflow OpenData</span>
             </a>
         </div>
         <div class="nav-item">
             <a class="nav-link{% if '/web/documents' in request.url.path %} active{% endif %}" href="/web/documents">
                 <i class="fas fa-file-alt"></i>
-                <span>Documents</span>
+                <span>Documenti</span>
             </a>
         </div>
         <div class="nav-item">
             <a class="nav-link{% if '/web/dossiers' in request.url.path %} active{% endif %}" href="/web/dossiers">
                 <i class="fas fa-folder-open"></i>
-                <span>Dossiers</span>
+                <span>Dossier</span>
             </a>
         </div>
+        {% if can_admin(user) %}
         <div class="nav-item">
             <a class="nav-link{% if '/web/browser' in request.url.path %} active{% endif %}" href="/web/browser">
-                <i class="fas fa-browser"></i>
+                <i class="fas fa-window-maximize"></i>
                 <span>Browser</span>
             </a>
         </div>
+        {% endif %}
     </div>
 </div>
 
@@ -67,7 +72,7 @@
     <button class="sidebar-group-header" type="button" aria-expanded="false">
         <span class="sidebar-group-label">
             <i class="fas fa-info-circle"></i>
-            Info
+            Informazioni
         </span>
         <i class="fas fa-chevron-down toggle-icon ms-auto"></i>
     </button>
@@ -93,13 +98,13 @@
         <div class="nav-item">
             <a class="nav-link{% if request.url.path == '/web/about' %} active{% endif %}" href="/web/about">
                 <i class="fas fa-building"></i>
-                <span>About</span>
+                <span>Informazioni</span>
             </a>
         </div>
         <div class="nav-item">
             <a class="nav-link" href="/docs" target="_blank">
                 <i class="fas fa-code"></i>
-                <span>API Docs</span>
+                <span>Documentazione API</span>
             </a>
         </div>
         <div class="nav-item">
@@ -114,10 +119,10 @@
 
 {% block footer_sections %}
 <div class="footer-section">
-    <h6 class="footer-title">SISTER</h6>
+    <h2 class="footer-title h6">SISTER</h2>
     <ul class="footer-links">
-        <li><a href="/web/about"><i class="fas fa-info-circle"></i>About</a></li>
-        <li><a href="/web/privacy"><i class="fas fa-shield-alt"></i>Privacy Policy</a></li>
+        <li><a href="/web/about"><i class="fas fa-info-circle"></i>Informazioni</a></li>
+        <li><a href="/web/privacy"><i class="fas fa-shield-alt"></i>Informativa privacy</a></li>
         <li><a href="/docs"><i class="fas fa-book"></i>API Documentation</a></li>
     </ul>
 </div>
@@ -125,5 +130,8 @@
 
 {% block extra_js %}
 <!-- SheetJS loaded on demand by sister_forms.js when XLSX file is dropped -->
-<script src="/static/js/sister_forms.js?v=20261006a" defer></script>
+<script src="/static/js/sister_csrf.js?v=20261009a" defer></script>
+<script src="/static/js/sister_actions.js?v=20261009a" defer></script>
+<script src="/static/js/sister_forms.js?v=20261009d" defer></script>
+<script src="/static/js/sister_a11y.js?v=20261009f" defer></script>
 {% endblock %}

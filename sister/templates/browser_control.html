@@ -6,12 +6,12 @@
 
 {% block extra_css %}
 {{ super() }}
-<link rel="stylesheet" href="/static/css/pages/browser_control.css">
+<link rel="stylesheet" href="/static/css/pages/browser_control.css?v=20261009a">
 {% endblock %}
 
 {% block content %}
 {# ── Hero ────────────────────────────────────────────────────────────────── #}
-{% call hero_section('Browser Control', 'fa-browser', '/web/', 'Dashboard',
+{% call hero_section('Browser Control', 'fa-window-maximize', '/web/', 'Dashboard',
                      breadcrumb_parent='Dashboard', breadcrumb_current='Browser Control') %}
 Gestisci la sessione Playwright / autenticazione SISTER
 {% endcall %}
@@ -74,29 +74,29 @@ Gestisci la sessione Playwright / autenticazione SISTER
             </div>
             <div class="card-body d-flex flex-column gap-3">
                 <div>
-                    <button id="btn-launch-chrome" class="btn btn-outline-primary w-100" onclick="launchChrome()">
+                    <button id="btn-launch-chrome" class="btn btn-outline-primary w-100" data-click="launchChrome">
                         <i class="fas fa-chrome me-2"></i>Lancia Chrome (CDP :9222)
                     </button>
                     <small class="text-muted">Avvia Google Chrome con <code>--remote-debugging-port=9222</code> se non è già in esecuzione.</small>
                 </div>
                 <div>
-                    <button id="btn-start" class="btn btn-success w-100" onclick="browserAction('start')">
+                    <button id="btn-start" class="btn btn-success w-100" data-click="browserAction" data-args='["start"]'>
                         <i class="fas fa-play me-2"></i>Avvia sessione
                     </button>
                     <small class="text-muted">Avvia autenticazione browser in background (idempotente).</small>
                 </div>
                 <div>
-                    <button id="btn-restart" class="btn btn-warning w-100" onclick="browserAction('restart')">
+                    <button id="btn-restart" class="btn btn-warning w-100" data-click="browserAction" data-args='["restart"]'>
                         <i class="fas fa-rotate-right me-2"></i>Riavvia sessione
                     </button>
                     <small class="text-muted">Chiude la sessione attuale e la riavvia. Utile dopo timeout MFA o scadenza sessione SISTER.</small>
                 </div>
                 <div>
                     <div class="input-group">
-                        <button id="btn-stop" class="btn btn-outline-danger flex-fill" onclick="browserAction('stop', false)">
+                        <button id="btn-stop" class="btn btn-outline-danger flex-fill" data-click="browserAction" data-args='["stop",false]'>
                             <i class="fas fa-stop me-2"></i>Ferma (drain coda)
                         </button>
-                        <button id="btn-stop-force" class="btn btn-danger" onclick="browserAction('stop', true)" title="Forza chiusura immediata">
+                        <button id="btn-stop-force" class="btn btn-danger" data-click="browserAction" data-args='["stop",true]' title="Forza chiusura immediata">
                             <i class="fas fa-bolt"></i> Force
                         </button>
                     </div>
@@ -114,7 +114,7 @@ Gestisci la sessione Playwright / autenticazione SISTER
             <div class="card-header d-flex align-items-center gap-2">
                 <i class="fas fa-terminal text-secondary"></i>
                 <strong>Log attività</strong>
-                <button class="btn btn-sm btn-outline-secondary ms-auto" onclick="document.getElementById('log-box').innerHTML=''">Svuota</button>
+                <button class="btn btn-sm btn-outline-secondary ms-auto" data-click="sisterActions.clear" data-args='["log-box"]'>Svuota</button>
             </div>
             <div class="card-body p-0">
                 <div class="log-box" id="log-box"></div>
@@ -126,7 +126,7 @@ Gestisci la sessione Playwright / autenticazione SISTER
 </div>{# /container #}
 <div class="container-fluid">
     {{ related_pages("Torna al lavoro", [
-        ("/web/forms", "Query Forms", "Invia una richiesta con la sessione attiva.", "fa-clipboard-list"),
+        ("/web/forms", "Query", "Invia una richiesta con la sessione attiva.", "fa-clipboard-list"),
         ("/web/results", "Risultati", "Segui lo stato e apri le risposte salvate.", "fa-database"),
         ("/web/guide", "Guida utente", "Consulta istruzioni e passaggi operativi.", "fa-book-open"),
         ("/web/cheatsheet", "Cheat sheet", "Rivedi rapidamente i dati da preparare.", "fa-bolt")
@@ -136,7 +136,7 @@ Gestisci la sessione Playwright / autenticazione SISTER
 
 {% block extra_js %}
 {{ super() }}
-<script>
+<script nonce="{{ csp_nonce }}">
 (function () {
     const STATE_COLORS = {
         ready:       { bg: 'success',   text: 'Pronto' },
@@ -214,6 +214,8 @@ Gestisci la sessione Playwright / autenticazione SISTER
     };
 
     window.browserAction = async function (action, force) {
+        if (action === 'stop' && force === true &&
+            !window.confirm('Forzare la chiusura del browser? Le richieste in corso andranno perse.')) return;
         const btns = ['btn-start','btn-restart','btn-stop','btn-stop-force'];
         btns.forEach(id => document.getElementById(id).disabled = true);
         const res = document.getElementById('action-result');

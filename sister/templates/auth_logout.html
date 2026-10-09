@@ -1,0 +1,24 @@
+{% extends "auth_base.html" %}
+{% block auth_page_title %}Esci — SISTER{% endblock %}
+{% block auth_title %}Vuoi uscire?{% endblock %}
+{% block auth_subtitle %}La sessione su questo browser verrà chiusa.{% endblock %}
+
+{% block auth_card %}
+<div class="card-modern auth-card">
+    <div class="card-body p-4 text-center">
+        <form id="logoutForm" method="post" action="/auth/logout">
+            <div id="logoutError" class="alert alert-danger d-none" role="alert" tabindex="-1"></div>
+            <div class="d-grid gap-2">
+                <button type="submit" class="btn btn-primary" id="logoutSubmit">Esci</button>
+                <a href="/web/" class="btn btn-outline-secondary">Annulla</a>
+            </div>
+        </form>
+    </div>
+</div>
+{% endblock %}
+
+{% block auth_footer %}{% endblock %}
+
+{% block auth_scripts %}
+<script src="/static/js/sister_login.js?v=20261009a" defer></script>
+{% endblock %}
