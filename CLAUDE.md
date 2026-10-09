@@ -92,6 +92,7 @@ uv run sister db init
   database rows is opt-in via `DB_RETENTION_SECONDS` (default 0 = never). (It used to reuse the cache TTL, which silently purged
   jobs/responses older than 6 h every minute.) After switching `DATABASE_DSN` to an empty database, rebuild jobs/responses from
   `outputs/` with the admin "Importa output" button on `/web/results`; it is idempotent.
+- Logins: `LOCAL_USERS_FILE` (in `.env`) points at `local_users.sister.txt` — hashed, mode 600, git-ignored (`local_users*.txt`). Regenerate or add users with `scripts/hash_local_password.py <user>`; plain entries still work but log a warning.
 - Static files: SISTER's own `/static` assets revalidate via ETag (no long cache); only versioned `aecs4u-theme` assets are immutable.
   Presentation formatting (dates, money, enum labels) lives in `sister/display.py` as Jinja filters.
 - UI audit and its fixes: `docs/ui_audit_2026-10-09.md` (§1b = what changed / what is left, mostly in the aecs4u-auth/theme packages).
