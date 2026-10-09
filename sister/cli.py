@@ -1625,6 +1625,31 @@ def db_status():
     command.current(cfg, verbose=True)
 
 
+@db_app.command("backfill")
+def db_backfill(
+    what: str = typer.Argument(
+        "all", help="projections (risultati -> immobili/intestati), xml (documenti -> tabelle tipizzate) o all"
+    ),
+    force: bool = typer.Option(False, "--force", help="Rielabora anche i documenti gia' popolati"),
+    limit: int = typer.Option(0, "--limit", help="Massimo di righe da elaborare (0 = tutte)"),
+):
+    """Riempie le tabelle strutturate dai dati gia' salvati (JSON delle risposte e XML dei documenti)."""
+    import asyncio
+
+    from . import database, xml_ingest
+
+    if what not in {"all", "projections", "xml"}:
+        raise typer.BadParameter("usa projections, xml o all")
+
+    async def _run():
+        if what in {"all", "projections"}:
+            console.print(f"Risposte: {await database.backfill_projections(limit=limit or None)}")
+        if what in {"all", "xml"}:
+            console.print(f"Documenti XML: {await xml_ingest.backfill_documents(force=force, limit=limit or None)}")
+
+    asyncio.run(_run())
+
+
 # -- entry point --------------------------------------------------------------
 
 

@@ -1,10 +1,12 @@
-// SISTER — "Person Search" (Persona Fisica) workflow
+// SISTER — "Person Search" (Persona Fisica) workflow, two phases
 // Render: dot -Tsvg person_search_workflow.dot -o person_search_workflow.svg
+// Code: phase 1 = run_soggetto_immobili (sister query soggetto-immobili --con-intestati)
+//       phase 2 = run_soggetto_documento / run_visura (CAPTCHA); data -> sister/xml_ingest.py
 digraph PersonSearch {
   rankdir=TB;
   fontname="Helvetica"; fontsize=12;
   labelloc="t";
-  label="SISTER — \"Person Search\" (Persona Fisica) workflow\nRule: at every table, repeat the request for EACH row, unless that row's data is already extracted";
+  label="SISTER — \"Person Search\" (Persona Fisica) workflow\nPhase 1 walks every HTML table first (no CAPTCHA) and stores it; phase 2 requests the documents (CAPTCHA) and parses the downloads\nRule: at every table, repeat the request for EACH row, unless that row's data is already extracted";
   node [fontname="Helvetica", fontsize=10];
   edge [fontname="Helvetica", fontsize=9];
 
@@ -22,70 +24,74 @@ digraph PersonSearch {
   }
 
   // ---- auth ----
-  start  [shape=ellipse, style=filled, fillcolor="#D2E3FC", label="Authenticated SISTER session\n(manual CIE/SPID via iampe login)"];
+  start  [shape=ellipse, style=filled, fillcolor="#D2E3FC", label="Authenticated SISTER session\n(manual CIE/SPID via iampe login; the service only attaches)"];
 
-  // ---- entry ----
-  scelta [shape=box, style="rounded,filled", fillcolor="#E8F0FE",
-          label="SceltaServizio.do\nselect Provincia / NAZIONALE\n(select[name=listacom]) → [Applica]"];
-  pf     [shape=box, style="filled", fillcolor="#FFF4E5", label="click left-menu link\n\"Persona fisica\""];
-  form   [shape=box, style="rounded,filled", fillcolor="#E8F0FE",
-          label="DataRichiesta.do — Ricerca persona fisica\n1) check CF radio  input[name=selDatiAna][value=CF_PF]\n2) fill  input[name=cod_fisc_pf]\n3) [Ricerca]"];
+  // ================= PHASE 1: HTML =================
+  subgraph cluster_p1 {
+    label="PHASE 1 — read all HTML pages (no CAPTCHA, nothing billed)"; style="rounded,filled"; fillcolor="#F1F8F4"; color="#34A853"; fontsize=11;
 
-  // ---- omonimi table ----
-  omon   [shape=box, style="filled", fillcolor="#FDE7E9",
-          label="RicercaPF.do — TABLE \"Elenco Omonimi\"\nCognome | Nome | Nascita | Luogo | Sesso | CF"];
-  omon_loop [shape=diamond, style="filled", fillcolor="#FFFDE7",
-          label="for each omonimo\n(unless extracted)"];
-  omon_pick [shape=box, style="filled", fillcolor="#FFF4E5", label="select row radio → [Ricerca]"];
+    scelta [shape=box, style="rounded,filled", fillcolor="#E8F0FE",
+            label="SceltaServizio.do\nselect Provincia / NAZIONALE\n(select[name=listacom]) → [Applica]"];
+    pf     [shape=box, style="filled", fillcolor="#FFF4E5", label="click left-menu link\n\"Persona fisica\""];
+    form   [shape=box, style="rounded,filled", fillcolor="#E8F0FE",
+            label="DataRichiesta.do — Ricerca persona fisica\n1) check CF radio  input[name=selDatiAna][value=CF_PF]\n2) fill  input[name=cod_fisc_pf]\n3) [Ricerca]"];
 
-  // ---- province table ----
-  prov   [shape=box, style="filled", fillcolor="#FDE7E9",
-          label="SceltaOmonimiPF.do — TABLE \"Elenco Province\"\nProvincia | Fabbricati | Terreni | Comuni"];
-  prov_loop [shape=diamond, style="filled", fillcolor="#FFFDE7",
-          label="for each provincia\n(unless extracted)"];
-  prov_pick [shape=box, style="filled", fillcolor="#FFF4E5", label="select row radio → [Immobili]"];
+    // ---- omonimi table ----
+    omon   [shape=box, style="filled", fillcolor="#FDE7E9",
+            label="RicercaPF.do — TABLE \"Elenco Omonimi\"\nCognome | Nome | Nascita | Luogo | Sesso | CF"];
+    omon_loop [shape=diamond, style="filled", fillcolor="#FFFDE7", label="for each omonimo\n(unless extracted)"];
+    omon_pick [shape=box, style="filled", fillcolor="#FFF4E5", label="select row radio → [Ricerca]"];
 
-  // ---- immobili table ----
-  imm    [shape=box, style="filled", fillcolor="#FDE7E9",
-          label="SceltaVisuraNazionalePF.do — TABLE \"Elenco immobili\"\nCatasto | Titolarità | Ubicazione | Foglio | Part. | Sub | Classamento | Rendita …"];
-  imm_loop [shape=diamond, style="filled", fillcolor="#FFFDE7",
-          label="for each immobile\n(unless extracted)"];
-  imm_pick [shape=box, style="filled", fillcolor="#FFF4E5", label="select row radio"];
-  imm_branch [shape=diamond, style="filled", fillcolor="#FFFDE7", label="which output?"];
+    // ---- province table ----
+    prov   [shape=box, style="filled", fillcolor="#FDE7E9",
+            label="SceltaOmonimiPF.do — TABLE \"Elenco Province\"\nProvincia | Fabbricati | Terreni | Comuni"];
+    prov_loop [shape=diamond, style="filled", fillcolor="#FFFDE7", label="for each provincia\n(unless extracted)"];
+    prov_pick [shape=box, style="filled", fillcolor="#FFF4E5", label="select row radio → [Immobili]"];
 
-  // ---- branch A: visura per immobile ----
-  optV   [shape=box, style="rounded,filled", fillcolor="#F3E5F5",
-          label="SceltaVisuraImmSoggPF.do — \"Tipo di visura\"\nset options: intestati(1/0) · tipoVisura(Completa/Storica) · tipoDocFornitura(PDF/XML)"];
+    // ---- immobili table ----
+    imm    [shape=box, style="filled", fillcolor="#FDE7E9",
+            label="SceltaVisuraNazionalePF.do — TABLE \"Elenco immobili\"\nCatasto | Titolarità | Ubicazione | Foglio | Part. | Sub | Classamento | Rendita …\nradio visImmSel → comune code (H199) · catasto · sub"];
+    imm_loop [shape=diamond, style="filled", fillcolor="#FFFDE7", label="for each immobile\n(unless extracted)"];
+    imm_pick [shape=box, style="filled", fillcolor="#FFF4E5", label="select row radio → [Intestati]"];
 
-  // ---- branch B: intestati table ----
-  intes  [shape=box, style="filled", fillcolor="#FDE7E9",
-          label="TABLE \"Elenco Intestati\"\nNominativo | Codice fiscale | Titolarità | Quota"];
-  intes_loop [shape=diamond, style="filled", fillcolor="#FFFDE7",
-          label="for each intestato\n(unless extracted)"];
-  intes_pick [shape=box, style="filled", fillcolor="#FFF4E5", label="select row radio → [Visura per Soggetto]"];
-  optS   [shape=box, style="rounded,filled", fillcolor="#F3E5F5",
-          label="SceltaIntestatiPF.do / TipoVisura.do — \"Visura soggetto\"\nset options: intestati · Sintetica/Analitica · PDF/XML"];
+    // ---- intestati table ----
+    intes  [shape=box, style="filled", fillcolor="#FDE7E9",
+            label="TABLE \"Elenco Intestati\"\nNominativo | Codice fiscale | Titolarità | Quota\n+ owner radios: sesso · luogo e data di nascita"];
+    back   [shape=box, style="filled", fillcolor="#ECEFF1", label="[Indietro]\nstep one level up the flow"];
+  }
 
-  // ---- shared CAPTCHA handling (human-in-the-loop) ----
-  cap_req  [shape=diamond, style="filled", fillcolor="#FFFDE7", label="CAPTCHA\nrequired?"];
-  cap_wait [shape=hexagon, style="filled", fillcolor="#FFCC80",
-            label="WAIT for user to enter\n\"Codice di sicurezza\"\n(input[name=inCaptchaChars])\n— pause until provided —"];
-  inoltra  [shape=box, style="filled", fillcolor="#FFF4E5", label="[Inoltra]"];
-  cap_ok   [shape=diamond, style="filled", fillcolor="#FFFDE7", label="CAPTCHA\naccepted?"];
+  store1 [shape=note, style="filled", fillcolor="#E6F4EA",
+          label="save_response → visura_results · visura_properties (RA/103 → section + sheet,\nUbicazione, Classamento split) · visura_owners (queried subject + each intestato)\ncadastral_subjects · ownership_rights — owners tied to their property by result_id"];
 
-  // ---- document ready + download + extract ----
-  ready  [shape=box, style="rounded,filled", fillcolor="#E8F0FE",
-          label="CheckRichiesta — \"Documento pronto\"\n(also kept 1 week under \"Richieste\")"];
-  salva  [shape=box, style="filled", fillcolor="#FFF4E5",
-          label="[Salva]  → download from\nConsultazioneRichieste.do"];
+  // ================= PHASE 2: documents =================
+  subgraph cluster_p2 {
+    label="PHASE 2 — document requests (the Tipo di visura form is the only place with a CAPTCHA)"; style="rounded,filled"; fillcolor="#FBF4FC"; color="#A142F4"; fontsize=11;
+
+    plan   [shape=diamond, style="filled", fillcolor="#FFFDE7",
+            label="for each immobile / each distinct intestato\n(skip codici fiscali already requested)"];
+    optV   [shape=box, style="rounded,filled", fillcolor="#F3E5F5",
+            label="SceltaVisuraImmSoggPF.do — \"Tipo di visura\" (per immobile)\nset options: intestati(1/0) · tipoVisura(Completa/Storica) · tipoDocFornitura(PDF/XML)"];
+    optS   [shape=box, style="rounded,filled", fillcolor="#F3E5F5",
+            label="SceltaIntestatiPF.do / TipoVisura.do — \"Visura soggetto\" (per intestato)\nset options: intestati · Sintetica/Analitica · PDF/XML"];
+    cap_req  [shape=diamond, style="filled", fillcolor="#FFFDE7", label="CAPTCHA\nrequired?"];
+    cap_wait [shape=hexagon, style="filled", fillcolor="#FFCC80",
+              label="WAIT for user to enter\n\"Codice di sicurezza\"\n(input[name=inCaptchaChars])\n— pause until provided —"];
+    inoltra  [shape=box, style="filled", fillcolor="#FFF4E5", label="[Inoltra]"];
+    cap_ok   [shape=diamond, style="filled", fillcolor="#FFFDE7", label="CAPTCHA\naccepted?"];
+    needs    [shape=box, style="rounded,filled", fillcolor="#FDE7E9",
+              label="nobody answered → needs_human\nphase-1 data kept; documents_pending\nlists the requests still to make"];
+    ready  [shape=box, style="rounded,filled", fillcolor="#E8F0FE",
+            label="CheckRichiesta — \"Documento pronto\"\n(also kept 1 week under \"Richieste\")"];
+    salva  [shape=box, style="filled", fillcolor="#FFF4E5",
+            label="[Salva]  → download from\nConsultazioneRichieste.do"];
+  }
+
   p7m    [shape=note, style="filled", fillcolor="#E6F4EA",
           label="DOC_<idRichiesta>.p7m\nDER PKCS#7 Signed Data (CAdES)\npayload = signed XML (Visure_SIT_ver1.0.xsd)"];
   xml    [shape=note, style="filled", fillcolor="#E6F4EA",
-          label="extract XML:\nopenssl cms -verify -noverify -inform DER\n→ <Visura> (Fabbricato | Soggetto)"];
-
-  // ---- back navigation ----
-  back   [shape=box, style="filled", fillcolor="#ECEFF1",
-          label="[Indietro]\nstep one level up the flow"];
+          label="extract XML (aecs4u-crypto) and parse it:\nVisuraFabbricati / VisuraTerreni (Attuale|Storica) · VisuraSoggettoAttuale"];
+  store2 [shape=note, style="filled", fillcolor="#E6F4EA",
+          label="visura_documents (linked to the response) · document_metadata header\ndocument_subjects · property_groups · building_units / building_* · land_*\nownership_mutations · property_owners (current + historical owners)\nbirth data and sex complete cadastral_subjects"];
 
   // ---- edges ----
   start -> scelta -> pf -> form -> omon;
@@ -98,34 +104,30 @@ digraph PersonSearch {
   prov_pick -> imm;
   imm -> imm_loop;
   imm_loop -> imm_pick [label="next row"];
-  imm_pick -> imm_branch;
+  imm_pick -> intes -> back;
+  back -> imm_loop [label="next immobile", constraint=false];
 
-  imm_branch -> optV   [label="Visura Per Immobile"];
-  imm_branch -> intes  [label="Intestati"];
+  imm_loop -> store1 [label="all rows read"];
+  store1 -> plan [label="richiedi_documenti"];
 
-  // branch B drilldown to soggetto option page
-  intes -> intes_loop;
-  intes_loop -> intes_pick [label="next row"];
-  intes_pick -> optS;
-
-  // shared CAPTCHA handling — both option pages converge here
+  plan -> optV [label="immobile"];
+  plan -> optS [label="intestato"];
   optV -> cap_req;
   optS -> cap_req;
   cap_req -> cap_wait  [label="yes"];
   cap_req -> inoltra   [label="no"];
   cap_wait -> inoltra  [label="user submitted code"];
+  cap_wait -> needs    [label="timeout", style=dashed, color="#C62828", fontcolor="#C62828"];
   inoltra -> cap_ok;
   cap_ok -> ready      [label="yes"];
   cap_ok -> cap_wait   [label="no — new image,\nwait again", color="#C62828", fontcolor="#C62828"];
+  ready -> plan        [label="next request", constraint=false];
 
   // document path
-  ready -> salva -> p7m -> xml;
+  ready -> salva -> p7m -> xml -> store2;
 
   // back navigation (dashed)
   edge [style=dashed, color="gray50"];
   imm   -> prov   [label="Indietro", constraint=false];
   prov  -> omon   [label="Indietro", constraint=false];
-  intes -> imm    [label="Immobili / Indietro", constraint=false];
-  ready -> imm    [label="Indietro", constraint=false];
-  xml   -> imm_loop [label="loop: next immobile\n(unless extracted)", constraint=false];
 }

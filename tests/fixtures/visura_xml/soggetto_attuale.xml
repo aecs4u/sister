@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Visura xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="Visure_SIT_ver1.0.xsd">
+  <VisuraSoggettoAttuale>
+    <TitoloVisura Titolo="VISURA PER SOGGETTO" SituazioneAl="20261006" TipoVisura="ATTUALE" TipoServizio="Visura" Data="20261006" Ora="11:00:00" Provenienza="SISTER"/>
+    <DatiRichiesta Provincia="ROMA" Comune="ROMA" CodiceComune="H501" TipoCatasto="E" Protocollo="T3" Anno="2026">
+      <SoggettoIndividuato><SoggettoPF CodiceFiscale="RSSMRA70A01H501Z" Cognome="ROSSI" Nome="MARIO" Sesso="M" DataNascita="01/01/1970" Provincia="RM" ComuneNascita="ROMA" CodiceComune="H501"/></SoggettoIndividuato>
+    </DatiRichiesta>
+    <GruppoUnitaImmobiliari IndiceGruppo="1" TipoCatasto="F" CodiceComune="H199" Descrizione="RAVENNA (RA)">
+      <ImmobileFabbricatiS IndiceImmobile="1">
+        <DatiIdentificativi><IdentificativoDefinitivo Provincia="RAVENNA" Comune="RAVENNA" CodiceComune="H199" Foglio="103" ParticellaNum="1714" Subalterno="2" SezUrbana="RA" ProgrId="9"/></DatiIdentificativi>
+        <DatiIndirizzo><IndirizzoImm>VIA EL ALAMEIN n. 2</IndirizzoImm></DatiIndirizzo>
+        <DatiClassamentoF Categoria="A/4" Classe="04" RenditaEuro="557.77" ZonaCensuaria="1"><Consistenza Unita="vani" Valore="6.0"/></DatiClassamentoF>
+        <SuperficieF Totale="120" TotaleE="110"><Planimetria Descrizione="PRESENTE"/></SuperficieF>
+      </ImmobileFabbricatiS>
+      <ImmobileFabbricatiS IndiceImmobile="2">
+        <DatiIdentificativi><IdentificativoDefinitivo Provincia="RAVENNA" Comune="RAVENNA" CodiceComune="H199" Foglio="103" ParticellaNum="1714" Subalterno="3" SezUrbana="RA" ProgrId="10"/></DatiIdentificativi>
+        <DatiClassamentoF Categoria="C/6" Classe="02" RenditaEuro="40.00" ZonaCensuaria="1"><Consistenza Unita="mq" Valore="15"/></DatiClassamentoF>
+      </ImmobileFabbricatiS>
+      <IntestazioneGruppo>
+        <MutazioneSoggettiva IndiceMutazione="1">
+          <DatiDerivantiDaMutazSogg>COMPRAVENDITA del 01/01/2010</DatiDerivantiDaMutazSogg>
+          <Intestazione>
+            <Intestato IndiceIntestato="1"><Nominativo>ROSSI MARIO</Nominativo><CF>RSSMRA70A01H501Z</CF>
+              <DirittiReali CodiceDiritto="1" Descrizione="Proprieta'" Quota="1/2"/></Intestato>
+          </Intestazione>
+        </MutazioneSoggettiva>
+      </IntestazioneGruppo>
+    </GruppoUnitaImmobiliari>
+    <GruppoUnitaImmobiliari IndiceGruppo="2" TipoCatasto="T" CodiceComune="G273" Descrizione="PALERMO (PA)">
+      <ImmobileTerreniS IndiceImmobile="1">
+        <DatiIdentificativi><IdentificativoDefinitivo Provincia="PALERMO" Comune="PALERMO" CodiceComune="G273" Foglio="25" ParticellaNum="266" SezCensuaria="" ProgrId="2"/></DatiIdentificativi>
+        <DatiClassamentoT><ClassamentoT Classe="3" Qualita="ULIVETO" SuperficieMQ="800" RedditoDominicaleEuro="5.00" RedditoAgrarioEuro="4.00"/></DatiClassamentoT>
+      </ImmobileTerreniS>
+    </GruppoUnitaImmobiliari>
+    <DatiLiquidazione Anno="2026" Protocollo="T3" UnitaImmobiliari="3"/>
+    <Richiedente Descrizione="STUDIO ROSSI"/>
+  </VisuraSoggettoAttuale>
+</Visura>

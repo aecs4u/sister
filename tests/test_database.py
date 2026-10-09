@@ -1,10 +1,10 @@
-"""Tests for the SQLite database layer (database.py).
+"""Tests for the database layer (database.py).
 
-Uses a temporary SQLite file for isolation (in-memory won't work because
-init_db() calls os.makedirs on the parent directory).
+Run against an isolated throwaway PostgreSQL schema (see ``tests/pg_isolation.py``); skipped without a local PostgreSQL.
 """
 
 import pytest
+from sqlalchemy import text
 
 import sister.database as database
 
@@ -14,19 +14,15 @@ import sister.database as database
 
 
 @pytest.fixture(autouse=True)
-async def _fresh_db(tmp_path, monkeypatch):
-    """Point the database module at a fresh temp file for each test."""
-    db_path = str(tmp_path / "test_sister.sqlite")
-    monkeypatch.setattr(database, "DB_PATH", db_path)
-    monkeypatch.setattr(database, "OUTPUTS_DIR", str(tmp_path / "outputs"))
-    # Reset the cached engine so it picks up the new path
-    database._engine = None
+async def _fresh_db(fresh_db):
+    """Every test starts on empty tables of the throwaway schema."""
     await database.init_db()
-    yield
-    # Clean up engine after test
-    if database._engine:
-        await database._engine.dispose()
-        database._engine = None
+
+
+async def _rows(sql: str, **params) -> list[dict]:
+    async with database._get_session_factory()() as session:
+        result = await session.execute(text(sql), params)
+        return [dict(row._mapping) for row in result]
 
 
 # ---------------------------------------------------------------------------
@@ -36,11 +32,7 @@ async def _fresh_db(tmp_path, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_init_db_creates_tables():
-    import aiosqlite
-
-    async with aiosqlite.connect(database.DB_PATH) as db:
-        cursor = await db.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
-        tables = [row[0] for row in await cursor.fetchall()]
+    tables = [r["tablename"] for r in await _rows("SELECT tablename FROM pg_tables WHERE schemaname = current_schema()")]
 
     assert "cadastral_locations" in tables
     assert "visura_requests" in tables
@@ -66,20 +58,13 @@ async def test_save_request_persists_row():
         particella="166",
     )
 
-    import aiosqlite
-
-    db = await aiosqlite.connect(database.DB_PATH)
-    db.row_factory = aiosqlite.Row
-    try:
-        cursor = await db.execute(
-            "SELECT req.request_id, loc.province AS provincia, loc.cadastre_type AS tipo_catasto"
-            " FROM visura_requests req LEFT JOIN cadastral_locations loc ON req.location_id = loc.id"
-            " WHERE req.request_id = ?",
-            ("req_T_abc",),
-        )
-        row = await cursor.fetchone()
-    finally:
-        await db.close()
+    rows = await _rows(
+        "SELECT req.request_id, loc.province AS provincia, loc.cadastre_type AS tipo_catasto"
+        " FROM visura_requests req LEFT JOIN cadastral_locations loc ON req.location_id = loc.id"
+        " WHERE req.request_id = :rid",
+        rid="req_T_abc",
+    )
+    row = rows[0] if rows else None
 
     assert row is not None
     assert row["provincia"] == "Trieste"
@@ -100,20 +85,13 @@ async def test_save_request_with_optional_fields():
         subalterno="3",
     )
 
-    import aiosqlite
-
-    db = await aiosqlite.connect(database.DB_PATH)
-    db.row_factory = aiosqlite.Row
-    try:
-        cursor = await db.execute(
-            "SELECT loc.section AS sezione, loc.subunit AS subalterno"
-            " FROM visura_requests req LEFT JOIN cadastral_locations loc ON req.location_id = loc.id"
-            " WHERE req.request_id = ?",
-            ("req_F_opt",),
-        )
-        row = await cursor.fetchone()
-    finally:
-        await db.close()
+    rows = await _rows(
+        "SELECT loc.section AS sezione, loc.subunit AS subalterno"
+        " FROM visura_requests req LEFT JOIN cadastral_locations loc ON req.location_id = loc.id"
+        " WHERE req.request_id = :rid",
+        rid="req_F_opt",
+    )
+    row = rows[0]
 
     assert row["sezione"] == "A"
     assert row["subalterno"] == "3"
@@ -135,15 +113,7 @@ async def test_save_requests_batch_persists_all():
     ]
     await database.save_requests_batch(rows)
 
-    import aiosqlite
-
-    db = await aiosqlite.connect(database.DB_PATH)
-    db.row_factory = aiosqlite.Row
-    try:
-        cursor = await db.execute("SELECT COUNT(*) FROM visura_requests")
-        count = (await cursor.fetchone())[0]
-    finally:
-        await db.close()
+    count = (await _rows("SELECT COUNT(*) AS n FROM visura_requests"))[0]["n"]
 
     assert count == 5
 
@@ -152,15 +122,7 @@ async def test_save_requests_batch_persists_all():
 async def test_save_requests_batch_empty_is_noop():
     await database.save_requests_batch([])
 
-    import aiosqlite
-
-    db = await aiosqlite.connect(database.DB_PATH)
-    db.row_factory = aiosqlite.Row
-    try:
-        cursor = await db.execute("SELECT COUNT(*) FROM visura_requests")
-        count = (await cursor.fetchone())[0]
-    finally:
-        await db.close()
+    count = (await _rows("SELECT COUNT(*) AS n FROM visura_requests"))[0]["n"]
 
     assert count == 0
 

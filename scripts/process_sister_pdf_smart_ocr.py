@@ -179,6 +179,7 @@ async def run_batch(output_root: Path, workers: int) -> int:
             config,
             api_key=openrouter_key,
             base_url="https://openrouter.ai/api/v1",
+            structure_max_tokens=max(config.structure_max_tokens, 16000),
         )
 
     DeepInfraConfig.from_mapping = classmethod(_openrouter_config)  # type: ignore[method-assign]

@@ -8,6 +8,8 @@ import types
 
 import pytest
 
+from .pg_isolation import fresh_db, pg_test_schema  # noqa: F401  (isolated PostgreSQL schema for DB tests)
+
 # The web routes fail closed (see sister.web._require_auth). Tests that exercise them without a login opt into the
 # documented dev switch explicitly instead of depending on whatever the developer's .env says; tests that check the
 # enforcement itself (tests/test_web_auth.py) override it per test. Must be set before ``sister.main`` is imported.

@@ -14,6 +14,22 @@ def test_parse_table_pads_short_rows_to_header_count():
     assert utils.parse_table(html) == [{"Foglio": "9", "Particella": "166", "Sub": ""}]
 
 
+def test_parse_table_keeps_the_radio_value_and_drops_the_blank_radio_column():
+    html = """
+    <table>
+      <tr><th></th><th>Foglio</th><th>Particella</th></tr>
+      <tr><td><input type="radio" name="visImmSel" value="634568#634568#F#RA/103#1714#H199##2# #RAVENNA"></td>
+          <td>RA/103</td><td>1714</td></tr>
+      <tr><td><input type="radio" property="visImmSel" value="x#x#T#1#2#G273###"></td><td>1</td><td>2</td></tr>
+    </table>
+    """
+
+    rows = utils.parse_table(html)
+
+    assert rows[0] == {"Foglio": "RA/103", "Particella": "1714", "visImmSel": "634568#634568#F#RA/103#1714#H199##2# #RAVENNA"}
+    assert rows[1]["visImmSel"] == "x#x#T#1#2#G273###" and "" not in rows[1]
+
+
 def test_parse_richieste_table_extracts_save_link_and_request_id():
     html = """
     <table>
@@ -102,3 +118,37 @@ def test_unique_document_stem_handles_pdf_and_xml_collisions(tmp_path):
     )
 
     assert stem == "vi_att_ROMA_123_2024_2"
+
+
+def _step(index, *cfs):
+    return {"result_index": index, "intestati": [{"Codice fiscale": cf} for cf in cfs]}
+
+
+def test_soggetto_plan_requests_each_owner_once_per_run():
+    steps = [_step(1, "AAA", "BBB"), _step(2, "AAA"), _step(3, "BBB", "CCC"), _step(4), _step(5, "DDD")]
+
+    plan = utils._plan_soggetto_requests(steps, bene_comune_indices={3})
+
+    # 1 -> AAA, 2 -> only AAA (already requested), 3 -> BBB (CCC is not needed), 4 bene comune, 5 -> DDD
+    assert plan == {1: 0, 2: None, 3: 0, 4: None, 5: 0}
+    assert steps[1]["documents"] == {"soggetto": "duplicate"}
+
+
+def test_soggetto_plan_does_not_merge_owners_without_codice_fiscale():
+    steps = [_step(1, ""), _step(2, "")]
+
+    assert utils._plan_soggetto_requests(steps, set()) == {1: 0, 2: 0}
+
+
+def test_pending_documents_lists_only_what_was_not_requested():
+    steps = [
+        {"result_index": 1, "documents": {"immobile": "requested", "soggetto": "requested"}},
+        {"result_index": 2, "documents": {"immobile": "requested", "soggetto": "pending"}},
+        {"result_index": 3, "documents": {"immobile": "pending", "soggetto": "duplicate"}},
+        {"result_index": 4},
+    ]
+
+    assert utils._pending_documents(steps) == [
+        {"result_index": 2, "kind": "soggetto"},
+        {"result_index": 3, "kind": "immobile"},
+    ]

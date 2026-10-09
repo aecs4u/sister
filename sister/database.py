@@ -10,6 +10,8 @@ import hashlib
 import json
 import logging
 import os
+from dataclasses import dataclass
+from dataclasses import field as dc_field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Optional
@@ -22,8 +24,6 @@ from sqlalchemy.orm import sessionmaker
 from sqlmodel import select
 
 from .db_models import (
-    OWNER_RIGHT_FIELD_MAP,
-    OWNER_SUBJECT_FIELD_MAP,
     PROPERTY_FIELD_MAP,
     PROPERTY_LOCATION_FIELD_MAP,
     PROPERTY_SUBJECT_FIELD_MAP,
@@ -48,6 +48,17 @@ from .db_models import (
     VisuraRequest,
     VisuraResponse,
     VisuraResult,
+)
+
+from .result_parsers import (
+    clean_amount,
+    identifier_kind,
+    land_area_m2,
+    normalize_owner,
+    parse_classamento,
+    parse_ubicazione,
+    parse_vis_imm_sel,
+    split_foglio,
 )
 
 logger = logging.getLogger("sister")
@@ -268,6 +279,21 @@ async def get_or_create_subject(
         result = await session.execute(select(CadastralSubject).where(CadastralSubject.fiscal_code == fiscal_code))
         existing = result.scalar_one_or_none()
         if existing is not None:
+            # a later, richer source (birth data from the Intestati page or the XML) completes a bare subject
+            known = {
+                "display_name": display_name,
+                "last_name": last_name,
+                "first_name": first_name,
+                "gender": gender,
+                "date_of_birth": date_of_birth,
+                "birth_place_id": birth_place_id,
+                "birth_municipality_code": birth_municipality_code,
+                "subject_type": subject_type,
+            }
+            for name, value in known.items():
+                if value and not getattr(existing, name):
+                    setattr(existing, name, value)
+            await session.flush()
             return existing.id
     subj = CadastralSubject(
         fiscal_code=fiscal_code,
@@ -403,6 +429,72 @@ async def save_requests_batch(requests: list[dict]) -> None:
 # ---------------------------------------------------------------------------
 
 
+_CATASTO_TYPE = {"F": "building", "T": "land", "E": "entity"}
+
+
+def _property_row(
+    response_id: str, tipo_catasto: str, item: dict
+) -> tuple[dict[str, Any], dict[str, str], dict[str, Any]]:
+    """One listed immobile → (property fields, location fields, subject fields).
+
+    Besides the plain column mapping this splits the composite cells of the portal lists: ``RA/103`` is sezione +
+    foglio, ``Ubicazione`` is comune + provincia + indirizzo, ``Classamento`` is zona + categoria, the money cells
+    lose their ``R.Euro:`` prefix, and the radio value (``visImmSel``) supplies the comune/sub the table omits.
+    """
+    prop_fields: dict[str, Any] = {
+        "response_id": response_id,
+        "property_type": _CATASTO_TYPE.get(tipo_catasto),
+    }
+    loc_fields: dict[str, str] = {
+        "cadastre_type": tipo_catasto,
+        "province": "",
+        "municipality": "",
+        "sheet": "",
+        "parcel": "",
+        "subunit": "",
+        "section": "",
+    }
+    subject_fields: dict[str, Any] = {}
+    for html_key, db_col in PROPERTY_FIELD_MAP.items():
+        if html_key in item:
+            prop_fields[db_col] = str(item[html_key]).strip() or None
+    for html_key, loc_col in PROPERTY_LOCATION_FIELD_MAP.items():
+        if html_key in item:
+            loc_fields[loc_col] = str(item[html_key]).strip()
+    for html_key, subject_col in PROPERTY_SUBJECT_FIELD_MAP.items():
+        if html_key in item:
+            subject_fields[subject_col] = str(item[html_key]).strip() or None
+
+    if "Foglio" in item:
+        section, loc_fields["sheet"] = split_foglio(item["Foglio"])
+        loc_fields["section"] = loc_fields["section"] or section
+    for column_name in ("income", "dominical_income", "agricultural_income"):
+        if column_name in prop_fields:
+            prop_fields[column_name] = clean_amount(prop_fields[column_name])
+    area = land_area_m2(item)
+    if area is not None:
+        prop_fields["area"] = str(area)
+    if item.get("Ubicazione"):
+        place = parse_ubicazione(item["Ubicazione"])
+        prop_fields.setdefault("address", place.get("address") or None)
+        loc_fields["municipality"] = loc_fields["municipality"] or place.get("municipality", "")
+    if item.get("Classamento"):
+        for column_name, value in parse_classamento(item["Classamento"]).items():
+            prop_fields.setdefault(column_name, value)
+    radio = parse_vis_imm_sel(item.get("visImmSel"))
+    # the row knows its own catasto: a response covering both (tipo E, workflows) mixes fabbricati and terreni
+    row_catasto = next(
+        (c for c in (item.get("_tipo_catasto"), item.get("Catasto"), radio.get("catasto")) if c in {"F", "T"}), None
+    )
+    if row_catasto:
+        loc_fields["cadastre_type"] = row_catasto
+        prop_fields["property_type"] = _CATASTO_TYPE[row_catasto]
+    for loc_col in ("section", "subunit", "municipality"):
+        loc_fields[loc_col] = loc_fields[loc_col] or radio.get(loc_col, "")
+    loc_fields["province"] = loc_fields["province"] or str(item.get("provincia_nome") or "").strip()
+    return prop_fields, loc_fields, subject_fields
+
+
 def _parse_property_rows(
     response_id: str, tipo_catasto: str, data: Optional[dict]
 ) -> list[tuple[dict[str, Any], dict[str, str], dict[str, Any]]]:
@@ -413,56 +505,108 @@ def _parse_property_rows(
     """
     if not data or not isinstance(data, dict):
         return []
-    _CATASTO_TYPE = {"F": "building", "T": "land", "E": "entity"}
-    rows = []
-    for item in data.get("immobili", []):
+    return [
+        _property_row(response_id, tipo_catasto, item) for item in data.get("immobili", []) if isinstance(item, dict)
+    ]
+
+
+def _owner_pairs(rows: Any) -> list[tuple[dict[str, Any], dict[str, Any]]]:
+    """Normalise a list of raw owners (Intestati rows, decoded radios, XML Intestato) to (subject, right) pairs."""
+    pairs = []
+    seen = set()
+    for item in rows if isinstance(rows, list) else []:
         if not isinstance(item, dict):
             continue
-        prop_fields: dict[str, Any] = {
-            "response_id": response_id,
-            "property_type": _CATASTO_TYPE.get(tipo_catasto),
-        }
-        loc_fields: dict[str, str] = {
-            "cadastre_type": tipo_catasto,
-            "province": "",
-            "municipality": "",
-            "sheet": "",
-            "parcel": "",
-            "subunit": "",
-            "section": "",
-        }
-        subject_fields: dict[str, Any] = {}
-        for html_key, db_col in PROPERTY_FIELD_MAP.items():
-            if html_key in item:
-                prop_fields[db_col] = str(item[html_key]).strip() or None
-        for html_key, loc_col in PROPERTY_LOCATION_FIELD_MAP.items():
-            if html_key in item:
-                loc_fields[loc_col] = str(item[html_key]).strip()
-        for html_key, subject_col in PROPERTY_SUBJECT_FIELD_MAP.items():
-            if html_key in item:
-                subject_fields[subject_col] = str(item[html_key]).strip() or None
-        rows.append((prop_fields, loc_fields, subject_fields))
-    return rows
+        subject_fields, right_fields = normalize_owner(item)
+        key = (
+            subject_fields.get("fiscal_code") or subject_fields.get("display_name"),
+            right_fields.get("right_type"),
+            right_fields.get("ownership_share"),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        pairs.append((subject_fields, right_fields))
+    return pairs
 
 
 def _parse_owners(response_id: str, data: Optional[dict]) -> list[tuple[dict[str, Any], dict[str, Any]]]:
-    """Parse owners from response JSON into (subject_fields, right_fields) pairs."""
+    """Parse the top-level owners of a response JSON into (subject_fields, right_fields) pairs."""
     if not data or not isinstance(data, dict):
         return []
-    rows = []
-    for item in data.get("intestati", []):
+    return _owner_pairs(data.get("intestati"))
+
+
+@dataclass
+class ProjectedProperty:
+    """A listed immobile with the owners found for it (``result_index`` ties them to one ``visura_results`` row)."""
+
+    index: int  # 1-based position in the response's ``immobili`` list
+    prop: dict[str, Any]
+    location: dict[str, str]
+    subject: dict[str, Any]
+    owners: list[tuple[dict[str, Any], dict[str, Any]]] = dc_field(default_factory=list)
+    result_index: Optional[int] = None
+    visura_present: bool = False
+
+
+def _subject_query_owner(data: dict, item: dict) -> Optional[dict[str, Any]]:
+    """The queried person/company as owner of a row of its own property list (rows carry ``Titolarità``)."""
+    identifier = str(data.get("soggetto") or "").strip().upper()
+    if not identifier_kind(identifier) or not item.get("Titolarità"):
+        return None
+    return {"codice_fiscale": identifier, "Titolarità": item["Titolarità"]}
+
+
+def _project_response(
+    response_id: str, tipo_catasto: str, data: Optional[dict]
+) -> tuple[list[ProjectedProperty], list[tuple[dict[str, Any], dict[str, Any]]], list[dict[str, Any]]]:
+    """Group a response's properties, owners and result rows so owners stay linked to *their* property.
+
+    Where the owners of a property come from, in order: the per-property ``results[].intestati`` (visura flow), the
+    ``intestati`` nested in the row (owner → immobili with owners), the queried subject itself when the row lists its
+    ``Titolarità``. Top-level ``intestati`` of a response without per-property data belong to its only property, or
+    stay unlinked when there are several. Returns (properties, unlinked owners, visura_results rows).
+    """
+    if not isinstance(data, dict):
+        return [], [], []
+    results = _parse_response_results(data)
+    result_items = {
+        row["result_index"]: item
+        for row, item in zip(results, [r for r in data.get("results", []) if isinstance(r, dict)])
+    }
+    properties: list[ProjectedProperty] = []
+    for position, item in enumerate(data.get("immobili", []), start=1):
         if not isinstance(item, dict):
             continue
-        subject_fields: dict[str, Any] = {}
-        right_fields: dict[str, Any] = {}
-        for html_key, db_col in OWNER_SUBJECT_FIELD_MAP.items():
-            if html_key in item:
-                subject_fields[db_col] = str(item[html_key]).strip() or None
-        for html_key, db_col in OWNER_RIGHT_FIELD_MAP.items():
-            if html_key in item:
-                right_fields[db_col] = str(item[html_key]).strip() or None
-        rows.append((subject_fields, right_fields))
-    return rows
+        prop, loc, subject = _property_row(response_id, tipo_catasto, item)
+        projected = ProjectedProperty(position, prop, loc, subject)
+        result_item = result_items.get(position)
+        raw_owners: list[dict] = []
+        if result_item is not None:
+            projected.result_index = position
+            projected.visura_present = bool(result_item.get("visura"))
+            raw_owners += [o for o in result_item.get("intestati") or [] if isinstance(o, dict)]
+        raw_owners += [o for o in item.get("intestati") or [] if isinstance(o, dict)]
+        queried = _subject_query_owner(data, item)
+        if queried and not any(o.get("codice_fiscale") == queried["codice_fiscale"] for o in raw_owners):
+            raw_owners.append(queried)
+        projected.owners = _owner_pairs(raw_owners)
+        properties.append(projected)
+
+    top_level = _owner_pairs(data.get("intestati")) if not result_items else []
+    unlinked: list[tuple[dict[str, Any], dict[str, Any]]] = []
+    if top_level and not any(p.owners for p in properties):
+        if len(properties) == 1:
+            properties[0].owners = top_level
+        else:
+            unlinked = top_level
+
+    for projected in properties:
+        if projected.owners and projected.result_index is None:
+            projected.result_index = projected.index
+            results.append({"result_index": projected.index, "visura_present": False})
+    return properties, unlinked, results
 
 
 def _parse_page_visits(response_id: str, data: Optional[dict]) -> list[PageVisit]:
@@ -532,6 +676,133 @@ def _parse_response_results(data: Optional[dict]) -> list[dict[str, Any]]:
     return rows
 
 
+async def _link_documents(session: AsyncSession, request_id: str, data: Optional[dict]) -> int:
+    """Tie the documents a response downloaded (``downloaded_pdfs``) to it; they are saved before the response."""
+    documents = data.get("downloaded_pdfs") if isinstance(data, dict) else None
+    linked = 0
+    for item in documents if isinstance(documents, list) else []:
+        if not isinstance(item, dict):
+            continue
+        names = [n for n in (item.get("filename"), item.get("original_filename")) if n]
+        paths = [p for p in (item.get("path"), item.get("extracted_path")) if p]
+        if not names and not paths:
+            continue
+        result = await session.execute(
+            text(
+                "UPDATE visura_documents SET response_id = :rid WHERE response_id IS NULL"
+                " AND (filename = ANY(:names) OR file_path = ANY(:paths))"
+            ),
+            {"rid": request_id, "names": names, "paths": paths},
+        )
+        linked += result.rowcount or 0
+    return linked
+
+
+async def _replace_projection(session: AsyncSession, request_id: str, tipo_catasto: str, data: Optional[dict]) -> None:
+    """Rebuild the structured rows of one response from its JSON (results, properties, owners, document links)."""
+    for table_name in ("visura_owners", "visura_properties", "visura_results"):
+        await session.execute(text(f"DELETE FROM {table_name} WHERE response_id = :rid"), {"rid": request_id})  # noqa: S608
+    # the request location supplies the province/municipality a row of the list does not carry
+    req_row = await session.get(VisuraRequest, request_id)
+    req_loc: Optional[CadastralLocation] = None
+    if req_row and req_row.location_id:
+        req_loc = await session.get(CadastralLocation, req_row.location_id)
+    await _persist_projection(session, request_id, tipo_catasto, data, req_loc)
+    await _link_documents(session, request_id, data)
+
+
+async def backfill_projections(limit: Optional[int] = None, batch: int = 50) -> dict[str, int]:
+    """Re-project every stored response with the current parsers (idempotent; the JSON in ``data`` is the source).
+
+    Fills ``result_id`` / ``owner_index`` on existing properties and owners, splits the composite portal cells and
+    ties downloaded documents to their response.
+    """
+    session_factory = _get_session_factory()
+    stats = {"responses": 0, "properties": 0, "owners": 0}
+    async with session_factory() as session:
+        stmt = select(VisuraResponse.request_id, VisuraResponse.cadastre_type).where(VisuraResponse.data.is_not(None))
+        if limit:
+            stmt = stmt.limit(limit)
+        todo = (await session.execute(stmt.order_by(VisuraResponse.created_at))).all()
+    for start in range(0, len(todo), batch):
+        async with session_factory() as session:
+            for request_id, cadastre_type in todo[start : start + batch]:
+                resp = await session.get(VisuraResponse, request_id)
+                if resp is None or not isinstance(resp.data, dict):
+                    continue
+                await _replace_projection(session, request_id, cadastre_type, resp.data)
+                stats["responses"] += 1
+            await session.commit()
+    async with session_factory() as session:
+        for key, table_name in (("properties", "visura_properties"), ("owners", "visura_owners")):
+            stats[key] = (await session.execute(text(f"SELECT count(*) FROM {table_name}"))).scalar_one()  # noqa: S608
+    return stats
+
+
+async def _resolve_subject(session: AsyncSession, fields: dict[str, Any]) -> Optional[int]:
+    """Create/enrich the subject for normalised owner fields (birth place → ``geographic_places``)."""
+    fields = dict(fields)
+    province = fields.pop("birth_province", "") or ""
+    municipality = fields.pop("birth_municipality", "") or ""
+    fields.pop("registered_office", None)
+    if not fields:
+        return None
+    if municipality:
+        fields["birth_place_id"] = await get_or_create_place(session, province=province, municipality=municipality)
+    return await get_or_create_subject(session, **fields)
+
+
+async def _persist_projection(
+    session: AsyncSession,
+    request_id: str,
+    tipo_catasto: str,
+    data: Optional[dict],
+    req_loc: Optional[CadastralLocation],
+) -> None:
+    """Write the properties, owners and result rows of a response, keeping each owner tied to its property.
+
+    One ``visura_results`` row per property that has a result (or owners); the property and its owners both carry
+    that ``result_id`` (the owner↔property views join on it), and ``owner_index`` keeps the portal's row order.
+    """
+    properties, unlinked, result_rows = _project_response(request_id, tipo_catasto, data)
+    result_ids: dict[int, int] = {}
+    for result_fields in result_rows:
+        row = VisuraResult(response_id=request_id, **result_fields)
+        session.add(row)
+        await session.flush()
+        result_ids[result_fields["result_index"]] = row.id
+
+    for projected in properties:
+        loc_fields = projected.location
+        if req_loc:
+            loc_fields["province"] = loc_fields["province"] or req_loc.province
+            loc_fields["municipality"] = loc_fields["municipality"] or req_loc.municipality
+        location_id = await get_or_create_location(session, **loc_fields)
+        subject_id = await _resolve_subject(session, projected.subject) if projected.subject else None
+        result_id = result_ids.get(projected.result_index) if projected.result_index is not None else None
+        session.add(VisuraProperty(**projected.prop, location_id=location_id, subject_id=subject_id, result_id=result_id))
+        for owner_index, (subject_fields, right_fields) in enumerate(projected.owners, start=1):
+            session.add(
+                VisuraOwner(
+                    response_id=request_id,
+                    result_id=result_id,
+                    owner_index=owner_index,
+                    subject_id=await _resolve_subject(session, subject_fields) if subject_fields else None,
+                    right_id=await get_or_create_right(session, **right_fields) if right_fields else None,
+                )
+            )
+    for owner_index, (subject_fields, right_fields) in enumerate(unlinked, start=1):
+        session.add(
+            VisuraOwner(
+                response_id=request_id,
+                owner_index=owner_index,
+                subject_id=await _resolve_subject(session, subject_fields) if subject_fields else None,
+                right_id=await get_or_create_right(session, **right_fields) if right_fields else None,
+            )
+        )
+    await session.flush()
+
+
 async def save_response(
     request_id: str,
     success: bool,
@@ -559,9 +830,6 @@ async def save_response(
             {"rid": request_id},
         )
         await session.execute(text("DELETE FROM page_visits WHERE response_id = :rid"), {"rid": request_id})
-        await session.execute(text("DELETE FROM visura_owners WHERE response_id = :rid"), {"rid": request_id})
-        await session.execute(text("DELETE FROM visura_properties WHERE response_id = :rid"), {"rid": request_id})
-        await session.execute(text("DELETE FROM visura_results WHERE response_id = :rid"), {"rid": request_id})
         resp = await session.get(VisuraResponse, request_id)
         if resp is None:
             resp = VisuraResponse(request_id=request_id, success=success, cadastre_type=tipo_catasto)
@@ -578,26 +846,7 @@ async def save_response(
         resp.created_at = datetime.now(timezone.utc)
         await session.flush()
 
-        # Look up request location to inherit province/municipality for property locations
-        req_row = await session.get(VisuraRequest, request_id)
-        req_loc: Optional[CadastralLocation] = None
-        if req_row and req_row.location_id:
-            req_loc = await session.get(CadastralLocation, req_row.location_id)
-
-        # Populate structured tables from JSON
-        for prop_fields, loc_fields, subject_fields in _parse_property_rows(request_id, tipo_catasto, data):
-            if req_loc:
-                loc_fields["province"] = loc_fields["province"] or req_loc.province
-                loc_fields["municipality"] = loc_fields["municipality"] or req_loc.municipality
-            location_id = await get_or_create_location(session, **loc_fields)
-            subject_id = await get_or_create_subject(session, **subject_fields) if subject_fields else None
-            session.add(VisuraProperty(**prop_fields, location_id=location_id, subject_id=subject_id))
-        for subject_fields, right_fields in _parse_owners(request_id, data):
-            subject_id = await get_or_create_subject(session, **subject_fields) if subject_fields else None
-            right_id = await get_or_create_right(session, **right_fields) if right_fields else None
-            session.add(VisuraOwner(response_id=request_id, subject_id=subject_id, right_id=right_id))
-        for result_fields in _parse_response_results(data):
-            session.add(VisuraResult(response_id=request_id, **result_fields))
+        await _replace_projection(session, request_id, tipo_catasto, data)
         await session.flush()
         raw_visits = (data or {}).get("page_visits", []) if isinstance(data, dict) else []
         for source_visit in raw_visits if isinstance(raw_visits, list) else []:
@@ -747,6 +996,7 @@ async def get_db_properties_for_response(request_id: str) -> list[dict]:
         rows = result.all()
     return [
         {
+            "result_id": prop.result_id,
             "property_type": prop.property_type,
             "address": prop.address,
             "partita": prop.partita,
@@ -795,6 +1045,11 @@ async def get_db_owners_for_response(request_id: str) -> list[dict]:
                 f"{subj.last_name or ''} {subj.first_name or ''}".strip() if subj else None
             ),
             "fiscal_code": subj.fiscal_code if subj else None,
+            "gender": subj.gender if subj else None,
+            "date_of_birth": subj.date_of_birth if subj else None,
+            "subject_type": subj.subject_type if subj else None,
+            "result_id": owner.result_id,
+            "owner_index": owner.owner_index,
             "right_type": right.right_type if right else None,
             "ownership_share": right.ownership_share if right else None,
             "right_code": right.right_code if right else None,
@@ -802,7 +1057,7 @@ async def get_db_owners_for_response(request_id: str) -> list[dict]:
             "start_date": right.start_date if right else None,
             "end_date": right.end_date if right else None,
         }
-        for _, subj, right in rows
+        for owner, subj, right in rows
     ]
 
 

@@ -365,6 +365,7 @@
           let html = '<div class="alert ' + alertClass + '"><i class="fas ' + icon + ' me-2"></i>';
           html += '<strong>Workflow: ' + (evt.preset || '') + '</strong> — ';
           html += (s.completed || 0) + ' completate, ' + (s.failed || 0) + ' fallite, ' + (s.skipped || 0) + ' saltate';
+          if ((s.query_cache_hits || 0) > 0) html += ' | ' + s.query_cache_hits + ' identical queries reused';
           if ((s.properties || 0) > 0 || (s.owners || 0) > 0) html += ' | ' + (s.properties || 0) + ' properties, ' + (s.owners || 0) + ' owners';
           if ((s.risk_flags || 0) > 0) html += ' | <span class="text-warning">' + (s.risk_flags || 0) + ' risk flag(s)</span>';
           html += '</div>';

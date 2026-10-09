@@ -7,6 +7,32 @@ e questo progetto aderisce al [Versionamento Semantico](https://semver.org/lang/
 
 ## [Non rilasciato]
 
+### Aggiunto (2026-10-09)
+- Flusso a due fasi per `search` / `intestati` (`run_visura`): prima si leggono **tutte le pagine HTML** (lista immobili e
+  pagina Intestati di ogni immobile, senza CAPTCHA), poi si **richiedono i documenti** (unica pagina con CAPTCHA). Un CAPTCHA
+  non risolto non fa piu' perdere gli intestati degli immobili successivi; `documents_pending` elenca le richieste mancanti.
+  Una sola *Visura per Soggetto* per intestato (mai lo stesso codice fiscale due volte nella stessa esecuzione).
+  Nuovo parametro `richiedi_documenti` (default `true`; `false` = solo HTML). Flowchart: `docs/property_visura_workflow.svg`,
+  `docs/person_search_workflow.svg` (rigenerato)
+- `sister/result_parsers.py`: parser puri per le celle composite del portale (sezione/foglio, diritto + quota, nominativo con
+  luogo e data di nascita, `visImmSel`, radio degli intestati) e per sesso/codice di nascita dal codice fiscale
+- `sister/xml_ingest.py`: i documenti XML (`VisuraFabbricati*`, `VisuraTerreni*`, `VisuraSoggettoAttuale`) popolano le tabelle
+  tipizzate (`building_*`, `land_*`, `property_groups`, `ownership_mutations`, `property_owners`, `document_subjects`,
+  intestazione in `document_metadata`), prima tutte vuote; `sister db backfill [projections|xml]` ricostruisce i dati gia' salvati
+- `docs/data_extraction.md`: cosa restituisce ogni form e dove finisce nel database
+
+### Corretto (2026-10-09)
+- `visura_owners` e `visura_properties` non avevano mai `result_id`/`owner_index`: ora ogni intestato e' legato al proprio immobile
+  (le viste owner↔property non incrociano piu' tutti gli intestati con tutti gli immobili di una risposta)
+- Terreni: `area`, `dominical_income`, `agricultural_income` non venivano mai valorizzati (il portale usa `ha/are/ca` e
+  `Reddito dominicale/agrario`); `_tipo_catasto`/`Catasto` di ogni riga decidono tipo e catasto dell'immobile
+- Liste: `RA/103` diviso in sezione + foglio, `Subalterno`/`Zona` (elenco), `Ubicazione`, `Classamento`, importi senza `R.Euro:`;
+  le righe di soggetto non producono piu' una sola `cadastral_location` senza comune
+- `cadastral_subjects`: data/luogo di nascita, sesso e tipo vengono salvati e completano un soggetto creato in precedenza
+  con meno dati; `parse_table` non restituisce piu' la colonna vuota del radio e conserva il valore del radio (`visImmSel`)
+- `visura_documents.response_id` non veniva mai impostato; XML oltre 50 kB troncati in `document_metadata.content`; le visure
+  terreni (`VisuraTerreniAttuale/Storica`) non venivano riconosciute; gli intestati storici si mescolavano a quelli attuali
+
 ### Aggiunto (2026-10-06)
 - Sessione portale in due tempi: `scripts/ade_login.py` esegue il login (e `--close` chiude una sessione rimasta aperta);
   il servizio si limita ad **agganciare** la sessione SISTER esistente (`attach_existing_session`), non fa più login

@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Visura>
+  <VisuraSoggettoAttuale>
+    <TitoloVisura Titolo="VISURA PER SOGGETTO" SituazioneAl="20261006" TipoVisura="ATTUALE"/>
+    <DatiRichiesta Provincia="MONZA" Comune="MONZA" CodiceComune="F704" TipoCatasto="E">
+      <SoggettoIndividuato><SoggettoPNF CodiceFiscale="00000000001" CodiceSede="F704" Denominazione="ROSSI S.R.L." Sede="MONZA (MB)"/></SoggettoIndividuato>
+    </DatiRichiesta>
+  </VisuraSoggettoAttuale>
+</Visura>

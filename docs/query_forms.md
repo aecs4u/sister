@@ -34,6 +34,12 @@ offer at that office level (e.g. "restrizione foglio" on the national office), f
 instead of waiting for the portal. The live check (fill every input of every real form and read it back) found
 this; it can be repeated whenever the portal changes.
 
+## Parameters that are not portal inputs
+
+`extra_params` of a form are parameters of the command that the portal form does not have (`provincia`, `tipo_catasto`,
+…). `search` and `intestati` also take **`richiedi_documenti`** (`true`/`false`, default `true`): `false` reads only the
+HTML pages (immobili and intestati, no CAPTCHA) and requests/downloads no document. See `docs/data_extraction.md`.
+
 ## Adding a query or an input
 
 1. Save the portal form as `tests/fixtures/portal_forms/<name>.html` (only the `<form>` of the query; no

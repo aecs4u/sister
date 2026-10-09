@@ -16,12 +16,15 @@ SISTER is a FastAPI service + Typer CLI for automated cadastral data extraction 
   - `models.py` — Pydantic input models, dataclasses, exceptions
   - `db_models.py` — SQLModel ORM table classes
   - `database.py` — Async SQLAlchemy engine, SQLModel sessions, cache functions
-  - `utils.py` — SISTER portal browser automation (run_visura, run_visura_soggetto, etc.)
+  - `utils.py` — SISTER portal browser automation (run_visura, run_visura_soggetto, etc.); `run_visura` is two-phase (see "Data extraction")
+  - `result_parsers.py` — pure parsers for the composite portal cells (`RA/103`, `Proprieta' per 1/2`, name + birth data, `visImmSel`, owner radios)
+  - `xml_ingest.py` — visura XML → typed document tables (`building_*`, `land_*`, `property_groups`, `ownership_mutations`, `property_owners`, …) + backfill
   - `client.py` — VisuraClient async HTTP client
   - `cli.py` — Typer CLI with query, db, and top-level commands
 - **`tests/`** — pytest test suite
 - **`alembic/`** — Database migrations
 - **`data/`** — documenti, dossier e output generati
+- **`docs/*.dot` / `*.svg`** — flowcharts of the query flows (`property_visura_workflow`, `person_search_workflow`); `docs/data_extraction.md` lists what each form returns and where it is stored
 - **`scripts/`** — Start script + bulk query scripts
   - `query_recrowd_proponents.py` — bulk `/visura/persona-giuridica` for all Recrowd proponents
   - `ade_login.py` — SISTER login in the shared Chrome (`--close` frees a stale session)
@@ -45,6 +48,8 @@ uv run sister query search -P Roma -C ROMA -F 100 -p 50 --wait
 uv run sister query soggetto --cf RSSMRI85E28H501E --wait
 uv run sister query workflow --preset due-diligence -P Roma -C ROMA -F 100 -p 50
 uv run sister db init
+# Fill the structured tables from data already stored (responses JSON, XML documents); idempotent, writes to the app schema
+uv run sister db backfill            # projections + xml; `xml --force --limit N` to redo some documents
 # Owner <-> property graph (resumable; see docs/dossier_graph.md)
 ../.venv/bin/python scripts/build_dossier_graph.py --seed <CF|PIVA>
 ```
@@ -86,7 +91,10 @@ uv run sister db init
   breaker (`web._opendata_get`); when it is down `/web/workflows` shows a notice instead of stalling.
 - Environment: keep `httpx` below 1.0 (`pyproject.toml` pins `<1`; 1.0 pre-releases have no `AsyncClient` and break `VisuraClient`).
   Test baseline 2026-10-09 (`/opt/venv/.aecs4u_venv/bin/python -m pytest -p no:logfire --continue-on-collection-errors`):
-  690 passed, 24 failed, 83 errors (browser dispatch, client contract, ontology, 1 DB test, 3 workflow tests, missing `fresh_db`).
+  813 passed, 52 failed, 4 collection errors (2026-10-09, after the two-phase/extraction work). DB tests run on a throwaway local schema (`tests/pg_isolation.py`: `fresh_db` fixture; skipped
+  without a local PostgreSQL; never touches the app schema). All remaining failures/errors are roadmap features absent from `sister/`:
+  browser dispatch (12), client contract (5), ontology (3), workflows (3), request jobs (9), section-extraction jobs (16),
+  `no_match` result status (4), and 4 test files importing missing helpers (`find_best_option_matches`, `_run_with_network_json`, `_request_job_outcome`).
 - The interactive API docs (`/docs`, `/redoc`, `/openapi.json`) require sign-in like the web UI (`main._docs_auth`); `/health` stays public.
 - Saved results are kept in the database indefinitely. `RESPONSE_TTL_SECONDS` (6 h) only governs the in-memory cache; deleting
   database rows is opt-in via `DB_RETENTION_SECONDS` (default 0 = never). (It used to reuse the cache TTL, which silently purged
@@ -126,6 +134,29 @@ CLI batch, `/web/forms` and the generic API route are generated from it and subm
 `VisuraClient.submit`. To add a query or an input, edit that table (see `docs/query_forms.md`); do not hand-write
 CLI options or web params. `uv run python -m pytest tests/test_query_forms.py` checks the spec against the
 saved portal forms in `tests/fixtures/portal_forms/`.
+
+## Data extraction (two phases)
+
+- `run_visura` (`search` / `intestati`) reads **all HTML first** (immobili list, then the Intestati page of every immobile,
+  `_read_immobili_intestati`: no CAPTCHA, the list stays valid after *Indietro*) and **requests documents second**
+  (`_request_visura_documents`: the *Tipo di visura* form is the only CAPTCHA page, and SISTER forgets the list after each
+  *Inoltra*). `richiedi_documenti=false` (CLI `--richiedi-documenti false`) stops after phase 1. One *Visura per Soggetto* per immobile,
+  never the same codice fiscale twice per run; a CAPTCHA nobody solves ends as `needs_human` with `documents_pending`.
+- `save_response` projects the JSON into the tables via `database._project_response`: owners are tied to *their* property
+  through `result_id` (the owner↔property views join on it), composite cells are split with `result_parsers`, terreni use the
+  portal's `ha/are/ca` and `Reddito dominicale/agrario` columns, each row keeps its own catasto. Downloaded XML also fills the
+  typed tables (`xml_ingest.ingest_visura_xml`, called from `_persist_flattened_xml`). Details: `docs/data_extraction.md`.
+- **When a query's flow changes, regenerate its flowchart**: `cd docs && dot -Tsvg <name>.dot -o <name>.svg` (edit the `.dot`).
+  `property_visura_workflow` covers `search`/`intestati`, `person_search_workflow` the persona-fisica flow; the per-preset SVGs in
+  `sister/static/images/workflows/` follow the `aecs4u_workflow` step lists.
+- No schema change was made: the catasto comune code (`visImmSel`, XML `CodiceComune`) has no column in `visura_properties` yet
+  (needs an Alembic migration + `DATABASE_REVISION` bump, which breaks `init_db` until `alembic upgrade head` is run).
+- Browser flow changes in `utils.py` cannot be exercised without a live SISTER session; verify them with a real run
+  (`search ... --richiedi-documenti false` first: no CAPTCHA).
+
+## Multi-step due-diligence workflows
+
+See `docs/document_due_diligence_batch.md` for document-derived property jobs and natural-person portfolio jobs, launch order, and paid-step gates. The `portfolio` workflow performs subject lookup, property expansion, ownership-history expansion, timeline, and risk steps; `portfolio_ipotecaria` is a separately gated paid step. A workflow run reuses identical free query submissions and reports cache hits; paid inspections and document downloads are excluded, and `force=true` bypasses reuse. Owner expansion is capped by `min(max_fanout, max_owners)`. Query steps return captured `page_visits` with structured results for normal response persistence. The Richieste step exposes metadata and IDs for rows with a `Salva` link, but omits session-bound download URLs; document downloading remains a separate action.
 
 ## Persona giuridica queries
 

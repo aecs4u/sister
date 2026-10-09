@@ -12,6 +12,7 @@ from bs4 import BeautifulSoup
 from playwright.async_api import Page
 
 from .models import CaptchaRequired
+from .result_parsers import parse_intestato_value
 from .query_forms import get_query_form
 
 log = logging.getLogger("sister.utils")
@@ -257,6 +258,12 @@ async def _navigate_to_scelta_servizio(page: Page, page_logger: PageLogger, max_
 
 
 def parse_table(html):
+    """Rows of a SISTER result table as dicts keyed by column header.
+
+    The unnamed leading column holds the row's radio button: it is dropped when blank, and the radio's ``value``
+    (which identifies the row on the portal, e.g. ``visImmSel`` with the catasto comune code) is kept under the
+    radio's ``name``. Short rows are padded with empty cells.
+    """
     soup = BeautifulSoup(html, "html.parser")
     headers = [th.get_text(strip=True) for th in soup.find_all("th")]
     rows = []
@@ -266,7 +273,12 @@ def parse_table(html):
             # Se ci sono meno celle che header, aggiungi celle vuote
             while len(cells) < len(headers):
                 cells.append("")
-            rows.append(dict(zip(headers, cells)))
+            row = {key: value for key, value in zip(headers, cells) if key or value}
+            for control in tr.find_all("input", attrs={"type": ["radio", "checkbox"]}):
+                name, value = control.get("name") or control.get("property"), control.get("value")
+                if name and value and name not in row:
+                    row[name] = value
+            rows.append(row)
     return rows
 
 
@@ -468,6 +480,322 @@ async def _select_sezione(page, comune: str, sezione=None):
     return None
 
 
+IMMOBILI_RADIOS = "input[type='radio'][property='visImmSel'], input[type='radio'][name='visImmSel']"
+_FALSE_VALUES = {"0", "false", "no", "n", "off", "f", "non"}
+
+
+async def _classify_immobili_radios(page, radio_count: int) -> tuple[list[int], set[int], int]:
+    """Split the immobili list into the rows to visit, the 'Bene comune non censibile' rows and the soppressi count."""
+    radios = page.locator(IMMOBILI_RADIOS)
+    active: list[int] = []
+    bene_comune: set[int] = set()
+    soppressi = 0
+    for i in range(radio_count):
+        val = await radios.nth(i).get_attribute("value") or ""
+        if "Soppress" in val:
+            soppressi += 1
+            continue
+        active.append(i)
+        if "Bene comune" in val:
+            bene_comune.add(i)
+    return active, bene_comune, soppressi
+
+
+async def _extract_intestati_with_identity(page) -> list[dict]:
+    """The Intestati table, completed with what the owner radios carry (sesso, luogo e data di nascita, sede).
+
+    The table gives name, codice fiscale, titolarita' and quota; the ``intestatoSelezionato`` radios of the same page
+    give the sex and the birth data as separate fields. Rows and radios are paired by position, and only when
+    their number matches and the codici fiscali agree.
+    """
+    rows = await _extract_intestati_playwright(page)
+    radios = page.locator("input[type='radio'][name='intestatoSelezionato']")
+    count = await radios.count()
+    if not rows or count != len(rows):
+        return rows
+    for i, row in enumerate(rows):
+        identity = parse_intestato_value(await radios.nth(i).get_attribute("value") or "")
+        row_id = (row.get("Codice fiscale") or "").strip().upper()
+        if row_id and identity["codice_fiscale"] and row_id != identity["codice_fiscale"]:
+            continue
+        if not row_id and identity["codice_fiscale"]:
+            row["Codice fiscale"] = identity["codice_fiscale"]
+        for key in ("sesso", "luogo_nascita", "data_nascita", "sede"):
+            if identity.get(key):
+                row.setdefault(key, identity[key])
+    return rows
+
+
+async def _restore_immobili_list(
+    page, page_logger, provincia, comune, sezione, foglio, particella, tipo_catasto, subalterno, sezione_urbana
+):
+    """Be on the immobili list again: step back from a sub-page, or re-submit the search when SISTER lost the list."""
+    await _navigate_back_to_immobili_list(page)
+    if await page.locator(IMMOBILI_RADIOS).count() == 0:
+        await _resubmit_search_for_immobili_list(
+            page, page_logger, provincia, comune, sezione, foglio, particella, tipo_catasto, subalterno,
+            sezione_urbana,
+        )
+    await _fill_richiedente_motivo(page, sezione_urbana=sezione_urbana)
+    return page.locator(IMMOBILI_RADIOS)
+
+
+async def _read_immobili_intestati(page, page_logger, immobili: list[dict], search: tuple):
+    """Phase 1 of ``run_visura``: one pass over the immobili list, reading the Intestati page of each immobile.
+
+    Every page involved is plain HTML without CAPTCHA, and "Indietro" from the Intestati page leaves the list valid
+    (only a submitted request makes SISTER forget it), so the whole list is read before anything is requested. A
+    CAPTCHA in phase 2 can then no longer cost us the owners of the immobili after the one it stopped at.
+
+    Returns (all intestati, one result per immobile visited, soppressi skipped, bene comune indices).
+    """
+    log.info("Fase 1 (HTML): intestati di ogni immobile...")
+    all_intestati: list[dict] = []
+    results_list: list[dict] = []
+    sezione_urbana = search[7]
+
+    # Re-fill richiedente/motivo/sezUrb on results page (SISTER clears them after submit)
+    await _fill_richiedente_motivo(page, sezione_urbana=sezione_urbana)
+
+    radio_count = await page.locator(IMMOBILI_RADIOS).count()
+    active_indices, bene_comune_indices, skipped_soppresso = await _classify_immobili_radios(page, radio_count)
+    if skipped_soppresso:
+        log.info("Saltati %d immobili soppressi su %d totali", skipped_soppresso, radio_count)
+    if bene_comune_indices:
+        log.info("Trovati %d 'Bene comune non censibile' — intestati saltati per questi", len(bene_comune_indices))
+    total_active = len(active_indices)
+    log.info("Iterando per %d immobili attivi", total_active)
+
+    for item_num, radio_idx in enumerate(active_indices, 1):
+        imm_data = immobili[radio_idx] if radio_idx < len(immobili) else {}
+        step_result = {"result_index": radio_idx + 1, "immobile": imm_data, "intestati": [], "visura": None}
+        results_list.append(step_result)  # kept even if this immobile fails: the others are still read
+        if radio_idx in bene_comune_indices:
+            continue
+        try:
+            await page.locator(IMMOBILI_RADIOS).nth(radio_idx).click()
+            log.info(
+                "[%d/%d] Immobile radio %d — Sub.%s %s",
+                item_num,
+                total_active,
+                radio_idx + 1,
+                imm_data.get("Sub", "?"),
+                imm_data.get("Indirizzo", "")[:30],
+            )
+            intestati_btn = page.locator("input[name='intestati'][value='Intestati']")
+            if await intestati_btn.count() == 0:
+                continue
+            await intestati_btn.click()
+            await page.wait_for_load_state("networkidle", timeout=30000)
+            await page_logger.log(page, f"intestati_{radio_idx + 1}")
+            step_intestati = await _extract_intestati_with_identity(page)
+            log.info("[green]%d intestati[/green] per immobile (radio %d)", len(step_intestati), radio_idx + 1)
+            all_intestati.extend(step_intestati)
+            step_result["intestati"] = step_intestati
+            await _navigate_back_to_immobili_list(page)
+            await _fill_richiedente_motivo(page, sezione_urbana=sezione_urbana)
+        except Exception as e:
+            step_result["error"] = str(e)[:200]
+            log.warning("Intestati non letti per immobile %d/%d: %s", item_num, total_active, e)
+            await _restore_immobili_list(page, page_logger, *search)
+
+    if not results_list and immobili:
+        results_list = [{"result_index": 1, "immobile": immobili[0], "intestati": all_intestati}]
+    return all_intestati, results_list, skipped_soppresso, bene_comune_indices
+
+
+def _owner_identifier(row: dict) -> str:
+    return (row.get("Codice fiscale") or row.get("Codice Fiscale") or "").strip().upper()
+
+
+def _plan_soggetto_requests(results_list: list[dict], bene_comune_indices: set[int]) -> dict[int, int | None]:
+    """Which owner (row of the Intestati table) gets a Visura per Soggetto for each immobile.
+
+    One owner per immobile, as before, but never an owner already requested for an earlier immobile of the same run:
+    the document is the same, and every request costs a CAPTCHA. ``None`` = nothing to request for that immobile.
+    """
+    requested: set[str] = set()
+    plan: dict[int, int | None] = {}
+    for step in results_list:
+        index = step["result_index"]
+        owners = step.get("intestati") or []
+        if (index - 1) in bene_comune_indices or not owners:
+            plan[index] = None
+            continue
+        pick = next((i for i, row in enumerate(owners) if _owner_identifier(row) not in requested), None)
+        if pick is None:
+            plan[index] = None
+            step.setdefault("documents", {})["soggetto"] = "duplicate"
+            continue
+        if _owner_identifier(owners[pick]):
+            requested.add(_owner_identifier(owners[pick]))
+        plan[index] = pick
+    return plan
+
+
+def _pending_documents(results_list: list[dict]) -> list[dict]:
+    """The document requests that did not go out (a CAPTCHA stopped the run): what a human has to finish."""
+    pending = []
+    for step in results_list:
+        for kind, state in (step.get("documents") or {}).items():
+            if state == "pending":
+                pending.append({"result_index": step["result_index"], "kind": kind})
+    return pending
+
+
+async def _submit_visura_soggetto(page, page_logger, radio_idx: int, step_result: dict) -> bool:
+    """From the Intestati page, press "Visura per Soggetto" and walk to the form that is submitted (CAPTCHA).
+
+    Returns True when the request was submitted. May pass through RicercaPF / SceltaOmonimi first.
+    """
+    visura_sogg_btn = page.locator("input[name='visura'][value='Visura per Soggetto']")
+    await visura_sogg_btn.click()
+    await page.wait_for_load_state("networkidle", timeout=30000)
+
+    submitted = False
+    for _nav in range(5):
+        current_url = page.url
+
+        # TipoVisura.do — the visura options form. After picking an owner SISTER keeps the URL at
+        # SceltaIntestatiIMM.do while already showing this form (with its own CAPTCHA), so detect it
+        # from the page content as well as from the URL.
+        if "TipoVisura" in current_url or await page.locator("form[name='TipoVisuraForm']").count() > 0:
+            await _set_visura_form_defaults(page)
+            await page_logger.log(page, f"visura_soggetto_{radio_idx + 1}")
+            step_result["visura_soggetto"] = await _extract_visura_immobile_playwright(page)
+
+            has_captcha = await _wait_for_captcha(page)
+            if not has_captcha:
+                inoltra_btn = page.locator(
+                    "input[name='inoltra'][value='Inoltra'], input[type='submit'][value='Inoltra']"
+                )
+                if await inoltra_btn.count() > 0:
+                    await inoltra_btn.click()
+                    await page.wait_for_load_state("networkidle", timeout=30000)
+            submitted = True
+            break
+
+        # RicercaPF.do — persona fisica search: click Ricerca to proceed
+        if "RicercaPF" in current_url:
+            log.info("Pagina RicercaPF — procedendo con ricerca")
+            await page_logger.log(page, f"ricerca_pf_{radio_idx + 1}")
+            ricerca_btn = page.locator("input[type='submit'][value='Ricerca'], input[name='ricerca'][value='Ricerca']")
+            if await ricerca_btn.count() > 0:
+                await ricerca_btn.first.click()
+                await page.wait_for_load_state("networkidle", timeout=30000)
+                continue
+
+        # SceltaOmonimiPF.do — homonym selection: select first and proceed
+        if "SceltaOmonimi" in current_url:
+            log.info("Pagina SceltaOmonimi — selezionando primo soggetto")
+            await page_logger.log(page, f"scelta_omonimi_{radio_idx + 1}")
+            first_radio = page.locator("input[type='radio']").first
+            if await first_radio.count() > 0:
+                await first_radio.click()
+            submit_btn = page.locator(
+                "input[type='submit'][value='Conferma'], input[type='submit'][value='Prosegui'], input[type='submit']"
+            ).first
+            if await submit_btn.count() > 0:
+                await submit_btn.click()
+                await page.wait_for_load_state("networkidle", timeout=30000)
+                continue
+
+        # InoltraRichiestaVis.do — already submitted
+        if "InoltraRichiesta" in current_url:
+            submitted = True
+            break
+
+        # Unknown page — log and break
+        log.warning("Pagina inattesa durante Visura per Soggetto: %s", current_url)
+        await page_logger.log(page, f"visura_soggetto_unexpected_{radio_idx + 1}")
+        break
+
+    if submitted:
+        await page_logger.log(page, f"visura_soggetto_inoltrata_{radio_idx + 1}")
+        log.info("Visura per Soggetto inoltrata per radio %d", radio_idx + 1)
+    return submitted
+
+
+async def _request_visura_documents(
+    page, page_logger, results_list, bene_comune_indices, tipo_visura, visura_soggetto, search
+) -> None:
+    """Phase 2 of ``run_visura``: submit the document requests, one Visura per Immobile + one per Soggetto.
+
+    Each request ends at the Tipo di visura form, which is where SISTER shows the CAPTCHA (a human types it; if nobody
+    does, ``CaptchaRequired`` stops the run and the steps still marked ``pending`` are what is left to request).
+    """
+    plan = _plan_soggetto_requests(results_list, bene_comune_indices) if visura_soggetto else {}
+    for step in results_list:
+        docs = step.setdefault("documents", {})
+        docs.setdefault("immobile", "pending")
+        if visura_soggetto and plan.get(step["result_index"]) is not None:
+            docs.setdefault("soggetto", "pending")
+
+    for step in results_list:
+        radio_idx = step["result_index"] - 1
+        docs = step["documents"]
+
+        # --- Visura Per Immobile ---
+        radios = await _restore_immobili_list(page, page_logger, *search)
+        await radios.nth(radio_idx).click()
+        visura_btn = page.locator("input[name='visuraImm'][value='Visura Per Immobile']")
+        if await visura_btn.count() > 0:
+            await visura_btn.click()
+            await page.wait_for_load_state("networkidle", timeout=30000)
+
+            # Set default options: requested tipo visura, XML, differita
+            await _set_visura_form_defaults(page, tipo_visura)
+            await page_logger.log(page, f"visura_immobile_{radio_idx + 1}")
+
+            # Extract visura data from the form page before submitting
+            step["visura"] = await _extract_visura_immobile_playwright(page)
+
+            # Wait for user to solve CAPTCHA (fills inCaptchaChars → form auto-submits)
+            if not await _wait_for_captcha(page):
+                # No CAPTCHA — click Inoltra manually
+                inoltra_btn = page.locator(
+                    "input[name='inoltra'][value='Inoltra'], input[type='submit'][value='Inoltra']"
+                )
+                if await inoltra_btn.count() > 0:
+                    await inoltra_btn.click()
+                    await page.wait_for_load_state("networkidle", timeout=30000)
+            docs["immobile"] = "requested"
+            await page_logger.log(page, f"visura_inoltrata_{radio_idx + 1}")
+            log.info("Visura Per Immobile inoltrata per radio %d", radio_idx + 1)
+
+            # SISTER loses the session state after Inoltra
+            await _resubmit_search_for_immobili_list(page, page_logger, *search)
+        else:
+            docs["immobile"] = "unavailable"
+
+        # --- Visura per Soggetto (one owner, none already requested in this run) ---
+        pick = plan.get(step["result_index"])
+        if pick is None:
+            continue
+        radios = await _restore_immobili_list(page, page_logger, *search)
+        await radios.nth(radio_idx).click()
+        intestati_btn = page.locator("input[name='intestati'][value='Intestati']")
+        if await intestati_btn.count() == 0:
+            docs["soggetto"] = "unavailable"
+            continue
+        await intestati_btn.click()
+        await page.wait_for_load_state("networkidle", timeout=30000)
+        if await page.locator("input[name='visura'][value='Visura per Soggetto']").count() == 0:
+            docs["soggetto"] = "unavailable"
+            continue
+        # With several intestati the portal lists one unchecked radio per owner and rejects the submit
+        # ("Selezionare un Omonimo") until one is chosen.
+        owner_radios = page.locator("input[type='radio'][name='intestatoSelezionato']")
+        owners = await owner_radios.count()
+        if owners:
+            await owner_radios.nth(min(pick, owners - 1)).check()
+            if owners > 1:
+                log.info("Piu' intestati (%d) — Visura per Soggetto per l'intestato %d", owners, pick + 1)
+        if await _submit_visura_soggetto(page, page_logger, radio_idx, step):
+            docs["soggetto"] = "requested"
+        await _resubmit_search_for_immobili_list(page, page_logger, *search)
+
+
 async def run_visura(
     page,
     provincia="Trieste",
@@ -481,12 +809,23 @@ async def run_visura(
     sezione_urbana=None,
     tipo_visura="completa",
     visura_soggetto=True,
+    request_documents=None,
 ):
     """Search a property and request its visura (and, optionally, each owner's Visura per Soggetto).
 
+    Two phases: first every HTML page is read (the immobili list and the Intestati page of each immobile: no
+    CAPTCHA), then the document requests are submitted (Tipo di visura form: CAPTCHA).
+
     tipo_visura: 'completa', 'storica_analitica' or 'storica_sintetica' (Tipo visura on the request form).
-    visura_soggetto: also request the Visura per Soggetto for the owners found (extra captcha per owner).
+    visura_soggetto: also request the Visura per Soggetto for the owners found (one owner per immobile, and never
+        the same owner twice in one run; extra captcha per request).
+    request_documents: False stops after phase 1 (HTML only, no CAPTCHA, nothing is requested or downloaded).
+        Default: the ``richiedi_documenti`` form field, else True.
     """
+    if request_documents is None:
+        request_documents = str(current_form_fields().get("richiedi_documenti", "true")).strip().lower() not in _FALSE_VALUES
+    # what _resubmit_search_for_immobili_list needs to bring the list back
+    search = (provincia, comune, sezione, foglio, particella, tipo_catasto, subalterno, sezione_urbana)
     time0 = time.time()
     page_logger = PageLogger("visura")
     sezione_info = f", sezione={sezione}" if sezione else ""
@@ -693,243 +1032,34 @@ async def run_visura(
             "page_visits": page_logger.page_visits,
         }
 
-    # STEP 5: Estrai intestati e visure per immobile
-    log.info("Estraendo intestati e visure per immobile...")
-    all_intestati = []
-    results_list = []
-    skipped_soppresso = 0
+    # STEP 5 — phase 1, HTML sweep (see _read_immobili_intestati)
+    all_intestati, results_list, skipped_soppresso, bene_comune_indices = await _read_immobili_intestati(
+        page, page_logger, immobili, search
+    )
     needs_human = None
 
-    # Re-fill richiedente/motivo/sezUrb on results page (SISTER clears them after submit)
-    await _fill_richiedente_motivo(page, sezione_urbana=sezione_urbana)
-
-    try:
-        # Check if there are radio buttons (multiple immobili)
-        radio_buttons = page.locator("input[type='radio'][property='visImmSel'], input[type='radio'][name='visImmSel']")
-        radio_count = await radio_buttons.count()
-
-        if radio_count > 0:
-            # Build list of active radio indices, classifying each
-            active_indices = []
-            bene_comune_indices = set()
-            for i in range(radio_count):
-                val = await radio_buttons.nth(i).get_attribute("value") or ""
-                if "Soppress" in val:
-                    skipped_soppresso += 1
-                else:
-                    active_indices.append(i)
-                    if "Bene comune" in val:
-                        bene_comune_indices.add(i)
-            skipped_bene_comune = len(bene_comune_indices)
-            if skipped_soppresso:
-                log.info("Saltati %d immobili soppressi su %d totali", skipped_soppresso, radio_count)
-            if skipped_bene_comune:
-                log.info("Trovati %d 'Bene comune non censibile' — intestati saltati per questi", skipped_bene_comune)
-            log.info("Iterando per %d immobili attivi", len(active_indices))
-        else:
-            active_indices = []
-            bene_comune_indices = set()
-
-        total_active = len(active_indices)
-        for item_num, radio_idx in enumerate(active_indices, 1):
-            imm_data = immobili[radio_idx] if radio_idx < len(immobili) else {}
-            is_bene_comune = radio_idx in bene_comune_indices
-            step_result = {"result_index": radio_idx + 1, "immobile": imm_data, "intestati": [], "visura": None}
-
-            # Select the radio button
-            radio = radio_buttons.nth(radio_idx)
-            await radio.click()
-            log.info(
-                "[%d/%d] Immobile radio %d — Sub.%s %s%s",
-                item_num,
-                total_active,
-                radio_idx + 1,
-                imm_data.get("Sub", "?"),
-                imm_data.get("Indirizzo", "")[:30],
-                " [Bene comune — skip intestati]" if is_bene_comune else "",
+    # STEP 6 — phase 2, document requests (the Tipo di visura form: the only place with a CAPTCHA).
+    documents_pending: list[dict] = []
+    if request_documents and results_list:
+        log.info("Fase 2 (documenti): richieste visura%s", " + soggetto" if visura_soggetto else "")
+        try:
+            await _request_visura_documents(
+                page, page_logger, results_list, bene_comune_indices, tipo_visura, visura_soggetto, search
             )
-
-            # --- Click "Intestati" (skip for Bene comune non censibile) ---
-            intestati_btn = page.locator("input[name='intestati'][value='Intestati']")
-            if not is_bene_comune and await intestati_btn.count() > 0:
-                await intestati_btn.click()
-                await page.wait_for_load_state("networkidle", timeout=30000)
-                await page_logger.log(page, f"intestati_{radio_idx + 1}")
-
-                # Extract intestati using Playwright locators
-                step_intestati = await _extract_intestati_playwright(page)
-                log.info("[green]%d intestati[/green] per immobile (radio %d)", len(step_intestati), radio_idx + 1)
-                all_intestati.extend(step_intestati)
-                step_result["intestati"] = step_intestati
-
-                # --- Click "Visura per Soggetto" (deferred PDF request) ---
-                visura_sogg_btn = page.locator("input[name='visura'][value='Visura per Soggetto']")
-                if visura_soggetto and await visura_sogg_btn.count() > 0:
-                    # With several intestati the portal lists one unchecked radio per owner and rejects the
-                    # submit ("Selezionare un Omonimo"), so pick one when none is selected.
-                    owner_radios = page.locator("input[type='radio'][name='intestatoSelezionato']")
-                    if await owner_radios.count() > 0 and await owner_radios.and_(page.locator(":checked")).count() == 0:
-                        await owner_radios.first.check()
-                        log.info("Piu' intestati (%d) — selezionato il primo per Visura per Soggetto", await owner_radios.count())
-                    await visura_sogg_btn.click()
-                    await page.wait_for_load_state("networkidle", timeout=30000)
-
-                    # Handle intermediate pages (RicercaPF, SceltaOmonimi, etc.)
-                    submitted = False
-                    for _nav in range(5):
-                        current_url = page.url
-
-                        # TipoVisura.do — the visura options form. After picking an owner SISTER keeps the URL at
-                        # SceltaIntestatiIMM.do while already showing this form (with its own CAPTCHA), so detect it
-                        # from the page content as well as from the URL.
-                        if "TipoVisura" in current_url or await page.locator("form[name='TipoVisuraForm']").count() > 0:
-                            await _set_visura_form_defaults(page)
-                            await page_logger.log(page, f"visura_soggetto_{radio_idx + 1}")
-                            visura_sogg_data = await _extract_visura_immobile_playwright(page)
-                            step_result["visura_soggetto"] = visura_sogg_data
-
-                            has_captcha = await _wait_for_captcha(page)
-                            if not has_captcha:
-                                inoltra_btn = page.locator(
-                                    "input[name='inoltra'][value='Inoltra'], input[type='submit'][value='Inoltra']"
-                                )
-                                if await inoltra_btn.count() > 0:
-                                    await inoltra_btn.click()
-                                    await page.wait_for_load_state("networkidle", timeout=30000)
-                            submitted = True
-                            break
-
-                        # RicercaPF.do — persona fisica search: click Ricerca to proceed
-                        if "RicercaPF" in current_url:
-                            log.info("Pagina RicercaPF — procedendo con ricerca")
-                            await page_logger.log(page, f"ricerca_pf_{radio_idx + 1}")
-                            ricerca_btn = page.locator(
-                                "input[type='submit'][value='Ricerca'], input[name='ricerca'][value='Ricerca']"
-                            )
-                            if await ricerca_btn.count() > 0:
-                                await ricerca_btn.first.click()
-                                await page.wait_for_load_state("networkidle", timeout=30000)
-                                continue
-
-                        # SceltaOmonimiPF.do — homonym selection: select first and proceed
-                        if "SceltaOmonimi" in current_url:
-                            log.info("Pagina SceltaOmonimi — selezionando primo soggetto")
-                            await page_logger.log(page, f"scelta_omonimi_{radio_idx + 1}")
-                            first_radio = page.locator("input[type='radio']").first
-                            if await first_radio.count() > 0:
-                                await first_radio.click()
-                            submit_btn = page.locator(
-                                "input[type='submit'][value='Conferma'], input[type='submit'][value='Prosegui'], input[type='submit']"
-                            ).first
-                            if await submit_btn.count() > 0:
-                                await submit_btn.click()
-                                await page.wait_for_load_state("networkidle", timeout=30000)
-                                continue
-
-                        # InoltraRichiestaVis.do — already submitted
-                        if "InoltraRichiesta" in current_url:
-                            submitted = True
-                            break
-
-                        # Unknown page — log and break
-                        log.warning("Pagina inattesa durante Visura per Soggetto: %s", current_url)
-                        await page_logger.log(page, f"visura_soggetto_unexpected_{radio_idx + 1}")
-                        break
-
-                    if submitted:
-                        await page_logger.log(page, f"visura_soggetto_inoltrata_{radio_idx + 1}")
-                        log.info("Visura per Soggetto inoltrata per radio %d", radio_idx + 1)
-
-                    # Re-submit search to get immobili list back
-                    radio_buttons = await _resubmit_search_for_immobili_list(
-                        page,
-                        page_logger,
-                        provincia,
-                        comune,
-                        sezione,
-                        foglio,
-                        particella,
-                        tipo_catasto,
-                        subalterno,
-                        sezione_urbana,
-                    )
-                else:
-                    # No "Visura per Soggetto" button — go back from intestati page
-                    await _navigate_back_to_immobili_list(page)
-                    radio_buttons = page.locator(
-                        "input[type='radio'][property='visImmSel'], input[type='radio'][name='visImmSel']"
-                    )
-
-                # Re-select the same radio for the next action (Visura Per Immobile)
-                radio = radio_buttons.nth(radio_idx)
-                await radio.click()
-
-            # --- Click "Visura Per Immobile" ---
-            visura_btn = page.locator("input[name='visuraImm'][value='Visura Per Immobile']")
-            if await visura_btn.count() > 0:
-                await visura_btn.click()
-                await page.wait_for_load_state("networkidle", timeout=30000)
-
-                # Set default options: requested tipo visura, XML, differita
-                await _set_visura_form_defaults(page, tipo_visura)
-                await page_logger.log(page, f"visura_immobile_{radio_idx + 1}")
-
-                # Extract visura data from the form page before submitting
-                visura_data = await _extract_visura_immobile_playwright(page)
-                step_result["visura"] = visura_data
-
-                # Wait for user to solve CAPTCHA (fills inCaptchaChars → form auto-submits)
-                has_captcha = await _wait_for_captcha(page)
-
-                if not has_captcha:
-                    # No CAPTCHA — click Inoltra manually
-                    inoltra_btn = page.locator(
-                        "input[name='inoltra'][value='Inoltra'], input[type='submit'][value='Inoltra']"
-                    )
-                    if await inoltra_btn.count() > 0:
-                        await inoltra_btn.click()
-                        await page.wait_for_load_state("networkidle", timeout=30000)
-
-                await page_logger.log(page, f"visura_inoltrata_{radio_idx + 1}")
-                log.info("Visura Per Immobile inoltrata per radio %d", radio_idx + 1)
-
-                # Re-submit search to get immobili list back (SISTER loses session state after Inoltra)
-                radio_buttons = await _resubmit_search_for_immobili_list(
-                    page,
-                    page_logger,
-                    provincia,
-                    comune,
-                    sezione,
-                    foglio,
-                    particella,
-                    tipo_catasto,
-                    subalterno,
-                    sezione_urbana,
-                )
-
-            await _fill_richiedente_motivo(page, sezione_urbana=sezione_urbana)
-            results_list.append(step_result)
-            log.info("[%d/%d] Completato immobile radio %d", item_num, total_active, radio_idx + 1)
-
-    except CaptchaRequired as e:
-        # Keep what was extracted from the pages (immobili, intestati) and flag the document request as pending a
-        # human, instead of swallowing it in the generic handler below and reporting a plain success.
-        needs_human = str(e)
-        log.warning("Richiesta documento in attesa di un operatore (CAPTCHA): %s", e)
-    except Exception as e:
-        log.error(
-            "Errore estrazione intestati/visure (item %d/%d): %s",
-            item_num if "item_num" in dir() else 0,
-            total_active if "total_active" in dir() else 0,
-            e,
-        )
-
-    if not results_list and immobili:
-        results_list = [{"result_index": 1, "immobile": immobili[0] if immobili else {}, "intestati": all_intestati}]
+        except CaptchaRequired as e:
+            # Keep what was extracted from the pages and flag the pending requests for a human, instead of reporting a
+            # plain success.
+            needs_human = str(e)
+            log.warning("Richiesta documento in attesa di un operatore (CAPTCHA): %s", e)
+        except Exception as e:
+            log.error("Errore richiesta documenti: %s", e)
+        documents_pending = _pending_documents(results_list)
+    elif not request_documents:
+        log.info("Fase 2 saltata (richiedi_documenti=false): solo pagine HTML")
 
     # --- Download PDFs from Richieste page ---
     downloaded_pdfs = []
-    if extract_intestati and results_list:
+    if extract_intestati and request_documents and results_list:
         try:
             downloaded_pdfs = await _download_richieste_documents(page, page_logger)
         except Exception as e:
@@ -953,6 +1083,7 @@ async def run_visura(
         "skipped_soppresso": skipped_soppresso,
         "downloaded_pdfs": downloaded_pdfs,
         "page_visits": page_logger.page_visits,
+        **({"documents_pending": documents_pending} if documents_pending else {}),
         **({"needs_human": needs_human} if needs_human else {}),
     }
 
@@ -1562,6 +1693,10 @@ def _extract_p7m(file_path: str) -> str | None:
     return None
 
 
+# Large Visure per Soggetto exceed 50 kB; the column is unbounded text, so only a runaway file is cut.
+XML_CONTENT_LIMIT = 5_000_000
+
+
 def _parse_visura_xml(file_path: str) -> dict | None:
     """Parse a SISTER visura XML file and extract structured data.
 
@@ -1598,7 +1733,7 @@ def _parse_visura_xml(file_path: str) -> dict | None:
             "immobile": {},
             "classamento": [],
             "indirizzo": "",
-            "xml_content": content[:50000],
+            "xml_content": content[:XML_CONTENT_LIMIT],
         }
 
         # Determine document type and subtype from XML root element and TitoloVisura
@@ -1634,7 +1769,13 @@ def _parse_visura_xml(file_path: str) -> dict | None:
             result["tipo"] = "visura_fabbricati"
             result["tipo_catasto"] = "F"
             result["visura_subtype"] = _subtype_from_titolo(titolo)
-        elif soup.find("VisuraTerrenoStorica") or soup.find("VisuraTerrenoAttuale") or soup.find("VisuraTerreno"):
+        elif (
+            soup.find("VisuraTerreniStorica")
+            or soup.find("VisuraTerreniAttuale")
+            or soup.find("VisuraTerrenoStorica")
+            or soup.find("VisuraTerrenoAttuale")
+            or soup.find("VisuraTerreno")
+        ):
             result["tipo"] = "visura_terreni"
             result["tipo_catasto"] = "T"
             result["visura_subtype"] = _subtype_from_titolo(titolo)
@@ -1652,7 +1793,7 @@ def _parse_visura_xml(file_path: str) -> dict | None:
             result["foglio"] = dati_rich.get("Foglio", "")
             result["particella"] = dati_rich.get("ParticellaNum", "") or dati_rich.get("Particella", "")
             result["subalterno"] = dati_rich.get("Subalterno", "")
-            result["sezione_urbana"] = dati_rich.get("SezUrbana", "")
+            result["sezione_urbana"] = dati_rich.get("SezUrbana", "") or dati_rich.get("SezCensuaria", "")
             result["tipo_catasto"] = dati_rich.get("TipoCatasto", "") or result["tipo_catasto"]
             result["protocollo"] = dati_rich.get("Protocollo", "")
             result["anno"] = dati_rich.get("Anno", "")
@@ -1708,7 +1849,10 @@ def _parse_visura_xml(file_path: str) -> dict | None:
             result["indirizzo"] = indirizzo_el.string.strip()
 
         # Extract intestati from Intestato elements (attributes + children)
+        # (the historical documents also list the former owners under StoriaIntestazione: not the current ones)
         for intestato_el in soup.find_all("Intestato"):
+            if intestato_el.find_parent("StoriaIntestazione") is not None:
+                continue
             intestato = dict(intestato_el.attrs)
             for child in intestato_el.children:
                 if hasattr(child, "name") and child.name:
@@ -1975,7 +2119,7 @@ def _parse_ispezione_ipotecaria_pdf(file_path: str) -> dict | None:
 
 
 async def _persist_flattened_xml(session, document_id: int, content: str | None) -> None:
-    """Store XML elements and attributes in the relational document tree."""
+    """Store XML elements and attributes in the relational document tree, then fill the typed tables from it."""
     if not content:
         return
 
@@ -2019,6 +2163,16 @@ async def _persist_flattened_xml(session, document_id: int, content: str | None)
             await visit(child, node.id, child_ordinal)
 
     await visit(root, None, 0)
+
+    # the same XML into the typed tables (properties, owners, ownership acts); a document the typed reader cannot
+    # place keeps its node tree, and a failure there must not lose the document
+    from .xml_ingest import ingest_visura_xml
+
+    try:
+        async with session.begin_nested():
+            await ingest_visura_xml(session, document_id, content)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("Tabelle tipizzate non popolate per il documento %s: %s", document_id, exc)
 
 
 async def _save_documents_to_db(documents: list[dict]) -> None:
@@ -2629,6 +2783,7 @@ async def run_elenco_immobili(
             "foglio": foglio,
             "immobili": grouped,
             "total_results": len(grouped),
+            "page_visits": page_logger.page_visits,
         }
 
     # STEP 6: Check for errors
@@ -2643,6 +2798,7 @@ async def run_elenco_immobili(
             "immobili": [],
             "total_results": 0,
             "error": "NESSUNA CORRISPONDENZA TROVATA",
+            "page_visits": page_logger.page_visits,
         }
 
     # STEP 7: Extract results
@@ -2658,6 +2814,7 @@ async def run_elenco_immobili(
         "foglio": foglio,
         "immobili": immobili,
         "total_results": len(immobili),
+        "page_visits": page_logger.page_visits,
     }
 
 
@@ -3523,6 +3680,7 @@ async def run_riepilogo_visure(page):
     return {
         "risultati": results,
         "total_results": len(results),
+        "page_visits": page_logger.page_visits,
     }
 
 
@@ -3546,13 +3704,22 @@ async def run_consultazione_richieste(page):
             await page.wait_for_load_state("networkidle", timeout=30000)
             await page_logger.log(page, "richieste")
 
-    results = _extract_result_tables(await page.content())
+    # The Richieste table has its own schema and isn't a cadastral result table.
+    # Return only rows with a Salva link, which means the document is ready to
+    # download. Keep the request id, but don't persist the session-bound URL.
+    requests = _parse_richieste_table(await page.content())
+    results = [
+        {key: value for key, value in item.items() if key != "salva_href"}
+        for item in requests
+    ]
     elapsed = time.time() - time0
-    log.info("[green]Consultazione richieste completata[/green] in %.1fs — %d risultati", elapsed, len(results))
+    log.info("[green]Consultazione richieste completata[/green] in %.1fs — %d pronti da scaricare", elapsed, len(results))
 
     return {
+        "richieste": results,
         "risultati": results,
         "total_results": len(results),
+        "page_visits": page_logger.page_visits,
     }
 
 
@@ -4353,7 +4520,12 @@ async def run_soggetto_documento(page, codice_fiscale, tipo_catasto="E", vista="
     n_province = None
     while True:
         if not await _open_soggetto_province_page(page, codice_fiscale, tipo_catasto, provincia):
-            return {"soggetto": codice_fiscale, "richieste": submitted, "error": "NESSUNA CORRISPONDENZA TROVATA"}
+            return {
+                "soggetto": codice_fiscale,
+                "richieste": submitted,
+                "error": "NESSUNA CORRISPONDENZA TROVATA",
+                "page_visits": page_logger.page_visits,
+            }
         province = page.locator(_PROVINCE_RADIOS)
         count = await province.count()
         if n_province is None:
@@ -4395,32 +4567,18 @@ async def run_soggetto_documento(page, codice_fiscale, tipo_catasto="E", vista="
             break
 
     log.info("[green]Visura per Soggetto inoltrata[/green] in %.1fs (%d province)", time.time() - time0, len(submitted))
-    return {"soggetto": codice_fiscale, "vista": vista, "richieste": submitted}
-
-
-_ID_RE = re.compile(r"^(?:[A-Z0-9]{16}|\d{11})$")
-
-
-def _parse_intestato_value(value: str) -> dict:
-    """Decode an intestatoSelezionato radio value.
-
-    Persona fisica: ``id#id#COGNOME NOME #CF#SESSO#LUOGO (PR)#GG/MM/AAAA``;
-    persona giuridica: ``id#0#DENOMINAZIONE#SEDE (PR)#PARTITA IVA``.
-    """
-    parts = [part.strip() for part in (value or "").split("#")]
-    ident = next((part for part in parts if _ID_RE.match(part)), "")
-    owner: dict = {"codice_fiscale": ident, "tipo": "azienda" if len(ident) == 11 else "persona"}
-    if owner["tipo"] == "persona" and len(parts) >= 7:
-        owner.update(nome=parts[2], sesso=parts[4], luogo_nascita=parts[5], data_nascita=parts[6])
-    elif len(parts) >= 5:
-        owner.update(nome=parts[2], sede=parts[3])
-    return owner
+    return {
+        "soggetto": codice_fiscale,
+        "vista": vista,
+        "richieste": submitted,
+        "page_visits": page_logger.page_visits,
+    }
 
 
 async def _extract_owners(page) -> list[dict]:
     """Owners of the selected immobile on the Intestati page (identity from the radios, shares from the table)."""
     radios = page.locator("input[type='radio'][name='intestatoSelezionato']")
-    owners = [_parse_intestato_value(await radios.nth(i).get_attribute("value")) for i in range(await radios.count())]
+    owners = [parse_intestato_value(await radios.nth(i).get_attribute("value")) for i in range(await radios.count())]
     table = await _extract_intestati_playwright(page)
     for i, row in enumerate(table):
         extra = {
@@ -4482,6 +4640,7 @@ async def run_soggetto_immobili(
                 "immobili": [],
                 "total_results": 0,
                 "error": "NESSUNA CORRISPONDENZA TROVATA",
+                "page_visits": page_logger.page_visits,
             }
         (label, provincia_nome), count = opened
         if n_province is None:
@@ -4532,4 +4691,9 @@ async def run_soggetto_immobili(
             break
 
     log.info("[green]Immobili soggetto[/green] %s: %d in %.1fs", codice_fiscale, len(immobili), time.time() - time0)
-    return {"soggetto": codice_fiscale, "immobili": immobili, "total_results": len(immobili)}
+    return {
+        "soggetto": codice_fiscale,
+        "immobili": immobili,
+        "total_results": len(immobili),
+        "page_visits": page_logger.page_visits,
+    }

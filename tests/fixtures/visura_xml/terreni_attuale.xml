@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Visura xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="Visure_SIT_ver1.0.xsd">
+  <VisuraTerreniAttuale>
+    <TitoloVisura Titolo="VISURA ATTUALE PER IMMOBILE" SituazioneAl="20261006" TipoVisura="ATTUALE" TipoServizio="Visura" Data="20261006" Ora="10:00:00" Provenienza="SISTER"/>
+    <DatiRichiesta Provincia="RAVENNA" Comune="RAVENNA" CodiceComune="H199" Foglio="2" ParticellaNum="246" SezCensuaria="SAVIO" Protocollo="T2" Anno="2026"/>
+    <ImmobileTerreni>
+      <DatiIdentificativi>
+        <IdentificativoDefinitivo Provincia="RAVENNA" Comune="RAVENNA" CodiceComune="H199" Foglio="2" ParticellaNum="246" SezCensuaria="SAVIO" ProgrId="4"><Partita>1234</Partita></IdentificativoDefinitivo>
+      </DatiIdentificativi>
+      <DatiClassamentoT>
+        <ClassamentoT Classe="2" Qualita="SEMINATIVO" SuperficieMQ="1500" RedditoDominicaleEuro="12.34" RedditoAgrarioEuro="9.87" SimboloDeduzione="A"/>
+        <ClassamentoT Classe="1" Qualita="VIGNETO" SuperficieMQ="500" RedditoDominicaleEuro="20.00" RedditoAgrarioEuro="15.00"/>
+      </DatiClassamentoT>
+      <MutazioneSoggettiva IndiceMutazione="1">
+        <DatiDerivantiDaMutazSogg>SUCCESSIONE</DatiDerivantiDaMutazSogg>
+        <Intestazione>
+          <Intestato IndiceIntestato="1"><Nominativo>ROSSI S.R.L.</Nominativo><CF>00000000001</CF>
+            <DirittiReali CodiceDiritto="1" Descrizione="Proprieta'" Quota="1/1"/></Intestato>
+        </Intestazione>
+      </MutazioneSoggettiva>
+    </ImmobileTerreni>
+    <DatiLiquidazione Anno="2026" Protocollo="T2" UnitaImmobiliari="1"/>
+    <Richiedente Descrizione="STUDIO ROSSI"/>
+  </VisuraTerreniAttuale>
+</Visura>

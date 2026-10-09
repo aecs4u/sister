@@ -105,8 +105,8 @@ _IMMOBILE = (
 )
 
 _BASE_FORMS: dict[str, QueryForm] = {
-    "search": QueryForm("search", "immobile", _IMMOBILE),
-    "intestati": QueryForm("intestati", "immobile", _IMMOBILE),
+    "search": QueryForm("search", "immobile", _IMMOBILE, extra_params=("provincia", "richiedi_documenti")),
+    "intestati": QueryForm("intestati", "immobile", _IMMOBILE, extra_params=("provincia", "richiedi_documenti")),
     "soggetto": QueryForm(
         "soggetto",
         "soggetto",
@@ -448,6 +448,10 @@ _EXTRA_HELP = {
     "foglio": "Numero di foglio (non è un campo di questa maschera)",
     "comune": "Comune (non è un campo di questa maschera)",
     "particella": "Numero di particella (non è un campo di questa maschera)",
+    "richiedi_documenti": (
+        "true/false (default true): false legge solo le pagine HTML (immobili e intestati, senza CAPTCHA) "
+        "e non richiede ne' scarica i documenti"
+    ),
 }
 
 _P = ("provincia", "comune")

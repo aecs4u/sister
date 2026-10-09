@@ -108,7 +108,7 @@ async def test_cleanup_returns_count_and_leaves_fresh_rows():
     await _request("fresh")
     await database.save_response("fresh", True, "F", data={})
 
-    deleted = await database.cleanup_old_responses(retention_days=1)
+    deleted = await database.cleanup_old_responses(ttl_seconds=24 * 60 * 60)
 
     assert deleted == 1
     assert await database.get_response("old") is None
@@ -152,14 +152,21 @@ def test_parse_property_rows_tolerates_bad_payloads(data):
 def test_parse_owners_splits_subject_and_right():
     ((subject, right),) = database._parse_owners("r1", SISTER_INTESTATI_RESPONSE["data"])
 
-    assert subject == {"display_name": "ROSSI MARIO", "fiscal_code": "RSSMRI85E28H501E"}
-    assert right == {"right_type": "Proprietà per 1/1"}
+    assert subject == {
+        "display_name": "ROSSI MARIO",
+        "fiscal_code": "RSSMRI85E28H501E",
+        "gender": "M",
+        "birth_municipality_code": "H501",
+        "subject_type": "person",
+    }
+    assert right == {"right_type": "Proprietà", "ownership_share": "1/1"}
 
 
-def test_parse_owners_blank_values_become_none():
-    ((subject, _),) = database._parse_owners("r1", {"intestati": [{"Nominativo": "  ", "Quota": "1/2"}]})
+def test_parse_owners_blank_values_are_dropped():
+    ((subject, right),) = database._parse_owners("r1", {"intestati": [{"Nominativo": "  ", "Quota": "1/2"}]})
 
-    assert subject == {"display_name": None}
+    assert subject == {}
+    assert right == {"ownership_share": "1/2"}
 
 
 def test_parse_page_visits_handles_bad_timestamps_and_serialises_extras():
@@ -230,7 +237,8 @@ async def test_save_response_projects_owners():
     (owner,) = await database.get_db_owners_for_response("i1")
 
     assert owner["fiscal_code"] == "RSSMRI85E28H501E"
-    assert owner["right_type"] == "Proprietà per 1/1"
+    assert (owner["right_type"], owner["ownership_share"]) == ("Proprietà", "1/1")
+    assert owner["gender"] == "M"
 
 
 @pytest.mark.usefixtures("fresh_db")
@@ -329,12 +337,14 @@ async def test_count_result_rows_breakdown():
     assert stats["pending"] == 0
 
 
-async def test_result_queries_without_database_file(tmp_path, monkeypatch):
-    monkeypatch.setattr(database, "DB_PATH", str(tmp_path / "missing.sqlite"))
+async def test_result_queries_without_database_configured_fail_loudly(monkeypatch):
+    """The layer is PostgreSQL-only: with no DSN there is no silent empty fallback."""
+    monkeypatch.setattr(database, "DATABASE_DSN", None)
+    monkeypatch.setattr(database, "_engine", None)
+    monkeypatch.setattr(database, "_db_writable", None)
 
-    assert await database.find_result_rows() == []
-    assert await database.count_total_result_rows() == 0
-    assert (await database.count_result_rows())["total_requests"] == 0
+    with pytest.raises(RuntimeError, match="DATABASE_DSN"):
+        await database.find_result_rows()
 
 
 @pytest.mark.usefixtures("populated")

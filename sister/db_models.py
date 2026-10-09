@@ -246,6 +246,7 @@ PROPERTY_FIELD_MAP = {
     "Classe": "cadastral_class",
     "Consistenza": "consistency",
     "Rendita": "income",
+    "Zona": "census_zone",
     "Zona cens": "census_zone",
     "Zona censuaria": "census_zone",
     # Terreni-specific
@@ -253,7 +254,9 @@ PROPERTY_FIELD_MAP = {
     "Qualità": "quality",
     "Superficie": "area",
     "Reddito Dominicale": "dominical_income",
+    "Reddito dominicale": "dominical_income",  # the portal's own spelling
     "Reddito Agrario": "agricultural_income",
+    "Reddito agrario": "agricultural_income",
     # Soggetto/PNF results
     "Sede": "registered_office",
     "Provincia": "province",
@@ -271,6 +274,7 @@ PROPERTY_LOCATION_FIELD_MAP = {
     "Foglio": "sheet",
     "Particella": "parcel",
     "Sub": "subunit",
+    "Subalterno": "subunit",
 }
 
 

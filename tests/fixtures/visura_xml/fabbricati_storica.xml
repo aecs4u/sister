@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Visura xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="Visure_SIT_ver1.0.xsd">
+  <VisuraFabbricatiStorica>
+    <TitoloVisura Titolo="VISURA STORICA PER IMMOBILE" SituazioneAl="20261006" TipoVisura="STORICA" TipoServizio="Visura" Data="20261006" Ora="20:10:50" Provenienza="SISTER"/>
+    <DatiRichiesta Provincia="RAVENNA" Comune="RAVENNA" CodiceComune="H199" Foglio="103" ParticellaNum="1714" Subalterno="2" SezUrbana="RA" Protocollo="T1" Anno="2026"/>
+    <SituazioneAttualeFabbricati>
+      <DatiIdentificativi>
+        <IdentificativoDefinitivo Provincia="RAVENNA" Comune="RAVENNA" CodiceComune="H199" Foglio="103" ParticellaNum="1714" Subalterno="2" SezUrbana="RA" ProgrId="9"/>
+      </DatiIdentificativi>
+      <DatiClassamentoF Categoria="A/4" Classe="04" RenditaEuro="557.77" ZonaCensuaria="1">
+        <Consistenza Unita="vani" Valore="6.0"/>
+      </DatiClassamentoF>
+      <IndirizzoImm>VIA EL ALAMEIN n. 2 Piano T-1</IndirizzoImm>
+      <SuperficieF Totale="120" TotaleE="110"/>
+      <MappaliCorrelati><IdentificativoCorrelato Foglio="103" ParticellaNum="1714" SezCensuaria="RA" ProgrId="3"/></MappaliCorrelati>
+      <IntestazioneAttuale>
+        <Intestato IndiceIntestato="1"><Nominativo>ROSSI MARIO</Nominativo><CF>RSSMRA70A01H501Z</CF>
+          <DirittiReali CodiceDiritto="1" Descrizione="Proprieta'" Quota="1/2" FineDiritto="dall'impianto al 31/12/2023"/></Intestato>
+        <Intestato IndiceIntestato="2"><Nominativo>ROSSI ANNA</Nominativo><CF>RSSNNA70A41H501Z</CF>
+          <DirittiReali CodiceDiritto="1" Descrizione="Proprieta'" Quota="1/2"/></Intestato>
+      </IntestazioneAttuale>
+    </SituazioneAttualeFabbricati>
+    <StoriaImmobileFabbricati>
+      <DatiIndirizzo>
+        <IdentificativoDefinitivoRiferimento Foglio="103" ParticellaNum="1714" Subalterno="2"/>
+        <DatiDerivantiDa Descrizione="VARIAZIONE"/><Situazione>dal 01/01/2000</Situazione>
+        <IndirizzoImm>VIA EL ALAMEIN n. 2</IndirizzoImm>
+      </DatiIndirizzo>
+    </StoriaImmobileFabbricati>
+    <StoriaIntestazione>
+      <MutazioneSoggettiva IndiceMutazione="1">
+        <IdentificativoDefinitivoRiferimento CodiceComune="H199" Comune="RAVENNA" Provincia="RAVENNA" Foglio="103" ParticellaNum="1714" Subalterno="2" SezUrbana="RA" StatoImmobile="A"/>
+        <DatiDerivantiDaMutazSogg>COMPRAVENDITA del 01/01/2000</DatiDerivantiDaMutazSogg>
+        <Intestazione>
+          <Intestato IndiceIntestato="1"><Nominativo>VERDI LUCA</Nominativo><CF>VRDLCU60A01H501Z</CF>
+            <DirittiReali CodiceDiritto="1" Descrizione="Proprieta'" Quota="1/1" FineDiritto="dal 01/01/1990 al 31/12/1999"/></Intestato>
+        </Intestazione>
+      </MutazioneSoggettiva>
+    </StoriaIntestazione>
+    <DatiLiquidazione Anno="2026" Protocollo="T1" UnitaImmobiliari="1"/>
+    <Richiedente Descrizione="STUDIO ROSSI"/>
+  </VisuraFabbricatiStorica>
+</Visura>

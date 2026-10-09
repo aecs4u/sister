@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import copy
+import hashlib
 import json
 import logging
 import os
 from dataclasses import dataclass
+from json import dumps as json_dumps
 from uuid import uuid4
 
 from aecs4u_workflow.executors import (
@@ -51,6 +54,52 @@ from pydantic import ValidationError
 from .client import VisuraClient
 
 logger = logging.getLogger("sister")
+
+
+class _WorkflowVisuraClient(VisuraClient):
+    """Reuse identical free query submissions during one workflow run.
+
+    The service also has a persistent response cache, but a single workflow can
+    encounter the same query through multiple fan-out paths. Reusing the first
+    submission here avoids another portal request even when that persistent
+    cache is unavailable. Paid inspections and document downloads are excluded.
+    """
+
+    _NON_CACHEABLE_PATHS = {
+        "/visura/workflow",
+        "/visura/download-documents",
+        "/visura/ispezione-ipotecaria",
+    }
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._workflow_submissions: dict[str, dict] = {}
+        self.query_cache_hits = 0
+
+    async def _request(self, method, path, *, json=None, params=None, force=False):
+        cache_key = None
+        if (
+            method.upper() == "POST"
+            and path.startswith("/visura/")
+            and path not in self._NON_CACHEABLE_PATHS
+            and not force
+        ):
+            canonical = json_dumps(
+                {"path": path, "json": json, "params": params},
+                sort_keys=True,
+                ensure_ascii=True,
+                default=str,
+            )
+            cache_key = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+            cached = self._workflow_submissions.get(cache_key)
+            if cached is not None:
+                self.query_cache_hits += 1
+                return copy.deepcopy(cached)
+
+        response = await super()._request(method, path, json=json, params=params, force=force)
+        if cache_key and response.get("status") not in {"error", "failed", "expired"}:
+            self._workflow_submissions[cache_key] = copy.deepcopy(response)
+        return response
 
 
 @dataclass
@@ -206,7 +255,7 @@ async def run_workflow_stream(plan: WorkflowPlan, *, base_url: str | None = None
         default=str,
     )
 
-    client = VisuraClient(
+    client = _WorkflowVisuraClient(
         base_url=base_url,
         api_key=api_key or os.getenv("VISURA_API_KEY") or os.getenv("API_KEY"),
     )
@@ -244,9 +293,17 @@ async def run_workflow_stream(plan: WorkflowPlan, *, base_url: str | None = None
 
             yield json.dumps({"event": "step", "step": step_name, "status": "running"})
             try:
+                executor_params = params
+                if step_name == "owner_expand":
+                    # The shared executor uses max_fanout for this loop; honor
+                    # the narrower owner-specific budget supplied by the app.
+                    executor_params = dict(params)
+                    executor_params["max_fanout"] = min(
+                        params["max_fanout"], params["max_owners"]
+                    )
                 data = await executor(
                     client,
-                    params,
+                    executor_params,
                     step_results,
                     poll_timeout=metadata.get("poll_timeout"),
                 )
@@ -275,6 +332,7 @@ async def run_workflow_stream(plan: WorkflowPlan, *, base_url: str | None = None
             "completed": completed,
             "failed": failed,
             "skipped": skipped,
+            "query_cache_hits": client.query_cache_hits,
             "properties": len(aggregate["properties"]),
             "owners": len(aggregate["owners"]),
             "addresses": len(aggregate.get("addresses", [])),

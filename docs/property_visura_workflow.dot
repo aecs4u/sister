@@ -1,0 +1,126 @@
+// SISTER — "Property search" (search / intestati) workflow, two phases
+// Render: dot -Tsvg property_visura_workflow.dot -o property_visura_workflow.svg
+// Code: sister/utils.py run_visura -> _read_immobili_intestati (phase 1) + _request_visura_documents (phase 2)
+digraph PropertyVisura {
+  rankdir=TB;
+  fontname="Helvetica"; fontsize=12;
+  labelloc="t";
+  label="SISTER — property search (query search / intestati)\nPhase 1 reads every HTML page (no CAPTCHA) and stores it; phase 2 submits the document requests (CAPTCHA)";
+  node [fontname="Helvetica", fontsize=10];
+  edge [fontname="Helvetica", fontsize=9];
+
+  // ---- legend ----
+  subgraph cluster_legend {
+    label="Legend"; style="dashed"; color="gray60"; fontsize=10;
+    lg_page  [shape=box,     style="rounded,filled", fillcolor="#E8F0FE", label="page / form"];
+    lg_act   [shape=box,     style="filled",         fillcolor="#FFF4E5", label="button / action"];
+    lg_tab   [shape=box,     style="filled",         fillcolor="#FDE7E9", label="TABLE (parsed)"];
+    lg_dec   [shape=diamond, style="filled",         fillcolor="#FFFDE7", label="decision / loop"];
+    lg_data  [shape=note,    style="filled",         fillcolor="#E6F4EA", label="stored data"];
+    lg_cost  [shape=box,     style="rounded,filled", fillcolor="#F3E5F5", label="BILLABLE + CAPTCHA"];
+    lg_wait  [shape=hexagon, style="filled",         fillcolor="#FFCC80", label="WAIT for user input\n(human-in-the-loop)"];
+    lg_page -> lg_act -> lg_tab -> lg_dec -> lg_data -> lg_cost -> lg_wait [style=invis];
+  }
+
+  start [shape=ellipse, style=filled, fillcolor="#D2E3FC",
+         label="Authenticated SISTER session\n(attached, never logged in by the service)"];
+
+  // ================= search =================
+  subgraph cluster_search {
+    label="Search (HTML, free)"; style="rounded"; color="#4285F4"; fontsize=11;
+    scelta [shape=box, style="rounded,filled", fillcolor="#E8F0FE",
+            label="SceltaServizio.do\nselect Provincia (select[name=listacom]) → [Applica]"];
+    imm    [shape=box, style="filled", fillcolor="#FFF4E5", label="left-menu link \"Immobile\""];
+    form   [shape=box, style="rounded,filled", fillcolor="#E8F0FE",
+            label="DataRichiesta.do — Ricerca per immobile\ntipoCatasto · comuneCat · sezione · foglio · particella1 · subalterno1\nrichiedente · motivoText   (+ other form fields)\n[Ricerca]"];
+    sub    [shape=diamond, style="filled", fillcolor="#FFFDE7", label="subalterno\nabsent?"];
+    conf   [shape=box, style="filled", fillcolor="#FFF4E5", label="AssenzaSubalterno.do\n[Conferma]"];
+    nomatch [shape=box, style="rounded,filled", fillcolor="#ECEFF1", label="NESSUNA CORRISPONDENZA TROVATA\n→ response with error, nothing to store"];
+    lista  [shape=box, style="filled", fillcolor="#FDE7E9",
+            label="TABLE \"Elenco Immobili\"  (radio visImmSel on every row)\nFoglio (sezione/foglio) | Particella | Sub | Indirizzo | Zona cens | Categoria | Classe\nConsistenza | Rendita | Partita | Altri Dati\nradio value → catasto · comune code (H199) · sub"];
+  }
+
+  // ================= phase 1 =================
+  subgraph cluster_p1 {
+    label="PHASE 1 — read all HTML pages (no CAPTCHA, nothing requested)"; style="rounded,filled"; fillcolor="#F1F8F4"; color="#34A853"; fontsize=11;
+    loop1  [shape=diamond, style="filled", fillcolor="#FFFDE7", label="for each immobile\n(skip Soppresso;\nBene comune: no owners)"];
+    pick1  [shape=box, style="filled", fillcolor="#FFF4E5", label="select row radio → [Intestati]"];
+    intes  [shape=box, style="filled", fillcolor="#FDE7E9",
+            label="TABLE \"Elenco Intestati\"\nNominativo o denominazione | Codice fiscale | Titolarità | Quota | Altri dati\n+ owner radios (intestatoSelezionato): sesso · luogo e data di nascita · sede"];
+    back1  [shape=box, style="filled", fillcolor="#ECEFF1", label="[Indietro]\nthe immobili list stays valid\n(no re-search needed)"];
+  }
+
+  // ---- storage after phase 1 ----
+  store1 [shape=note, style="filled", fillcolor="#E6F4EA",
+          label="save_response → visura_results · visura_properties · visura_owners\ncadastral_locations (section/sheet split) · cadastral_subjects (birth data, sex)\nownership_rights (diritto + quota)\nowners tied to their property by result_id"];
+  docs_dec  [shape=diamond, style="filled", fillcolor="#FFFDE7", label="richiedi_documenti\n(default true)"];
+  htmlonly [shape=ellipse, style=filled, fillcolor="#D2E3FC", label="End — HTML only\n(no CAPTCHA, no download)"];
+
+  // ================= phase 2 =================
+  subgraph cluster_p2 {
+    label="PHASE 2 — document requests (the only place with a CAPTCHA)"; style="rounded,filled"; fillcolor="#FBF4FC"; color="#A142F4"; fontsize=11;
+    loop2  [shape=diamond, style="filled", fillcolor="#FFFDE7", label="for each immobile"];
+    optV   [shape=box, style="rounded,filled", fillcolor="#F3E5F5",
+            label="[Visura Per Immobile] → TipoVisura.do — \"Tipo di visura\"\nCompleta / Storica · XML · differita"];
+    ownpick [shape=diamond, style="filled", fillcolor="#FFFDE7",
+             label="first owner whose\ncodice fiscale was not\nrequested yet in this run?"];
+    optS   [shape=box, style="rounded,filled", fillcolor="#F3E5F5",
+            label="[Intestati] → select owner radio → [Visura per Soggetto]\nTipoVisura.do (via RicercaPF / SceltaOmonimi if shown)"];
+    capV   [shape=diamond, style="filled", fillcolor="#FFFDE7", label="CAPTCHA\nshown?"];
+    waitV  [shape=hexagon, style="filled", fillcolor="#FFCC80",
+            label="WAIT for user to type\n\"Codice di sicurezza\"\n(input[name=inCaptchaChars])"];
+    inoltraV [shape=box, style="filled", fillcolor="#FFF4E5", label="[Inoltra]"];
+    forgetV [shape=box, style="filled", fillcolor="#ECEFF1",
+             label="SISTER forgets the list after Inoltra\n→ re-submit the search"];
+    capS   [shape=diamond, style="filled", fillcolor="#FFFDE7", label="CAPTCHA\nshown?"];
+    waitS  [shape=hexagon, style="filled", fillcolor="#FFCC80", label="WAIT for user to type\n\"Codice di sicurezza\""];
+    inoltraS [shape=box, style="filled", fillcolor="#FFF4E5", label="[Inoltra]"];
+    forgetS [shape=box, style="filled", fillcolor="#ECEFF1", label="re-submit the search"];
+    needs  [shape=box, style="rounded,filled", fillcolor="#FDE7E9",
+            label="no one solved it → needs_human\nHTML data kept; documents_pending lists\nwhat is still to request"];
+  }
+
+  // ---- download + extract ----
+  richieste [shape=box, style="rounded,filled", fillcolor="#E8F0FE",
+             label="ConsultazioneRichieste.do — \"Richieste\"\n(documents are ready after a while; kept 1 week)"];
+  salva  [shape=box, style="filled", fillcolor="#FFF4E5", label="[Salva] → DOC_<idRichiesta>.p7m / PDF"];
+  xml    [shape=note, style="filled", fillcolor="#E6F4EA",
+          label="extract signed XML (aecs4u-crypto)\nVisuraFabbricati/Terreni Attuale|Storica · VisuraSoggettoAttuale"];
+  store2 [shape=note, style="filled", fillcolor="#E6F4EA",
+          label="visura_documents (linked to the response) · document_metadata (header)\ndocument_subjects · building_* / land_* · property_groups\nownership_mutations · property_owners · related_parcels\n(+ raw tree in document_xml_nodes)"];
+
+  // ---- edges ----
+  start -> scelta -> imm -> form -> sub;
+  sub -> conf [label="yes"];
+  sub -> lista [label="no"];
+  conf -> lista;
+  form -> nomatch [label="no match", style=dashed];
+
+  lista -> loop1;
+  loop1 -> pick1 [label="next row"];
+  pick1 -> intes -> back1;
+  back1 -> loop1 [label="next immobile", constraint=false];
+  loop1 -> store1 [label="all rows read"];
+  store1 -> docs_dec;
+  docs_dec -> htmlonly [label="false"];
+  docs_dec -> loop2 [label="true"];
+
+  loop2 -> optV [label="next row"];
+  optV -> capV;
+  capV -> waitV [label="yes"];
+  capV -> inoltraV [label="no"];
+  waitV -> inoltraV [label="code typed"];
+  waitV -> needs [label="timeout /\n5 wrong codes", style=dashed, color="#C62828", fontcolor="#C62828"];
+  inoltraV -> forgetV -> ownpick;
+  ownpick -> optS [label="yes (dedupe by CF)"];
+  ownpick -> loop2 [label="no: already\nrequested", constraint=false];
+  optS -> capS;
+  capS -> waitS [label="yes"];
+  capS -> inoltraS [label="no"];
+  waitS -> inoltraS [label="code typed"];
+  waitS -> needs [style=dashed, color="#C62828"];
+  inoltraS -> forgetS;
+  forgetS -> loop2 [label="next immobile", constraint=false];
+  loop2 -> richieste [label="all rows requested"];
+  richieste -> salva -> xml -> store2;
+}
