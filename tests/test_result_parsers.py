@@ -178,3 +178,22 @@ def test_normalize_owner_from_xml_intestato_with_period():
         "start_date": "01/01/2020",
         "end_date": "31/12/2023",
     }
+
+
+def test_workflow_columns_adds_what_the_executors_read():
+    row = {"Catasto": "F", "Titolarità": "Proprieta' per 1/2", "Ubicazione": "RAVENNA(RA) VIA EL ALAMEIN n. 2",
+           "Foglio": "RA/103", "Particella": "1714", "Sub": "2", "provincia": "RA", "provincia_nome": "RAVENNA",
+           "visImmSel": "634568#634568#F#RA/103#1714#H199##2# #RAVENNA"}
+
+    out = rp.workflow_columns(row)
+
+    assert (out["Provincia"], out["Comune"], out["Foglio"], out["Particella"], out["Sub"]) == (
+        "RAVENNA", "RAVENNA", "103", "1714", "2")
+    assert (out["Tipo"], out["Foglio_portale"]) == ("F", "RA/103") and "Sezione" not in out
+    assert row["Foglio"] == "RA/103"  # input untouched
+
+
+def test_workflow_columns_leaves_entity_rows_alone():
+    row = {"Denominazione": "ROSSI S.R.L.", "Sede": "MONZA (MB)", "Codice Fiscale": "00000000001"}
+
+    assert rp.workflow_columns(row) is row

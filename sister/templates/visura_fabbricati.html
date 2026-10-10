@@ -5,6 +5,7 @@
     owners_section, cadastral_ref, liquidazione_row, visura_per_immobile %}
 {% from "parts/_hero.html" import hero_section %}
 {% from "parts/_visura_header.html" import visura_doc_card %}
+{% from "parts/_visura_story.html" import unit_facts, property_history, ownership_history %}
 {% set _v = doc.xml_parsed.VisuraFabbricatiStorica or doc.xml_parsed.VisuraFabbricatiAttuale or doc.xml_parsed.VisuraFabbricatiSintetica or doc.xml_parsed.VisuraFabbricati or {} %}
 {% set _t = _v.TitoloVisura or {} %}
 {% set _dr = _v.DatiRichiesta or {} %}
@@ -70,6 +71,45 @@ PT <strong>{{ doc.particella or _dr.ParticellaNum or '-' }}</strong>
         </div>
     </div>
 
+    {% if doc.view and doc.view.units %}
+    {# ── Interpreted model (sister/visura_view.py): current state, history by period, ownership acts ── #}
+    {% set _owners_theme = namespace(items=[]) %}
+    {% set _immobili = [] %}
+    {% for _u in doc.view.units %}
+    {% set _rows = [] %}
+    {% for o in _u.current_owners %}
+    {% set _born = (' · nato/a il ' ~ o.birth_date ~ ((' a ' ~ o.birth_place) if o.birth_place else '')) if o.birth_date else (' · sede ' ~ o.registered_office if o.registered_office else '') %}
+    {% set _ = _rows.append({
+        'denominazione': (o.name or '') ~ _born,
+        'cf': o.fiscal_code,
+        'quota': o.quota,
+        'proprieta': (o.right or 'Diritto') ~ ((' (' ~ o.right_code ~ ')') if o.right_code else ''),
+    }) %}
+    {% endfor %}
+    {% set _c = _u.classification %}
+    {% set _income = ('R.Euro: ' ~ _c.income_eur) if _c.income_eur else '' %}
+    {% set _ = _immobili.append({
+        'foglio': _u.identifier.sheet or doc.foglio,
+        'particella': _u.identifier.parcel or doc.particella,
+        'subalterno': _u.identifier.subunit or doc.subalterno,
+        'indirizzo': _u.address,
+        'zona_censuaria': _c.zone,
+        'categoria': _c.category,
+        'classe': _c.class,
+        'consistenza': _c.consistency,
+        'rendita': _income,
+        'partita': _c.partita or _u.identifier.partita,
+        'id_immobile': 'FG ' ~ (_u.identifier.sheet or doc.foglio or '-') ~ ' PT ' ~ (_u.identifier.parcel or doc.particella or '-') ~ ' SUB ' ~ (_u.identifier.subunit or doc.subalterno or '-'),
+        'intestatari': _rows,
+    }) %}
+    {% endfor %}
+    <h2 class="h5 border-bottom pb-2 mb-3">{% if _is_historical %}Situazione Attuale{% elif _is_synthetic %}Riepilogo Sintetico{% else %}Dati del Fabbricato{% endif %}
+        <span class="small text-muted fw-normal ms-2">al {{ doc.view.as_of }}</span></h2>
+    {{ visura_per_immobile({'immobili': _immobili}) }}
+    {% for _u in doc.view.units %}{{ unit_facts(doc.view, _u) }}{% endfor %}
+    {{ property_history(doc.view) }}
+    {{ ownership_history(doc.view, color='#28a745', badge='bg-success') }}
+    {% else %}
     {# ── Current property (theme: full visura_per_immobile component) ─────── #}
     {% if _property %}
     {% set _idf_raw = (_property.DatiIdentificativi or {}).IdentificativoDefinitivo or {} %}
@@ -335,6 +375,8 @@ PT <strong>{{ doc.particella or _dr.ParticellaNum or '-' }}</strong>
     {% endif %}
     {% endif %}
 
+    {% endif %}
+
     {# ── Richiedente ─────────────────────────────────────────────────────── #}
     {% if (_v.Richiedente or {}).Descrizione %}
     <p class="small text-muted"><i class="fas fa-user-tag me-1"></i>Richiedente: {{ _v.Richiedente.Descrizione }}</p>
@@ -358,5 +400,5 @@ PT <strong>{{ doc.particella or _dr.ParticellaNum or '-' }}</strong>
 
 {% block extra_js %}
 {{ super() }}
-{{ timeline_js() }}
+{{ timeline_js(csp_nonce) }}
 {% endblock %}

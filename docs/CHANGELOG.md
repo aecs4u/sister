@@ -21,7 +21,46 @@ e questo progetto aderisce al [Versionamento Semantico](https://semver.org/lang/
   intestazione in `document_metadata`), prima tutte vuote; `sister db backfill [projections|xml]` ricostruisce i dati gia' salvati
 - `docs/data_extraction.md`: cosa restituisce ogni form e dove finisce nel database
 
+### Aggiunto (2026-10-10)
+- `sister/visura_view.py`: modello di presentazione delle visure Fabbricati/Terreni (Attuale/Storica) letto in ordine di
+  documento: stato attuale, storia dell'immobile per periodo (identificativi, indirizzo, classamento, superficie con la
+  rispettiva derivazione) e atti di titolarita' dal piu' recente, con intestatari interpretati. La pagina
+  `/web/documents/<id>` usa `parts/_visura_story.html` (visura_fabbricati.html e visura_terreni.html)
+- `result_parsers.parse_xml_nominativo` / `parse_right_period`: nominativo dell'XML (`COGNOME Nome GG/MM/AAAA; Comune X (PR)`,
+  ente senza data, data incompleta `/mese/anno/`, sesso da `Nato/Nata`), periodo del diritto (in corso, dall'impianto,
+  invertito)
+
+### Corretto (2026-10-10)
+- Richiesta documento segnata `requested` solo perche' il campo CAPTCHA era sparito: ora serve la conferma del portale
+  (pagina "Attesa" con "Richiesta inoltrata"); se il modulo ritorna ("Digitare correttamente il codice di sicurezza") o la
+  pagina e' un'altra lo stato e' `unconfirmed` con il motivo (`submit_problems`, `documents_unconfirmed`). Verificato sulle pagine
+  salvate (381 accettate, 1 rifiutata) e dal vivo su Napoli fg. 8 part. 217
+- Titolarita' storica non consultabile: `timeline_js()` emetteva `<script nonce="">` (una macro importata non vede
+  `csp_nonce`), quindi la CSP bloccava lo script e gli atti storici, chiusi, non si aprivano mai. `timeline_js` ora riceve il
+  nonce (`timeline_js(csp_nonce)`) e la titolarita' di `visura_story` usa `<details>` nativi, senza JavaScript.
+  Stesso difetto in `table_filter_csv_js` (filtro/CSV delle tabelle di Terreni e Soggetto): ora riceve il nonce
+- Migrazione `20261010_xml_typed_columns`: aggiunge le 7 colonne di collegamento delle tabelle XML tipizzate
+  (`land_parcels.location_id`, `building_identifiers.location_id`, `related_parcels.location_id`,
+  `ownership_mutations.reference_location_id`, `property_owners.subject_id/right_id`, `document_subjects.subject_id`) che i
+  modelli definivano senza migrazione: prima ogni inserimento tipizzato falliva e restava solo l'albero dei nodi
+- Pagina documento: la titolarita' mostrava come "Attuale" l'atto sbagliato nei Fabbricati (`IndiceMutazione` va dal piu'
+  recente al piu' vecchio nei Fabbricati, dal piu' vecchio nei Terreni), segnava "Cessato" i diritti ancora in corso
+  (`al <data della visura>`) e riportava periodi invertiti (`dal 22/07/2013 al 01/09/2012`); lo storico dell'immobile
+  veniva spezzato per tipo di dato e perdeva l'ordine cronologico
+- Nominativi dell'XML: data e luogo di nascita, sede e sesso ora vengono estratti anche per `cadastral_subjects`
+  (`normalize_owner`); quota e descrizione del diritto senza il "per" residuo; un diritto che termina alla data della
+  visura non riceve piu' una data di fine
+- `_save_documents_to_db`: un documento nuovo veniva scartato come duplicato di un altro documento della stessa unita'
+  (stesso foglio/particella/sub/tipo), ad es. una visura storica dopo una planimetria; ora il duplicato e' lo stesso file o lo
+  stesso tipo di visura con la stessa data di riferimento
+
 ### Corretto (2026-10-09)
+- Workflow `portfolio`: le righe dell'elenco immobili di un soggetto non avevano le colonne lette dagli executor
+  (`Provincia`/`Comune`/`Foglio`/`Particella`), quindi `drill_intestati` e i passi seguenti non espandevano mai nulla (0 immobili).
+  `soggetto`/`azienda` ora aggiungono quelle colonne (`result_parsers.workflow_columns`); i passi `search`/`intestati` del
+  workflow `portfolio` non richiedono piu' documenti (niente CAPTCHA ne' costi)
+- Workflow su codice fiscale/partita IVA: il catasto predefinito era `T`, quindi la ricerca soggetto escludeva i fabbricati
+  (e il workflow vedeva solo i terreni); ora e' `E` (entrambi). I workflow per particella restano su `T`
 - `visura_owners` e `visura_properties` non avevano mai `result_id`/`owner_index`: ora ogni intestato e' legato al proprio immobile
   (le viste owner↔property non incrociano piu' tutti gli intestati con tutti gli immobili di una risposta)
 - Terreni: `area`, `dominical_income`, `agricultural_income` non venivano mai valorizzati (il portale usa `ha/are/ca` e

@@ -76,6 +76,11 @@ digraph PropertyVisura {
     waitS  [shape=hexagon, style="filled", fillcolor="#FFCC80", label="WAIT for user to type\n\"Codice di sicurezza\""];
     inoltraS [shape=box, style="filled", fillcolor="#FFF4E5", label="[Inoltra]"];
     forgetS [shape=box, style="filled", fillcolor="#ECEFF1", label="re-submit the search"];
+    confV  [shape=diamond, style="filled", fillcolor="#FFFDE7",
+            label="portal acknowledged?\npage \"Attesa\":\n\"Richiesta inoltrata\""];
+    confS  [shape=diamond, style="filled", fillcolor="#FFFDE7", label="portal acknowledged?\n\"Richiesta inoltrata\""];
+    unconf [shape=box, style="rounded,filled", fillcolor="#FDE7E9",
+            label="state \"unconfirmed\" (+ reason)\nform came back / no acknowledgement\n→ documents_unconfirmed"];
     needs  [shape=box, style="rounded,filled", fillcolor="#FDE7E9",
             label="no one solved it → needs_human\nHTML data kept; documents_pending lists\nwhat is still to request"];
   }
@@ -111,7 +116,10 @@ digraph PropertyVisura {
   capV -> inoltraV [label="no"];
   waitV -> inoltraV [label="code typed"];
   waitV -> needs [label="timeout /\n5 wrong codes", style=dashed, color="#C62828", fontcolor="#C62828"];
-  inoltraV -> forgetV -> ownpick;
+  inoltraV -> confV;
+  confV -> forgetV [label="yes: \"requested\""];
+  confV -> unconf [label="no", style=dashed, color="#C62828", fontcolor="#C62828"];
+  forgetV -> ownpick;
   ownpick -> optS [label="yes (dedupe by CF)"];
   ownpick -> loop2 [label="no: already\nrequested", constraint=false];
   optS -> capS;
@@ -119,7 +127,9 @@ digraph PropertyVisura {
   capS -> inoltraS [label="no"];
   waitS -> inoltraS [label="code typed"];
   waitS -> needs [style=dashed, color="#C62828"];
-  inoltraS -> forgetS;
+  inoltraS -> confS;
+  confS -> forgetS [label="yes: \"requested\""];
+  confS -> unconf [label="no", style=dashed, color="#C62828", fontcolor="#C62828"];
   forgetS -> loop2 [label="next immobile", constraint=false];
   loop2 -> richieste [label="all rows requested"];
   richieste -> salva -> xml -> store2;

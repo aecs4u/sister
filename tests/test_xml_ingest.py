@@ -245,3 +245,40 @@ def test_complete_content_rereads_a_legacy_cut_copy(tmp_path):
     assert xml_ingest._complete_content(full[:50_000], str(path)) == full
     assert xml_ingest._complete_content("<short/>", str(path)) == "<short/>"
     assert xml_ingest._complete_content(full[:50_000], None) == full[:50_000]
+
+
+def _downloaded(filename, subtype, date, xml=None):
+    return {
+        "filename": filename,
+        "path": f"/data/{filename}",
+        "file_format": "P7M",
+        "parsed_data": {
+            "tipo": "visura_fabbricati",
+            "tipo_catasto": "F",
+            "provincia": "PA",
+            "comune": "PALERMO",
+            "foglio": "9",
+            "particella": "1452",
+            "subalterno": "5",
+            "visura_subtype": subtype,
+            "situazione_al": date,
+            "xml_content": xml,
+        },
+    }
+
+
+@pytest.mark.usefixtures("fresh_db")
+async def test_a_new_visura_is_not_dropped_as_duplicate_of_another_document_of_the_unit():
+    from sister.utils import _save_documents_to_db
+
+    plan = _downloaded("plan_PA_FG9_PT1452_SUB5.pdf", None, "05/02/2026")
+    storica = _downloaded("vi_sto_PA_FG9_PT1452_SUB5.p7m", "storica", "10/10/2026", _read("fabbricati_storica"))
+
+    await _save_documents_to_db([plan])
+    await _save_documents_to_db([storica])
+    await _save_documents_to_db([storica])  # the same download again is still skipped
+    await _save_documents_to_db([_downloaded("vi_sto_PA_FG9_PT1452_SUB5_bis.p7m", "storica", "10/10/2026")])  # same kind+date
+
+    async with database._get_session_factory()() as session:
+        names = (await session.execute(text("SELECT filename FROM visura_documents ORDER BY id"))).scalars().all()
+    assert names == ["plan_PA_FG9_PT1452_SUB5.pdf", "vi_sto_PA_FG9_PT1452_SUB5.p7m"]

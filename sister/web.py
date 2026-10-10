@@ -7,11 +7,12 @@ Auth: landing page is public; /web/* routes require authentication.
 from __future__ import annotations
 
 import asyncio
+import functools
 import logging
 import os
 import re
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from threading import Lock
 from typing import Any, Optional
@@ -35,8 +36,10 @@ from .database import (
     get_documents_for_response,
     get_indexed_file_metadata,
     get_result_record,
+    record_activity,
 )
 from .form_config import get_available_form_groups, get_single_step_groups, get_workflow_groups
+from .visura_view import build_visura_view
 
 # Opendata API URL — workflow runs/steps are owned by opendata, not sister.
 # Sister's web UI proxies workflow list/detail requests to opendata.
@@ -1319,6 +1322,84 @@ async def _require_admin(request: Request, user=Depends(_require_auth)):
     return user
 
 
+def _actor(user) -> str:
+    """Who is acting, for the activity log (the signed-in user's email/username; 'anonymous' when auth is off)."""
+    for attr in ("email", "username", "name"):
+        value = getattr(user, attr, None)
+        if isinstance(value, str) and value:
+            return value
+    return "anonymous"
+
+
+def _client_ip(request: Optional[Request]) -> Optional[str]:
+    return request.client.host if request is not None and request.client else None
+
+
+def _audited(action: str):
+    """Record the call of a route handler in ``activity_log`` (who, parameters, HTTP outcome, duration).
+
+    For handlers whose result is a small JSON/dict the summary is stored too (lists are reduced to their length).
+    Handlers that know better numbers (imports, rescans) call ``record_activity`` themselves instead.
+    """
+
+    def _summary(response) -> dict:
+        body: Any = response
+        if isinstance(response, JSONResponse):
+            try:
+                import json
+
+                body = json.loads(response.body)
+            except (ValueError, TypeError):
+                body = {}
+        summary: dict[str, Any] = {"http_status": getattr(response, "status_code", 200)}
+        if isinstance(body, dict):
+            for key, value in body.items():
+                if isinstance(value, (list, tuple, dict)):
+                    summary[key] = len(value)
+                elif isinstance(value, (str, int, float, bool)) or value is None:
+                    summary[key] = value if not isinstance(value, str) else value[:200]
+        return summary
+
+    def decorator(handler):
+        @functools.wraps(handler)
+        async def wrapper(*args, **kwargs):
+            request = kwargs.get("request") or next((a for a in args if isinstance(a, Request)), None)
+            user = kwargs.get("user")
+            params = {k: v for k, v in kwargs.items() if k not in {"request", "user"} and isinstance(v, (str, int, float, bool))}
+            started = datetime.now(timezone.utc)
+            try:
+                response = await handler(*args, **kwargs)
+            except Exception as exc:  # noqa: BLE001
+                from fastapi import HTTPException
+
+                rejected = isinstance(exc, HTTPException) and exc.status_code < 500
+                await record_activity(
+                    action,
+                    actor=_actor(user),
+                    status="rejected" if rejected else "error",
+                    params=params,
+                    error=str(getattr(exc, "detail", None) or exc),
+                    started_at=started,
+                    client_ip=_client_ip(request),
+                )
+                raise
+            code = getattr(response, "status_code", 200)
+            await record_activity(
+                action,
+                actor=_actor(user),
+                status="success" if code < 400 else ("rejected" if code < 500 else "error"),
+                params=params,
+                result=_summary(response),
+                started_at=started,
+                client_ip=_client_ip(request),
+            )
+            return response
+
+        return wrapper
+
+    return decorator
+
+
 def _build_url(path: str, **params) -> str:
     """Build a URL with only non-empty query params."""
     filtered = {k: v for k, v in params.items() if v not in (None, "")}
@@ -1889,6 +1970,7 @@ def _missing_pair_job_view(job: dict[str, Any] | None) -> dict[str, Any]:
 
 
 @router.post("/web/documents/retrieve-missing-pairs", response_class=JSONResponse)
+@_audited("documents.retrieve_missing_pairs")
 async def web_retrieve_missing_pairs(request: Request, user=Depends(_require_admin)):
     """Find missing PDF/P7M pairs and start a free-visura recovery batch."""
     global _missing_pair_job, _missing_pair_task
@@ -1976,6 +2058,7 @@ async def web_results_refresh(request: Request, user=Depends(_require_admin)):
 
     from .database import OUTPUTS_DIR, save_request, save_response
 
+    started = datetime.now(timezone.utc)
     project_root = Path(__file__).resolve().parent.parent
     script = project_root / "scripts" / "populate_query_data.py"
     spec = importlib.util.spec_from_file_location("populate_query_data", script)
@@ -2009,6 +2092,14 @@ async def web_results_refresh(request: Request, user=Depends(_require_admin)):
         )
         imported += 1
     logger.info("Imported %s response payloads from %s", imported, source)
+    await record_activity(
+        "results.import",
+        actor=_actor(user),
+        target=str(source),
+        result={"imported": imported},
+        started_at=started,
+        client_ip=_client_ip(request),
+    )
 
     return RedirectResponse("/web/results", status_code=303)
 
@@ -2220,6 +2311,7 @@ async def web_result_detail(request: Request, request_id: str, user=Depends(_req
     )
     for doc in result["documents"]:
         doc["xml_parsed"] = _parse_xml_to_dict(doc.get("xml_content", ""))
+        doc["view"] = build_visura_view(doc.get("xml_content", ""))
         doc.pop("xml_content", None)
         # Normalize intestati server-side for flat Tabulator display
         doc["intestati_rows"] = [
@@ -2360,6 +2452,7 @@ async def web_workflow_detail(request: Request, workflow_id: str, user=Depends(_
     )
     for doc in result["documents"]:
         doc["xml_parsed"] = _parse_xml_to_dict(doc.get("xml_content", ""))
+        doc["view"] = build_visura_view(doc.get("xml_content", ""))
         doc.pop("xml_content", None)
     result["page_visit_rows"] = []
     return theme.render(
@@ -2467,6 +2560,7 @@ def _render_doc_from_db(doc: dict, request, theme, user, force_template: str | N
     generic, exhaustive view of any document.
     """
     doc["xml_parsed"] = _parse_xml_to_dict(doc.get("xml_content", ""))
+    doc["view"] = build_visura_view(doc.get("xml_content", ""))
     doc.pop("xml_content", None)
     doc["intestati_rows"] = [
         {
@@ -2635,6 +2729,7 @@ async def web_document_view(request: Request, path: str, user=Depends(_require_a
         "classamento": [],
         "indirizzo": "",
         "xml_parsed": xml_parsed,
+        "view": build_visura_view(xml_content),
     }
 
     # Populate structured fields from xml_parsed if possible
@@ -2716,6 +2811,7 @@ async def web_files_redirect(request: Request, path: str = ""):
 
 
 @router.post("/web/documents/export-named")
+@_audited("documents.export_named")
 async def web_documents_export_named(request: Request, user=Depends(_require_auth)):
     """Copy all documents to documents/named/ using the display name stored in oggetto."""
     import shutil
@@ -3308,6 +3404,34 @@ async def _backfill_document_metadata(base: Path, parsed_by_stem: dict) -> None:
 @router.post("/web/documents/rescan", response_class=HTMLResponse)
 async def web_documents_rescan(request: Request, user=Depends(_require_admin)):
     """Scan the documents directory for files not yet indexed in the DB and register them."""
+    started = datetime.now(timezone.utc)
+    try:
+        indexed = await _rescan_documents_dir()
+    except Exception as exc:  # noqa: BLE001
+        await record_activity(
+            "documents.rescan",
+            actor=_actor(user),
+            status="error",
+            error=str(exc) or exc.__class__.__name__,
+            started_at=started,
+            client_ip=_client_ip(request),
+        )
+        raise
+    await record_activity(
+        "documents.rescan",
+        actor=_actor(user),
+        result={"indexed": indexed},
+        started_at=started,
+        client_ip=_client_ip(request),
+    )
+    return RedirectResponse("/web/documents", status_code=303)
+
+
+async def _rescan_documents_dir() -> int | None:
+    """Index the files of the documents directory that are not in the DB yet.
+
+    Returns how many new files were indexed (``None`` when the directory does not exist).
+    """
     import asyncio
 
     from .database import get_indexed_file_paths, get_indexed_filenames
@@ -3315,7 +3439,7 @@ async def web_documents_rescan(request: Request, user=Depends(_require_admin)):
 
     base = _files_base()
     if not base.exists():
-        return RedirectResponse("/web/documents", status_code=303)
+        return None
 
     indexed_paths = set((await get_indexed_file_paths()).keys())
     indexed_names = await get_indexed_filenames()
@@ -3413,7 +3537,44 @@ async def web_documents_rescan(request: Request, user=Depends(_require_admin)):
     # which no longer exists; actual files are under SISTER_FILES_BASE).
     await _backfill_document_metadata(base, parsed_by_stem)
 
-    return RedirectResponse("/web/documents", status_code=303)
+    return len(new_docs)
+
+
+_documents_import_lock = asyncio.Lock()
+
+
+@router.post("/web/documents/import", response_class=JSONResponse)
+async def web_documents_import(request: Request, force: bool = False, user=Depends(_require_admin)):
+    """Index new files, then fill the typed tables from their XML (what ``sister db backfill xml`` does).
+
+    Without ``force`` only documents that have no typed rows yet are read; with it every XML document is redone.
+    One import at a time: a second request gets 409 instead of racing the first.
+    """
+    from . import xml_ingest
+
+    audit = {"actor": _actor(user), "params": {"force": force}, "client_ip": _client_ip(request)}
+    if _documents_import_lock.locked():
+        await record_activity(
+            "documents.import", status="rejected", error="importazione gia' in corso", **audit
+        )
+        return JSONResponse({"error": "Un'importazione e' gia' in corso"}, status_code=409)
+    started = datetime.now(timezone.utc)
+    async with _documents_import_lock:
+        try:
+            indexed = await _rescan_documents_dir()
+            xml = await xml_ingest.backfill_documents(force=force)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("Import documenti non riuscito")
+            message = str(exc) or exc.__class__.__name__
+            await record_activity(
+                "documents.import", status="error", error=message, started_at=started, **audit
+            )
+            return JSONResponse({"error": message}, status_code=500)
+    logger.info("Import documenti: %s file indicizzati, XML %s (force=%s)", indexed, xml, force)
+    await record_activity(
+        "documents.import", result={"indexed": indexed, "xml": xml}, started_at=started, **audit
+    )
+    return JSONResponse({"indexed": indexed, "xml": xml, "force": force})
 
 
 @router.get("/web/documents", response_class=HTMLResponse)
@@ -3802,6 +3963,7 @@ async def web_browser_status(request: Request, user=Depends(_require_auth)):
 
 
 @router.post("/web/browser/start", response_class=JSONResponse)
+@_audited("browser.start")
 async def web_browser_start(request: Request, user=Depends(_require_admin)):
     from .main import visura_service
 
@@ -3812,6 +3974,7 @@ async def web_browser_start(request: Request, user=Depends(_require_admin)):
 
 
 @router.post("/web/browser/stop", response_class=JSONResponse)
+@_audited("browser.stop")
 async def web_browser_stop(request: Request, force: bool = False, user=Depends(_require_admin)):
     from .main import visura_service
 
@@ -3822,6 +3985,7 @@ async def web_browser_stop(request: Request, force: bool = False, user=Depends(_
 
 
 @router.post("/web/browser/restart", response_class=JSONResponse)
+@_audited("browser.restart")
 async def web_browser_restart(request: Request, user=Depends(_require_admin)):
     from .main import visura_service
 
@@ -3832,6 +3996,7 @@ async def web_browser_restart(request: Request, user=Depends(_require_admin)):
 
 
 @router.post("/web/browser/launch-chrome", response_class=JSONResponse)
+@_audited("browser.launch_chrome")
 async def web_browser_launch_chrome(request: Request, user=Depends(_require_admin)):
     """Launch Google Chrome with CDP if not already running, then start the browser session."""
     import asyncio

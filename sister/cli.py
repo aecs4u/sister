@@ -1642,10 +1642,38 @@ def db_backfill(
         raise typer.BadParameter("usa projections, xml o all")
 
     async def _run():
-        if what in {"all", "projections"}:
-            console.print(f"Risposte: {await database.backfill_projections(limit=limit or None)}")
-        if what in {"all", "xml"}:
-            console.print(f"Documenti XML: {await xml_ingest.backfill_documents(force=force, limit=limit or None)}")
+        import getpass
+        from datetime import datetime, timezone
+
+        started = datetime.now(timezone.utc)
+        result: dict = {}
+        try:
+            if what in {"all", "projections"}:
+                result["projections"] = await database.backfill_projections(limit=limit or None)
+                console.print(f"Risposte: {result['projections']}")
+            if what in {"all", "xml"}:
+                result["xml"] = await xml_ingest.backfill_documents(force=force, limit=limit or None)
+                console.print(f"Documenti XML: {result['xml']}")
+        except Exception as exc:  # noqa: BLE001
+            await database.record_activity(
+                "db.backfill",
+                actor=getpass.getuser(),
+                source="cli",
+                status="error",
+                params={"what": what, "force": force, "limit": limit},
+                result=result,
+                error=str(exc) or exc.__class__.__name__,
+                started_at=started,
+            )
+            raise
+        await database.record_activity(
+            "db.backfill",
+            actor=getpass.getuser(),
+            source="cli",
+            params={"what": what, "force": force, "limit": limit},
+            result=result,
+            started_at=started,
+        )
 
     asyncio.run(_run())
 

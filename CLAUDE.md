@@ -91,7 +91,7 @@ uv run sister db backfill            # projections + xml; `xml --force --limit N
   breaker (`web._opendata_get`); when it is down `/web/workflows` shows a notice instead of stalling.
 - Environment: keep `httpx` below 1.0 (`pyproject.toml` pins `<1`; 1.0 pre-releases have no `AsyncClient` and break `VisuraClient`).
   Test baseline 2026-10-09 (`/opt/venv/.aecs4u_venv/bin/python -m pytest -p no:logfire --continue-on-collection-errors`):
-  813 passed, 52 failed, 4 collection errors (2026-10-09, after the two-phase/extraction work). DB tests run on a throwaway local schema (`tests/pg_isolation.py`: `fresh_db` fixture; skipped
+  825 passed, 52 failed, 4 collection errors (2026-10-10, after the two-phase/extraction/visura-view work). DB tests run on a throwaway local schema (`tests/pg_isolation.py`: `fresh_db` fixture; skipped
   without a local PostgreSQL; never touches the app schema). All remaining failures/errors are roadmap features absent from `sister/`:
   browser dispatch (12), client contract (5), ontology (3), workflows (3), request jobs (9), section-extraction jobs (16),
   `no_match` result status (4), and 4 test files importing missing helpers (`find_best_option_matches`, `_run_with_network_json`, `_request_job_outcome`).
@@ -142,6 +142,8 @@ saved portal forms in `tests/fixtures/portal_forms/`.
   (`_request_visura_documents`: the *Tipo di visura* form is the only CAPTCHA page, and SISTER forgets the list after each
   *Inoltra*). `richiedi_documenti=false` (CLI `--richiedi-documenti false`) stops after phase 1. One *Visura per Soggetto* per immobile,
   never the same codice fiscale twice per run; a CAPTCHA nobody solves ends as `needs_human` with `documents_pending`.
+  A request is `requested` only when the portal says so (`_confirm_request_submitted`: page "Attesa" + "Richiesta inoltrata"; the
+  CAPTCHA field disappearing is not proof): otherwise it is `unconfirmed` with a reason, listed in `documents_unconfirmed`.
 - `save_response` projects the JSON into the tables via `database._project_response`: owners are tied to *their* property
   through `result_id` (the owner↔property views join on it), composite cells are split with `result_parsers`, terreni use the
   portal's `ha/are/ca` and `Reddito dominicale/agrario` columns, each row keeps its own catasto. Downloaded XML also fills the
@@ -149,8 +151,15 @@ saved portal forms in `tests/fixtures/portal_forms/`.
 - **When a query's flow changes, regenerate its flowchart**: `cd docs && dot -Tsvg <name>.dot -o <name>.svg` (edit the `.dot`).
   `property_visura_workflow` covers `search`/`intestati`, `person_search_workflow` the persona-fisica flow; the per-preset SVGs in
   `sister/static/images/workflows/` follow the `aecs4u_workflow` step lists.
-- No schema change was made: the catasto comune code (`visImmSel`, XML `CodiceComune`) has no column in `visura_properties` yet
-  (needs an Alembic migration + `DATABASE_REVISION` bump, which breaks `init_db` until `alembic upgrade head` is run).
+- Schema: `20261010_xml_typed_columns` adds the 7 link columns that `visura_xml_models.py` defined but no migration created
+  (`land_parcels.location_id`, `ownership_mutations.reference_location_id`, `property_owners.subject_id/right_id`, …); before it every
+  typed XML insert failed on a migrated database and only `document_xml_nodes` was kept. A model column added without a migration
+  is invisible to the throwaway test schema (built from the models), so **add the Alembic revision together with the model change**
+  and bump `DATABASE_REVISION` only after `alembic upgrade head` has run. Still open: the catasto comune code (`visImmSel`, XML
+  `CodiceComune`) has no column in `visura_properties`; `feedback_*` drift comes from `aecs4u-domain` 0.17.0.
+- The document page (`/web/documents/<id>`) renders `doc.view` from `sister/visura_view.py` (current state, history by period,
+  ownership acts newest first) through `templates/parts/_visura_story.html`; the generic `xml_parsed` dict is only used for the
+  "Dati completi" dump and as fallback. `IndiceMutazione` runs oldest→newest in Terreni and newest→oldest in Fabbricati.
 - Browser flow changes in `utils.py` cannot be exercised without a live SISTER session; verify them with a real run
   (`search ... --richiedi-documenti false` first: no CAPTCHA).
 

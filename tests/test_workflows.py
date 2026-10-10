@@ -1161,3 +1161,15 @@ class TestWorkflowCLI:
         assert called_with.get("max_total_steps") == 200
         assert called_with.get("auto_confirm") is True
         assert called_with.get("include_paid_steps") is True
+
+
+def test_portfolio_workflow_defaults_to_both_catasti_for_a_subject():
+    from sister.workflows import _build_params, prepare_workflow
+
+    person = _build_params(prepare_workflow({"preset": "portfolio", "codice_fiscale": "RSSMRA70A01H501Z"}).workflow, {})
+    parcel = _build_params(
+        prepare_workflow({"preset": "due-diligence", "provincia": "Roma", "comune": "ROMA", "foglio": "1", "particella": "2"}).workflow, {}
+    )
+
+    assert person["tipo_catasto"] == "E"
+    assert parcel["tipo_catasto"] == "T"

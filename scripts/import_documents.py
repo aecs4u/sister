@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Index the files in the SISTER documents directory in PostgreSQL.
 
-The source files remain in place.  PDF, P7M, XML and ZIP files are indexed;
-generated ``*.plan.json`` sidecars are deliberately excluded.  XML content is
-kept in document_metadata and decomposed into document_xml_nodes and
+The source files remain in place. PDF, P7M, XML, ZIP and fiducial DAT files are
+indexed; generated ``*.plan.json`` sidecars are deliberately excluded. XML
+content is kept in document_metadata and decomposed into document_xml_nodes and
 document_xml_attributes so the import is searchable without losing the raw
 document content.
 """
@@ -53,11 +53,15 @@ def file_kind(path: Path) -> str:
         return "XML"
     if path.suffix.lower() == ".p7m":
         return "P7M"
+    if path.suffix.lower() == ".dat":
+        return "DAT"
     return "OTHER"
 
 
 def guess_type(filename: str) -> str:
     name = filename.lower()
+    if name.startswith("punti_fiduciali_"):
+        return "fiduciali"
     for prefix, document_type in (
         ("vi_att_fab", "visura_fabbricati"),
         ("vi_sto_fab", "visura_fabbricati"),
@@ -250,7 +254,7 @@ async def async_main() -> None:
         for path in documents_dir.rglob("*")
         if path.is_file()
         and not path.name.endswith(".plan.json")
-        and file_kind(path) in {"PDF", "P7M", "XML", "ZIP"}
+        and file_kind(path) in {"PDF", "P7M", "XML", "ZIP", "DAT"}
     )
     xml_by_stem = {path.stem: path for path in files if file_kind(path) == "XML"}
 

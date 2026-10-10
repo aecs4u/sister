@@ -12,7 +12,7 @@
                           badge_class='bg-success') }}
 
      In {% block extra_js %} block  (call ONCE even if render_timeline called multiple times):
-       {{ timeline_js() }}
+       {{ timeline_js(csp_nonce) }}
 
    Parameters for render_timeline:
      mutazioni_list  — list of MutazioneSoggettiva dicts, ascending IndiceMutazione
@@ -151,8 +151,8 @@
 {% endmacro %}
 
 
-{% macro timeline_js() %}
-<script nonce="{{ csp_nonce }}">
+{% macro timeline_js(nonce='') %}
+<script nonce="{{ nonce }}">
 (function () {
     /* Extract embedded date from DatiDerivantiDaMutazSogg free text.
        Matches DD/MM/YYYY first, then bare 4-digit years. */

@@ -39,6 +39,14 @@
                     {{ csrf_input() }}
                     <button type="submit" class="btn btn-outline-warning"><i class="fas fa-rotate me-2"></i>Aggiorna</button>
                 </form>
+                <button data-click="importDocuments" data-args='["@this", false]' class="btn btn-outline-info"
+                        title="Indicizza i file nuovi e riempie le tabelle strutturate (fabbricati, terreni, titolari, trascrizioni) dai documenti XML non ancora importati">
+                    <i class="fas fa-file-import me-2"></i>Importa nuovi
+                </button>
+                <button data-click="importDocuments" data-args='["@this", true]' class="btn btn-outline-secondary"
+                        title="Rielabora anche i documenti XML gia' importati (sostituisce le righe tipizzate)">
+                    <i class="fas fa-arrows-rotate me-2"></i>Reimporta tutti
+                </button>
                 {% endif %}
                 <button data-click="exportNamed" data-args='["@this"]' class="btn btn-outline-success"><i class="fas fa-file-export me-2"></i>Esporta con nomi</button>
                 <a href="/web/documents?view=files" class="btn btn-outline-light"><i class="fas fa-hard-drive me-2"></i>Sfoglia file</a>
@@ -106,6 +114,37 @@ async function exportNamed(btn) {
         btn.disabled = false;
         icon.className = 'fas fa-file-export me-2';
     }
+}
+
+async function importDocuments(btn, force) {
+    if (force && !window.confirm("Rielaborare tutti i documenti XML? Le righe tipizzate gia' importate vengono sostituite.")) return;
+    btn.disabled = true;
+    const icon = btn.querySelector('i');
+    const iconClass = icon.className;
+    icon.className = 'fas fa-spinner fa-spin me-2';
+    let changed = false;
+    try {
+        const resp = await fetch('/web/documents/import' + (force ? '?force=true' : ''), {method: 'POST'});
+        const data = await resp.json().catch(() => ({error: 'Risposta non valida (HTTP ' + resp.status + ')'}));
+        if (!resp.ok || data.error) {
+            showExportToast('danger', `<strong>Errore:</strong> ${data.error || ('HTTP ' + resp.status)}`);
+        } else {
+            const x = data.xml || {};
+            changed = (data.indexed || 0) > 0 || (x.documents || 0) > 0;
+            showExportToast('success',
+                `<strong>${data.indexed ?? 0}</strong> file nuovi indicizzati · `
+                + `<strong>${x.documents || 0}</strong> documenti XML importati `
+                + `(${x.units || 0} unità, ${x.parcels || 0} particelle, ${x.owners || 0} titolari)`
+                + ((x.not_visura || 0) ? `<br><small class="text-muted">${x.not_visura} non sono visure</small>` : '')
+                + ((x.failed || 0) ? `<br><small class="text-danger">${x.failed} non riusciti (vedi log)</small>` : ''));
+        }
+    } catch (e) {
+        showExportToast('danger', 'Errore di rete: ' + e.message);
+    } finally {
+        btn.disabled = false;
+        icon.className = iconClass;
+    }
+    if (changed) setTimeout(() => window.location.reload(), 2500);
 }
 
 function showExportToast(type, html) {

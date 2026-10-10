@@ -152,3 +152,80 @@ def test_pending_documents_lists_only_what_was_not_requested():
         {"result_index": 2, "kind": "soggetto"},
         {"result_index": 3, "kind": "immobile"},
     ]
+
+
+# --- explicit confirmation that SISTER accepted a document request --------------------------------------------
+
+ACCEPTED_PAGE = (
+    'Ti trovi in: Home dei Servizi / Attesa Convenzione: ROSSI MARIO (CONSULTAZIONI - PROFILO B) '
+    'Codice di Richiesta: C00075022026 Richiesta inoltrata: Verificare i risultati nella sezione "Richieste".'
+)
+REJECTED_PAGE = (
+    "Dati della ricerca Catasto: Fabbricati Comune di: RAVENNA Foglio: 103 Particella: 1714 "
+    "Digitare correttamente il codice di sicurezza Visura immobile Con intestati Codice di sicurezza:"
+)
+
+
+def test_accepted_page_is_confirmed_with_its_portal_code():
+    result = utils.classify_submit_page(ACCEPTED_PAGE, has_captcha_input=False)
+
+    assert result == {"confirmed": True, "portal_code": "C00075022026", "reason": ""}
+
+
+def test_form_coming_back_is_a_rejected_captcha_not_a_success():
+    assert utils.classify_submit_page(REJECTED_PAGE, True)["reason"] == "captcha_rejected"
+    # the field alone, without the message, is still not a success
+    assert utils.classify_submit_page("Tipo di visura", True)["confirmed"] is False
+
+
+def test_a_page_without_the_acknowledgement_is_not_confirmed_even_if_the_captcha_field_is_gone():
+    # the case the old check got wrong: the field vanished, but SISTER did not say "Richiesta inoltrata"
+    for text in ("Sessione scaduta o errore caricamento pagina", "Servizio momentaneamente non disponibile", ""):
+        result = utils.classify_submit_page(text, has_captcha_input=False)
+        assert result["confirmed"] is False and result["reason"] == "no_confirmation"
+
+
+class _FakePage:
+    def __init__(self, texts, captcha=False):
+        self._texts = list(texts)
+        self._captcha = captcha
+
+    async def inner_text(self, selector):
+        return self._texts.pop(0) if len(self._texts) > 1 else self._texts[0]
+
+    def locator(self, selector):
+        outer = self
+
+        class _Locator:
+            async def count(self_inner):
+                return 1 if outer._captcha else 0
+
+        return _Locator()
+
+
+async def test_confirmation_waits_for_the_page_to_finish_navigating():
+    page = _FakePage(["Attendere prego...", ACCEPTED_PAGE])
+
+    result = await utils._confirm_request_submitted(page, wait=3.0)
+
+    assert result["confirmed"] and result["portal_code"] == "C00075022026"
+
+
+async def test_confirmation_gives_up_with_a_reason_when_nothing_acknowledges():
+    page = _FakePage(["Errore imprevisto"])
+
+    result = await utils._confirm_request_submitted(page, wait=0.6)
+
+    assert result == {"confirmed": False, "portal_code": "", "reason": "no_confirmation"}
+
+
+def test_unconfirmed_requests_are_recorded_and_listed_separately_from_pending():
+    step = {"result_index": 4, "documents": {"immobile": "pending", "soggetto": "pending"}}
+    utils._record_submit(step, step["documents"], "immobile", {"confirmed": True, "portal_code": "C1234567"})
+    utils._record_submit(step, step["documents"], "soggetto", {"confirmed": False, "reason": "captcha_rejected"})
+
+    assert step["documents"] == {"immobile": "requested", "soggetto": "unconfirmed"}
+    assert step["portal_codes"] == {"immobile": "C1234567"}
+    assert utils._unconfirmed_documents([step]) == [
+        {"result_index": 4, "kind": "soggetto", "reason": "captcha_rejected"}]
+    assert utils._pending_documents([step]) == []

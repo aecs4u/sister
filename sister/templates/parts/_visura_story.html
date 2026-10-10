@@ -1,0 +1,217 @@
+{# ─────────────────────────────────────────────────────────────────────────────
+   parts/_visura_story.html — macros that render the interpreted visura model (sister/visura_view.py):
+   the current state of the unit/parcel, its history by period and its ownership acts.
+
+     {% from "parts/_visura_story.html" import unit_facts, property_history, ownership_history %}
+     {{ unit_facts(doc.view, unit) }}
+     {{ property_history(doc.view) }}
+     {{ ownership_history(doc.view, color='#28a745', badge='bg-success') }}
+
+   The ownership timeline reuses the ``tl-*`` styles of _timeline.html (timeline_css) and needs no script: each act is a
+   native <details>.
+   ─────────────────────────────────────────────────────────────────────────── #}
+
+{% macro _money(eur, lire) -%}
+{%- if eur %}€ {{ eur }}{% endif %}{% if eur and lire %} <span class="text-muted">(Lire {{ lire }})</span>{% elif lire %}Lire {{ lire }}{% endif %}
+{%- endmacro %}
+
+{% macro _reference(r) -%}
+{{ r.reference or '—' }}{% if r.sequence_id %} <span class="text-muted">· Prog. {{ r.sequence_id }}</span>{% endif %}
+{%- endmacro %}
+
+{% macro _classification_line(c, family) -%}
+{%- if family == 'fabbricati' -%}
+{%- set parts = [] -%}
+{%- if c.category %}{% set _ = parts.append('Cat. ' ~ c.category ~ ((' ' ~ c.category_description) if c.category_description else '')) %}{% endif -%}
+{%- if c.class %}{% set _ = parts.append('Classe ' ~ c.class) %}{% endif -%}
+{%- if c.zone %}{% set _ = parts.append('Zona ' ~ c.zone) %}{% endif -%}
+{%- if c.consistency %}{% set _ = parts.append('Consistenza ' ~ c.consistency) %}{% endif -%}
+{%- if c.income_eur %}{% set _ = parts.append('Rendita € ' ~ c.income_eur) %}{% endif -%}
+{%- if c.income_lire %}{% set _ = parts.append('Lire ' ~ c.income_lire) %}{% endif -%}
+{%- if c.partita %}{% set _ = parts.append('Partita ' ~ c.partita) %}{% endif -%}
+{{ parts|join(' · ') or '—' }}
+{%- else -%}
+{%- set parts = [] -%}
+{%- if c.quality %}{% set _ = parts.append(c.quality) %}{% endif -%}
+{%- if c.class %}{% set _ = parts.append('Classe ' ~ c.class) %}{% endif -%}
+{%- if c.area_m2 %}{% set _ = parts.append(c.area_m2 ~ ' m²') %}{% endif -%}
+{%- if c.dominical_income_eur %}{% set _ = parts.append('Reddito dom. € ' ~ c.dominical_income_eur) %}{% endif -%}
+{%- if c.agricultural_income_eur %}{% set _ = parts.append('Reddito agr. € ' ~ c.agricultural_income_eur) %}{% endif -%}
+{%- if c.deduction %}{% set _ = parts.append('Deduzione ' ~ c.deduction) %}{% endif -%}
+{%- if c.portion %}{% set _ = parts.append('Porzione ' ~ c.portion) %}{% endif -%}
+{{ parts|join(' · ') or '—' }}
+{%- endif -%}
+{%- endmacro %}
+
+
+{# ── current state: every field of the unit/parcel ─────────────────────── #}
+{% macro unit_facts(view, unit, show_classification=true) %}
+{% set i = unit.identifier %}
+<div class="card border-0 bg-light mb-4">
+    <div class="card-body py-3 px-3">
+        <dl class="row mb-0 small">
+            <dt class="col-sm-3 col-lg-2">Identificativo</dt>
+            <dd class="col-sm-9 col-lg-10">{{ _reference(i) }}</dd>
+            {% if unit.address %}
+            <dt class="col-sm-3 col-lg-2">Indirizzo</dt><dd class="col-sm-9 col-lg-10">{{ unit.address }}</dd>
+            {% endif %}
+            {% if show_classification and view.family == 'fabbricati' and unit.classification %}
+            <dt class="col-sm-3 col-lg-2">Classamento</dt>
+            <dd class="col-sm-9 col-lg-10">{{ _classification_line(unit.classification, 'fabbricati') }}</dd>
+            {% endif %}
+            {% for c in (unit.classifications if show_classification else []) %}
+            <dt class="col-sm-3 col-lg-2">{{ 'Qualità' if loop.first else '' }}</dt>
+            <dd class="col-sm-9 col-lg-10">{{ _classification_line(c, 'terreni') }}</dd>
+            {% endfor %}
+            {% if unit.surface and (unit.surface.total or unit.surface.excluded) %}
+            <dt class="col-sm-3 col-lg-2">Superficie</dt>
+            <dd class="col-sm-9 col-lg-10">
+                {% if unit.surface.total %}totale {{ unit.surface.total }} m²{% endif %}
+                {% if unit.surface.excluded %}<span class="text-muted">· escluse aree scoperte {{ unit.surface.excluded }} m²</span>{% endif %}
+            </dd>
+            {% endif %}
+            {% if unit.related %}
+            <dt class="col-sm-3 col-lg-2">Mappali correlati</dt>
+            <dd class="col-sm-9 col-lg-10">
+                {% for r in unit.related %}<span class="me-3">FG {{ r.Foglio or '—' }} · PT {{ (r.ParticellaNum or '—')|string|trim }}{% if r.Subalterno %} · Sub {{ r.Subalterno }}{% endif %}{% if r.SezCensuaria|trim %} · Sez. {{ r.SezCensuaria|trim }}{% endif %}{% if r.ProgrId %} · Prog. {{ r.ProgrId }}{% endif %}</span>{% endfor %}
+            </dd>
+            {% endif %}
+        </dl>
+    </div>
+</div>
+{% endmacro %}
+
+
+{# ── derivation of a record: the act/practice, its annotations and the other units it touched ── #}
+{% macro _derivation(d) %}
+{% if d and (d.description or d.annotations or d.other_units) %}
+<div class="text-muted">
+    {% if d.description %}<i class="fas fa-file-signature me-1"></i>{{ d.description }}{% endif %}
+    {% for a in d.annotations %}<div class="fst-italic ps-3">{{ a|trim }}</div>{% endfor %}
+    {% if d.other_units %}
+    <div class="ps-3">{{ d.other_units_label or 'Altri immobili interessati' }}
+        {% for u in d.other_units %}<span class="badge bg-light text-dark border ms-1">{{ u.reference or ('PT ' ~ u.parcel) }}</span>{% endfor %}
+    </div>
+    {% endif %}
+</div>
+{% endif %}
+{% endmacro %}
+
+
+{# ── property history, one card per period ────────────────────────────── #}
+{% macro property_history(view) %}
+{% if view.history %}
+<h2 class="h5 border-bottom pb-2 mb-3">
+    <i class="fas fa-clock-rotate-left text-success me-2"></i>Storia dell'immobile
+    <span class="badge bg-secondary ms-2">{{ view.history|length }} period{{ 'o' if view.history|length == 1 else 'i' }}</span>
+</h2>
+<div class="mb-4">
+    {% for h in view.history %}
+    <div class="card mb-2 {{ 'border-success' if h.current else '' }}">
+        <div class="card-header py-2 d-flex flex-wrap align-items-center gap-2 {{ 'bg-success bg-opacity-10' if h.current else '' }}">
+            <span class="fw-semibold">{{ h.period.label or '—' }}</span>
+            {% if h.status %}<span class="badge bg-{{ 'success' if h.status == 'attuale' else 'secondary' }}">{{ h.status }}</span>{% endif %}
+        </div>
+        <div class="card-body py-2 small">
+            {% if h.derived %}<div class="mb-2">{{ _derivation(h.derived) }}</div>{% endif %}
+            <dl class="row mb-0">
+                {% for facet in h.facets %}
+                {% for item in facet.records %}
+                <dt class="col-sm-3 col-lg-2">{{ facet.label if loop.first else '' }}</dt>
+                <dd class="col-sm-9 col-lg-10">
+                    {% if facet.kind == 'identificativi' %}{{ _reference(item.data) }}
+                    {% elif facet.kind == 'indirizzo' %}{{ item.data.address or '—' }}
+                    {% elif facet.kind == 'classamento' %}{{ _classification_line(item.data, view.family) }}
+                    {% elif facet.kind == 'superficie' %}
+                        {% if item.data.total %}totale {{ item.data.total }} m²{% endif %}{% if item.data.excluded %} · escluse {{ item.data.excluded }} m²{% endif %}
+                    {% else %}Nessuna variazione dei dati catastali
+                    {% endif %}
+                    {% if not h.derived %}{{ _derivation(item.derived) }}{% endif %}
+                </dd>
+                {% endfor %}
+                {% endfor %}
+            </dl>
+        </div>
+    </div>
+    {% endfor %}
+</div>
+{% endif %}
+{% endmacro %}
+
+
+{# ── one owner ──────────────────────────────────────────────────────────── #}
+{% macro _owner(o, badge) %}
+<div class="tl-owner-row {{ 'tl-owner-active' if o.period.ongoing else ('tl-owner-ended' if o.period.end else '') }}">
+    <div class="d-flex flex-wrap align-items-baseline gap-2">
+        <span class="tl-owner-name">{{ o.name or '—' }}</span>
+        {% if o.kind == 'legal_entity' %}<span class="badge bg-info text-dark">ente / società</span>{% endif %}
+        {% if o.fiscal_code %}<span class="tl-owner-cf">{{ o.fiscal_code }}</span>{% endif %}
+        {% if o.quota %}<span class="badge {{ badge }} tl-owner-share">{{ o.quota }}</span>{% endif %}
+    </div>
+    <div class="small text-muted">
+        <span class="text-body">{{ o.right or 'Diritto' }}{% if o.right_code %} ({{ o.right_code }}){% endif %}</span>
+        · {{ o.period.label or '—' }}{% if o.period.inverted %}
+        <i class="fas fa-circle-info ms-1" title="Diritto di un precedente titolare, riportato alla costituzione dell'unità: la scheda indica una data di inizio successiva alla fine."></i>{% endif %}
+    </div>
+    <div class="small text-muted">
+        {% if o.birth_date or o.birth_date_partial or o.birth_place %}
+        {{ 'nata' if o.sex == 'F' else ('nato' if o.sex == 'M' else 'nato/a') }}
+        {% if o.birth_date %}il {{ o.birth_date }}{% elif o.birth_date_partial %}il <span title="data incompleta nella scheda">{{ o.birth_date_partial }}</span>{% endif %}
+        {% if o.birth_place %}a {{ o.birth_place }}{% endif %}
+        {% elif o.registered_office %}sede {{ o.registered_office }}{% endif %}
+        {% if o.note %}<span class="ms-2">· {{ o.note }}</span>{% endif %}
+        {% for k, v in o.extra.items() %}<span class="ms-2">· {{ k }}: {{ v }}</span>{% endfor %}
+    </div>
+</div>
+{% endmacro %}
+
+
+{# ── ownership acts, newest first ──────────────────────────────────────── #}
+{% macro ownership_history(view, color='#28a745', badge='bg-success') %}
+{% if view.ownership %}
+<style>
+details.tl-details > summary.tl-header { list-style: none; }
+details.tl-details > summary.tl-header::-webkit-details-marker { display: none; }
+details.tl-details[open] > summary .tl-chevron { transform: rotate(180deg); }
+details.tl-details > summary:focus-visible { outline: 2px solid var(--tl-color, #28a745); outline-offset: 2px; }
+@media print { details.tl-details:not([open]) > .tl-body { display: block; } }
+</style>
+<h2 class="h5 border-bottom pb-2 mb-3">
+    <i class="fas fa-history text-success me-2"></i>Titolarità
+    <span class="badge bg-secondary ms-2">{{ view.ownership|length }} {{ 'atto' if view.ownership|length == 1 else 'atti' }}</span>
+</h2>
+<div class="card border-0 shadow-sm mb-4">
+    <div class="card-body py-3 px-3">
+        <div class="ownership-timeline" style="--tl-color: {{ color }}">
+            {% set _open_all = view.ownership|length <= 8 %}
+            {% for m in view.ownership %}
+            <div class="tl-node">
+                <span class="tl-dot {{ 'dot-current' if m.current else '' }}"></span>
+                {# <details>: every act can be opened without JavaScript (inline scripts need a CSP nonce) #}
+                <details class="tl-card tl-details {{ 'tl-card-current' if m.current else '' }}" {% if m.current or _open_all %}open{% endif %}>
+                    <summary class="tl-header {{ 'tl-header-current' if m.current else '' }}">
+                        <span class="badge {{ badge if m.current else 'bg-secondary' }}">{{ 'Attuale' if m.current else 'Storico' }}</span>
+                        <span class="tl-desc" title="{{ m.act.text }}">{{ m.act.type or m.act.text or ('Mutazione ' ~ m.index) }}</span>
+                        <span class="tl-date-tag">{{ m.act.date }}</span>
+                        <i class="fas fa-chevron-down tl-chevron"></i>
+                    </summary>
+                    <div class="tl-body">
+                        {% if m.act.text and m.act.text != m.act.type %}<p class="small text-muted mb-2">{{ m.act.text }}</p>{% endif %}
+                        <p class="small mb-2">
+                            <i class="far fa-calendar me-1"></i>
+                            {% if m.current %}diritti in corso{% if m.start %} dal {{ m.start }}{% endif %}
+                            {% elif m.start and m.end %}diritti dal {{ m.start }} al {{ m.end }}
+                            {% elif m.end %}diritti fino al {{ m.end }}
+                            {% elif m.start %}diritti dal {{ m.start }}{% endif %}
+                            {% if m.reference.reference %}<span class="text-muted ms-2">· {{ m.reference.reference }}</span>{% endif %}
+                        </p>
+                        {% for o in m.owners %}{{ _owner(o, badge) }}{% endfor %}
+                    </div>
+                </details>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+</div>
+{% endif %}
+{% endmacro %}

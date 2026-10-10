@@ -186,5 +186,5 @@ Riepilogo catasto nazionale —
     {% endif %}
 })();
 </script>
-{{ table_filter_csv_js('#province-table, #comuni-table') }}
+{{ table_filter_csv_js('#province-table, #comuni-table', csp_nonce) }}
 {% endblock %}

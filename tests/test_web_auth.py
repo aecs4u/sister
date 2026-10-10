@@ -140,6 +140,7 @@ def test_operational_routes_require_admin():
         "/web/browser/launch-chrome",
         "/web/results/refresh",
         "/web/documents/rescan",
+        "/web/documents/import",
         "/web/documents/retrieve-missing-pairs",
     }
     found = set()
@@ -181,3 +182,58 @@ def test_public_pages_resolve_the_signed_in_user():
 
     for name in ("web_about", "web_privacy", "web_guide", "web_cheatsheet", "web_glossary"):
         assert "_optional_user" in inspect.getsource(getattr(web, name)), name
+
+
+@pytest.mark.asyncio
+async def test_documents_import_reports_indexed_files_and_typed_rows(monkeypatch):
+    """The Documenti page "Importa nuovi" button: new files are indexed, then the typed XML tables are filled."""
+    import json
+
+    from sister import xml_ingest
+
+    calls = []
+
+    async def _rescan():
+        calls.append("rescan")
+        return 3
+
+    async def _backfill(force=False, limit=None, batch=50):
+        calls.append(("backfill", force))
+        return {"documents": 2, "not_visura": 1, "failed": 0, "units": 5, "parcels": 4, "owners": 7}
+
+    monkeypatch.setattr(web, "_rescan_documents_dir", _rescan)
+    monkeypatch.setattr(xml_ingest, "backfill_documents", _backfill)
+
+    response = await web.web_documents_import(_request(method="POST"), force=True, user=None)
+    body = json.loads(response.body)
+
+    assert response.status_code == 200
+    assert calls == ["rescan", ("backfill", True)]
+    assert body["indexed"] == 3 and body["force"] is True
+    assert body["xml"]["owners"] == 7
+
+
+@pytest.mark.asyncio
+async def test_documents_import_refuses_a_second_concurrent_run(monkeypatch):
+    import json
+
+    await web._documents_import_lock.acquire()
+    try:
+        response = await web.web_documents_import(_request(method="POST"), force=False, user=None)
+    finally:
+        web._documents_import_lock.release()
+    assert response.status_code == 409
+    assert "in corso" in json.loads(response.body)["error"]
+
+
+@pytest.mark.asyncio
+async def test_documents_import_returns_the_error_instead_of_a_stack_trace(monkeypatch):
+    import json
+
+    async def _boom():
+        raise RuntimeError("database non raggiungibile")
+
+    monkeypatch.setattr(web, "_rescan_documents_dir", _boom)
+    response = await web.web_documents_import(_request(method="POST"), force=False, user=None)
+    assert response.status_code == 500
+    assert json.loads(response.body)["error"] == "database non raggiungibile"

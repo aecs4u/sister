@@ -582,6 +582,33 @@ class MortgageInspectionParty(SQLModel, table=True):
     )
 
 
+class ActivityLog(SQLModel, table=True):
+    """Traceability record of an operational action: who ran what, from where, with which parameters and outcome.
+
+    Written by ``database.record_activity``. Rows are only ever appended; ``params``/``result`` hold small JSON
+    summaries (counts, flags), never document contents or personal data.
+    """
+
+    __tablename__ = "activity_log"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    started_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc),
+        sa_column=Column(sa.DateTime(timezone=True), nullable=False, index=True),
+    )
+    finished_at: Optional[datetime] = Field(default=None, sa_column=Column(sa.DateTime(timezone=True)))
+    duration_ms: Optional[int] = None
+    actor: str = Field(default="system", index=True)
+    source: str = Field(default="web")  # web | cli | api | worker
+    action: str = Field(index=True)  # e.g. documents.import, documents.rescan, results.import, browser.restart
+    status: str = Field(default="success", index=True)  # success | error | rejected
+    target: Optional[str] = None
+    params: Optional[dict[str, Any]] = Field(default=None, sa_column=Column(JSONB))
+    result: Optional[dict[str, Any]] = Field(default=None, sa_column=Column(JSONB))
+    error: Optional[str] = Field(default=None, sa_column=Column(Text))
+    client_ip: Optional[str] = None
+
+
 OWNER_SUBJECT_FIELD_MAP = {
     "Nominativo o denominazione": "display_name",
     "Nominativo": "display_name",

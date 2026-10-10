@@ -28,7 +28,11 @@ Two principles drive the extraction:
   document is identical and each request costs a CAPTCHA. The step is marked `duplicate` in `results[].documents`.
 * When the CAPTCHA is not solved the run ends as `needs_human`; the HTML data is kept and `documents_pending` lists the
   requests still to make (`{"result_index": 3, "kind": "soggetto"}`). `results[].documents` records each request as
-  `requested` / `pending` / `duplicate` / `unavailable`.
+  `requested` / `pending` / `duplicate` / `unavailable` / `unconfirmed`.
+  `requested` means the portal acknowledged the request (page "Attesa": "Richiesta inoltrata"); `unconfirmed` means it was
+  submitted but not acknowledged (the form came back, or another page): `submit_problems` holds the reason and
+  `documents_unconfirmed` lists them. The "Codice di Richiesta" on that page is the same for every request of an account
+  and year (kept as `portal_codes`, informational); the request id is the `id_richiesta` of its row in Richieste.
 * After a submitted request SISTER forgets the immobili list, so phase 2 re-submits the search once per request.
   Phase 1 never needs to (that was 2 re-searches per immobile when both phases were interleaved).
 
@@ -90,6 +94,8 @@ at 50 kB by the old limit are re-read from the file). Both are safe to re-run. N
 the application schema.
 
 ## Not captured yet
+
+(Schema note: the link columns of the typed XML tables exist since migration `20261010_xml_typed_columns`.)
 
 * Catasto **comune code** (`H199`, in `visImmSel`; `CodiceComune` in the XML) has no column in `visura_properties` /
   `cadastral_locations`; it is only in the JSON and in the typed XML tables. Adding it needs an Alembic migration.

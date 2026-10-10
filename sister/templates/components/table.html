@@ -1,18 +1,20 @@
 {# ── table.html — filterable table JS helper ───────────────────────────────
    Import: {% from "components/table.html" import table_filter_csv_js %}
 
-   table_filter_csv_js(selector)
+   table_filter_csv_js(selector, nonce)
+     ``nonce`` must be the request's ``csp_nonce``: an imported macro does not see the page context, and the CSP
+     blocks an inline script without it.
      Emits a <script> that adds a filter input + CSV download button before
      the .table-responsive wrapper of every table matching `selector`.
 
    Examples:
-     {{ table_filter_csv_js('#my-table') }}
-     {{ table_filter_csv_js('[id^="classamento-table-"]') }}
-     {{ table_filter_csv_js('#province-table, #comuni-table') }}
+     {{ table_filter_csv_js('#my-table', csp_nonce) }}
+     {{ table_filter_csv_js('[id^="classamento-table-"]', csp_nonce) }}
+     {{ table_filter_csv_js('#province-table, #comuni-table', csp_nonce) }}
    ─────────────────────────────────────────────────────────────────────── #}
 
-{% macro table_filter_csv_js(selector='[data-filterable]') %}
-<script>
+{% macro table_filter_csv_js(selector='[data-filterable]', nonce='') %}
+<script nonce="{{ nonce }}">
 (function () {
     function addFilter(tbl) {
         var bar = document.createElement('div');

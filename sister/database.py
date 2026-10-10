@@ -27,6 +27,7 @@ from .db_models import (
     PROPERTY_FIELD_MAP,
     PROPERTY_LOCATION_FIELD_MAP,
     PROPERTY_SUBJECT_FIELD_MAP,
+    ActivityLog,
     CadastralLocation,
     CadastralSubject,
     DocumentMetadata,
@@ -68,7 +69,7 @@ load_dotenv(PROJECT_ROOT / ".env")
 load_dotenv(PROJECT_ROOT.parent / ".env", override=False)
 DATA_ROOT = Path(os.getenv("SISTER_DATA_ROOT", str(PROJECT_ROOT))).expanduser().resolve()
 DATABASE_DSN = os.getenv("DATABASE_DSN")
-DATABASE_REVISION = "20261009_ocular_structured"
+DATABASE_REVISION = "20261010_xml_typed_columns"
 
 # ---------------------------------------------------------------------------
 # Engine and session
@@ -152,6 +153,74 @@ async def init_db() -> None:
                 f"PostgreSQL schema is at {version!r}; expected {DATABASE_REVISION!r}. Run `alembic upgrade head`."
             )
     logger.info("Database PostgreSQL inizializzato (writable=%s)", is_db_writable())
+
+
+# ---------------------------------------------------------------------------
+# Activity log (traceability of operational actions)
+# ---------------------------------------------------------------------------
+
+
+def _json_safe(value: Any) -> Any:
+    """A JSON-compatible copy of ``value`` (unknown types become strings) so a summary never fails to serialise."""
+    if value is None:
+        return None
+    return json.loads(json.dumps(value, default=str))
+
+
+async def record_activity(
+    action: str,
+    *,
+    actor: Optional[str] = None,
+    source: str = "web",
+    status: str = "success",
+    target: Optional[str] = None,
+    params: Optional[dict] = None,
+    result: Optional[dict] = None,
+    error: Optional[str] = None,
+    started_at: Optional[datetime] = None,
+    client_ip: Optional[str] = None,
+) -> Optional[int]:
+    """Append one row to ``activity_log`` and return its id (``None`` when it could not be written).
+
+    Never raises: the audit trail must not break the action it describes. Keep ``params`` and ``result`` to small
+    summaries (flags, counts); documents and personal data do not belong here.
+    """
+    if not is_db_writable():
+        return None
+    finished = datetime.now(timezone.utc)
+    started = started_at or finished
+    try:
+        async with _get_session_factory()() as session:
+            row = ActivityLog(
+                started_at=started,
+                finished_at=finished,
+                duration_ms=max(0, int((finished - started).total_seconds() * 1000)),
+                actor=(actor or "system")[:200],
+                source=source,
+                action=action,
+                status=status,
+                target=target,
+                params=_json_safe(params),
+                result=_json_safe(result),
+                error=(error or None) and str(error)[:2000],
+                client_ip=client_ip,
+            )
+            session.add(row)
+            await session.commit()
+            return row.id
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Registro attivita' '%s' non scritto: %s", action, exc)
+        return None
+
+
+async def get_recent_activity(limit: int = 50, action: Optional[str] = None) -> list[dict]:
+    """The newest ``activity_log`` rows (newest first), optionally filtered by action."""
+    async with _get_session_factory()() as session:
+        stmt = select(ActivityLog).order_by(ActivityLog.started_at.desc(), ActivityLog.id.desc()).limit(limit)
+        if action:
+            stmt = stmt.where(ActivityLog.action == action)
+        rows = (await session.execute(stmt)).scalars().all()
+    return [row.model_dump(mode="json") for row in rows]
 
 
 # ---------------------------------------------------------------------------

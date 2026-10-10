@@ -247,14 +247,15 @@ def _first(source: dict, keys: tuple[str, ...]) -> str:
     return ""
 
 
-def normalize_owner(raw: dict) -> tuple[dict[str, Any], dict[str, Any]]:
+def normalize_owner(raw: dict, as_of: str = "") -> tuple[dict[str, Any], dict[str, Any]]:
     """One owner, whatever page or document it came from → (subject fields, right fields).
 
     Understands the Intestati table row (``Nominativo o denominazione`` / ``Codice fiscale`` / ``Titolarità`` /
     ``Quota``), the decoded radio (``nome`` / ``sesso`` / ``luogo_nascita`` / ``data_nascita``) and the XML
     ``Intestato`` (``Nominativo`` / ``CF`` / ``DirittiReali``). Subject keys follow ``get_or_create_subject`` plus
     ``birth_province`` / ``birth_municipality`` (resolved to a place by the caller); right keys follow
-    ``get_or_create_right``. Empty values are omitted.
+    ``get_or_create_right``. Empty values are omitted. ``as_of`` (DD/MM/YYYY) is the visura's reference date: a
+    right ending on it is still held, so it gets no end date.
     """
     subject: dict[str, Any] = {}
     right: dict[str, Any] = {}
@@ -264,7 +265,15 @@ def normalize_owner(raw: dict) -> tuple[dict[str, Any], dict[str, Any]]:
     if identifier:
         subject["fiscal_code"] = identifier
 
-    parsed = parse_nominativo(_first(raw, _NOMINATIVO_KEYS))
+    nominativo = _first(raw, _NOMINATIVO_KEYS)
+    parsed = parse_nominativo(nominativo)
+    if ";" in nominativo or "DirittiReali" in raw:  # the XML spells name, birth data and place differently
+        xml_parsed = parse_xml_nominativo(nominativo)
+        if xml_parsed.get("birth_date") or xml_parsed.get("birth_date_partial") or xml_parsed.get("registered_office") or xml_parsed.get("note"):
+            parsed = {key: value for key, value in xml_parsed.items() if key != "birth_place"}
+            place, province = parse_place(xml_parsed.get("birth_place", ""))
+            if place:
+                parsed["birth_place"], parsed["birth_province"] = place, province
     name = parsed.get("name") or ""
     if raw.get("Cognome") or raw.get("Nome"):
         subject["last_name"] = squeeze(raw.get("Cognome")) or None
@@ -306,9 +315,10 @@ def normalize_owner(raw: dict) -> tuple[dict[str, Any], dict[str, Any]]:
     if diritti:
         right["right_code"] = squeeze(diritti.get("CodiceDiritto")) or None
         right["right_type"] = squeeze(diritti.get("Descrizione")) or None
-        right["ownership_share"] = squeeze(diritti.get("Quota")) or None
-        start, end = parse_period(diritti.get("FineDiritto"))
-        right["start_date"], right["end_date"] = start or None, end or None
+        right["right_type"] = clean_right_description(diritti.get("Descrizione")) or None
+        right["ownership_share"] = clean_quota(diritti.get("Quota")) or None
+        period = parse_right_period(diritti.get("FineDiritto"), as_of)
+        right["start_date"], right["end_date"] = period["start"] or None, period["end"] or None
     else:
         right.update(titolarita)
         right.pop("note", None)
@@ -319,3 +329,129 @@ def normalize_owner(raw: dict) -> tuple[dict[str, Any], dict[str, Any]]:
         {key: value for key, value in subject.items() if value not in (None, "")},
         {key: value for key, value in right.items() if value not in (None, "")},
     )
+
+
+def workflow_columns(row: dict) -> dict:
+    """A subject-list row with the columns the workflow executors read (``aecs4u_workflow._normalize_property``).
+
+    The executors expect ``Provincia`` / ``Comune`` / ``Foglio`` / ``Particella`` (+ ``Sub``, ``Tipo``);
+    the owner → immobili list gives ``provincia_nome``, ``Ubicazione`` (comune + indirizzo), ``Foglio`` as ``RA/103``
+    and ``Catasto``. Added only where missing; ``Foglio`` becomes the plain number (the portal's value is kept as
+    ``Foglio_portale``). Rows that are not immobili (no foglio/particella) are returned unchanged.
+    """
+    if not (row.get("Foglio") and row.get("Particella")):
+        return row
+    radio = parse_vis_imm_sel(row.get("visImmSel"))
+    out = dict(row)
+    section, sheet = split_foglio(row["Foglio"])
+    if section or sheet != row["Foglio"]:
+        out["Foglio_portale"] = row["Foglio"]
+        out["Foglio"] = sheet
+    out.setdefault("Provincia", squeeze(row.get("provincia_nome")) or squeeze(row.get("provincia")))
+    out.setdefault("Comune", parse_ubicazione(row.get("Ubicazione")).get("municipality") or radio.get("municipality", ""))
+    if not out.get("Tipo"):
+        out["Tipo"] = squeeze(row.get("Catasto")) or radio.get("catasto", "")
+    # no "Sezione": the executors pass it to the sezione dropdown, but the RA of RA/103 is a sezione *urbana*
+    return out
+
+
+# ---------------------------------------------------------------------------------------------------------
+# Visura XML cells (the XML spells names and periods differently from the HTML tables)
+# ---------------------------------------------------------------------------------------------------------
+
+_XML_PLACE = re.compile(
+    r";\s*(?:Comune\s+(?:(?P<sex>Nat[oa])\s+a\s+)?)?(?P<place>[^;()]+?)\s*\((?P<prov>[A-Za-z]{2,3})\)\s*$"
+)
+_XML_DATE_END = re.compile(r"\s*(?P<date>\d{2}/\d{2}/\d{4})\s*$")
+_XML_PARTIAL_DATE = re.compile(r"\s*(?P<partial>/\d{1,2}/\d{1,2}/)\s*il\s*$")
+
+
+def _unescape(text: str) -> str:
+    import html
+
+    for _ in range(2):  # the portal escapes some names twice (``&amp;amp;``)
+        if "&" not in text:
+            break
+        text = html.unescape(text)
+    return text
+
+
+def parse_xml_nominativo(value: Any) -> dict[str, str]:
+    """Split the ``Nominativo`` of a visura XML.
+
+    * ``ROSSI MARIO 04/07/1974; Comune PALERMO (PA)`` → name, birth_date, birth_place, birth_province;
+    * ``ROSSI MARIA /0/26/ il ; Comune Nata a MILANO (MI)`` → name, partial birth date (``/mese/anno/``), sex F, place;
+    * ``MONTE DI PIETA'; Comune PALERMO (PA)`` (no date) → name, registered_office;
+    * ``ROSSI Anna ; Bianchi`` → name, note (the text after the first ``;``).
+    """
+    text = squeeze(_unescape(squeeze(value)))
+    if not text:
+        return {}
+    out: dict[str, str] = {}
+    head = text
+    place = _XML_PLACE.search(text)
+    if place:
+        head = text[: place.start()]
+        place_text = f"{place.group('place').strip()} ({place.group('prov').upper()})"
+        sex = place.group("sex")
+        if sex:
+            out["sex"] = "F" if sex.lower() == "nata" else "M"
+    else:
+        place_text = ""
+    head = head.strip()
+    date = _XML_DATE_END.search(head)
+    partial = _XML_PARTIAL_DATE.search(head)
+    if date:
+        out["birth_date"] = date.group("date")
+        head = head[: date.start()]
+    elif partial:
+        out["birth_date_partial"] = partial.group("partial")
+        head = head[: partial.start()]
+    name, _, note = head.partition(";")
+    out["name"] = squeeze(name)
+    if squeeze(note):
+        out["note"] = squeeze(note)
+    if place_text:
+        if out.get("birth_date") or out.get("birth_date_partial") or out.get("sex"):
+            out["birth_place"] = place_text
+        else:
+            out["registered_office"] = place_text
+    return out
+
+
+def parse_right_period(value: Any, as_of: str = "") -> dict[str, Any]:
+    """``dal 01/09/2012 al 10/10/2026`` / ``dall'impianto al 29/03/1983`` → a period with its flags.
+
+    ``as_of`` is the visura's reference date (DD/MM/YYYY): an end equal to it means the right is still held
+    (``ongoing``), not that it ended on that day. A start after the end (the right is listed as of the unit's
+    creation but ended earlier) is reported as ``inverted`` with the start dropped.
+    """
+    text = squeeze(value)
+    start, end = parse_period(text)
+    from_origin = "dall'impianto" in text.lower() or "dall’impianto" in text.lower()
+    ongoing = bool(end) and bool(as_of) and end == as_of
+    inverted = False
+    if start and end and _to_date(start) and _to_date(end) and _to_date(start) > _to_date(end):
+        inverted = True
+        start = ""
+    return {"start": start, "end": "" if ongoing else end, "from_origin": from_origin, "ongoing": ongoing,
+            "inverted": inverted, "raw": text}
+
+
+def _to_date(value: str):
+    from datetime import datetime
+
+    try:
+        return datetime.strptime(value, "%d/%m/%Y").date()
+    except (TypeError, ValueError):
+        return None
+
+
+def clean_quota(value: Any) -> str:
+    """``" per 2/9"`` → ``2/9``; ``"per 1/1"`` → ``1/1``."""
+    return re.sub(r"^\s*per\s+", "", squeeze(value), flags=re.IGNORECASE)
+
+
+def clean_right_description(value: Any) -> str:
+    """``"Livellario per"`` → ``Livellario`` (the portal leaves the preposition of the quota in the description)."""
+    return re.sub(r"\s+per$", "", squeeze(value), flags=re.IGNORECASE)

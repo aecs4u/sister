@@ -219,7 +219,11 @@ async def run_batch(output_root: Path, workers: int) -> int:
             model=model,
             schema_name=schema_name,
             validator=validator,
-            force=force,
+            # When a previous response was truncated or invalid, Ocular has
+            # cached that raw response in the run directory. Force only the
+            # structure stage so retries call the model again; the workflow's
+            # OCR stage remains reusable through input_data.force=False.
+            force=True,
         )
 
     DeepInfraPipeline.run_structure = _run_structure_with_schema_prompt  # type: ignore[method-assign]
@@ -288,7 +292,7 @@ async def run_batch(output_root: Path, workers: int) -> int:
                             "file_path": str(first_path),
                             "output_dir": str(output_root),
                             "schema_name": schema,
-                            "model": "google/gemma-4-31b-it",
+                            "model": os.getenv("SISTER_OCR_MODEL", "google/gemma-4-31b-it"),
                             "prompt": "",
                             "force": False,
                             "enable_corrections": True,

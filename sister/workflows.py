@@ -52,6 +52,7 @@ from aecs4u_workflow.models import (
 from pydantic import ValidationError
 
 from .client import VisuraClient
+from .result_parsers import workflow_columns
 
 logger = logging.getLogger("sister")
 
@@ -71,10 +72,23 @@ class _WorkflowVisuraClient(VisuraClient):
         "/visura/ispezione-ipotecaria",
     }
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, html_only: bool = False, **kwargs):
         super().__init__(*args, **kwargs)
         self._workflow_submissions: dict[str, dict] = {}
         self.query_cache_hits = 0
+        self.html_only = html_only
+
+    def _html_only_fields(self, form_fields: dict | None) -> dict | None:
+        """Portfolio steps only need the pages (owners): no Visura document, hence no CAPTCHA and no cost."""
+        if not self.html_only:
+            return form_fields
+        return {"richiedi_documenti": "false", **(form_fields or {})}
+
+    async def search(self, *args, form_fields=None, **kwargs):
+        return await super().search(*args, form_fields=self._html_only_fields(form_fields), **kwargs)
+
+    async def intestati(self, *args, form_fields=None, **kwargs):
+        return await super().intestati(*args, form_fields=self._html_only_fields(form_fields), **kwargs)
 
     async def _request(self, method, path, *, json=None, params=None, force=False):
         cache_key = None
@@ -200,7 +214,8 @@ def _build_params(workflow: WorkflowInput, extra: dict) -> dict:
         "comune": workflow.comune,
         "foglio": workflow.foglio,
         "particella": workflow.particella,
-        "tipo_catasto": workflow.tipo_catasto or "T",
+        # a person/company portfolio covers fabbricati and terreni; a parcel preset keeps its terreni default
+        "tipo_catasto": workflow.tipo_catasto or ("E" if workflow.codice_fiscale or workflow.identificativo else "T"),
         "sezione": workflow.sezione,
         "sezione_urbana": workflow.sezione_urbana,
         "subalterno": workflow.subalterno,
@@ -256,6 +271,7 @@ async def run_workflow_stream(plan: WorkflowPlan, *, base_url: str | None = None
     )
 
     client = _WorkflowVisuraClient(
+        html_only=plan.family == "portfolio",
         base_url=base_url,
         api_key=api_key or os.getenv("VISURA_API_KEY") or os.getenv("API_KEY"),
     )
@@ -307,6 +323,9 @@ async def run_workflow_stream(plan: WorkflowPlan, *, base_url: str | None = None
                     step_results,
                     poll_timeout=metadata.get("poll_timeout"),
                 )
+                if step_name in ("soggetto", "azienda") and isinstance(data, dict):
+                    # later steps read Provincia/Comune/Foglio/Particella columns, which the subject list does not have
+                    data["immobili"] = [workflow_columns(row) for row in data.get("immobili") or []]
                 result = {"step": step_name, "status": "completed", "data": data}
                 params["_total_step_count"] += 1
             except Exception as exc:

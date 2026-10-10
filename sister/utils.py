@@ -319,6 +319,12 @@ async def find_best_option_match(page, selector, search_text):
             log.debug("Exact text match: '%s' -> '%s'", text, value)
             return value
 
+        # PRIORITÀ 2b: sigla provincia: il value e' "PALERMO Territorio-PA" (il testo solo "PALERMO Territorio");
+        # senza questa "PA" sceglierebbe "PARMA Territorio" (testo piu' corto che inizia con "PA")
+        if len(search_upper) == 2 and value_upper.endswith(f" TERRITORIO-{search_upper}"):
+            log.debug("Sigla provincia match: '%s' -> '%s'", text, value)
+            return value
+
         # PRIORITÀ 3: Match che inizia con il testo cercato
         if text_upper.startswith(search_upper):
             score = len(search_text) / len(text)
@@ -363,7 +369,8 @@ async def _wait_for_captcha(page, timeout: int = 120):
        → waits for the element to disappear
 
     Returns True once a CAPTCHA was solved, False when there was none. Raises ``CaptchaRequired`` when no human
-    solved it in time, so callers never go on as if the request had been submitted.
+    solved it in time, so callers never go on as if the request had been submitted. A solved CAPTCHA only means the
+    field is gone: whether the portal accepted the request is decided by ``_confirm_request_submitted``.
     """
     # SISTER-native CAPTCHA
     captcha_input = page.locator("input[name='inCaptchaChars']")
@@ -433,6 +440,49 @@ async def _wait_for_captcha(page, timeout: int = 120):
                 raise CaptchaRequired(f"CAPTCHA non completato entro {timeout}s")
             return True
     return False
+
+
+# What SISTER shows after "Inoltra" (checked against the saved pages in logs/pages: 381 accepted, 1 rejected):
+#   accepted -> page "Attesa": ``Codice di Richiesta: C00075022026`` + ``Richiesta inoltrata: Verificare i risultati ...``
+#   The "Codice di Richiesta" is the same for every request of an account/year (it is not a request id): the id of a
+#   request is the ``id_richiesta`` of its row in "Richieste", which the download step reads.
+#   rejected -> the "Tipo di visura" form again, ``Digitare correttamente il codice di sicurezza``, CAPTCHA still there
+_REQUEST_ACCEPTED = re.compile(r"Richiesta\s+inoltrata", re.IGNORECASE)
+_PORTAL_CODE = re.compile(r"Codice\s+di\s+Richiesta\s*:?\s*([A-Z0-9]{6,})", re.IGNORECASE)
+_REQUEST_REJECTED = re.compile(r"Digitare\s+correttamente\s+il\s+codice\s+di\s+sicurezza", re.IGNORECASE)
+
+
+def classify_submit_page(text: str, has_captcha_input: bool) -> dict:
+    """Did SISTER accept the document request? (pure: the text of the page after Inoltra)
+
+    ``confirmed`` needs the portal's own acknowledgement ("Richiesta inoltrata"), never just the absence of the
+    CAPTCHA field: an error page can lack the field too. ``reason`` is ``captcha_rejected`` (the form came back) or
+    ``no_confirmation`` (some other page).
+    """
+    code = _PORTAL_CODE.search(text or "")
+    if _REQUEST_ACCEPTED.search(text or "") and not has_captcha_input:
+        return {"confirmed": True, "portal_code": code.group(1).upper() if code else "", "reason": ""}
+    if has_captcha_input or _REQUEST_REJECTED.search(text or ""):
+        return {"confirmed": False, "portal_code": "", "reason": "captcha_rejected"}
+    return {"confirmed": False, "portal_code": "", "reason": "no_confirmation"}
+
+
+async def _confirm_request_submitted(page, wait: float = 6.0) -> dict:
+    """Read the page after a submit and decide with ``classify_submit_page`` (waits a little for the navigation)."""
+    result = {"confirmed": False, "portal_code": "", "reason": "unreadable"}
+    deadline = asyncio.get_running_loop().time() + wait
+    while True:
+        try:
+            text = await page.inner_text("body")
+            has_captcha = await page.locator("input[name='inCaptchaChars']").count() > 0
+            result = classify_submit_page(text, has_captcha)
+        except Exception as e:  # page navigating / context destroyed: look again
+            log.debug("Conferma richiesta: pagina non leggibile: %s", e)
+        if result["confirmed"] or result["reason"] == "captcha_rejected":
+            return result
+        if asyncio.get_running_loop().time() >= deadline:
+            return result
+        await asyncio.sleep(0.5)
 
 
 async def _select_sezione(page, comune: str, sezione=None):
@@ -633,6 +683,28 @@ def _plan_soggetto_requests(results_list: list[dict], bene_comune_indices: set[i
     return plan
 
 
+def _record_submit(step: dict, docs: dict, kind: str, confirmation: dict) -> None:
+    """Store the outcome of one document request: ``requested`` only when the portal acknowledged it."""
+    if confirmation.get("confirmed"):
+        docs[kind] = "requested"
+        if confirmation.get("portal_code"):
+            step.setdefault("portal_codes", {})[kind] = confirmation["portal_code"]
+        return
+    docs[kind] = "unconfirmed"
+    step.setdefault("submit_problems", {})[kind] = confirmation.get("reason") or "no_confirmation"
+    log.warning("Richiesta %s non confermata dal portale (%s)", kind, step["submit_problems"][kind])
+
+
+def _unconfirmed_documents(results_list: list[dict]) -> list[dict]:
+    """The requests that were submitted but never acknowledged by the portal (to be re-checked in Richieste)."""
+    return [
+        {"result_index": step["result_index"], "kind": kind, "reason": (step.get("submit_problems") or {}).get(kind, "")}
+        for step in results_list
+        for kind, state in (step.get("documents") or {}).items()
+        if state == "unconfirmed"
+    ]
+
+
 def _pending_documents(results_list: list[dict]) -> list[dict]:
     """The document requests that did not go out (a CAPTCHA stopped the run): what a human has to finish."""
     pending = []
@@ -672,7 +744,9 @@ async def _submit_visura_soggetto(page, page_logger, radio_idx: int, step_result
                 if await inoltra_btn.count() > 0:
                     await inoltra_btn.click()
                     await page.wait_for_load_state("networkidle", timeout=30000)
-            submitted = True
+            confirmation = await _confirm_request_submitted(page)
+            step_result["_soggetto_confirmation"] = confirmation
+            submitted = confirmation["confirmed"]
             break
 
         # RicercaPF.do — persona fisica search: click Ricerca to proceed
@@ -700,9 +774,11 @@ async def _submit_visura_soggetto(page, page_logger, radio_idx: int, step_result
                 await page.wait_for_load_state("networkidle", timeout=30000)
                 continue
 
-        # InoltraRichiestaVis.do — already submitted
+        # InoltraRichiestaVis.do — already submitted: confirm from the page, not from the URL
         if "InoltraRichiesta" in current_url:
-            submitted = True
+            confirmation = await _confirm_request_submitted(page)
+            step_result["_soggetto_confirmation"] = confirmation
+            submitted = confirmation["confirmed"]
             break
 
         # Unknown page — log and break
@@ -759,9 +835,15 @@ async def _request_visura_documents(
                 if await inoltra_btn.count() > 0:
                     await inoltra_btn.click()
                     await page.wait_for_load_state("networkidle", timeout=30000)
-            docs["immobile"] = "requested"
+            confirmation = await _confirm_request_submitted(page)
             await page_logger.log(page, f"visura_inoltrata_{radio_idx + 1}")
-            log.info("Visura Per Immobile inoltrata per radio %d", radio_idx + 1)
+            _record_submit(step, docs, "immobile", confirmation)
+            log.info(
+                "Visura Per Immobile radio %d: %s%s",
+                radio_idx + 1,
+                docs["immobile"],
+                f" (codice {confirmation['portal_code']})" if confirmation["portal_code"] else "",
+            )
 
             # SISTER loses the session state after Inoltra
             await _resubmit_search_for_immobili_list(page, page_logger, *search)
@@ -792,7 +874,9 @@ async def _request_visura_documents(
             if owners > 1:
                 log.info("Piu' intestati (%d) — Visura per Soggetto per l'intestato %d", owners, pick + 1)
         if await _submit_visura_soggetto(page, page_logger, radio_idx, step):
-            docs["soggetto"] = "requested"
+            _record_submit(step, docs, "soggetto", step.pop("_soggetto_confirmation", {"confirmed": True}))
+        elif "_soggetto_confirmation" in step:
+            _record_submit(step, docs, "soggetto", step.pop("_soggetto_confirmation"))
         await _resubmit_search_for_immobili_list(page, page_logger, *search)
 
 
@@ -1040,6 +1124,7 @@ async def run_visura(
 
     # STEP 6 — phase 2, document requests (the Tipo di visura form: the only place with a CAPTCHA).
     documents_pending: list[dict] = []
+    documents_unconfirmed: list[dict] = []
     if request_documents and results_list:
         log.info("Fase 2 (documenti): richieste visura%s", " + soggetto" if visura_soggetto else "")
         try:
@@ -1054,6 +1139,7 @@ async def run_visura(
         except Exception as e:
             log.error("Errore richiesta documenti: %s", e)
         documents_pending = _pending_documents(results_list)
+        documents_unconfirmed = _unconfirmed_documents(results_list)
     elif not request_documents:
         log.info("Fase 2 saltata (richiedi_documenti=false): solo pagine HTML")
 
@@ -1084,6 +1170,7 @@ async def run_visura(
         "downloaded_pdfs": downloaded_pdfs,
         "page_visits": page_logger.page_visits,
         **({"documents_pending": documents_pending} if documents_pending else {}),
+        **({"documents_unconfirmed": documents_unconfirmed} if documents_unconfirmed else {}),
         **({"needs_human": needs_human} if needs_human else {}),
     }
 
@@ -2206,17 +2293,31 @@ async def _save_documents_to_db(documents: list[dict]) -> None:
                 if existing.fetchone():
                     skipped += 1
                     continue
-            # Other document types retain the property-level duplicate check.
+            # Other document types retain the property-level duplicate check: the same file, or the same kind of
+            # document (visura subtype and reference date) for the same property. A planimetry or an older visura
+            # of the unit is a different document and must not hide a new one.
             elif foglio and particella:
                 existing = await session.execute(
                     text(
                         "SELECT vd.id FROM visura_documents vd"
                         " JOIN document_metadata m ON vd.id = m.id"
-                        " JOIN cadastral_locations loc ON m.location_id = loc.id"
-                        " WHERE loc.sheet = :f AND loc.parcel = :p AND loc.subunit = :s AND vd.document_type = :t"
+                        " LEFT JOIN cadastral_locations loc ON m.location_id = loc.id"
+                        " WHERE vd.filename = :name OR (:path <> '' AND vd.file_path = :path)"
+                        " OR (loc.sheet = :f AND loc.parcel = :p AND loc.subunit = :s AND vd.document_type = :t"
+                        "     AND m.view_subtype IS NOT DISTINCT FROM CAST(:v AS VARCHAR)"
+                        "     AND m.reference_date IS NOT DISTINCT FROM CAST(:d AS VARCHAR))"
                         " LIMIT 1"
                     ),
-                    {"f": foglio, "p": particella, "s": subalterno, "t": doc_type},
+                    {
+                        "name": doc.get("filename", ""),
+                        "path": doc.get("path") or "",
+                        "f": foglio,
+                        "p": particella,
+                        "s": subalterno,
+                        "t": doc_type,
+                        "v": parsed.get("visura_subtype") or None,
+                        "d": parsed.get("situazione_al") or None,
+                    },
                 )
                 if existing.fetchone():
                     log.debug(

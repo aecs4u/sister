@@ -298,7 +298,9 @@ async def _clear(session, document_id: int) -> None:
         await session.execute(text(f"DELETE FROM {table} WHERE {scopes[table]}"), params)  # noqa: S608 (fixed names)
 
 
-async def _write_mutations(session, mutations: list[dict], parent: dict[str, int], cadastre_type: str) -> int:
+async def _write_mutations(
+    session, mutations: list[dict], parent: dict[str, int], cadastre_type: str, as_of: str = ""
+) -> int:
     from .database import get_or_create_right
     from .visura_xml_models import OwnershipMutation, PropertyOwner
 
@@ -317,7 +319,7 @@ async def _write_mutations(session, mutations: list[dict], parent: dict[str, int
         session.add(row)
         await session.flush()
         for owner in mutation["owners"]:
-            subject_fields, right_fields = normalize_owner(owner)
+            subject_fields, right_fields = normalize_owner(owner, as_of)
             if right_fields.get("right_type") and not right_fields.get("right_description"):
                 right_fields["right_description"] = right_fields["right_type"]
             session.add(
@@ -440,6 +442,12 @@ def _subject_fields(subject: dict[str, Any]) -> dict[str, Any]:
     return fields
 
 
+def _as_of(parsed: dict[str, Any]) -> str:
+    """The visura's reference date (``SituazioneAl``, YYYYMMDD) as DD/MM/YYYY."""
+    value = squeeze(parsed.get("header", {}).get("SituazioneAl", ""))
+    return f"{value[6:8]}/{value[4:6]}/{value[0:4]}" if len(value) == 8 and value.isdigit() else ""
+
+
 async def ingest_visura_xml(session, document_id: int, content: str | bytes | None) -> dict[str, int]:
     """Fill the typed tables from one document's XML; returns row counts (empty when the XML is not a visura).
 
@@ -513,7 +521,11 @@ async def ingest_visura_xml(session, document_id: int, content: str | bytes | No
                     counts["parcels"] += 1
             counts["mutations"] += len(group["mutations"])
             counts["owners"] += await _write_mutations(
-                session, group["mutations"], {"property_group_id": row.id}, group["attrs"].get("TipoCatasto") or "F"
+                session,
+                group["mutations"],
+                {"property_group_id": row.id},
+                group["attrs"].get("TipoCatasto") or "F",
+                _as_of(parsed),
             )
     else:
         for unit in parsed["units"]:
@@ -527,7 +539,9 @@ async def ingest_visura_xml(session, document_id: int, content: str | bytes | No
                 counts["parcels"] += 1
                 mutations = unit.get("mutations", [])
                 counts["mutations"] += len(mutations)
-                counts["owners"] += await _write_mutations(session, mutations, {"land_parcel_id": parcel_id}, "T")
+                counts["owners"] += await _write_mutations(
+                    session, mutations, {"land_parcel_id": parcel_id}, "T", _as_of(parsed)
+                )
         for entry in parsed["history_addresses"]:
             session.add(
                 BuildingAddress(
@@ -535,7 +549,9 @@ async def ingest_visura_xml(session, document_id: int, content: str | bytes | No
                 )
             )
         counts["mutations"] += len(parsed["mutations"])
-        counts["owners"] += await _write_mutations(session, parsed["mutations"], {"document_id": document_id}, cadastre_type)
+        counts["owners"] += await _write_mutations(
+            session, parsed["mutations"], {"document_id": document_id}, cadastre_type, _as_of(parsed)
+        )
     await session.flush()
     return counts
 

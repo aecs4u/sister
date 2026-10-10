@@ -226,6 +226,6 @@ Visura soggetto {{ _variant_label|lower }}
 
 {% block extra_js %}
 {{ super() }}
-{{ timeline_js() }}
-{{ table_filter_csv_js('.imm-tables .cat-compact-table') }}
+{{ timeline_js(csp_nonce) }}
+{{ table_filter_csv_js('.imm-tables .cat-compact-table', csp_nonce) }}
 {% endblock %}
