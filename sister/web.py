@@ -29,6 +29,7 @@ from .database import (
     count_total_result_rows,
     find_result_rows,
     get_all_documents,
+    get_cadastral_sibling_visuras,
     get_db_owners_for_response,
     get_db_properties_for_response,
     get_document_by_id,
@@ -2551,7 +2552,7 @@ def _file_icon(ext: str, is_dir: bool) -> tuple[str, str]:
     }.get(ext, ("fa-file", "text-muted"))
 
 
-def _render_doc_from_db(doc: dict, request, theme, user, force_template: str | None = None):
+async def _render_doc_from_db(doc: dict, request, theme, user, force_template: str | None = None):
     """Finalize a doc dict fetched from the DB and render the matching visura template.
 
     By default the template is chosen from the XML root element. Pass
@@ -2642,7 +2643,279 @@ def _render_doc_from_db(doc: dict, request, theme, user, force_template: str | N
             result=result,
             request_id=str(doc.get("id") or doc.get("filename") or ""),
         )
-    return theme.render(template, request, user=user, doc=doc)
+    return theme.render(
+        template,
+        request,
+        user=user,
+        doc=doc,
+        google_maps=await _google_maps_context(doc) if template == "visura_fabbricati.html" else None,
+    )
+
+
+async def _google_maps_context(doc: dict) -> dict[str, Any] | None:
+    """Build Google Maps and Street View links from a verified parcel or address."""
+    view = doc.get("view") or {}
+    units = view.get("units") or []
+    unit = units[0] if units and isinstance(units[0], dict) else {}
+    identifier = unit.get("identifier") or {}
+    address = str(unit.get("address") or doc.get("indirizzo") or "").strip()
+    address = re.sub(r"\s+n\.?\s*SNC\b", "", address, flags=re.IGNORECASE)
+    address = re.sub(r"\s+Piano\s+[A-Z0-9]+\s*$", "", address, flags=re.IGNORECASE)
+    address = re.sub(r"\s+", " ", address).strip(" ,")
+    municipality = str(identifier.get("municipality") or doc.get("comune") or "").strip()
+    province = str(identifier.get("province") or doc.get("provincia") or "").strip()
+    sheet = str(identifier.get("sheet") or doc.get("foglio") or "").strip()
+    parcel = str(identifier.get("parcel") or doc.get("particella") or "").strip()
+    subunit = str(identifier.get("subunit") or doc.get("subalterno") or "").strip()
+    section = str(
+        identifier.get("urban_section")
+        or identifier.get("census_section")
+        or doc.get("sezione_urbana")
+        or ""
+    ).strip()
+    municipality_code = str(identifier.get("municipality_code") or "").strip().upper()
+    location_parts = [part for part in (address, municipality, province) if part]
+    if not location_parts:
+        return None
+    location = ", ".join((*location_parts, "Italia"))
+
+    def search_url(query: str) -> str:
+        return "https://www.google.com/maps/search/?" + urlencode({"api": "1", "query": query})
+
+    def map_embed_url(query: str) -> str:
+        return "https://maps.google.com/maps?" + urlencode(
+            {"q": query, "z": 18, "output": "embed"}
+        )
+
+    def street_view_embed_url(point: str) -> str:
+        return "https://maps.google.com/maps?" + urlencode(
+            {
+                "layer": "c",
+                "cbll": point,
+                "cbp": "11,0,0,0,0",
+                "output": "svembed",
+            }
+        )
+
+    context: dict[str, Any] = {
+        "location": location,
+        "map_url": search_url(location),
+        "map_embed_url": map_embed_url(location),
+        # Without a verified coordinate Google can only search the address; the
+        # user can select Street View where coverage exists.
+        "street_view_url": search_url(location) if address else "",
+        "street_view_embed_url": "",
+        "centroid": None,
+        "lookup_status": "not_configured",
+        "lookup_message": "",
+        "related_subunits": [],
+        "adjacent_parcels": [],
+    }
+
+    if municipality and province and sheet and parcel:
+        try:
+            siblings = await get_cadastral_sibling_visuras(
+                province=province,
+                municipality=municipality,
+                sheet=sheet,
+                parcel=parcel,
+                subunit=subunit,
+                section=section,
+            )
+            context["related_subunits"] = [
+                {
+                    **sibling,
+                    "url": f"/web/documents/{sibling['document_id']}",
+                }
+                for sibling in siblings
+            ]
+        except Exception as exc:
+            logger.warning("Sibling subaltern lookup unavailable: %s", type(exc).__name__)
+
+    dsn = os.getenv("CADASTRAL_POSTGRES_DSN", "").strip()
+    if not dsn or not (municipality and province and sheet and parcel):
+        return context
+
+    sheet_values = {sheet.upper()}
+    if sheet.isdigit():
+        normalized_sheet = str(int(sheet))
+        sheet_values.update(normalized_sheet.zfill(width) for width in (2, 3, 4))
+        if int(normalized_sheet) >= 100 and int(normalized_sheet) % 100 == 0:
+            normalized_sheet = str(int(normalized_sheet) // 100)
+            sheet_values.add(normalized_sheet)
+            sheet_values.update(normalized_sheet.zfill(width) for width in (2, 3, 4))
+        # AdE regional map extracts commonly store a four-character sheet
+        # followed by the two-zero precision suffix.
+        sheet_values.add(normalized_sheet.zfill(4) + "00")
+    parcel_values = {parcel.upper()}
+    if parcel.isdigit():
+        normalized_parcel = str(int(parcel))
+        parcel_values.update(normalized_parcel.zfill(width) for width in (2, 3, 4, 5))
+
+    # The regional union view has expression indexes on municipality, province,
+    # sheet and parcel. Keeping those expressions intact avoids scanning the
+    # full cadastral extracts.
+    sql = """
+        SELECT national_cadastral_reference,
+               min(municipality_code) AS municipality_code,
+               min(municipality_name) AS municipality_name,
+               min(province) AS province,
+               min(ST_SRID(geom)) AS srid,
+               max(ST_SRID(geom)) AS max_srid,
+               ST_X(ST_Centroid(ST_Collect(geom))) AS longitude,
+               ST_Y(ST_Centroid(ST_Collect(geom))) AS latitude
+        FROM spatial.cadastral_parcel
+        WHERE lower(btrim(municipality_name)) = lower(btrim(%s))
+          AND upper(btrim(province)) = upper(btrim(%s))
+          AND upper(btrim(sheet)) = ANY(%s)
+          AND upper(btrim(parcel)) = ANY(%s)
+          AND (%s = '' OR upper(btrim(municipality_code)) = %s)
+        GROUP BY national_cadastral_reference
+        LIMIT 2
+    """
+    adjacent_sql = """
+        WITH target AS (
+            SELECT ST_UnaryUnion(ST_Collect(geom)) AS geom
+            FROM spatial.cadastral_parcel
+            WHERE national_cadastral_reference = %s
+            GROUP BY national_cadastral_reference
+        )
+        SELECT COALESCE(n.national_cadastral_reference, n.canonical_reference) AS cadastral_reference,
+               min(n.municipality_code) AS municipality_code,
+               min(n.municipality_name) AS municipality_name,
+               min(n.province) AS province,
+               min(n.sheet) AS sheet,
+               min(n.parcel) AS parcel,
+               min(ST_SRID(n.geom)) AS srid,
+               max(ST_SRID(n.geom)) AS max_srid,
+               ST_X(ST_Centroid(ST_Collect(n.geom))) AS longitude,
+               ST_Y(ST_Centroid(ST_Collect(n.geom))) AS latitude
+        FROM spatial.cadastral_parcel AS n
+        CROSS JOIN target AS t
+        WHERE n.geom && t.geom
+          AND ST_Touches(n.geom, t.geom)
+          AND COALESCE(n.national_cadastral_reference, n.canonical_reference) IS DISTINCT FROM %s
+        GROUP BY COALESCE(n.national_cadastral_reference, n.canonical_reference)
+        ORDER BY min(n.municipality_name), min(n.sheet), min(n.parcel)
+        LIMIT 25
+    """
+    adjacent_rows = []
+    try:
+        import psycopg
+
+        dsn = dsn.replace("postgresql+asyncpg://", "postgresql://", 1)
+        dsn = dsn.replace("postgresql+psycopg://", "postgresql://", 1)
+        async with await psycopg.AsyncConnection.connect(
+            dsn,
+            connect_timeout=2,
+            options="-c default_transaction_read_only=on -c statement_timeout=2500",
+        ) as connection:
+            cursor = await connection.execute(
+                sql,
+                (
+                    municipality,
+                    province,
+                    sorted(sheet_values),
+                    sorted(parcel_values),
+                    municipality_code,
+                    municipality_code,
+                ),
+            )
+            rows = await cursor.fetchall()
+            if len(rows) == 1 and rows[0][0]:
+                try:
+                    adjacent_cursor = await connection.execute(adjacent_sql, (rows[0][0], rows[0][0]))
+                    adjacent_rows = await adjacent_cursor.fetchall()
+                except Exception as exc:
+                    logger.warning("Adjacent cadastral parcels unavailable: %s", type(exc).__name__)
+    except Exception as exc:
+        logger.warning("Cadastral map lookup unavailable: %s", type(exc).__name__)
+        context["lookup_status"] = "unavailable"
+        context["lookup_message"] = (
+            "La cartografia catastale locale non è disponibile; i collegamenti cercano l’indirizzo della visura."
+        )
+        return context
+
+    context["lookup_status"] = "not_found"
+    reference = f"FG {sheet} · PT {parcel}"
+    if len(rows) != 1:
+        context["lookup_message"] = (
+            f"La particella {reference} non è stata trovata in modo univoco nella cartografia catastale locale. "
+            "I collegamenti cercano l’indirizzo della visura; Street View dipende dalla copertura."
+        )
+        return context
+
+    row = rows[0]
+    try:
+        longitude = float(row[6])
+        latitude = float(row[7])
+        srid, max_srid = int(row[4]), int(row[5])
+    except (TypeError, ValueError):
+        return context
+    if (
+        srid != 4326
+        or max_srid != 4326
+        or not (-180 <= longitude <= 180)
+        or not (-90 <= latitude <= 90)
+    ):
+        logger.warning("Cadastral parcel has invalid WGS84 coordinates")
+        context["lookup_status"] = "invalid_coordinates"
+        context["lookup_message"] = (
+            f"La geometria catastale della particella {reference} non ha coordinate WGS84 valide; "
+            "i collegamenti cercano l’indirizzo della visura."
+        )
+        return context
+
+    point = f"{latitude:.6f},{longitude:.6f}"
+    context.update(
+        {
+            "map_url": search_url(point),
+            "map_embed_url": map_embed_url(point),
+            "street_view_url": "https://www.google.com/maps/@?"
+            + urlencode({"api": "1", "map_action": "pano", "viewpoint": point}),
+            "street_view_embed_url": street_view_embed_url(point),
+            "centroid": point,
+            "lookup_status": "matched",
+            "lookup_message": f"Centroide catastale della particella {reference}: {point} (WGS84).",
+        }
+    )
+    seen_adjacent = set()
+    for adjacent in adjacent_rows:
+        try:
+            adjacent_srid, adjacent_max_srid = int(adjacent[6]), int(adjacent[7])
+            adjacent_longitude, adjacent_latitude = float(adjacent[8]), float(adjacent[9])
+        except (TypeError, ValueError):
+            continue
+        if (
+            adjacent_srid != 4326
+            or adjacent_max_srid != 4326
+            or not (-180 <= adjacent_longitude <= 180)
+            or not (-90 <= adjacent_latitude <= 90)
+        ):
+            continue
+        adjacent_municipality = str(adjacent[2] or municipality).strip()
+        adjacent_province = str(adjacent[3] or province).strip()
+        adjacent_sheet = str(adjacent[4] or "").strip()
+        adjacent_parcel = str(adjacent[5] or "").strip()
+        dedupe_key = (
+            str(adjacent[1] or adjacent[0] or "").upper(),
+            adjacent_sheet.upper(),
+            adjacent_parcel.upper(),
+        )
+        if dedupe_key in seen_adjacent or not (adjacent_sheet and adjacent_parcel):
+            continue
+        seen_adjacent.add(dedupe_key)
+        adjacent_point = f"{adjacent_latitude:.6f},{adjacent_longitude:.6f}"
+        context["adjacent_parcels"].append(
+            {
+                "sheet": adjacent_sheet,
+                "parcel": adjacent_parcel,
+                "municipality": adjacent_municipality,
+                "province": adjacent_province,
+                "map_url": search_url(adjacent_point),
+            }
+        )
+    return context
 
 
 def _doc_as_result(doc: dict) -> dict:
@@ -2800,7 +3073,13 @@ async def web_document_view(request: Request, path: str, user=Depends(_require_a
     else:
         template = "result_detail.html"
 
-    return theme.render(template, request, user=user, doc=doc)
+    return theme.render(
+        template,
+        request,
+        user=user,
+        doc=doc,
+        google_maps=await _google_maps_context(doc) if template == "visura_fabbricati.html" else None,
+    )
 
 
 @router.get("/web/files")
@@ -3703,7 +3982,7 @@ async def web_documents(
                 ocular_extraction=ocular_extraction,
                 request_id=str(doc.get("id") or doc.get("filename") or ""),
             )
-        return _render_doc_from_db(doc, request, theme, user, force_template=template or None)
+        return await _render_doc_from_db(doc, request, theme, user, force_template=template or None)
 
     # Root with no explicit path → hierarchical document index (unless browsing files)
     if not path and view != "files":

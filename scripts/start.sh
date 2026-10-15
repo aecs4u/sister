@@ -11,7 +11,7 @@ START_DEFAULT_HOST="0.0.0.0"
 START_WORKERS=1
 START_UVICORN_ARGS=(
     --reload-include "*.py"
-    --reload-exclude "templates/*"
+    --reload-include "*.html"
     --reload-exclude "static/*"
 )
 START_PROJECT_ROOT="${PROJECT_ROOT}"

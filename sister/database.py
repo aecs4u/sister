@@ -1221,6 +1221,66 @@ async def get_document_by_id(doc_id: int) -> dict | None:
     }
 
 
+async def get_cadastral_sibling_visuras(
+    *,
+    province: str,
+    municipality: str,
+    sheet: str,
+    parcel: str,
+    subunit: str,
+    section: str = "",
+) -> list[dict]:
+    """Return the latest indexed fabbricati visura for each other subunit."""
+    if not all((province, municipality, sheet, parcel)):
+        return []
+
+    def reference_values(value: str) -> set[str]:
+        raw = value.strip().upper()
+        values = {raw}
+        if raw.isdigit():
+            normalized = str(int(raw))
+            values.add(normalized)
+            values.update(normalized.zfill(width) for width in (2, 3, 4, 5))
+        return values
+
+    current_subunits = reference_values(subunit)
+
+    session_factory = _get_session_factory()
+    async with session_factory() as session:
+        result = await session.execute(
+            select(
+                VisuraDocument.id,
+                VisuraDocument.created_at,
+                CadastralLocation.subunit,
+            )
+            .join(DocumentMetadata, VisuraDocument.id == DocumentMetadata.id)
+            .join(CadastralLocation, DocumentMetadata.location_id == CadastralLocation.id)
+            .where(
+                CadastralLocation.cadastre_type == "F",
+                func.lower(func.trim(CadastralLocation.province)) == province.strip().lower(),
+                func.lower(func.trim(CadastralLocation.municipality)) == municipality.strip().lower(),
+                func.upper(func.trim(CadastralLocation.sheet)).in_(reference_values(sheet)),
+                func.upper(func.trim(CadastralLocation.parcel)).in_(reference_values(parcel)),
+                func.upper(func.trim(CadastralLocation.section)) == section.strip().upper(),
+                func.trim(CadastralLocation.subunit) != "",
+                func.upper(func.trim(CadastralLocation.subunit)).notin_(current_subunits),
+                VisuraDocument.document_type.in_(
+                    ("visura_fabbricati", "visura_storica", "visura")
+                ),
+            )
+            .order_by(VisuraDocument.created_at.desc(), VisuraDocument.id.desc())
+            .limit(200)
+        )
+
+        # Multiple visure (e.g. current and historical) can exist per subunit;
+        # retain the most recently indexed one for a concise navigation list.
+        siblings = {}
+        for doc_id, _created_at, sibling_subunit in result.all():
+            label = str(sibling_subunit or "").strip()
+            siblings.setdefault(label, {"subunit": label, "document_id": doc_id})
+    return list(siblings.values())[:25]
+
+
 async def get_document_structured_extraction(doc_id: int) -> dict | None:
     """Fetch the latest archived structured payload and its normalized rows."""
     session_factory = _get_session_factory()

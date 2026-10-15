@@ -32,7 +32,7 @@
 {{ super() }}
 {{ catasto_assets() }}
 {{ timeline_css() }}
-<link rel="stylesheet" href="/static/css/pages/visura_fabbricati_storica.css?v=20261009a">
+<link rel="stylesheet" href="/static/css/pages/visura_fabbricati_storica.css?v=20261015a">
 {% endblock %}
 
 {% block content %}
@@ -70,6 +70,97 @@ PT <strong>{{ doc.particella or _dr.ParticellaNum or '-' }}</strong>
             {{ visura_doc_card('success', _t, _dr, doc) }}
         </div>
     </div>
+
+    {% if google_maps %}
+    <section class="card border-0 shadow-sm mb-4" aria-labelledby="visuraMapHeading">
+        <div class="card-body p-4">
+            <div class="d-flex align-items-start gap-3 mb-3">
+                <span class="visura-map-icon text-success" aria-hidden="true"><i class="fas fa-map-location-dot"></i></span>
+                <div>
+                    <h2 class="h5 mb-1" id="visuraMapHeading">Google Maps e Street View</h2>
+                    <p class="small text-muted mb-0">{{ google_maps.location }}</p>
+                </div>
+            </div>
+            <div class="row g-3 mb-3">
+                <div class="{% if google_maps.street_view_embed_url %}col-lg-6{% else %}col-12{% endif %}">
+                    <h3 class="h6 mb-2">Mappa</h3>
+                    <div class="visura-map-frame rounded overflow-hidden border">
+                        <iframe
+                            src="{{ google_maps.map_embed_url }}"
+                            title="Google Maps{% if google_maps.centroid %}: centroide catastale {{ google_maps.centroid }}{% else %}: {{ google_maps.location }}{% endif %}"
+                            loading="lazy"
+                            referrerpolicy="no-referrer-when-downgrade"
+                            allowfullscreen>
+                        </iframe>
+                    </div>
+                </div>
+                {% if google_maps.street_view_embed_url %}
+                <div class="col-lg-6">
+                    <h3 class="h6 mb-2">Street View</h3>
+                    <div class="visura-map-frame rounded overflow-hidden border">
+                        <iframe
+                            src="{{ google_maps.street_view_embed_url }}"
+                            title="Google Street View: {{ google_maps.location }}"
+                            loading="lazy"
+                            referrerpolicy="no-referrer-when-downgrade"
+                            allowfullscreen>
+                        </iframe>
+                    </div>
+                </div>
+                {% endif %}
+            </div>
+            <div class="d-flex flex-wrap gap-2">
+                <a class="btn btn-success" href="{{ google_maps.map_url }}" target="_blank" rel="noopener noreferrer">
+                    <i class="fas fa-map me-2" aria-hidden="true"></i>Apri Google Maps
+                </a>
+                {% if google_maps.street_view_url %}
+                <a class="btn btn-outline-success" href="{{ google_maps.street_view_url }}" target="_blank" rel="noopener noreferrer">
+                    <i class="fas fa-street-view me-2" aria-hidden="true"></i>{% if google_maps.centroid %}Apri Street View{% else %}Cerca Street View{% endif %}
+                </a>
+                {% endif %}
+            </div>
+            {% if google_maps.lookup_message %}
+            <p class="small {% if google_maps.lookup_status == 'not_found' %}text-warning-emphasis{% else %}text-muted{% endif %} mt-3 mb-0">{{ google_maps.lookup_message }}</p>
+            {% endif %}
+            {% if google_maps.street_view_url and not google_maps.centroid and not google_maps.lookup_message %}
+            <p class="small text-muted mt-3 mb-0">La ricerca si basa sull’indirizzo; scegli una posizione e verifica la copertura Street View.</p>
+            {% elif google_maps.centroid %}
+            <p class="small text-muted mt-3 mb-0">Google apre la vista panoramica disponibile più vicina al centroide catastale.</p>
+            {% endif %}
+            {% if google_maps.related_subunits or google_maps.adjacent_parcels %}
+            <div class="row g-4 mt-2">
+                {% if google_maps.related_subunits %}
+                <div class="col-lg-6">
+                    <h3 class="h6 mb-2">Altri subalterni dello stesso mappale</h3>
+                    <ul class="list-group list-group-flush small">
+                        {% for sibling in google_maps.related_subunits %}
+                        <li class="list-group-item px-0 py-1">
+                            <a href="{{ sibling.url }}" class="text-decoration-none">Sub {{ sibling.subunit }}</a>
+                        </li>
+                        {% endfor %}
+                    </ul>
+                </div>
+                {% endif %}
+                {% if google_maps.adjacent_parcels %}
+                <div class="col-lg-6">
+                    <h3 class="h6 mb-2">Particelle confinanti</h3>
+                    <ul class="list-group list-group-flush small">
+                        {% for parcel in google_maps.adjacent_parcels %}
+                        <li class="list-group-item px-0 py-1">
+                            <a href="{{ parcel.map_url }}" target="_blank" rel="noopener noreferrer" class="text-decoration-none">
+                                FG {{ parcel.sheet }} · PT {{ parcel.parcel }}
+                            </a>
+                            {% if parcel.municipality %}<span class="text-muted"> — {{ parcel.municipality }}{% if parcel.province %} ({{ parcel.province }}){% endif %}</span>{% endif %}
+                        </li>
+                        {% endfor %}
+                    </ul>
+                </div>
+                {% endif %}
+            </div>
+            {% endif %}
+        </div>
+    </section>
+    {% endif %}
 
     {% if doc.view and doc.view.units %}
     {# ── Interpreted model (sister/visura_view.py): current state, history by period, ownership acts ── #}

@@ -38,6 +38,7 @@ def apply_nonce_policy(csp: str, nonce: str) -> str:
     replacements = {"script-src": f"'self' 'nonce-{nonce}' blob:", **_STRICT_DIRECTIVES}
     directives = []
     seen = set()
+    frame_src_seen = False
     for directive in csp.split(";"):
         tokens = directive.split()
         if not tokens:
@@ -46,11 +47,23 @@ def apply_nonce_policy(csp: str, nonce: str) -> str:
         if name in replacements:
             directives.append(f"{tokens[0]} {replacements[name]}")
             seen.add(name)
+        elif name == "frame-src":
+            # Preserve auth-provider frames from the package policy while
+            # allowing the embedded Google Maps and Street View views.
+            sources = [source for source in tokens[1:] if source != "'none'"]
+            if "'self'" not in sources and not sources:
+                sources.append("'self'")
+            if "https://*.google.com" not in sources:
+                sources.append("https://*.google.com")
+            directives.append(f"{tokens[0]} {' '.join(sources)}")
+            frame_src_seen = True
         else:
             directives.append(" ".join(tokens))
     for name, value in replacements.items():
         if name not in seen:
             directives.append(f"{name} {value}")
+    if not frame_src_seen:
+        directives.append("frame-src 'self' https://*.google.com")
     return "; ".join(directives)
 
 
