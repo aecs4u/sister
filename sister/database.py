@@ -69,7 +69,7 @@ load_dotenv(PROJECT_ROOT / ".env")
 load_dotenv(PROJECT_ROOT.parent / ".env", override=False)
 DATA_ROOT = Path(os.getenv("SISTER_DATA_ROOT", str(PROJECT_ROOT))).expanduser().resolve()
 DATABASE_DSN = os.getenv("DATABASE_DSN")
-DATABASE_REVISION = "20261010_xml_typed_columns"
+DATABASE_REVISION = "20261010_activity_log"
 
 # ---------------------------------------------------------------------------
 # Engine and session
