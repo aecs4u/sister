@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import re
 import subprocess
-import tempfile
 from collections import defaultdict
 from pathlib import Path
 from typing import Any
@@ -16,7 +15,7 @@ _PROVINCE_NAME_RE = re.compile(r"Direzione Provinciale di\s+([A-ZÀÈÉÌÒÙ][A
 
 def _parse_file(path: Path) -> dict[str, Any] | None:
     """Parse the document metadata needed to reproduce a SISTER visura request."""
-    from .utils import _extract_p7m, _parse_visura_pdf, _parse_visura_xml
+    from .utils import _parse_visura_pdf, _parse_visura_xml
 
     suffix = path.suffix.lower()
     if suffix == ".pdf":
@@ -32,18 +31,9 @@ def _parse_file(path: Path) -> dict[str, Any] | None:
             except Exception:
                 pass
         return parsed
-    if suffix == ".xml":
+    if suffix in (".xml", ".p7m"):
+        # A .p7m is read in memory, so a scan never changes the source files.
         return _parse_visura_xml(str(path))
-    if suffix == ".p7m":
-        sibling_xml = path.with_suffix(".xml")
-        if sibling_xml.is_file():
-            return _parse_visura_xml(str(sibling_xml))
-        # Parse outside the documents folder so a scan never changes the source files.
-        with tempfile.TemporaryDirectory(prefix="sister-pair-scan-") as temp_dir:
-            temp_p7m = Path(temp_dir) / path.name
-            temp_p7m.write_bytes(path.read_bytes())
-            extracted = _extract_p7m(str(temp_p7m))
-            return _parse_visura_xml(extracted) if extracted else None
     return None
 
 
@@ -127,10 +117,13 @@ def build_missing_pair_batch(documents_dir: Path) -> dict[str, Any]:
             "error": f"Documents directory not found: {documents_dir}",
         }
 
-    grouped: dict[str, dict[str, Path]] = defaultdict(dict)
-    for path in documents_dir.iterdir():
+    from .utils import _document_key
+
+    # A PDF and a P7M are separate requests and may carry different request dates: pair them without the date.
+    grouped: dict[str, dict[str, list[Path]]] = defaultdict(lambda: defaultdict(list))
+    for path in sorted(documents_dir.iterdir()):
         if path.is_file() and path.suffix.lower() in {".pdf", ".p7m", ".xml"}:
-            grouped[path.stem][path.suffix.lower()] = path
+            grouped[_document_key(path.stem)][path.suffix.lower()].append(path)
 
     requests: dict[tuple, dict[str, Any]] = {}
     missing_pairs: list[dict[str, Any]] = []
@@ -148,7 +141,7 @@ def build_missing_pair_batch(documents_dir: Path) -> dict[str, Any]:
             skipped.append({"stem": stem, "reason": "Not a supported cadastral visura file"})
             continue
 
-        source = files.get(".pdf") or files.get(".xml") or files.get(".p7m")
+        source = next(iter(files.get(".pdf") or files.get(".xml") or files.get(".p7m") or []), None)
         try:
             parsed = _parse_file(source) if source else None
         except Exception as exc:
@@ -160,7 +153,8 @@ def build_missing_pair_batch(documents_dir: Path) -> dict[str, Any]:
             continue
 
         key, query = query_info
-        pair = {"stem": stem, "source_files": sorted(p.name for p in files.values()), "missing_formats": missing_formats}
+        source_files = sorted(p.name for paths in files.values() for p in paths)
+        pair = {"stem": stem, "source_files": source_files, "missing_formats": missing_formats}
         missing_pairs.append(pair)
         if key not in requests:
             requests[key] = {**query, "source_files": [], "missing_pair_count": 0}

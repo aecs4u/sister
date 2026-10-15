@@ -900,6 +900,12 @@
       if (['T', 'F', 'E', 'TF'].includes(upper)) return { valid: true, cleaned: upper };
       return { valid: false, msg: 'Deve essere T, F o E' };
     },
+    'vista': function(val) {
+      if (!val) return { valid: true, cleaned: '' };
+      const lower = val.trim().toLowerCase();
+      if (['analitica', 'sintetica'].includes(lower)) return { valid: true, cleaned: lower };
+      return { valid: false, msg: 'Deve essere analitica o sintetica' };
+    },
     'indirizzo': function(val) {
       if (!val) return { valid: true, cleaned: '' };
       return { valid: true, cleaned: val.trim() };
@@ -918,8 +924,10 @@
   // Required fields per command (includes aliases)
   const REQUIRED_BY_COMMAND = {
     'search': ['provincia', 'comune', 'foglio', 'particella'],
+    'visura-storica': ['provincia', 'comune', 'foglio', 'particella'],
     'intestati': ['provincia', 'comune', 'foglio', 'particella', 'tipo_catasto'],
     'soggetto': ['codice_fiscale', 'cf', 'tax_code'],
+    'soggetto-documento': ['codice_fiscale'],
     'persona-giuridica': ['identificativo', 'piva', 'p.iva', 'partita_iva', 'vat', 'vat_code', 'p_iva'],
     'elenco-immobili': ['provincia', 'comune'],
     'indirizzo': ['provincia', 'comune', 'indirizzo'],
@@ -1203,8 +1211,10 @@
   // Expected API fields per command
   const API_FIELDS = {
     'search': ['provincia', 'comune', 'foglio', 'particella', 'tipo_catasto', 'sezione', 'subalterno'],
+    'visura-storica': ['provincia', 'comune', 'foglio', 'particella', 'tipo_catasto', 'sezione', 'subalterno'],
     'intestati': ['provincia', 'comune', 'foglio', 'particella', 'tipo_catasto', 'subalterno', 'sezione'],
     'soggetto': ['codice_fiscale', 'tipo_catasto', 'provincia'],
+    'soggetto-documento': ['provincia', 'codice_fiscale', 'azienda', 'tipo_catasto', 'vista'],
     'persona-giuridica': ['identificativo', 'tipo_catasto', 'provincia'],
     'elenco-immobili': ['provincia', 'comune', 'tipo_catasto', 'foglio', 'sezione'],
     'indirizzo': ['provincia', 'comune', 'indirizzo', 'tipo_catasto'],
@@ -1226,6 +1236,7 @@
     'sezione': 'sezione', 'section': 'sezione',
     'tipo_catasto': 'tipo_catasto', 'type': 'tipo_catasto', 'catasto': 'tipo_catasto',
     'codice_fiscale': 'codice_fiscale', 'cf': 'codice_fiscale', 'tax_code': 'codice_fiscale',
+    'azienda': 'azienda', 'vista': 'vista',
     'identificativo': 'identificativo',
     'piva': 'identificativo', 'p.iva': 'identificativo', 'p_iva': 'identificativo',
     'vat': 'identificativo', 'vat_code': 'identificativo', 'partita_iva': 'identificativo',
@@ -1322,6 +1333,10 @@
           'partita-search': 'partita',
         };
         var cmd = idToCommand[id];
+        var endpointInput = activePane.querySelector('input[name="endpoint-' + id + '"]:checked');
+        var endpointId = endpointInput ? endpointInput.value : null;
+        if (id === 'property-search' && endpointId === 'visura-storica') cmd = 'visura-storica';
+        if (id === 'company-search' && endpointId === 'soggetto-documento') cmd = 'soggetto-documento';
         if (cmd) {
           // Update hidden command field in batch form
           var cmdField = document.getElementById('param-batch-command');

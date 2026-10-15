@@ -1,0 +1,357 @@
+{
+  "_meta": {
+    "generated_at": "2026-10-14",
+    "command": "soggetto-documento",
+    "endpoint": "/visura/soggetto-documento",
+    "submitter_selection": "Ricerca società → Visura storica analitica per soggetto",
+    "source": "Local Recrowd proponents, checked against local Sister documents",
+    "rows": 48,
+    "coverage": {
+      "recrowd_proponents": 109,
+      "proponents_with_valid_identifier": 48,
+      "distinct_identifiers_in_database": 47,
+      "additional_user_supplied_identifiers": 1,
+      "proponents_without_identifier": 61,
+      "already_available_in_sister": 0
+    },
+    "note": "The 48 rows contain 47 unique valid identifiers from Recrowd plus the additional identifier supplied by the user, 10329400013, which is not currently linked to a Recrowd proponent row. The 61 proponents without an identifier in the database cannot be queried from this file."
+  },
+  "data": [
+    {
+      "provincia": "NAZIONALE",
+      "codice_fiscale": "01803350196",
+      "azienda": true,
+      "tipo_catasto": "E",
+      "vista": "analitica"
+    },
+    {
+      "provincia": "NAZIONALE",
+      "codice_fiscale": "02216310504",
+      "azienda": true,
+      "tipo_catasto": "E",
+      "vista": "analitica"
+    },
+    {
+      "provincia": "NAZIONALE",
+      "codice_fiscale": "02308480504",
+      "azienda": true,
+      "tipo_catasto": "E",
+      "vista": "analitica"
+    },
+    {
+      "provincia": "NAZIONALE",
+      "codice_fiscale": "02343800039",
+      "azienda": true,
+      "tipo_catasto": "E",
+      "vista": "analitica"
+    },
+    {
+      "provincia": "NAZIONALE",
+      "codice_fiscale": "02471840997",
+      "azienda": true,
+      "tipo_catasto": "E",
+      "vista": "analitica"
+    },
+    {
+      "provincia": "NAZIONALE",
+      "codice_fiscale": "02752311205",
+      "azienda": true,
+      "tipo_catasto": "E",
+      "vista": "analitica"
+    },
+    {
+      "provincia": "NAZIONALE",
+      "codice_fiscale": "03233600737",
+      "azienda": true,
+      "tipo_catasto": "E",
+      "vista": "analitica"
+    },
+    {
+      "provincia": "NAZIONALE",
+      "codice_fiscale": "03295450989",
+      "azienda": true,
+      "tipo_catasto": "E",
+      "vista": "analitica"
+    },
+    {
+      "provincia": "NAZIONALE",
+      "codice_fiscale": "03531340960",
+      "azienda": true,
+      "tipo_catasto": "E",
+      "vista": "analitica"
+    },
+    {
+      "provincia": "NAZIONALE",
+      "codice_fiscale": "03618371201",
+      "azienda": true,
+      "tipo_catasto": "E",
+      "vista": "analitica"
+    },
+    {
+      "provincia": "NAZIONALE",
+      "codice_fiscale": "03753160542",
+      "azienda": true,
+      "tipo_catasto": "E",
+      "vista": "analitica"
+    },
+    {
+      "provincia": "NAZIONALE",
+      "codice_fiscale": "03836260137",
+      "azienda": true,
+      "tipo_catasto": "E",
+      "vista": "analitica"
+    },
+    {
+      "provincia": "NAZIONALE",
+      "codice_fiscale": "03870361205",
+      "azienda": true,
+      "tipo_catasto": "E",
+      "vista": "analitica"
+    },
+    {
+      "provincia": "NAZIONALE",
+      "codice_fiscale": "03930920545",
+      "azienda": true,
+      "tipo_catasto": "E",
+      "vista": "analitica"
+    },
+    {
+      "provincia": "NAZIONALE",
+      "codice_fiscale": "04192721209",
+      "azienda": true,
+      "tipo_catasto": "E",
+      "vista": "analitica"
+    },
+    {
+      "provincia": "NAZIONALE",
+      "codice_fiscale": "04363080245",
+      "azienda": true,
+      "tipo_catasto": "E",
+      "vista": "analitica"
+    },
+    {
+      "provincia": "NAZIONALE",
+      "codice_fiscale": "04604690166",
+      "azienda": true,
+      "tipo_catasto": "E",
+      "vista": "analitica"
+    },
+    {
+      "provincia": "NAZIONALE",
+      "codice_fiscale": "04626680989",
+      "azienda": true,
+      "tipo_catasto": "E",
+      "vista": "analitica"
+    },
+    {
+      "provincia": "NAZIONALE",
+      "codice_fiscale": "04659930277",
+      "azienda": true,
+      "tipo_catasto": "E",
+      "vista": "analitica"
+    },
+    {
+      "provincia": "NAZIONALE",
+      "codice_fiscale": "04694910409",
+      "azienda": true,
+      "tipo_catasto": "E",
+      "vista": "analitica"
+    },
+    {
+      "provincia": "NAZIONALE",
+      "codice_fiscale": "04770400168",
+      "azienda": true,
+      "tipo_catasto": "E",
+      "vista": "analitica"
+    },
+    {
+      "provincia": "NAZIONALE",
+      "codice_fiscale": "04821070234",
+      "azienda": true,
+      "tipo_catasto": "E",
+      "vista": "analitica"
+    },
+    {
+      "provincia": "NAZIONALE",
+      "codice_fiscale": "05311840283",
+      "azienda": true,
+      "tipo_catasto": "E",
+      "vista": "analitica"
+    },
+    {
+      "provincia": "NAZIONALE",
+      "codice_fiscale": "07868270963",
+      "azienda": true,
+      "tipo_catasto": "E",
+      "vista": "analitica"
+    },
+    {
+      "provincia": "NAZIONALE",
+      "codice_fiscale": "08556550963",
+      "azienda": true,
+      "tipo_catasto": "E",
+      "vista": "analitica"
+    },
+    {
+      "provincia": "NAZIONALE",
+      "codice_fiscale": "08706990721",
+      "azienda": true,
+      "tipo_catasto": "E",
+      "vista": "analitica"
+    },
+    {
+      "provincia": "NAZIONALE",
+      "codice_fiscale": "08997300960",
+      "azienda": true,
+      "tipo_catasto": "E",
+      "vista": "analitica"
+    },
+    {
+      "provincia": "NAZIONALE",
+      "codice_fiscale": "09219470961",
+      "azienda": true,
+      "tipo_catasto": "E",
+      "vista": "analitica"
+    },
+    {
+      "provincia": "NAZIONALE",
+      "codice_fiscale": "09934090961",
+      "azienda": true,
+      "tipo_catasto": "E",
+      "vista": "analitica"
+    },
+    {
+      "provincia": "NAZIONALE",
+      "codice_fiscale": "10329400013",
+      "azienda": true,
+      "tipo_catasto": "E",
+      "vista": "analitica"
+    },
+    {
+      "provincia": "NAZIONALE",
+      "codice_fiscale": "10802940964",
+      "azienda": true,
+      "tipo_catasto": "E",
+      "vista": "analitica"
+    },
+    {
+      "provincia": "NAZIONALE",
+      "codice_fiscale": "11026500964",
+      "azienda": true,
+      "tipo_catasto": "E",
+      "vista": "analitica"
+    },
+    {
+      "provincia": "NAZIONALE",
+      "codice_fiscale": "11176850961",
+      "azienda": true,
+      "tipo_catasto": "E",
+      "vista": "analitica"
+    },
+    {
+      "provincia": "NAZIONALE",
+      "codice_fiscale": "11266570966",
+      "azienda": true,
+      "tipo_catasto": "E",
+      "vista": "analitica"
+    },
+    {
+      "provincia": "NAZIONALE",
+      "codice_fiscale": "11706500961",
+      "azienda": true,
+      "tipo_catasto": "E",
+      "vista": "analitica"
+    },
+    {
+      "provincia": "NAZIONALE",
+      "codice_fiscale": "12004490962",
+      "azienda": true,
+      "tipo_catasto": "E",
+      "vista": "analitica"
+    },
+    {
+      "provincia": "NAZIONALE",
+      "codice_fiscale": "12221190965",
+      "azienda": true,
+      "tipo_catasto": "E",
+      "vista": "analitica"
+    },
+    {
+      "provincia": "NAZIONALE",
+      "codice_fiscale": "12410420017",
+      "azienda": true,
+      "tipo_catasto": "E",
+      "vista": "analitica"
+    },
+    {
+      "provincia": "NAZIONALE",
+      "codice_fiscale": "12679410964",
+      "azienda": true,
+      "tipo_catasto": "E",
+      "vista": "analitica"
+    },
+    {
+      "provincia": "NAZIONALE",
+      "codice_fiscale": "12798650961",
+      "azienda": true,
+      "tipo_catasto": "E",
+      "vista": "analitica"
+    },
+    {
+      "provincia": "NAZIONALE",
+      "codice_fiscale": "12816281005",
+      "azienda": true,
+      "tipo_catasto": "E",
+      "vista": "analitica"
+    },
+    {
+      "provincia": "NAZIONALE",
+      "codice_fiscale": "12978450968",
+      "azienda": true,
+      "tipo_catasto": "E",
+      "vista": "analitica"
+    },
+    {
+      "provincia": "NAZIONALE",
+      "codice_fiscale": "13168720962",
+      "azienda": true,
+      "tipo_catasto": "E",
+      "vista": "analitica"
+    },
+    {
+      "provincia": "NAZIONALE",
+      "codice_fiscale": "13661140965",
+      "azienda": true,
+      "tipo_catasto": "E",
+      "vista": "analitica"
+    },
+    {
+      "provincia": "NAZIONALE",
+      "codice_fiscale": "13854430967",
+      "azienda": true,
+      "tipo_catasto": "E",
+      "vista": "analitica"
+    },
+    {
+      "provincia": "NAZIONALE",
+      "codice_fiscale": "15079111009",
+      "azienda": true,
+      "tipo_catasto": "E",
+      "vista": "analitica"
+    },
+    {
+      "provincia": "NAZIONALE",
+      "codice_fiscale": "15922551005",
+      "azienda": true,
+      "tipo_catasto": "E",
+      "vista": "analitica"
+    },
+    {
+      "provincia": "NAZIONALE",
+      "codice_fiscale": "15948701006",
+      "azienda": true,
+      "tipo_catasto": "E",
+      "vista": "analitica"
+    }
+  ]
+}

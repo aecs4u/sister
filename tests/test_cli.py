@@ -1002,3 +1002,95 @@ def test_batch_output_dir(monkeypatch, tmp_path):
 
     files = list(out_dir.glob("*.json"))
     assert len(files) == 1
+
+
+# ---------------------------------------------------------------------------
+# download again? (an identical query answered before the cache window)
+# ---------------------------------------------------------------------------
+
+_STALE = {
+    "request_id": "soggetto_E_old",
+    "status": "completed",
+    "timestamp": "2026-10-06T16:08:22",
+    "data": {},
+    "stale": True,
+}
+_NEW = {"request_id": "soggetto_E_new", "status": "queued"}
+
+
+def _record_submits(monkeypatch, first):
+    from sister.client import VisuraClient
+
+    calls = []
+
+    async def fake_submit(self, command, params, *, force=False, reuse_previous=False):
+        calls.append({"force": force, "reuse_previous": reuse_previous})
+        return _NEW if force else first
+
+    monkeypatch.setattr(VisuraClient, "submit", fake_submit)
+    return calls
+
+
+_CF = ["query", "soggetto", "--cf", "RSSMRA85M01H501Z"]
+
+
+def test_an_answered_query_asks_before_downloading_again_and_defaults_to_no(monkeypatch):
+    calls = _record_submits(monkeypatch, _STALE)
+    monkeypatch.setattr("sister.cli._interactive", lambda: True)
+
+    result = runner.invoke(app, _CF, input="\n")
+
+    assert result.exit_code == 0, result.output
+    assert "Already downloaded" in result.output and "soggetto_E_old" in result.output
+    assert calls == [{"force": False, "reuse_previous": True}]  # Enter = no: nothing new was requested
+
+
+def test_answering_yes_to_the_prompt_downloads_again(monkeypatch):
+    calls = _record_submits(monkeypatch, _STALE)
+    monkeypatch.setattr("sister.cli._interactive", lambda: True)
+
+    result = runner.invoke(app, _CF, input="y\n")
+
+    assert result.exit_code == 0, result.output
+    assert calls == [{"force": False, "reuse_previous": True}, {"force": True, "reuse_previous": False}]
+    assert "soggetto_E_new" in result.output
+
+
+def test_yes_downloads_again_without_asking(monkeypatch):
+    calls = _record_submits(monkeypatch, _STALE)
+
+    result = runner.invoke(app, [*_CF, "--yes"])
+
+    assert result.exit_code == 0, result.output
+    assert calls == [{"force": True, "reuse_previous": False}]
+    assert "Download it again" not in result.output
+
+
+def test_no_reuses_the_previous_result_without_asking(monkeypatch):
+    calls = _record_submits(monkeypatch, _STALE)
+
+    result = runner.invoke(app, [*_CF, "--no"])
+
+    assert result.exit_code == 0, result.output
+    assert calls == [{"force": False, "reuse_previous": True}]
+    assert "Download it again" not in result.output and "soggetto_E_old" in result.output
+
+
+def test_without_a_terminal_the_answer_is_no(monkeypatch):
+    calls = _record_submits(monkeypatch, _STALE)
+    monkeypatch.setattr("sister.cli._interactive", lambda: False)
+
+    result = runner.invoke(app, _CF)
+
+    assert result.exit_code == 0, result.output
+    assert calls == [{"force": False, "reuse_previous": True}]
+
+
+def test_a_new_query_is_submitted_without_any_question(monkeypatch):
+    calls = _record_submits(monkeypatch, _NEW)
+
+    result = runner.invoke(app, _CF)
+
+    assert result.exit_code == 0, result.output
+    assert calls == [{"force": False, "reuse_previous": True}]
+    assert "Already downloaded" not in result.output

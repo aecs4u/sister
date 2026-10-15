@@ -569,13 +569,20 @@ def _complete_content(content: str, file_path: str | None) -> str:
         return content
     from pathlib import Path
 
-    for candidate in (Path(file_path), Path(file_path).with_suffix(".xml")):
-        if candidate.suffix.lower() == ".xml" and candidate.is_file():
-            try:
-                return candidate.read_text(encoding="utf-8", errors="ignore")
-            except OSError:
-                continue
-    return content
+    from .utils import _p7m_payload
+
+    path = Path(file_path)
+    suffix = path.suffix.lower()
+    if suffix not in (".xml", ".p7m") or not path.is_file():
+        return content
+    try:
+        if suffix == ".p7m":
+            # the signed content is read in memory; no extracted .xml is kept next to the .p7m
+            payload = _p7m_payload(str(path))
+            return payload.decode("utf-8", errors="ignore") if payload else content
+        return path.read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return content
 
 
 async def backfill_documents(force: bool = False, limit: int | None = None, batch: int = 50) -> dict[str, int]:

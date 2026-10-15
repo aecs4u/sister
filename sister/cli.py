@@ -20,6 +20,7 @@ import csv
 import inspect
 import io
 import json
+import sys
 import time
 from pathlib import Path
 from typing import Optional
@@ -246,8 +247,40 @@ def _report_submission(client: VisuraClient, params: dict, result: dict, wait: b
         _write_output(all_results if len(all_results) > 1 else next(iter(all_results.values())), output)
 
 
-def _run_query_command(command: str, params: dict, wait: bool, output: Optional[str], dry_run: bool, force: bool) -> None:
-    """Shared body of every generated query command: validate → (dry run) → submit → report."""
+def _interactive() -> bool:
+    return sys.stdin.isatty()
+
+
+def _confirm_download_again(result: dict, redownload: Optional[bool]) -> bool:
+    """Whether to download again an identical query answered before: ``--yes``/``--no`` skip the question (default no)."""
+    if redownload is not None:
+        return redownload
+    when = result.get("timestamp") or next(
+        (item.get("timestamp") for item in result.get("cached_results", []) if item.get("timestamp")), ""
+    )
+    console.print(
+        f"[yellow]Already downloaded[/yellow]{f' on {when[:10]}' if when else ''}: "
+        + ", ".join(f"[cyan]{rid}[/cyan]" for rid in VisuraClient.request_ids(result))
+    )
+    if not _interactive():
+        return False
+    return typer.confirm("Download it again (a new request, possibly paid)?", default=False)
+
+
+def _run_query_command(
+    command: str,
+    params: dict,
+    wait: bool,
+    output: Optional[str],
+    dry_run: bool,
+    force: bool,
+    redownload: Optional[bool] = None,
+) -> None:
+    """Shared body of every generated query command: validate → (dry run) → submit → report.
+
+    An identical query answered before the cache window is not run again silently: the previous answer is shown and
+    the user is asked whether to download again (default no; ``--yes`` / ``--no`` answer in advance).
+    """
     spec = QUERY_FORMS[command]
     try:
         validate_params(command, params)
@@ -262,7 +295,12 @@ def _run_query_command(command: str, params: dict, wait: bool, output: Optional[
         console.print(f"  Body: {json.dumps(params, ensure_ascii=False)}")
         return
     try:
-        result = asyncio.run(client.submit(command, params, force=force))
+        if force or redownload is True:
+            result = asyncio.run(client.submit(command, params, force=True))
+        else:
+            result = asyncio.run(client.submit(command, params, reuse_previous=True))
+            if result.get("stale") and _confirm_download_again(result, redownload):
+                result = asyncio.run(client.submit(command, params, force=True))
     except VisuraAPIError as e:
         _handle_api_error(e)
         return
@@ -290,18 +328,27 @@ def _make_query_command(form):
         "wait": (bool, typer.Option(False, "--wait", "-w", help="Attende il risultato invece di tornare subito")),
         "dry_run": (bool, typer.Option(False, "--dry-run", help="Mostra la richiesta senza inviarla")),
         "force": (bool, typer.Option(False, "--force", help="Ignora la cache e invia sempre una nuova richiesta")),
+        "redownload": (
+            Optional[bool],
+            typer.Option(
+                None,
+                "--yes/--no",
+                help="Se la stessa richiesta e' gia' stata scaricata: scarica di nuovo (--yes) o riusa il risultato "
+                "(--no) senza chiedere. Senza opzione chiede conferma (default: no)",
+            ),
+        ),
     }
     for name, (annotation, option) in common.items():
         parameters.append(inspect.Parameter(name, inspect.Parameter.KEYWORD_ONLY, default=option, annotation=annotation))
 
     def command(**kwargs):
-        output, wait, dry_run, force = (kwargs.pop(name) for name in common)
+        output, wait, dry_run, force, redownload = (kwargs.pop(name) for name in common)
         params = {
             name: (("true" if value else "false") if isinstance(value, bool) else str(value))
             for name, value in kwargs.items()
             if value is not None
         }
-        _run_query_command(form.command, params, wait, output, dry_run, force)
+        _run_query_command(form.command, params, wait, output, dry_run, force, redownload)
 
     command.__signature__ = inspect.Signature(parameters)
     command.__annotations__ = {p.name: p.annotation for p in parameters}
@@ -1093,6 +1140,12 @@ def batch(
     output: Optional[str] = typer.Option(None, "--output", "-o", help="File di output unico (tutti i risultati uniti)"),
     dry_run: bool = typer.Option(False, "--dry-run", help="Mostra le righe senza eseguirle"),
     force: bool = typer.Option(False, "--force", help="Ignora la cache e invia sempre una nuova richiesta"),
+    redownload: Optional[bool] = typer.Option(
+        None,
+        "--yes/--no",
+        help="Righe gia' scaricate: scarica di nuovo (--yes) o riusa il risultato (--no) senza chiedere. "
+        "Senza opzione chiede conferma per ogni riga (default: no)",
+    ),
 ):
     """Invia più query da un file CSV.
 
@@ -1183,7 +1236,12 @@ def batch(
         console.print(f"\n[dim]({i}/{len(rows)})[/dim] {label}")
 
         try:
-            result = asyncio.run(client.submit(spec.command, params, force=force))
+            if force or redownload is True:
+                result = asyncio.run(client.submit(spec.command, params, force=True))
+            else:
+                result = asyncio.run(client.submit(spec.command, params, reuse_previous=True))
+                if result.get("stale") and _confirm_download_again(result, redownload):
+                    result = asyncio.run(client.submit(spec.command, params, force=True))
         except VisuraAPIError as e:
             console.print(f"  [red]Submit failed: HTTP {e.status_code}: {e.detail}[/red]")
             err_count += 1

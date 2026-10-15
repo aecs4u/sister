@@ -65,6 +65,7 @@ def _submit_result_to_response(results: list, tipos_catasto: list, message: str)
                         "status": _response_status(r.response),
                         "data": r.response.data,
                         "error": r.response.error,
+                        "stale": r.stale,
                     }
                 )
         elif isinstance(r, str):
@@ -78,6 +79,7 @@ def _submit_result_to_response(results: list, tipos_catasto: list, message: str)
     }
     if cached_data:
         resp["cached_results"] = cached_data
+    resp["stale"] = any(item["stale"] for item in cached_data)
     return JSONResponse(resp)
 
 
@@ -98,6 +100,7 @@ def _cached_single_response(result, tipo_catasto: str):
             "data": resp.data,
             "error": resp.error,
             "timestamp": resp.timestamp.isoformat() if resp.timestamp else None,
+            "stale": result.stale,
         }
     )
 
@@ -465,10 +468,14 @@ async def richiedi_elenco_immobili(request: ElencoImmobiliInput, service: Visura
         raise HTTPException(status_code=500, detail="Errore interno del server")
 
 
-async def download_documents(service: VisuraService):
-    """Download all available documents from SISTER Richieste page."""
+async def download_documents(service: VisuraService, since: str = "", skip_known: bool = False):
+    """Download the available documents from the SISTER Richieste page.
+
+    All of them by default; ``since=YYYY-MM-DD`` keeps the requests of that day onwards and ``skip_known=true``
+    leaves out the ones whose document is already stored (the list holds the whole history).
+    """
     try:
-        documents = await service.download_richieste_documents()
+        documents = await service.download_richieste_documents(since=since, skip_known=skip_known)
         return JSONResponse(
             {
                 "status": "completed",

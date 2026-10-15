@@ -236,19 +236,17 @@ def compute_cache_key(request_type: str, **params) -> str:
     return hashlib.sha256(canonical.encode()).hexdigest()
 
 
-async def find_cached_response(cache_key: str, ttl_seconds: int) -> Optional[dict]:
-    """Find a successful, non-expired response matching the cache key."""
+async def find_cached_response(cache_key: str, ttl_seconds: Optional[int]) -> Optional[dict]:
+    """Find a successful response matching the cache key, not older than ``ttl_seconds`` (None: any age)."""
     session_factory = _get_session_factory()
     async with session_factory() as session:
-        cutoff = datetime.now(timezone.utc) - timedelta(seconds=ttl_seconds)
+        conditions = [VisuraRequest.cache_key == cache_key, VisuraResponse.success == True]  # noqa: E712
+        if ttl_seconds is not None:
+            conditions.append(VisuraResponse.created_at >= datetime.now(timezone.utc) - timedelta(seconds=ttl_seconds))
         stmt = (
             select(VisuraResponse)
             .join(VisuraRequest)
-            .where(
-                VisuraRequest.cache_key == cache_key,
-                VisuraResponse.success == True,  # noqa: E712
-                VisuraResponse.created_at >= cutoff,
-            )
+            .where(*conditions)
             .order_by(VisuraResponse.created_at.desc())
             .limit(1)
         )

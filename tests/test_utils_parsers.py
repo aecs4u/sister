@@ -104,20 +104,117 @@ def test_descriptive_filename_uses_subject_and_property_metadata():
     ) == "vi_sin_ter_ROMA_FG001_PT02_SUB7"
 
 
-def test_unique_document_stem_handles_pdf_and_xml_collisions(tmp_path):
+def test_subject_filename_carries_the_office_so_results_of_different_offices_do_not_share_a_name():
+    base = {"tipo": "visura_soggetto", "visura_subtype": "attuale", "tipo_catasto": "E", "identificativo": "RSSMRA85M01H501Z"}
+
+    ravenna = utils._descriptive_filename({**base, "provincia": "ra"})
+    palermo = utils._descriptive_filename({**base, "provincia": "PA"})
+    limited = utils._descriptive_filename({**base, "provincia": "RA", "codice_comune": "H199"})
+
+    assert (ravenna, palermo) == ("vs_att_RSSMRA85M01H501Z_RA_CE", "vs_att_RSSMRA85M01H501Z_PA_CE")
+    assert limited == "vs_att_RSSMRA85M01H501Z_RA_H199_CE"
+    assert utils._descriptive_filename(base) == "vs_att_RSSMRA85M01H501Z_CE"  # national scope: no office
+
+
+def test_subject_filename_always_names_its_cadastre():
+    base = {"tipo": "visura_soggetto", "visura_subtype": "attuale", "identificativo": "RSSMRA85M01H501Z", "provincia": "RA"}
+
+    assert utils._descriptive_filename({**base, "tipo_catasto": "E"}) == "vs_att_RSSMRA85M01H501Z_RA_CE"
+    assert utils._descriptive_filename({**base, "tipo_catasto": "F"}) == "vs_att_RSSMRA85M01H501Z_RA_CF"
+    assert utils._descriptive_filename({**base, "tipo_catasto": "T"}) == "vs_att_RSSMRA85M01H501Z_RA_CT"
+    # the document does not say (older PDF, unknown value): both cadastres, the portal default
+    assert utils._descriptive_filename(base) == "vs_att_RSSMRA85M01H501Z_RA_CE"
+    assert utils._descriptive_filename({**base, "tipo_catasto": "X"}) == "vs_att_RSSMRA85M01H501Z_RA_CE"
+
+
+def test_historical_subject_filename_carries_the_situation_date_when_it_is_not_the_request_date():
+    parsed = {
+        "tipo": "visura_soggetto",
+        "visura_subtype": "storica",
+        "tipo_catasto": "E",
+        "identificativo": "03870361205",
+        "provincia": "BO",
+        "situazione_al": "26/12/2023",
+    }
+
+    assert utils._descriptive_filename(parsed, requested_at="26/06/2026 22:53") == "vs_sto_03870361205_BO_CE_al2023-12-26"
+    assert utils._descriptive_filename({**parsed, "situazione_al": "26/06/2026"}, requested_at="26/06/2026") == (
+        "vs_sto_03870361205_BO_CE"
+    )
+    # an attuale visura is "al" its request day: no extra token whatever the portal prints
+    assert utils._descriptive_filename({**parsed, "visura_subtype": "attuale"}, requested_at="26/06/2026") == (
+        "vs_att_03870361205_BO_CE"
+    )
+    assert utils._document_key("vs_sto_03870361205_BO_CE_al2023-12-26_2026-06-26") == "vs_sto_03870361205_BO_CE_al2023-12-26"
+
+
+def test_unique_document_stem_adds_the_practice_id_on_collision(tmp_path):
     (tmp_path / "vi_att_ROMA.pdf").touch()
-    (tmp_path / "vi_att_ROMA_123_2024.xml").touch()
+    (tmp_path / "vi_att_ROMA_123_2024.pdf").touch()
 
     stem = utils._unique_document_stem(
         str(tmp_path),
         "vi_att_ROMA",
         ".pdf",
-        include_xml=True,
         parsed={"protocollo": "123", "anno": "2024"},
         request_id="req_1",
     )
 
     assert stem == "vi_att_ROMA_123_2024_2"
+
+
+def test_unique_document_stem_appends_the_iso_request_date_then_the_practice_id(tmp_path):
+    def name(requested_at):
+        stem = utils._unique_document_stem(
+            str(tmp_path),
+            "vs_att_SNTSFN77C08F205Y_CF",
+            ".p7m",
+            parsed={"protocollo": "T265733", "anno": "2026"},
+            request_id="req_1",
+            requested_at=requested_at,
+        )
+        (tmp_path / f"{stem}.p7m").touch()
+        return stem
+
+    # every download carries the date (not the time) of its request; the practice id only separates repeats
+    assert name("06/10/2026 16:06") == "vs_att_SNTSFN77C08F205Y_CF_2026-10-06"
+    assert name("06/10/2026\xa016:08") == "vs_att_SNTSFN77C08F205Y_CF_2026-10-06_T265733_2026"
+    assert name("06/10/2026 16:34") == "vs_att_SNTSFN77C08F205Y_CF_2026-10-06_T265733_2026_2"
+    assert name("07/10/2026 09:00") == "vs_att_SNTSFN77C08F205Y_CF_2026-10-07"
+
+
+def test_unique_document_stem_without_any_date_keeps_the_plain_name_while_free(tmp_path):
+    def name():
+        stem = utils._unique_document_stem(
+            str(tmp_path), "vi_att_ROMA", ".pdf", parsed={"protocollo": "T1", "anno": "2026"}, request_id="r"
+        )
+        (tmp_path / f"{stem}.pdf").touch()
+        return stem
+
+    assert name() == "vi_att_ROMA"
+    assert name() == "vi_att_ROMA_T1_2026"
+
+
+def test_the_reference_date_stands_in_when_the_request_date_is_unknown(tmp_path):
+    stem = utils._unique_document_stem(
+        str(tmp_path), "vi_att_ROMA", ".p7m", parsed={"situazione_al": "06/10/2026"}, request_id="r"
+    )
+
+    assert stem == "vi_att_ROMA_2026-10-06"
+
+
+def test_document_key_pairs_files_requested_on_different_days():
+    assert utils._document_key("vs_att_SNTSFN77C08F205Y_CF_2026-10-06") == "vs_att_SNTSFN77C08F205Y_CF"
+    assert utils._document_key("vi_att_PA_FG11_PT1752_2026-10-06_T1_2026") == "vi_att_PA_FG11_PT1752_T1_2026"
+    assert utils._document_key("vs_att_SNTSFN77C08F205Y_CF") == "vs_att_SNTSFN77C08F205Y_CF"
+
+
+def test_iso_request_date_reads_portal_dates_and_rejects_impossible_ones():
+    assert utils._iso_request_date("06/10/2026 16:08") == "2026-10-06"
+    assert utils._iso_request_date("6/1/2026") == "2026-01-06"
+    assert utils._iso_request_date("20261006") == "2026-10-06"
+    assert utils._iso_request_date("31/02/2026 10:00") == ""
+    assert utils._iso_request_date("") == ""
 
 
 def _step(index, *cfs):
@@ -229,3 +326,64 @@ def test_unconfirmed_requests_are_recorded_and_listed_separately_from_pending():
     assert utils._unconfirmed_documents([step]) == [
         {"result_index": 4, "kind": "soggetto", "reason": "captcha_rejected"}]
     assert utils._pending_documents([step]) == []
+
+
+def _fake_p7m_payload(monkeypatch, payload: bytes):
+    import aecs4u_crypto
+
+    monkeypatch.setattr(aecs4u_crypto, "extract_p7m_payload", lambda data: payload)
+
+
+def test_parsing_a_p7m_leaves_no_extracted_copy_in_the_documents_folder(tmp_path, monkeypatch):
+    _fake_p7m_payload(monkeypatch, b"<root><TitoloVisura Titolo='Visura attuale'/></root>")
+    p7m = tmp_path / "vi_att_RA_FG1_PT2.p7m"
+    p7m.write_bytes(b"signed")
+
+    parsed = utils._parse_visura_xml(str(p7m))
+
+    assert parsed and "TitoloVisura" in parsed["xml_content"]
+    assert sorted(path.name for path in tmp_path.iterdir()) == ["vi_att_RA_FG1_PT2.p7m"]
+
+
+def test_p7m_payload_is_returned_in_memory_and_empty_payload_is_none(tmp_path, monkeypatch):
+    p7m = tmp_path / "vi_att_RA_FG1_PT2.p7m"
+    p7m.write_bytes(b"signed")
+
+    _fake_p7m_payload(monkeypatch, b"<root/>")
+    assert utils._p7m_payload(str(p7m)) == b"<root/>"
+    _fake_p7m_payload(monkeypatch, b"")
+    assert utils._p7m_payload(str(p7m)) is None
+    assert sorted(path.name for path in tmp_path.iterdir()) == ["vi_att_RA_FG1_PT2.p7m"]
+
+
+def test_missing_pairs_pairs_a_pdf_and_a_p7m_requested_on_different_days(tmp_path):
+    from sister.missing_pairs import build_missing_pair_batch
+
+    (tmp_path / "vi_att_RA_FG1_PT2_2026-10-06.p7m").touch()
+    (tmp_path / "vi_att_RA_FG1_PT2_2026-10-08.pdf").touch()
+
+    batch = build_missing_pair_batch(tmp_path)
+
+    assert batch["missing_pairs"] == [] and batch["skipped"] == []
+
+
+def test_select_richieste_keeps_recent_requests_not_stored_yet():
+    rows = [
+        {"richiesta_del": "10/09/2026 09:00", "oggetto": "old", "salva_href": "a"},
+        {"richiesta_del": "14/10/2026 15:24", "oggetto": "new", "salva_href": "b"},
+        {"richiesta_del": "14/10/2026 15:30", "oggetto": "stored", "salva_href": "c"},
+        {"richiesta_del": "", "oggetto": "undated", "salva_href": "d"},
+    ]
+
+    assert [r["oggetto"] for r in utils._select_richieste(rows)] == ["old", "new", "stored", "undated"]
+    assert [r["oggetto"] for r in utils._select_richieste(rows, since="2026-10-14")] == ["new", "stored"]
+    known = {("14/10/2026 15:30", "stored")}
+    assert [r["oggetto"] for r in utils._select_richieste(rows, since="2026-10-14", known=known)] == ["new"]
+
+
+def test_empty_downloads_are_not_kept_so_a_pending_request_is_fetched_again():
+    import inspect
+
+    source = inspect.getsource(utils._download_richieste_documents)
+
+    assert "os.path.getsize(temp_path) == 0" in source and "non ancora pronto" in source

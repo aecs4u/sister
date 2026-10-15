@@ -26,7 +26,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from sister.db_models import CadastralLocation, DocumentMetadata, VisuraDocument
-from sister.utils import _parse_visura_pdf, _parse_visura_xml
+from sister.utils import _document_key, _parse_visura_pdf, _parse_visura_xml
 from sister.visura_xml_models import DocumentXmlAttribute, DocumentXmlNode
 
 
@@ -41,6 +41,16 @@ def resolve_path(path: str) -> Path:
         if fallback.exists():
             return fallback.resolve()
     raise FileNotFoundError(path)
+
+
+def is_extensionless_copy(path: Path) -> bool:
+    """True for a bare-name copy of a payload that also exists as ``<name>.xml`` / ``<name>.p7m``.
+
+    ``file_kind`` sniffs the content, so these copies would be indexed as a second XML document.
+    """
+    if path.suffix:
+        return False
+    return any(path.with_name(f"{path.name}{ext}").exists() for ext in (".xml", ".p7m"))
 
 
 def file_kind(path: Path) -> str:
@@ -82,8 +92,8 @@ def read_xml_content(path: Path, parsed: dict[str, Any] | None) -> str | None:
     if not parsed or not parsed.get("xml_content"):
         return None
     # For plain XML files this preserves the complete document rather than the
-    # parser's display-oriented 50k preview.  P7M parsing may have produced an
-    # extracted sibling, whose content is already available via parsed data.
+    # parser's display-oriented 50k preview.  A P7M is read in memory by the parser,
+    # whose content is already available via parsed data.
     if file_kind(path) == "XML":
         return path.read_text(encoding="utf-8", errors="ignore").replace("\x00", "")
     return str(parsed["xml_content"]).replace("\x00", "")
@@ -180,7 +190,7 @@ async def import_documents(files: list[Path], paired_xml: dict[str, Path]) -> di
         for path in files:
             kind = file_kind(path)
             parsed: dict[str, Any] | None = None
-            parse_path = paired_xml.get(path.stem, path)
+            parse_path = paired_xml.get(path.stem) or paired_xml.get(_document_key(path.stem), path)
 
             if kind == "XML":
                 parsed = _parse_visura_xml(str(path))
@@ -254,9 +264,16 @@ async def async_main() -> None:
         for path in documents_dir.rglob("*")
         if path.is_file()
         and not path.name.endswith(".plan.json")
+        and not is_extensionless_copy(path)
         and file_kind(path) in {"PDF", "P7M", "XML", "ZIP", "DAT"}
     )
-    xml_by_stem = {path.stem: path for path in files if file_kind(path) == "XML"}
+    # PDFs inherit their metadata from the signed document with the same stem (read in memory for a .p7m);
+    # the key without the request date also pairs a PDF and a P7M that were requested on different days
+    xml_by_stem: dict[str, Path] = {}
+    for path in files:
+        if file_kind(path) in {"XML", "P7M"}:
+            xml_by_stem[path.stem] = path
+            xml_by_stem.setdefault(_document_key(path.stem), path)
 
     print(f"files={len(files)} xml_pairs={len(xml_by_stem)}")
     print("postgresql", await import_documents(files, xml_by_stem))

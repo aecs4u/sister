@@ -1,7 +1,7 @@
 # SISTER
 
 [![Licenza](https://img.shields.io/badge/Licenza-AGPL%20v3-blue.svg)](LICENSE)
-[![Python](https://img.shields.io/badge/Python-3.11%2B-green.svg)](https://www.python.org/)
+[![Python](https://img.shields.io/badge/Python-3.12%2B-green.svg)](https://www.python.org/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.115-009688.svg)](https://fastapi.tiangolo.com/)
 
 Servizio REST + CLI + Web UI per l'estrazione automatizzata di dati catastali dal portale **SISTER** dell'Agenzia delle Entrate. Utilizza [`aecs4u-auth`](https://github.com/aecs4u/aecs4u-auth) per l'autenticazione SPID/CIE via browser headless, [`aecs4u-theme`](https://github.com/aecs4u/aecs4u-theme) per l'interfaccia web e [FastAPI](https://fastapi.tiangolo.com/) per l'API REST.
@@ -32,6 +32,7 @@ Servizio REST + CLI + Web UI per l'estrazione automatizzata di dati catastali da
   - [Shutdown](#shutdown)
 - [Client Python](#client-python)
 - [Esempi d'uso](#esempi-duso)
+- [Guide operative](#guide-operative)
 - [Logging e debug](#logging-e-debug)
 - [Dettagli tecnici](#dettagli-tecnici)
 - [Sviluppo e contribuzione](#sviluppo-e-contribuzione)
@@ -57,7 +58,8 @@ Entrambe le richieste vengono accodate ed eseguite sequenzialmente su un singolo
 - **Web UI** — Dashboard, query forms (12 single-step + 10 workflow), results browser, workflow flowcharts with depth selector (light/standard/deep/full), batch CSV/JSON/XLSX upload
 - **CLI integrata** — 25+ comandi query (incl. ispezioni ipotecarie), 10 workflow presets (7 standard + 3 multi-hop), batch, requests, history, db management
 - **Client Python** — `VisuraClient` asincrono con polling automatico e timeout configurabili
-- **Cache intelligente** — evita richieste duplicate; bypass con `--force`
+- **Server MCP locale** — query, anteprima, invio controllato, risultati e storico per client LLM (extra facoltativo)
+- **Cache intelligente** — evita richieste duplicate; prima di ripetere una query già scaricata la CLI chiede conferma
 - **Database SQLModel** — tabelle strutturate (immobili, intestati) + Alembic migrations
 - **Autenticazione SPID/CIE** via [`aecs4u-auth`](https://github.com/aecs4u/aecs4u-auth) con keep-alive e recovery automatico
 - **Coda sequenziale** — le richieste vengono processate una alla volta per non sovraccaricare il portale
@@ -130,7 +132,8 @@ sister/
 │   ├── form_config.py      # Web UI form group definitions
 │   ├── utils.py            # Automazione SISTER: run_visura(), parse_table()
 │   ├── client.py           # VisuraClient — async HTTP client con polling
-│   ├── cli.py              # CLI Typer: 16+ query commands, workflow, batch, db
+│   ├── mcp_server.py       # Server MCP locale su stdio (extra opzionale)
+│   ├── cli.py              # CLI Typer: query commands, workflow, batch, db
 │   ├── templates/sister/   # Jinja2 templates (extends aecs4u-theme)
 │   │   ├── landing.html    # Landing page (pubblica)
 │   │   ├── index.html      # Dashboard
@@ -138,13 +141,12 @@ sister/
 │   │   ├── results.html    # Results browser
 │   │   └── ...
 │   └── static/             # CSS, JS, icons, workflow SVG flowcharts
-├── tests/                  # Test suite (158+ test)
+├── tests/                  # Test suite
 ├── alembic/                # Database migrations
 ├── data/                   # Documenti, dossier e output generati
 ├── examples/               # CLI + Python client examples
-├── scripts/                # Start script
-├── docs/                   # Governance docs
-│   └── document_file_naming.md # Filename rules for downloaded documents
+├── scripts/                # Avvio, import e job batch/manutenzione
+├── docs/                   # Guide operative, diagrammi, audit e documentazione di progetto
 ├── Dockerfile
 ├── docker-compose.yaml
 ├── pyproject.toml
@@ -155,7 +157,7 @@ sister/
 
 ## Prerequisiti
 
-- **Python 3.11+** (testato fino a 3.13)
+- **Python 3.12+** (testato fino a 3.13)
 - **Credenziali SPID** tramite provider Sielte ID con app MySielteID configurata
 - **Convenzione SISTER attiva** — l'utente deve avere un account abilitato sul portale SISTER
 
@@ -400,6 +402,19 @@ sister
 (*) = known limitations, see "Limitazioni note"
 ```
 
+#### Ripetere una query già scaricata
+
+La CLI riusa automaticamente una risposta ancora nella cache. Se trova una risposta identica più vecchia del periodo di
+retention (`RESPONSE_TTL_SECONDS`, 6 ore per default), mostra l'ID e la data e chiede se inviare una nuova richiesta:
+
+```bash
+uv run sister query soggetto --cf RSSMRA85M01H501Z --yes  # forza una nuova richiesta senza chiedere
+uv run sister query soggetto --cf RSSMRA85M01H501Z --no   # riusa la risposta precedente
+```
+
+Senza terminale la CLI riusa la risposta precedente. `--force` invia sempre una nuova richiesta ed equivale a `--yes`;
+in `query batch`, `--yes` e `--no` si applicano a tutte le righe.
+
 ### Ricerca immobili
 
 ```bash
@@ -618,6 +633,11 @@ Per altri esempi vedi [`examples/cli_usage.sh`](examples/cli_usage.sh).
 ---
 
 ## Endpoint API
+
+Gli endpoint di invio riusano una risposta identica ancora nella finestra `RESPONSE_TTL_SECONDS`. Per i client HTTP,
+aggiungere `reuse_previous=true` alla richiesta restituisce anche una risposta precedente fuori dalla finestra, marcata
+`stale`, invece di accodare una nuova visura; `force=true` ignora la cache e invia una nuova richiesta. La CLI usa
+`reuse_previous=true` e chiede conferma prima di ripetere una richiesta già completata.
 
 ### Health check
 
@@ -964,6 +984,40 @@ uv run sister query batch -I parcelle.csv --wait -O ./results/
 uv run sister history --provincia Roma --limit 10
 ```
 
+### Guide operative
+
+- [Form delle query e parametri CLI/API](docs/query_forms.md)
+- [Estrazione HTML, documenti e dati tipizzati](docs/data_extraction.md)
+- [Sessione SISTER nel browser](docs/portal_session.md) e [gestione CAPTCHA](docs/captcha_pages.md)
+- [Server MCP locale per client LLM](docs/mcp_server.md)
+- [Nomi e manutenzione dei documenti scaricati](docs/document_file_naming.md)
+- [Batch Recrowd: visure soggetto](docs/recrowd_storica_analitica_batch.md) e [visure per immobile](docs/recrowd_immobile_storica_analitica_batch.md)
+- [Job di due diligence da documenti](docs/document_due_diligence_batch.md) e [grafo proprietari/immobili](docs/dossier_graph.md)
+- [Contribuire](docs/CONTRIBUTING.md), [sicurezza](docs/SECURITY.md), [codice di condotta](docs/CODE_OF_CONDUCT.md) e [registro delle modifiche](docs/CHANGELOG.md)
+
+### Batch Recrowd — visure soggetto storiche analitiche
+
+Anteprima (sola lettura) e invio delle richieste mancanti:
+
+```bash
+uv run python scripts/batch_recrowd_storica_analitica.py
+uv run python scripts/batch_recrowd_storica_analitica.py --execute --limit 2
+```
+
+Il job verifica prima il database Sister; CAPTCHA e download dei documenti pronti sono descritti in [questa guida](docs/recrowd_storica_analitica_batch.md).
+
+### Batch Recrowd — visure storiche analitiche per immobile
+
+Il job elenca gli immobili intestati ai proponenti Recrowd, controlla se la visura storica analitica è già nel database Sister e, con `--execute`, invia solo le richieste mancanti:
+
+```bash
+uv run python scripts/batch_recrowd_immobile_storica_analitica.py
+uv run python scripts/batch_recrowd_immobile_storica_analitica.py --execute --limit-proponents 2 --limit-properties 5
+uv run python scripts/batch_recrowd_immobile_storica_analitica.py --execute
+```
+
+Uso e stati del report sono descritti in [questa guida](docs/recrowd_immobile_storica_analitica_batch.md).
+
 ### Flusso completo con cURL
 
 ```bash
@@ -1097,17 +1151,17 @@ cp .env.example .env
 ### Test
 
 ```bash
-# Tutti i 156 test
-python -m pytest
+# Tutti i test
+uv run pytest
 
 # Con output verbose
-python -m pytest -v
+uv run pytest -v
 
 # Solo un modulo
-python -m pytest tests/test_database.py
+uv run pytest tests/test_database.py
 
 # Con coverage
-python -m pytest --cov=sister
+uv run pytest --cov=sister
 ```
 
 ### Formattazione e linting

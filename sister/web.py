@@ -59,7 +59,7 @@ def _files_base() -> "Path":
 def _ispezione_group_key(filename: str) -> str:
     """Return the shared inspection key for a report and its individual notes."""
     stem = Path(filename).stem
-    match = re.match(r"^(isp_.+?_T\d+_\d{4})(?:_(?:RP\d+|DOC_.+))?$", stem, re.IGNORECASE)
+    match = re.match(r"^(isp_.+?_T\d+_\d{4})(?:_(?:RP\d+|DOC_.+))?(?:_\d{4}-\d{2}-\d{2})?$", stem, re.IGNORECASE)
     return (match.group(1) if match else stem).casefold()
 
 
@@ -2698,11 +2698,11 @@ async def web_document_view(request: Request, path: str, user=Depends(_require_a
     xml_content = ""
     ext = target.suffix.lower()
     if ext == ".p7m":
-        from .utils import _extract_p7m
+        from .utils import _p7m_payload
 
-        extracted = _extract_p7m(str(target))
-        if extracted and Path(extracted).exists():
-            xml_content = Path(extracted).read_text(encoding="utf-8", errors="ignore")
+        payload = _p7m_payload(str(target))
+        if payload:
+            xml_content = payload.decode("utf-8", errors="ignore")
     elif ext in (".xml",):
         xml_content = target.read_text(encoding="utf-8", errors="ignore")
     else:
@@ -3285,7 +3285,7 @@ async def _backfill_document_metadata(base: Path, parsed_by_stem: dict) -> None:
 
     from .database import _get_session_factory, get_or_create_location, is_db_writable
     from .db_models import DocumentMetadata, VisuraDocument
-    from .utils import _parse_ispezione_ipotecaria_pdf, _parse_visura_xml, _persist_flattened_xml
+    from .utils import _document_key, _parse_ispezione_ipotecaria_pdf, _parse_visura_xml, _persist_flattened_xml
 
     if not is_db_writable():
         return
@@ -3356,6 +3356,8 @@ async def _backfill_document_metadata(base: Path, parsed_by_stem: dict) -> None:
         # Parse the file to extract metadata.
         stem = actual.stem
         parsed = parsed_by_stem.get(stem)
+        if parsed is None and actual.suffix.lower() == ".pdf":
+            parsed = parsed_by_stem.get(_document_key(stem))
         if actual.suffix.lower() == ".pdf" and actual.name.casefold().startswith("isp_"):
             parsed = await asyncio.to_thread(_parse_ispezione_ipotecaria_pdf, str(actual))
         elif parsed is None and actual.suffix.lower() in (".p7m", ".xml"):
@@ -3435,7 +3437,13 @@ async def _rescan_documents_dir() -> int | None:
     import asyncio
 
     from .database import get_indexed_file_paths, get_indexed_filenames
-    from .utils import _parse_ispezione_ipotecaria_pdf, _parse_visura_pdf, _parse_visura_xml, _save_documents_to_db
+    from .utils import (
+        _document_key,
+        _parse_ispezione_ipotecaria_pdf,
+        _parse_visura_pdf,
+        _parse_visura_xml,
+        _save_documents_to_db,
+    )
 
     base = _files_base()
     if not base.exists():
@@ -3484,6 +3492,8 @@ async def _rescan_documents_dir() -> int | None:
         result = await asyncio.to_thread(_parse_visura_xml, str(fpath))
         if result:
             parsed_by_stem[stem] = result
+            # PDFs pair without the request date (another request, possibly another day)
+            parsed_by_stem.setdefault(_document_key(stem), result)
 
     new_docs = []
     for fpath in sorted(base.rglob("*")):
@@ -3505,8 +3515,8 @@ async def _rescan_documents_dir() -> int | None:
                 parsed = dict(parsed or {})
                 parsed["tipo"] = "ispezione_ipotecaria"
         else:
-            # PDF: try to inherit metadata from a paired P7M/XML with the same stem
-            parsed = parsed_by_stem.get(fpath.stem)
+            # PDF: try to inherit metadata from a paired P7M/XML with the same stem (or the same without the date)
+            parsed = parsed_by_stem.get(fpath.stem) or parsed_by_stem.get(_document_key(fpath.stem))
             if fpath.name.casefold().startswith("isp_"):
                 parsed = await asyncio.to_thread(_parse_ispezione_ipotecaria_pdf, str(fpath))
             elif parsed is None:
@@ -4103,6 +4113,8 @@ async def web_api_batch(request: Request, user=Depends(_require_auth)):
 
     import httpx
 
+    from .query_forms import QUERY_FORMS
+
     body = await request.json()
     csv_data = body.get("csv_data", "")
     command = body.get("command", "search")
@@ -4158,13 +4170,26 @@ async def web_api_batch(request: Request, user=Depends(_require_auth)):
     }
     api_path = endpoint_map.get(command, f"/visura/{command}")
     base = f"http://localhost:{request.url.port or 8025}"
+    generic_commands = {
+        form.command for form in QUERY_FORMS.values() if form.method == "generic_search"
+    }
 
     results = []
     async with httpx.AsyncClient(timeout=120) as client:
         for i, row in enumerate(rows):
             try:
-                resp = await client.post(f"{base}{api_path}", json=row, headers=_internal_api_headers())
-                results.append({"row": i + 1, "status": "submitted", "data": resp.json()})
+                if command in generic_commands:
+                    resp = await client.post(f"{base}{api_path}", params=row, headers=_internal_api_headers())
+                else:
+                    resp = await client.post(f"{base}{api_path}", json=row, headers=_internal_api_headers())
+                result = {
+                    "row": i + 1,
+                    "status": "submitted" if resp.is_success else "error",
+                    "data": resp.json(),
+                }
+                if not resp.is_success:
+                    result["http_status"] = resp.status_code
+                results.append(result)
             except Exception as e:
                 results.append({"row": i + 1, "status": "error", "error": str(e)})
 

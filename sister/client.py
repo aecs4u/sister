@@ -13,6 +13,7 @@ Configuration is read from environment variables:
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import logging
 import os
 import time
@@ -35,6 +36,11 @@ DEFAULT_POLL_TIMEOUT = 300.0
 # ---------------------------------------------------------------------------
 # Error
 # ---------------------------------------------------------------------------
+
+
+# Set by ``VisuraClient.submit(reuse_previous=True)``: every request it makes asks the service for the previous answer
+# of an identical query instead of starting a new (paid) one once the cache window has passed.
+_REUSE_PREVIOUS: contextvars.ContextVar[bool] = contextvars.ContextVar("sister_reuse_previous", default=False)
 
 
 class VisuraAPIError(Exception):
@@ -121,9 +127,12 @@ class VisuraClient:
         params: dict | None = None,
         force: bool = False,
     ) -> dict:
-        if force:
+        if force or _REUSE_PREVIOUS.get():
             params = dict(params or {})
-            params["force"] = "true"
+            if force:
+                params["force"] = "true"
+            if _REUSE_PREVIOUS.get():
+                params["reuse_previous"] = "true"
         async with self._get_client() as client:
             resp = await client.request(method, path, json=json, params=params)
         if resp.status_code >= 400:
@@ -391,7 +400,9 @@ class VisuraClient:
         """Poll a single request result (GET /visura/{request_id})."""
         return await self._request("GET", f"/visura/{request_id}")
 
-    async def submit(self, command: str, params: dict[str, Any], *, force: bool = False) -> dict:
+    async def submit(
+        self, command: str, params: dict[str, Any], *, force: bool = False, reuse_previous: bool = False
+    ) -> dict:
         """Submit one single-step query given its ``sister query`` command name and its parameters.
 
         The single entry point shared by the CLI, the CLI batch and the ``/web/forms`` page. The query is
@@ -407,6 +418,13 @@ class VisuraClient:
             raise ValueError(f"comando sconosciuto: {command}")
         params = {k: v for k, v in params.items() if v not in (None, "")}
         validate_params(spec.command, params)
+        token = _REUSE_PREVIOUS.set(reuse_previous)
+        try:
+            return await self._submit_validated(spec, params, force)
+        finally:
+            _REUSE_PREVIOUS.reset(token)
+
+    async def _submit_validated(self, spec, params: dict[str, Any], force: bool) -> dict:
         if spec.method != "generic_search":
             known = {name: params.pop(name) for name in spec.dedicated if name in params}
             return await getattr(self, spec.method)(**known, form_fields=params or None, force=force)

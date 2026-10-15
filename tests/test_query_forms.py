@@ -61,7 +61,7 @@ def test_command_names_are_normalised():
 # step 2a: spec -> CLI (every parameter is an option of the command and reaches the client call)
 # --------------------------------------------------------------------------------------------------
 
-_NOT_INPUTS = {"output", "wait", "dry_run", "force", "help"}
+_NOT_INPUTS = {"output", "wait", "dry_run", "force", "redownload", "help"}
 
 
 def sample_value(query: str, param: str) -> str:

@@ -1346,15 +1346,50 @@ async def _set_visura_form_defaults(page, tipo_visura="completa"):
     log.info("Form defaults: Con intestati, %s, XML, Differita", tipo_visura)
 
 
-async def _download_richieste_documents(page, page_logger) -> list[dict]:
+def _select_richieste(richieste_meta: list[dict], *, since: str = "", known: frozenset | set = frozenset()) -> list[dict]:
+    """The Richieste rows to download: requested on/after ``since`` (ISO date) and not stored yet.
+
+    ``known`` holds ``(richiesta_del, oggetto)`` pairs of the documents already in the database. Without both filters
+    every row of the list is returned (what the in-flow download after ``run_visura`` has always done).
+    """
+    selected = []
+    for meta in richieste_meta:
+        if since and (_iso_request_date(meta.get("richiesta_del", "")) or "0000-00-00") < since:
+            continue
+        if (meta.get("richiesta_del", ""), meta.get("oggetto", "")) in known:
+            continue
+        selected.append(meta)
+    return selected
+
+
+async def _known_richieste() -> set[tuple[str, str]]:
+    """``(requested_at, subject)`` of every document already stored (empty when the database is unavailable)."""
+    from sqlalchemy import text
+
+    from .database import _get_session_factory
+
+    try:
+        async with _get_session_factory()() as session:
+            rows = await session.execute(
+                text("SELECT requested_at, subject FROM visura_documents WHERE requested_at IS NOT NULL")
+            )
+            return {(r[0] or "", r[1] or "") for r in rows}
+    except Exception as e:
+        log.warning("Documenti gia' scaricati non leggibili (%s): nessun filtro", e)
+        return set()
+
+
+async def _download_richieste_documents(
+    page, page_logger, *, since: str = "", skip_known: bool = False
+) -> list[dict]:
     """Navigate to the Richieste page, extract metadata, download and rename files.
 
     1. Scrapes the Richieste table for metadata (Oggetto, timestamp, idRichiesta)
     2. Downloads each document from the "salva" column
-    3. Extracts P7M → XML via openssl
-    4. Parses XML for structured data
-    5. Renames files using the shared cadastral filename convention
-    6. Persists to visura_documents table
+    3. Reads a P7M's signed XML payload in memory (without creating a sibling XML file)
+    4. Parses XML/PDF for structured data
+    5. Renames the downloaded file using the shared cadastral filename convention
+    6. Persists the document and parsed metadata to the database
 
     Returns a list of dicts with download info.
     """
@@ -1384,6 +1419,11 @@ async def _download_richieste_documents(page, page_logger) -> list[dict]:
     html_content = await page.content()
     richieste_meta = _parse_richieste_table(html_content)
     log.info("Richieste trovate: %d", len(richieste_meta))
+    if since or skip_known:
+        known = await _known_richieste() if skip_known else set()
+        richieste_meta = _select_richieste(richieste_meta, since=since, known=known)
+        log.info("Richieste da scaricare (dal %s%s): %d", since or "inizio", ", non gia' salvate" if skip_known else "",
+                 len(richieste_meta))
 
     if not richieste_meta:
         return []
@@ -1408,7 +1448,6 @@ async def _download_richieste_documents(page, page_logger) -> list[dict]:
 
         orig_filename = ""
         temp_path = ""
-        extracted_temp_path = None
         try:
             # Find and click the salva link for this idRichiesta
             link = page.locator(f"a[href*='idRichiesta={id_richiesta}'][href*='salva']")
@@ -1435,36 +1474,39 @@ async def _download_richieste_documents(page, page_logger) -> list[dict]:
             temp_stem = f".sister_download_{id_richiesta}_{time.time_ns()}"
             temp_path = os.path.join(docs_dir, f"{temp_stem}{file_ext}")
             await download.save_as(temp_path)
+            if os.path.getsize(temp_path) == 0:
+                # a *differita* request answers its Salva link with an empty body until SISTER has produced it:
+                # keep nothing, so the next run (``skip_known``) still sees the request as to download
+                os.remove(temp_path)
+                temp_path = ""
+                log.warning("Documento non ancora pronto (0 byte): %s (id=%s)", oggetto[:50], id_richiesta)
+                continue
 
             parsed = None
             if file_format == "P7M":
-                extracted_temp_path = _extract_p7m(temp_path)
-                if extracted_temp_path:
-                    parsed = _parse_visura_xml(extracted_temp_path)
+                # The signed content is read in memory: only the .p7m is kept in the documents folder.
+                if _p7m_payload(temp_path):
+                    parsed = _parse_visura_xml(temp_path)
             elif file_format == "XML":
                 parsed = _parse_visura_xml(temp_path)
             elif file_format == "PDF":
                 parsed = _parse_visura_pdf(temp_path)
 
-            canonical_stem = _descriptive_filename(parsed or {}, oggetto=oggetto, request_id=id_richiesta)
+            canonical_stem = _descriptive_filename(
+                parsed or {}, oggetto=oggetto, request_id=id_richiesta, requested_at=richiesta_del
+            )
             final_stem = _unique_document_stem(
                 docs_dir,
                 canonical_stem,
                 file_ext,
-                include_xml=(file_format == "P7M"),
                 parsed=parsed or {},
                 request_id=id_richiesta,
+                requested_at=richiesta_del,
             )
             final_filename = f"{final_stem}{file_ext}"
             save_path = os.path.join(docs_dir, final_filename)
             os.replace(temp_path, save_path)
             temp_path = ""
-
-            extracted_path = None
-            if extracted_temp_path and os.path.exists(extracted_temp_path):
-                extracted_path = os.path.join(docs_dir, f"{final_stem}.xml")
-                os.replace(extracted_temp_path, extracted_path)
-                extracted_temp_path = None
 
             source_filename = os.path.basename(orig_filename) or f"DOC_{id_richiesta}{file_ext}"
             try:
@@ -1498,14 +1540,6 @@ async def _download_richieste_documents(page, page_logger) -> list[dict]:
                 "parsed_data": parsed,
             }
 
-            if extracted_path:
-                doc_info["extracted_path"] = extracted_path
-                extracted_source_name = f"{os.path.splitext(source_filename)[0]}.xml"
-                try:
-                    _link_source_filename(extracted_source_name, extracted_path, links_dir, id_richiesta)
-                except OSError as link_error:
-                    log.warning("Impossibile creare il collegamento XML %s: %s", extracted_source_name, link_error)
-
             if parsed:
                 log.info(
                     "  Dati: %s F.%s P.%s Sub.%s — %d intestati",
@@ -1519,12 +1553,11 @@ async def _download_richieste_documents(page, page_logger) -> list[dict]:
             downloaded.append(doc_info)
 
         except Exception as e:
-            for temp_file in (temp_path, extracted_temp_path):
-                if temp_file and os.path.exists(temp_file):
-                    try:
-                        os.remove(temp_file)
-                    except OSError:
-                        pass
+            if temp_path and os.path.exists(temp_path):
+                try:
+                    os.remove(temp_path)
+                except OSError:
+                    pass
             log.warning("Errore download %s (id=%s): %s", oggetto[:40], id_richiesta, e)
 
     # --- Step 3: Persist to database ---
@@ -1607,11 +1640,14 @@ def _filename_token(value: str) -> str:
     return re.sub(r"[^A-Za-z0-9-]+", "_", str(value or "")).strip("_-")
 
 
-def _descriptive_filename(parsed: dict, *, oggetto: str = "", request_id: str = "") -> str:
+def _descriptive_filename(parsed: dict, *, oggetto: str = "", request_id: str = "", requested_at: str = "") -> str:
     """Return the canonical SISTER basename for a downloaded document.
 
     Property example: ``vi_sto_PA_FG134_PT122_SUB21``
-    Subject example: ``vs_sin_FRSLSE77B54E730C_CE``
+    Subject example: ``vs_sin_FRSLSE77B54E730C_RA_CE``: the queried province (and the comune code when the query
+    was limited to one) separates the results of different offices for the same person. The cadastre is always
+    named: ``CE`` both (the default when the document does not say), ``CF`` buildings, ``CT`` land. A
+    storica/sintetica visura whose "situazione al" date is not the request date adds it (``..._CE_al2022-06-04``).
     """
     tipo = (parsed.get("tipo") or "").lower()
     subtype = (parsed.get("visura_subtype") or "").lower()
@@ -1634,10 +1670,19 @@ def _descriptive_filename(parsed: dict, *, oggetto: str = "", request_id: str = 
             match = re.search(r"(?<![A-Z0-9])([A-Z0-9]{16}|\d{11})(?![A-Z0-9])", oggetto.upper())
             identifier = match.group(1) if match else ""
         if identifier:
-            category = {"E": "CE", "F": "CF", "T": "CT"}.get(cadastre_type)
+            category = {"E": "CE", "F": "CF", "T": "CT"}.get(cadastre_type, "CE")
             parts = [f"vs_{view}", identifier]
+            if province:
+                parts.append(province)
+            comune_code = _filename_token(parsed.get("codice_comune", "")).upper()
+            if comune_code:
+                parts.append(comune_code)
             if category:
                 parts.append(category)
+            situation = _iso_request_date(parsed.get("situazione_al", ""))
+            requested = _iso_request_date(requested_at)
+            if situation and requested and situation != requested and view in {"sto", "sin"}:
+                parts.append(f"al{situation}")
             return "_".join(parts)
 
     if tipo in {"visura_fabbricati", "visura_terreni"} or (foglio and particella):
@@ -1668,23 +1713,53 @@ def _descriptive_filename(parsed: dict, *, oggetto: str = "", request_id: str = 
     return f"{label}_{_filename_token(request_id)}" if request_id else label
 
 
+def _iso_request_date(value: str) -> str:
+    """ISO date of a portal timestamp: ``06/10/2026 16:08`` (or ``20261006``, ``2026-10-06``) -> ``2026-10-06``."""
+    text_value = str(value or "")
+    match = (
+        re.search(r"(\d{1,2})/(\d{1,2})/(\d{4})", text_value)
+        or re.fullmatch(r"\s*(\d{4})(\d{2})(\d{2})\s*", text_value)
+        or re.match(r"\s*(\d{4})-(\d{2})-(\d{2})", text_value)
+    )
+    if not match:
+        return ""
+    first, month, last = match.groups()
+    day, year = (last, first) if len(first) == 4 else (first, last)
+    try:
+        return datetime(int(year), int(month), int(day)).strftime("%Y-%m-%d")
+    except ValueError:
+        return ""
+
+
+_DATE_SUFFIX_RE = re.compile(r"_\d{4}-\d{2}-\d{2}")
+
+
+def _document_key(stem: str) -> str:
+    """Stem without its ISO request date: a PDF and a P7M of one document pair even when requested on other days."""
+    return _DATE_SUFFIX_RE.sub("", stem, count=1)
+
+
 def _unique_document_stem(
     docs_dir: str,
     preferred_stem: str,
     file_ext: str,
     *,
-    include_xml: bool,
     parsed: dict,
     request_id: str,
+    requested_at: str = "",
 ) -> str:
-    """Keep canonical names when free and add the SISTER practice id on collision."""
+    """Canonical name plus the ISO request date (``_2026-10-06``); on collision add the practice id.
+
+    The date is the one of the portal request; the visura's reference date is the fallback. A document without
+    either keeps the plain canonical name while it is free.
+    """
 
     def occupied(stem: str) -> bool:
-        candidates = [os.path.join(docs_dir, f"{stem}{file_ext}")]
-        if include_xml:
-            candidates.append(os.path.join(docs_dir, f"{stem}.xml"))
-        return any(os.path.lexists(path) for path in candidates)
+        return os.path.lexists(os.path.join(docs_dir, f"{stem}{file_ext}"))
 
+    date = _iso_request_date(requested_at) or _iso_request_date(parsed.get("situazione_al", ""))
+    if date:
+        preferred_stem = f"{preferred_stem}_{date}"
     if not occupied(preferred_stem):
         return preferred_stem
 
@@ -1755,24 +1830,14 @@ def _link_source_filename(source_filename: str, target_path: str, links_dir: str
         ordinal += 1
 
 
-def _extract_p7m(file_path: str) -> str | None:
-    """Extract the signed content from a P7M file via aecs4u-crypto (no openssl).
-
-    Returns the path to the extracted file, or None on failure.
-    """
+def _p7m_payload(file_path: str) -> bytes | None:
+    """Return the signed content of a P7M file without writing anything to disk."""
     from aecs4u_crypto import extract_p7m_payload, P7MError
 
-    out_path = file_path.rsplit(".p7m", 1)[0]
-    if not out_path or out_path == file_path:
-        out_path = file_path + ".extracted"
     try:
-        payload = extract_p7m_payload(open(file_path, "rb").read())
-        if not payload:
-            return None
-        with open(out_path, "wb") as f:
-            f.write(payload)
-        log.info("P7M estratto: %s → %s (%d bytes)", file_path, out_path, len(payload))
-        return out_path
+        with open(file_path, "rb") as f:
+            payload = extract_p7m_payload(f.read())
+        return payload or None
     except P7MError as e:
         log.warning("Estrazione P7M fallita %s: %s", file_path, e)
     except Exception as e:
@@ -1791,17 +1856,17 @@ def _parse_visura_xml(file_path: str) -> dict | None:
     P7M files are first extracted via aecs4u-crypto (CMS payload extraction).
     """
     try:
-        xml_path = file_path
-
-        # P7M: extract signed content via openssl
+        payload = None
+        # P7M: read the signed content in memory; parsing must not leave files in the documents folder
         if file_path.lower().endswith(".p7m"):
-            extracted = _extract_p7m(file_path)
-            if extracted:
-                xml_path = extracted
-            else:
+            payload = _p7m_payload(file_path)
+            if payload is None:
                 log.warning("Fallback: tentativo parsing diretto P7M %s", file_path)
 
-        content = open(xml_path, "r", encoding="utf-8", errors="ignore").read()
+        if payload is not None:
+            content = payload.decode("utf-8", errors="ignore")
+        else:
+            content = open(file_path, "r", encoding="utf-8", errors="ignore").read()
 
         soup = BeautifulSoup(content, "xml")
         if not soup.find():
@@ -1877,6 +1942,7 @@ def _parse_visura_xml(file_path: str) -> dict | None:
         if dati_rich:
             result["provincia"] = dati_rich.get("Provincia", "")
             result["comune"] = dati_rich.get("Comune", "")
+            result["codice_comune"] = dati_rich.get("CodiceComune", "")
             result["foglio"] = dati_rich.get("Foglio", "")
             result["particella"] = dati_rich.get("ParticellaNum", "") or dati_rich.get("Particella", "")
             result["subalterno"] = dati_rich.get("Subalterno", "")
@@ -2025,6 +2091,16 @@ def _parse_visura_pdf(file_path: str) -> dict | None:
     m = _re.search(r"situazione[^\d]+(\d{2}/\d{2}/\d{4})", t)
     if m:
         result["situazione_al"] = m.group(1)
+
+    # a subject visura covers one province: the sigla printed after the cadastral code of any immobile ("(H199) (RA)"),
+    # and one scope: "Terreni e Fabbricati siti in ..." (E), "Fabbricati siti in ..." (F), "Terreni siti in ..." (T)
+    if tipo == "visura_soggetto":
+        m = _re.search(r"\([A-Z]\d{3}\)\s*\(([A-Z]{2})\)", text)
+        if m:
+            result["provincia"] = m.group(1)
+        m = _re.search(r"(Terreni e Fabbricati|Fabbricati|Terreni)\s+siti\s+in", text)
+        if m:
+            result["tipo_catasto"] = {"Terreni e Fabbricati": "E", "Fabbricati": "F", "Terreni": "T"}[m.group(1)]
 
     # --- provincia + comune from "Direzione Provinciale di <Comune>" header ---
     m = _re.search(r"direzione provinciale di ([A-Z][A-Za-zÀ-ÿ '\-]+)\b", text)
@@ -4601,12 +4677,17 @@ async def _open_soggetto_province_page(page, identifier, tipo_catasto, provincia
     return True
 
 
-async def run_soggetto_documento(page, codice_fiscale, tipo_catasto="E", vista="analitica", provincia=None):
-    """Request the Visura per Soggetto document (XML, differita) of a persona fisica, once per province.
+async def run_soggetto_documento(
+    page, codice_fiscale, tipo_catasto="E", vista="analitica", provincia=None, azienda=False
+):
+    """Request an analytical/synthetic Visura per Soggetto (XML, differita), once per province.
 
     vista: 'analitica' or 'sintetica'. The request is submitted after the user solves the CAPTCHA; the
     document then appears under Richieste (download with POST /visura/download-documents).
+    azienda: ``codice_fiscale`` is a company tax code / VAT number, so search as a legal entity.
     """
+    if isinstance(azienda, str):
+        azienda = azienda.strip().lower() in ("1", "true", "yes", "si", "on")
     if provincia and provincia.upper() == "NAZIONALE":
         provincia = None
     storica = _SOGGETTO_STORICA_VALUES.get(vista)
@@ -4620,7 +4701,9 @@ async def run_soggetto_documento(page, codice_fiscale, tipo_catasto="E", vista="
     index = 0
     n_province = None
     while True:
-        if not await _open_soggetto_province_page(page, codice_fiscale, tipo_catasto, provincia):
+        if not await _open_soggetto_province_page(
+            page, codice_fiscale, tipo_catasto, provincia, azienda=azienda
+        ):
             return {
                 "soggetto": codice_fiscale,
                 "richieste": submitted,

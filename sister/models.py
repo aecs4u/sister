@@ -176,6 +176,8 @@ class SubmitResult(SQLModel):
     request_id: str
     cached: bool = False
     response: Optional[VisuraResponse] = None
+    # an answer older than the cache window, returned only when the caller asked to reuse any previous result
+    stale: bool = False
 
 
 # ---------------------------------------------------------------------------

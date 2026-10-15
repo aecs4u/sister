@@ -393,3 +393,37 @@ async def test_add_request_returns_runtime_error_when_persistence_fails(monkeypa
 
     assert service.request_queue.qsize() == 0
     assert request.request_id not in service.pending_request_ids
+
+
+# ---------------------------------------------------------------------------
+# reuse_previous: an answer older than the cache window is returned stale instead of re-run
+# ---------------------------------------------------------------------------
+
+
+async def test_check_cache_returns_a_stale_previous_answer_only_when_asked(monkeypatch):
+    from types import SimpleNamespace
+
+    from sister import services
+
+    record = {"request_id": "old", "success": True, "tipo_catasto": "E", "data": {}, "error": None, "created_at": None}
+    seen = []
+
+    async def fake_find(cache_key, ttl):
+        seen.append(ttl)
+        return None if ttl is not None else record
+
+    monkeypatch.setattr(services, "find_cached_response", fake_find)
+    service = services.VisuraService.__new__(services.VisuraService)
+    service.response_ttl_seconds = 21600
+    request = SimpleNamespace(request_id="new", cadastre_type="E", fiscal_code="RSSMRA85M01H501Z")
+
+    assert await service._check_cache("soggetto", request) is None  # default: the old behaviour (a new request)
+
+    token = services.reuse_previous_var.set(True)
+    try:
+        result = await service._check_cache("soggetto", request)
+    finally:
+        services.reuse_previous_var.reset(token)
+
+    assert result.cached and result.stale and result.request_id == "old"
+    assert seen == [21600, 21600, None]

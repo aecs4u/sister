@@ -18,7 +18,6 @@ classifiers = [
     "Intended Audience :: Developers",
     "License :: OSI Approved :: GNU Affero General Public License v3",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
     "Topic :: Software Development :: Libraries",
@@ -57,6 +56,9 @@ dependencies = [
 floor-plan-ocr = [
     "ocular[promptflow]",
 ]
+mcp = [
+    "mcp>=2.0.0,<3",
+]
 dev = [
     "pytest>=7.0",
     "pytest-cov>=4.0",
@@ -69,19 +71,20 @@ dev = [
 Homepage = "https://github.com/aecs4u/sister"
 Repository = "https://github.com/aecs4u/sister"
 Issues = "https://github.com/aecs4u/sister/issues"
-Changelog = "https://github.com/aecs4u/sister/blob/main/CHANGELOG.md"
+Changelog = "https://github.com/aecs4u/sister/blob/main/docs/CHANGELOG.md"
 
 [project.scripts]
 sister = "sister.cli:run"
+sister-mcp = "sister.mcp_server:run"
 
 [tool.uv.sources]
 aecs4u-auth = { git = "https://github.com/aecs4u/aecs4u-auth.git", branch = "main" }
-aecs4u-domain = { workspace = true }
-aecs4u-email = { workspace = true }
-aecs4u-crypto = { workspace = true }
-aecs4u-theme = { workspace = true }
-aecs4u-workflow = { workspace = true }
-ocular = { workspace = true }
+aecs4u-domain = { git = "https://github.com/aecs4u/aecs4u-domain.git", branch = "main" }
+aecs4u-email = { git = "https://github.com/aecs4u/aecs4u-email.git", branch = "main" }
+aecs4u-crypto = { git = "https://github.com/aecs4u/aecs4u-crypto.git", branch = "main" }
+aecs4u-theme = { git = "https://github.com/aecs4u/aecs4u-theme.git", branch = "main" }
+aecs4u-workflow = { git = "https://github.com/aecs4u/aecs4u-workflow.git", branch = "main" }
+ocular = { git = "https://github.com/aecs4u/ocular.git", branch = "main" }
 
 [tool.setuptools]
 packages = ["sister"]

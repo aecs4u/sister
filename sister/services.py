@@ -5,6 +5,7 @@ backwards compatibility.
 """
 
 import asyncio
+import contextvars
 import json
 import logging
 import os
@@ -38,6 +39,9 @@ from .models import (
     VisuraResponse,
     VisuraSoggettoRequest,
 )
+
+# Set per request by ``main._reuse_previous`` (``?reuse_previous=true``): see ``VisuraService._check_cache``.
+reuse_previous_var: contextvars.ContextVar[bool] = contextvars.ContextVar("sister_reuse_previous", default=False)
 
 logger = logging.getLogger("sister")
 
@@ -467,11 +471,17 @@ class VisuraService:
         params = self._request_cache_params(request_type, request)
         cache_key = compute_cache_key(request_type, **params)
         record = await find_cached_response(cache_key, self.response_ttl_seconds)
+        stale = False
+        if record is None and reuse_previous_var.get():
+            # outside the cache window the same query would be a new (paid) request: hand the previous answer back,
+            # marked stale, and let the caller decide whether to download again
+            record = await find_cached_response(cache_key, None)
+            stale = record is not None
         if record is None:
             return None
         response = self._response_from_db_record(record)
-        logger.info("Cache hit for %s %s (key=%s...)", request_type, request.request_id, cache_key[:12])
-        return SubmitResult(request_id=record["request_id"], cached=True, response=response)
+        logger.info("Cache hit%s for %s %s (key=%s...)", " (stale)" if stale else "", request_type, request.request_id, cache_key[:12])
+        return SubmitResult(request_id=record["request_id"], cached=True, response=response, stale=stale)
 
     # ------------------------------------------------------------------
     # Persistence
@@ -692,9 +702,12 @@ class VisuraService:
     # Browser session control (manual start/stop/restart)
     # ------------------------------------------------------------------
 
-    async def download_richieste_documents(self) -> list[dict]:
-        """Download the completed documents listed on the SISTER Richieste page (see /visura/download-documents)."""
-        return await self.browser_manager.download_richieste_documents()
+    async def download_richieste_documents(self, *, since: str = "", skip_known: bool = False) -> list[dict]:
+        """Download the completed documents listed on the SISTER Richieste page (see /visura/download-documents).
+
+        ``since`` (ISO date) and ``skip_known`` limit it to recent requests whose document is not stored yet.
+        """
+        return await self.browser_manager.download_richieste_documents(since=since, skip_known=skip_known)
 
     async def start_browser(self) -> dict:
         """Start browser authentication if not already running or ready."""

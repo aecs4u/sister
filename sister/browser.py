@@ -489,13 +489,13 @@ class BrowserManager:
             page = await self._get_authenticated_page()
             return await extract_all_sezioni(page, tipo_catasto=tipo_catasto, max_province=max_province)
 
-    async def download_richieste_documents(self) -> list[dict]:
+    async def download_richieste_documents(self, *, since: str = "", skip_known: bool = False) -> list[dict]:
         from .utils import PageLogger, _download_richieste_documents
 
         async with self._page_lock:
             page = await self._get_authenticated_page()
             page_logger = PageLogger("download_richieste")
-            return await _download_richieste_documents(page, page_logger)
+            return await _download_richieste_documents(page, page_logger, since=since, skip_known=skip_known)
 
     async def close_sister_session(self):
         """Release the session SISTER holds for this user (it allows only one, so a leftover blocks the next login)."""

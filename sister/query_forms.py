@@ -714,12 +714,13 @@ _NO_FORM = (
     ),
     _extra(
         "soggetto-documento",
-        "Request the Visura per Soggetto document (XML) of a persona fisica.",
+        "Request an analytical or synthetic Visura per Soggetto document (XML) for a person or legal entity.",
         "/visura/soggetto-documento",
         "soggetto-documento",
         (
             ("provincia", "text", _PROVINCIA_HELP),
-            ("codice_fiscale", "text", "Codice fiscale"),
+            ("codice_fiscale", "text", "Codice fiscale / Partita IVA"),
+            ("azienda", "checkbox", "Search as a legal entity using its tax code / VAT number"),
             ("tipo_catasto", "select", "T = Terreni, F = Fabbricati, E = both"),
             ("vista", "select", "analitica | sintetica"),
         ),

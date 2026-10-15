@@ -7,6 +7,22 @@ e questo progetto aderisce al [Versionamento Semantico](https://semver.org/lang/
 
 ## [Non rilasciato]
 
+### Aggiunto (2026-10-15)
+- Server MCP locale opzionale (`uv sync --extra mcp`, `sister-mcp`) con elenco query, anteprima validata e invio
+  esplicitamente confermato, consultazione richieste, storico e stato del servizio. Vedi `docs/mcp_server.md`.
+- Configurazione uv delle dipendenze Aecs4u come sorgenti Git, così il progetto può essere installato anche fuori dal
+  workspace di sviluppo.
+- `scripts/batch_recrowd_storica_analitica.py` e `scripts/batch_recrowd_immobile_storica_analitica.py`: anteprima e invio
+  sequenziale delle visure storiche analitiche mancanti per i proponenti Recrowd e per i loro immobili. I report salvano
+  lo stato per riprendere dopo un'interruzione; i job si fermano quando serve risolvere un CAPTCHA. Guide:
+  `docs/recrowd_storica_analitica_batch.md` e `docs/recrowd_immobile_storica_analitica_batch.md`.
+- Nomi dei documenti con data ISO della richiesta e accoppiamento PDF/P7M senza richiedere date identiche. I payload XML
+  dei `.p7m` sono letti in memoria; gli script `cleanup_extracted_xml.py`, `rename_documents_with_date.py`,
+  `normalize_documents.py` e `reconcile_missing_documents.py` supportano la migrazione e la pulizia dei file esistenti.
+  Vedi `docs/document_file_naming.md`.
+- La CLI riusa le risposte già scaricate chiedendo prima di inviare una nuova richiesta (`--yes`, `--no`; `--force` forza
+  una nuova richiesta).
+
 ### Aggiunto (2026-10-09)
 - Flusso a due fasi per `search` / `intestati` (`run_visura`): prima si leggono **tutte le pagine HTML** (lista immobili e
   pagina Intestati di ogni immobile, senza CAPTCHA), poi si **richiedono i documenti** (unica pagina con CAPTCHA). Un CAPTCHA

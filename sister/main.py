@@ -249,8 +249,20 @@ async def lifespan(app: FastAPI):
 
 # The interactive API docs are served by the routes below (behind the same authentication as the web UI), not by
 # FastAPI's built-in public ones.
+async def _reuse_previous(request: Request) -> None:
+    """``?reuse_previous=true``: an identical query answered before the cache window is returned (stale), not re-run."""
+    from .services import reuse_previous_var
+
+    reuse_previous_var.set(request.query_params.get("reuse_previous", "").lower() in {"1", "true", "yes"})
+
+
 app = FastAPI(
-    title="SISTER - Cadastral Data Service", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None
+    title="SISTER - Cadastral Data Service",
+    lifespan=lifespan,
+    docs_url=None,
+    redoc_url=None,
+    openapi_url=None,
+    dependencies=[Depends(_reuse_previous)],
 )
 
 # Delivery: compress HTML/JSON (SSE is excluded by default, already-compressed formats are skipped). Versioned theme
@@ -678,10 +690,12 @@ async def _richiedi_elenco_immobili(
 
 @app.post("/visura/download-documents")
 async def _download_documents(
+    since: str = "",
+    skip_known: bool = False,
     service: VisuraService = Depends(get_visura_service),
     _: None = Depends(require_api_key),
 ):
-    return await download_documents(service)
+    return await download_documents(service, since=since, skip_known=skip_known)
 
 
 @app.post("/visura/ispezione-ipotecaria")
@@ -738,7 +752,7 @@ async def _richiedi_generic(
     params = {
         key: value
         for key, value in request.query_params.items()
-        if key not in {"provincia", "force", "comune", "tipo_catasto"} and value != ""
+        if key not in {"provincia", "force", "reuse_previous", "comune", "tipo_catasto"} and value != ""
     }
     internal = {"ispezioni-cartacee": "ispezioni_cart"}.get(name, name.replace("-", "_"))
     return await richiedi_generic_sister(

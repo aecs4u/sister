@@ -20,6 +20,7 @@ SISTER is a FastAPI service + Typer CLI for automated cadastral data extraction 
   - `result_parsers.py` — pure parsers for the composite portal cells (`RA/103`, `Proprieta' per 1/2`, name + birth data, `visImmSel`, owner radios)
   - `xml_ingest.py` — visura XML → typed document tables (`building_*`, `land_*`, `property_groups`, `ownership_mutations`, `property_owners`, …) + backfill
   - `client.py` — VisuraClient async HTTP client
+  - `mcp_server.py` — optional local MCP server over stdio; wraps `VisuraClient` and `query_forms.py`
   - `cli.py` — Typer CLI with query, db, and top-level commands
 - **`tests/`** — pytest test suite
 - **`alembic/`** — Database migrations
@@ -50,9 +51,23 @@ uv run sister query workflow --preset due-diligence -P Roma -C ROMA -F 100 -p 50
 uv run sister db init
 # Fill the structured tables from data already stored (responses JSON, XML documents); idempotent, writes to the app schema
 uv run sister db backfill            # projections + xml; `xml --force --limit N` to redo some documents
+# Optional local MCP server for LLM clients
+uv sync --extra mcp
+uv run sister-mcp
 # Owner <-> property graph (resumable; see docs/dossier_graph.md)
 ../.venv/bin/python scripts/build_dossier_graph.py --seed <CF|PIVA>
 ```
+
+## MCP server
+
+- Setup and client configuration: `docs/mcp_server.md`. The server is optional and uses local stdio; it does not start
+  the browser or log in to SISTER. The API service and an authenticated portal session must already be running.
+- Query discovery and validation come from `query_forms.py`; submissions go through `VisuraClient.submit`.
+- Keep the `list_queries` → `preview_query` → explicit user confirmation → `submit_query` flow. Previews expire after
+  15 minutes and are single-use. The normal submission path reuses an earlier answer when available; `force=true`
+  bypasses that behavior and may incur another fee, so use it only when requested.
+- `get_request` and `search_history` can return personal and property data. Treat their results as sensitive. CAPTCHA
+  solving remains a human action in the active browser session.
 
 ## Development conventions
 
@@ -90,8 +105,8 @@ uv run sister db backfill            # projections + xml; `xml --force --limit N
 - `OPENDATA_API_URL` (workflow storage, separate service) is called with a 1 s connect / 4 s total timeout and a 30 s circuit
   breaker (`web._opendata_get`); when it is down `/web/workflows` shows a notice instead of stalling.
 - Environment: keep `httpx` below 1.0 (`pyproject.toml` pins `<1`; 1.0 pre-releases have no `AsyncClient` and break `VisuraClient`).
-  Test baseline 2026-10-09 (`/opt/venv/.aecs4u_venv/bin/python -m pytest -p no:logfire --continue-on-collection-errors`):
-  825 passed, 52 failed, 4 collection errors (2026-10-10, after the two-phase/extraction/visura-view work). DB tests run on a throwaway local schema (`tests/pg_isolation.py`: `fresh_db` fixture; skipped
+  Test baseline 2026-10-11 (`/opt/venv/.aecs4u_venv/bin/python -m pytest -p no:logfire --continue-on-collection-errors`):
+  863 passed, 52 failed, 4 collection errors (825 passed with the same 52/4 on 2026-10-10). DB tests run on a throwaway local schema (`tests/pg_isolation.py`: `fresh_db` fixture; skipped
   without a local PostgreSQL; never touches the app schema). All remaining failures/errors are roadmap features absent from `sister/`:
   browser dispatch (12), client contract (5), ontology (3), workflows (3), request jobs (9), section-extraction jobs (16),
   `no_match` result status (4), and 4 test files importing missing helpers (`find_best_option_matches`, `_run_with_network_json`, `_request_job_outcome`).
@@ -148,6 +163,23 @@ saved portal forms in `tests/fixtures/portal_forms/`.
   through `result_id` (the owner↔property views join on it), composite cells are split with `result_parsers`, terreni use the
   portal's `ha/are/ca` and `Reddito dominicale/agrario` columns, each row keeps its own catasto. Downloaded XML also fills the
   typed tables (`xml_ingest.ingest_visura_xml`, called from `_persist_flattened_xml`). Details: `docs/data_extraction.md`.
+- **Only the `.p7m` is stored; its XML is never extracted next to it.** The signed content is read in memory
+  (`utils._p7m_payload`, used by `_parse_visura_xml`, the document page, `missing_pairs`, `xml_ingest._complete_content`).
+  Older runs left `<stem>.xml` and a bare `<stem>` per `.p7m`, and the folder imports indexed them as extra documents;
+  `scripts/cleanup_extracted_xml.py` removes them (dry run by default, verifies each file against the payload, backs up first).
+- **Every stored document includes its ISO request date** (`vs_att_<CF>_CE_2026-10-06.p7m`: the date, never the time;
+  `utils._unique_document_stem`). A same-day repeat adds the practice id after it (`_2026-10-06_T265733_2026`). A PDF and a
+  P7M are separate requests and can carry different dates, so pair them with `utils._document_key(stem)` (the stem without
+  the date), never the exact stem. Existing files were renamed with `scripts/rename_documents_with_date.py` (plan + DB
+  backup in `<data>/backups/`, `--revert <plan.json>` undoes it). `.meta` files are never renamed.
+  `scripts/normalize_documents.py` re-derives names from content (office/comune/`al` date of a subject visura, `sto`/`ter` of
+  a property visura), then collapses same-day repeats with the same content (quarantine folder + DB rows, dry run by default)
+  and lists the names that still cover different contents. After removing files by hand run
+  `scripts/reconcile_missing_documents.py` (dry run by default): it drops the rows/aliases of a deleted `.p7m` only when a
+  surviving file has the same XML as the row, never a row that has extraction results its equivalent lacks.
+- **`sister query ...` / `query batch` do not silently re-run an answered query** (the service reuses an identical request only
+  for `RESPONSE_TTL_SECONDS`, 6 h): with `?reuse_previous=true` it returns the previous answer marked `stale`, and the CLI asks
+  "Download it again?" (default no; `--yes` downloads, `--no` reuses, without a terminal the answer is no; `--force` = `--yes`).
 - **When a query's flow changes, regenerate its flowchart**: `cd docs && dot -Tsvg <name>.dot -o <name>.svg` (edit the `.dot`).
   `property_visura_workflow` covers `search`/`intestati`, `person_search_workflow` the persona-fisica flow; the per-preset SVGs in
   `sister/static/images/workflows/` follow the `aecs4u_workflow` step lists.
@@ -180,7 +212,7 @@ Companies must use `POST /visura/persona-giuridica` with `{"identificativo": "<v
 ## Code style
 
 - Line length: 120 (configured in ruff/black)
-- Python 3.11+
+- Python 3.12+ (`pyproject.toml`)
 - Async throughout (psycopg, async SQLAlchemy, asyncio)
 - CLI commands use `asyncio.run()` to call async client methods
 - f-string log calls avoided in favor of `logger.info("msg: %s", var)` style
