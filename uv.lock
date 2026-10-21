@@ -9,10 +9,10 @@ resolution-markers = [
     "python_full_version == '3.14.*' and sys_platform == 'emscripten'",
     "python_full_version == '3.14.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
     "python_full_version == '3.13.*' and sys_platform == 'win32'",
-    "python_full_version < '3.13' and sys_platform == 'win32'",
     "python_full_version == '3.13.*' and sys_platform == 'emscripten'",
-    "python_full_version < '3.13' and sys_platform == 'emscripten'",
     "python_full_version == '3.13.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
+    "python_full_version < '3.13' and sys_platform == 'win32'",
+    "python_full_version < '3.13' and sys_platform == 'emscripten'",
     "python_full_version < '3.13' and sys_platform != 'emscripten' and sys_platform != 'win32'",
 ]
 
@@ -205,8 +205,8 @@ dependencies = [
 
 [[package]]
 name = "aecs4u-theme"
-version = "1.6.0"
-source = { git = "https://github.com/aecs4u/aecs4u-theme.git?branch=main#77891f59fc25f9f264e6402b1b7bb041f691b97b" }
+version = "1.6.2"
+source = { git = "https://github.com/aecs4u/aecs4u-theme.git?branch=main#f3f9264f5338e67d78692e9620f4ce953d7b34ce" }
 dependencies = [
     { name = "aecs4u-i18n" },
     { name = "fastapi" },
