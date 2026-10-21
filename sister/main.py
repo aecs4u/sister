@@ -615,6 +615,14 @@ try:
     if _static_dir.exists():
         app.mount("/static", StaticFiles(directory=str(_static_dir)), name="static")
 
+    # Cadastral map assets and tile/identify API used by /documents?view=cadastral-map
+    try:
+        from land_registry.consumer import install_land_registry_consumer
+
+        install_land_registry_consumer(app, prefix="/land-registry")
+    except ImportError as e:
+        logger.warning("land_registry consumer non disponibile: %s", e)
+
     # Mount outputs directory for screenshots
     from .database import OUTPUTS_DIR
 
