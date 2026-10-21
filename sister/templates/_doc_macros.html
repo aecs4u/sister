@@ -139,10 +139,10 @@
                     <i class="fas fa-copy" aria-hidden="true"></i> ID
                 </button>
                 {% endif %}
-                <a href="/web/dossiers/view/{{ peer.name }}" class="btn btn-compact btn-outline-{{ color }}">
+                <a href="/dossiers/view/{{ peer.name }}" class="btn btn-compact btn-outline-{{ color }}">
                     <i class="fas fa-eye"></i> Apri
                 </a>
-                <a href="/web/dossiers/{{ peer.name }}?download=1" class="btn btn-compact btn-outline-secondary">
+                <a href="/dossiers/{{ peer.name }}?download=1" class="btn btn-compact btn-outline-secondary">
                     <i class="fas fa-download"></i>
                 </a>
             </div>
@@ -198,7 +198,7 @@
     {% endif %}
     <div class="small text-muted px-3 pb-2"><i class="fas fa-clock me-1"></i>{{ d.mtime }} · {{ d.size_human }}</div>
     <div class="card-footer bg-transparent border-top-0 pt-0 pb-2 px-3 d-flex gap-2 no-print">
-        <a href="/web/dossiers/view/{{ d.name }}" class="btn btn-sm btn-outline-{{ color }} flex-fill">
+        <a href="/dossiers/view/{{ d.name }}" class="btn btn-sm btn-outline-{{ color }} flex-fill">
             <i class="fas fa-eye me-1"></i>Apri
         </a>
         {% if d.ident %}
@@ -206,7 +206,7 @@
             <i class="fas fa-copy" aria-hidden="true"></i>
         </button>
         {% endif %}
-        <a href="/web/dossiers/{{ d.name }}?download=1" class="btn btn-sm btn-outline-secondary" title="Scarica JSON">
+        <a href="/dossiers/{{ d.name }}?download=1" class="btn btn-sm btn-outline-secondary" title="Scarica JSON">
             <i class="fas fa-download"></i>
         </a>
     </div>
@@ -215,7 +215,7 @@
 {% endmacro %}
 
 {# Attachment chips: every file of a logical document (P7M/XML primary + PDFs). #}
-{% macro file_chips(d, prefix='/web/documents') %}
+{% macro file_chips(d, prefix='/documents') %}
 <div class="d-flex flex-wrap gap-1">
     {% for f in d.files %}
     {% set cls = 'attach-pdf' if f.file_format == 'PDF' else ('attach-p7m' if f.file_format == 'P7M' else 'attach-xml') %}
@@ -228,11 +228,11 @@
 {% endmacro %}
 
 {# Documents table. `docs` = list of logical documents; links use `prefix`
-   (/web/documents or /web/dossiers). `show_location` toggles the Ubicazione
+   (/documents or /dossiers). `show_location` toggles the Ubicazione
    column (hidden inside a property dossier where it is redundant).
    `is_soggetto` replaces Ubicazione/Dati Catastali/Catasto with CF/VAT columns. #}
 {% set _doc_table_seq = namespace(n=0) %}
-{% macro doc_table(table_id, docs, color, prefix='/web/documents', show_location=True, is_soggetto=False) %}
+{% macro doc_table(table_id, docs, color, prefix='/documents', show_location=True, is_soggetto=False) %}
 {% set _doc_table_seq.n = _doc_table_seq.n + 1 %}
 <div class="table-responsive">
     <table class="table table-hover table-sm mb-0 doc-table" id="doc-table-{{ table_id }}-{{ _doc_table_seq.n }}">
@@ -268,6 +268,19 @@
                     {% endif %}
                     {% if d.oggetto and d.filename and d.oggetto != d.filename %}
                     <br><small class="text-muted font-monospace">{{ d.filename }}</small>
+                    {% endif %}
+                    {% if d.related_immobile_docs %}
+                    <br><small class="d-block mt-1"><span class="text-muted">Visure per immobile:</span>
+                        {% for related in d.related_immobile_docs %}
+                        <a href="{{ prefix }}/{{ related.id }}">{{ related.label }}</a>{% if not loop.last %}<span class="text-muted"> · </span>{% endif %}
+                        {% endfor %}
+                    </small>
+                    {% elif d.related_soggetto_docs %}
+                    <br><small class="d-block mt-1"><span class="text-muted">Visure per soggetto:</span>
+                        {% for related in d.related_soggetto_docs %}
+                        <a href="{{ prefix }}/{{ related.id }}">{{ related.label }}</a>{% if not loop.last %}<span class="text-muted"> · </span>{% endif %}
+                        {% endfor %}
+                    </small>
                     {% endif %}
                 </td>
                 <td><span class="badge bg-light text-dark border">{{ (d.document_type or '-')|replace('_', ' ') }}</span></td>

@@ -7,7 +7,7 @@
 {% block hero_subtitle %}Estrazione automatica dei dati catastali dal portale SISTER dell'Agenzia delle Entrate.{% endblock %}
 
 {% block hero_actions %}
-<a href="/web/" class="btn btn-primary btn-lg me-3">
+<a href="/" class="btn btn-primary btn-lg me-3">
     <i class="fas fa-rocket me-2"></i>Inizia
 </a>
 <a href="/docs" class="btn btn-outline-secondary btn-lg" target="_blank">
@@ -57,13 +57,13 @@
         </div>
         <div class="row g-3 justify-content-center">
             {% for item in [
-                ("fa-home", "Immobili", "/web/forms"),
-                ("fa-users", "Intestati", "/web/forms"),
-                ("fa-user", "Soggetto", "/web/forms"),
-                ("fa-building", "Azienda", "/web/forms"),
-                ("fa-list", "Elenco", "/web/forms"),
-                ("fa-map-marker-alt", "Indirizzo", "/web/forms"),
-                ("fa-hashtag", "Partita", "/web/forms"),
+                ("fa-home", "Immobili", "/forms"),
+                ("fa-users", "Intestati", "/forms"),
+                ("fa-user", "Soggetto", "/forms"),
+                ("fa-building", "Azienda", "/forms"),
+                ("fa-list", "Elenco", "/forms"),
+                ("fa-map-marker-alt", "Indirizzo", "/forms"),
+                ("fa-hashtag", "Partita", "/forms"),
                 ("fa-terminal", "CLI", "/docs")
             ] %}
             <div class="col-md-3 col-6">
@@ -81,7 +81,7 @@
 {% block cta_subtitle %}Basato sull'automazione del browser sul portale SISTER.{% endblock %}
 
 {% block cta_actions %}
-<a href="/web/" class="btn btn-light btn-lg">
+<a href="/" class="btn btn-light btn-lg">
     <i class="fas fa-sign-in-alt me-2"></i>Accedi alla dashboard
 </a>
 {% endblock %}
@@ -90,14 +90,14 @@
 <div class="footer-section">
     <p class="footer-title">Informazioni</p>
     <ul class="footer-links">
-        <li><a href="/web/about"><i class="fas fa-circle-info"></i>About</a></li>
-        <li><a href="/web/privacy"><i class="fas fa-user-shield"></i>Privacy</a></li>
+        <li><a href="/about"><i class="fas fa-circle-info"></i>About</a></li>
+        <li><a href="/privacy"><i class="fas fa-user-shield"></i>Privacy</a></li>
     </ul>
 </div>
 <div class="footer-section">
     <p class="footer-title">Supporto</p>
     <ul class="footer-links">
-        <li><a href="/web/guide"><i class="fas fa-book-open"></i>Guida utente</a></li>
+        <li><a href="/guide"><i class="fas fa-book-open"></i>Guida utente</a></li>
         <li><a href="/docs"><i class="fas fa-code"></i>API Documentation</a></li>
     </ul>
 </div>

@@ -1,5 +1,5 @@
 {% extends "_base.html" %}
-{% from "parts/_related_links.html" import related_pages %}
+{% from "components/related_links.html" import related_pages %}
 {% block page_title %}Cheat Sheet{% endblock %}
 
 {% block extra_css %}
@@ -12,7 +12,7 @@
     <div class="container-fluid">
         <nav class="mb-3" aria-label="breadcrumb">
             <ol class="breadcrumb mb-0">
-                <li class="breadcrumb-item"><a href="/web/" class="text-white-50">Dashboard</a></li>
+                <li class="breadcrumb-item"><a href="/" class="text-white-50">Dashboard</a></li>
                 <li class="breadcrumb-item active text-white">Cheat Sheet</li>
             </ol>
         </nav>
@@ -222,10 +222,10 @@
 
     </div>{# /row #}
     {{ related_pages("Apri gli strumenti collegati", [
-        ("/web/forms", "Query", "Compila una ricerca singola o un workflow.", "fa-clipboard-list"),
-        ("/web/results", "Risultati", "Filtra le richieste eseguite e consulta le risposte.", "fa-database"),
-        ("/web/guide#flussi", "Guida ai flussi", "Leggi le procedure complete per le attività comuni.", "fa-book-open"),
-        ("/web/glossary", "Glossario", "Chiarisci sigle, tipi di documento e termini catastali.", "fa-book")
+        ("/forms", "Query", "Compila una ricerca singola o un workflow.", "fa-clipboard-list"),
+        ("/results", "Risultati", "Filtra le richieste eseguite e consulta le risposte.", "fa-database"),
+        ("/guide#flussi", "Guida ai flussi", "Leggi le procedure complete per le attività comuni.", "fa-book-open"),
+        ("/glossary", "Glossario", "Chiarisci sigle, tipi di documento e termini catastali.", "fa-book")
     ], "Usa questi collegamenti per passare dal promemoria all'attività o al riferimento di dettaglio.") }}
 </div>
 {% endblock %}

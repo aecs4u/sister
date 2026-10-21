@@ -3,7 +3,7 @@
 1. portal → spec: every input of the saved SISTER form (tests/fixtures/portal_forms) has a parameter in
    ``sister.query_forms`` (and the spec names no input that the form lacks);
 2. spec → CLI → web: every parameter is an option of ``sister query <command>`` and a parameter of the
-   ``/web/forms`` page, which is generated from the same spec.
+   ``/forms`` page, which is generated from the same spec.
 """
 
 import re
@@ -192,7 +192,7 @@ def _bool_params(query: str) -> set[str]:
 
 
 # --------------------------------------------------------------------------------------------------
-# step 2c: CLI -> /web/forms (the page is generated from the CLI commands)
+# step 2c: CLI -> /forms (the page is generated from the CLI commands)
 # --------------------------------------------------------------------------------------------------
 
 
@@ -212,7 +212,7 @@ def test_web_forms_take_exactly_the_cli_options():
     for group, endpoint, command in _single_step_endpoints():
         cli = {p.name for p in _cli_command(command).params} - _NOT_INPUTS
         web = {p.name for p in group.params if endpoint.id in p.endpoints}
-        assert web == cli, f"/web/forms {group.id}/{endpoint.id} vs sister query {command}: {sorted(web ^ cli)}"
+        assert web == cli, f"/forms {group.id}/{endpoint.id} vs sister query {command}: {sorted(web ^ cli)}"
         assert set(param_names(command)) <= web
         seen.add(command)
     assert seen >= set(WITH_FORM)  # every query with a portal form has a web endpoint
@@ -221,7 +221,7 @@ def test_web_forms_take_exactly_the_cli_options():
 def test_web_forms_page_renders_an_input_for_every_parameter(main_module):
     from fastapi.testclient import TestClient
 
-    response = TestClient(main_module.app).get("/web/forms")
+    response = TestClient(main_module.app).get("/forms")
     assert response.status_code == 200
     html = response.text
     for group, endpoint, command in _single_step_endpoints():
@@ -231,7 +231,7 @@ def test_web_forms_page_renders_an_input_for_every_parameter(main_module):
 
 
 def test_web_submit_goes_through_the_cli_client(main_module, monkeypatch):
-    """/web/api/<endpoint> submits with the same client code as the CLI (command + parameters)."""
+    """/api/ui/<endpoint> submits with the same client code as the CLI (command + parameters)."""
     from fastapi.testclient import TestClient
 
     from sister.client import VisuraClient
@@ -245,8 +245,8 @@ def test_web_submit_goes_through_the_cli_client(main_module, monkeypatch):
     monkeypatch.setattr(VisuraClient, "submit", fake_submit)
     web = TestClient(main_module.app)
     body = {"provincia": "Ravenna", "comune": "RAVENNA", "foglio": "103", "categoria": "A%", "force": "true"}
-    assert web.post("/web/api/elenco-immobili", json=body).json()["request_id"] == "x"
-    assert web.post("/web/api/mappa", json={"provincia": "Ravenna", "intero_foglio": "true"}).status_code == 200
+    assert web.post("/api/ui/elenco-immobili", json=body).json()["request_id"] == "x"
+    assert web.post("/api/ui/mappa", json={"provincia": "Ravenna", "intero_foglio": "true"}).status_code == 200
     assert calls[0] == (
         "elenco",
         {"provincia": "Ravenna", "comune": "RAVENNA", "foglio": "103", "categoria": "A%"},
@@ -293,7 +293,7 @@ def test_web_proxies_send_the_api_key(main_module, monkeypatch):
     monkeypatch.setattr(httpx.AsyncClient, "get", fake_get)
     monkeypatch.setattr(httpx.AsyncClient, "post", fake_post)
     web = TestClient(main_module.app)
-    assert web.get("/web/api/visura/req_F_x").status_code == 200
-    assert web.post("/web/api/ipotecaria-stato-not-a-query", json={}).status_code == 200
+    assert web.get("/api/ui/visura/req_F_x").status_code == 200
+    assert web.post("/api/ui/ipotecaria-stato-not-a-query", json={}).status_code == 200
     assert all(headers == {"X-API-Key": "secret-key"} for _, _, headers in seen), seen
     assert len(seen) == 2

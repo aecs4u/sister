@@ -1,8 +1,8 @@
 {% extends "_base.html" %}
-{% from "parts/_related_links.html" import related_pages %}
+{% from "components/related_links.html" import related_pages %}
 {% from "_doc_macros.html" import jump_chips, query_section,
                                    query_subsection, dossier_card, doc_macros_js %}
-{% from "parts/_hero.html" import hero_section %}
+{% from "components/hero.html" import hero_section %}
 
 {% block page_title %}Dossier{% endblock %}
 
@@ -14,9 +14,9 @@
 
 {% block content %}
 {# ── Hero ───────────────────────────────────────────────────────────────── #}
-{% call hero_section('Dossier', 'fa-folder-open', '/web/', 'Dashboard',
+{% call hero_section('Dossier', 'fa-folder-open', '/', 'Dashboard',
                      breadcrumb_parent='Dashboard', breadcrumb_current='Dossier',
-                     extra_btn_url='/web/documents', extra_btn_label='Documenti', extra_btn_icon='fa-folder-tree') %}
+                     extra_btn_url='/documents', extra_btn_label='Documenti', extra_btn_icon='fa-folder-tree') %}
 <strong>{{ total }}</strong> dossier — query <em>single-step</em> e <em>workflow multi-step</em>
 {% if n_errors %}
 <a class="d-inline-block ms-2 fw-semibold text-white" href="#dossier-filter-errors" data-show-errors>
@@ -109,10 +109,10 @@
 
     {% endif %}
     {{ related_pages("Collegamenti correlati", [
-        ("/web/results", "Risultati", "Cercare richieste eseguite e aprire le risposte.", "fa-database"),
-        ("/web/documents", "Documenti", "Consultare i file ufficiali associati alle risposte.", "fa-folder-tree"),
-        ("/web/forms", "Query", "Avviare una nuova ricerca o un workflow.", "fa-clipboard-list"),
-        ("/web/glossary#dossier", "Glossario dossier", "Vedere la differenza tra dossier e documento.", "fa-book")
+        ("/results", "Risultati", "Cercare richieste eseguite e aprire le risposte.", "fa-database"),
+        ("/documents", "Documenti", "Consultare i file ufficiali associati alle risposte.", "fa-folder-tree"),
+        ("/forms", "Query", "Avviare una nuova ricerca o un workflow.", "fa-clipboard-list"),
+        ("/glossary#dossier", "Glossario dossier", "Vedere la differenza tra dossier e documento.", "fa-book")
     ]) }}
 </div>
 {% endblock %}

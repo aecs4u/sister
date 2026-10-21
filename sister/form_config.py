@@ -1,6 +1,6 @@
 """Form group definitions for the sister web UI.
 
-Defines the query forms rendered on the /web/forms page. Each FormGroup
+Defines the query forms rendered on the /forms page. Each FormGroup
 maps to one or more sister API endpoints.
 
 Categories:

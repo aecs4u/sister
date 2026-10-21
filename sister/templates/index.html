@@ -13,7 +13,7 @@
     <div class="alert alert-{% if auth_status.state == 'connecting' %}info{% else %}warning{% endif %} border-0 shadow-sm mb-4">
         <i class="fas fa-{% if auth_status.state == 'connecting' %}spinner fa-spin{% else %}exclamation-triangle{% endif %} me-2"></i>
         <strong>Browser {{ {"idle": "inattivo", "ready": "pronto", "connecting": "in connessione", "unavailable": "non disponibile"}.get(auth_status.state, auth_status.state) }}:</strong> {{ auth_status.message }}
-        {% if can_admin(user) %}<a href="/web/browser" class="alert-link ms-2">Apri il pannello</a>{% endif %}
+        {% if can_admin(user) %}<a href="/browser" class="alert-link ms-2">Apri il pannello</a>{% endif %}
         {% if auth_status.state == 'unavailable' %}
         <span class="text-muted ms-2">— Interfaccia in sola lettura: le query live non sono disponibili.</span>
         {% endif %}
@@ -23,16 +23,16 @@
     <!-- Stats -->
     <div class="row g-4 mb-4">
         <div class="col-md-3 col-6">
-            {{ stat_card("Richieste eseguite", stats.total_requests, icon="fa-list-check", color="primary", href="/web/results") }}
+            {{ stat_card("Richieste eseguite", stats.total_requests, icon="fa-list-check", color="primary", href="/results") }}
         </div>
         <div class="col-md-3 col-6">
-            {{ stat_card("Riuscite", stats.successful, icon="fa-check-circle", color="success", href="/web/results?status=completed") }}
+            {{ stat_card("Riuscite", stats.successful, icon="fa-check-circle", color="success", href="/results?status=completed") }}
         </div>
         <div class="col-md-3 col-6">
-            {{ stat_card("Fallite", stats.failed, icon="fa-times-circle", color="danger", href="/web/results?status=failed") }}
+            {{ stat_card("Fallite", stats.failed, icon="fa-times-circle", color="danger", href="/results?status=failed") }}
         </div>
         <div class="col-md-3 col-6">
-            {{ stat_card("Risposte estratte", stats.total_responses, icon="fa-database", color="info", href="/web/results?status=completed") }}
+            {{ stat_card("Risposte estratte", stats.total_responses, icon="fa-database", color="info", href="/results?status=completed") }}
         </div>
     </div>
 
@@ -41,16 +41,16 @@
         <div class="col-md-6">
             {% call card("Azioni rapide", class="border-0 shadow-sm h-100") %}
                     <div class="d-grid gap-2">
-                        <a href="/web/forms" class="btn btn-primary">
+                        <a href="/forms" class="btn btn-primary">
                             <i class="fas fa-clipboard-list me-2"></i>Invia una query
                         </a>
-                        <a href="/web/results" class="btn btn-outline-secondary">
+                        <a href="/results" class="btn btn-outline-secondary">
                             <i class="fas fa-database me-2"></i>Sfoglia i risultati
                         </a>
-                        <a href="/web/documents" class="btn btn-outline-secondary">
+                        <a href="/documents" class="btn btn-outline-secondary">
                             <i class="fas fa-folder-tree me-2"></i>Sfoglia i documenti
                         </a>
-                        <a href="/web/dossiers" class="btn btn-outline-secondary">
+                        <a href="/dossiers" class="btn btn-outline-secondary">
                             <i class="fas fa-folder-open me-2"></i>Sfoglia i dossier
                         </a>
                         {% if can_admin(user) %}
@@ -74,7 +74,7 @@
                     {% if recent %}
                     <div class="list-group list-group-flush">
                         {% for r in recent %}
-                        <a href="/web/results/{{ r.request_id }}" class="list-group-item list-group-item-action px-3">
+                        <a href="/results/{{ r.request_id }}" class="list-group-item list-group-item-action px-3">
                             <div class="d-flex justify-content-between align-items-center">
                                 <div>
                                     {{ status_badge(r.status) }}
@@ -107,7 +107,7 @@
     const statusBox = document.getElementById('missing-pairs-status');
     if (!button || !statusBox) return;
 
-    const startUrl = '/web/documents/retrieve-missing-pairs';
+    const startUrl = '/documents/retrieve-missing-pairs';
     const statusUrl = `${startUrl}/status`;
     const defaultLabel = button.textContent.trim();
     let pollTimer = null;

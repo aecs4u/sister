@@ -405,7 +405,7 @@ class VisuraClient:
     ) -> dict:
         """Submit one single-step query given its ``sister query`` command name and its parameters.
 
-        The single entry point shared by the CLI, the CLI batch and the ``/web/forms`` page. The query is
+        The single entry point shared by the CLI, the CLI batch and the ``/forms`` page. The query is
         described by ``sister.query_forms``: its dedicated arguments go to the matching client method, every
         other parameter is an input of the SISTER form and travels as ``form_fields`` (or as a query
         parameter for the generic search types). Raises ``ValueError`` for an unknown command or

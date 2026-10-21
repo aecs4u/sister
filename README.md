@@ -137,8 +137,7 @@ sister/
 │   ├── templates/sister/   # Jinja2 templates (extends aecs4u-theme)
 │   │   ├── landing.html    # Landing page (pubblica)
 │   │   ├── index.html      # Dashboard
-│   │   ├── forms.html      # Query forms (8 gruppi)
-│   │   ├── results.html    # Results browser
+│   │   ├── (forms.html, results.html now live in aecs4u-theme: catasto/)
 │   │   └── ...
 │   └── static/             # CSS, JS, icons, workflow SVG flowcharts
 ├── tests/                  # Test suite
@@ -329,17 +328,17 @@ SISTER include un'interfaccia web accessibile al browser, basata su [`aecs4u-the
 
 | URL | Descrizione |
 |-----|-------------|
-| `GET /` | Landing page (pubblica, senza autenticazione) |
-| `GET /web/` | Dashboard — statistiche servizio, attività recente |
-| `GET /web/forms` | 8 form di ricerca raggruppati per tipo |
-| `GET /web/results` | Browser risultati con filtri e paginazione |
-| `GET /web/results/{id}` | Dettaglio risultato: immobili + intestati |
-| `GET /web/about` | Informazioni sul servizio |
-| `GET /web/privacy` | Privacy policy |
+| `GET /landing` | Landing page (pubblica, senza autenticazione) |
+| `GET /` | Dashboard — statistiche servizio, attività recente |
+| `GET /forms` | 8 form di ricerca raggruppati per tipo |
+| `GET /results` | Browser risultati con filtri e paginazione |
+| `GET /results/{id}` | Dettaglio risultato: immobili + intestati |
+| `GET /about` | Informazioni sul servizio |
+| `GET /privacy` | Privacy policy |
 
 ### Form di ricerca
 
-La pagina `/web/forms` ha un gruppo di form per ogni query single-step e per i workflow:
+La pagina `/forms` ha un gruppo di form per ogni query single-step e per i workflow:
 
 1. **Property Search** — ricerca per foglio/particella + intestati
 2. **Person Search** — codice fiscale oppure cognome e dati di nascita
@@ -354,7 +353,7 @@ La pagina `/web/forms` ha un gruppo di form per ogni query single-step e per i w
 comandi CLI (`sister/query_forms.py`, vedi [`docs/query_forms.md`](docs/query_forms.md)) e sono mostrati solo per
 l'endpoint selezionato.
 
-I form inviano le richieste con lo stesso codice del CLI (`VisuraClient.submit`, tramite `POST /web/api/*`) ed effettuano il polling dei risultati automaticamente.
+I form inviano le richieste con lo stesso codice del CLI (`VisuraClient.submit`, tramite `POST /api/ui/*`) ed effettuano il polling dei risultati automaticamente.
 
 ---
 

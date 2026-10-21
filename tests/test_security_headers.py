@@ -113,3 +113,27 @@ def test_force_adds_secure_even_over_http_and_never_twice():
 
     cookies = _set_cookies(TestClient(_cookie_app(force=True), base_url="http://localhost").get("/login"))
     assert cookies["aecs4u_session"].lower().count("secure") == 1
+
+
+def test_google_3d_sources_are_added_only_on_the_3d_page():
+    from fastapi import FastAPI
+    from starlette.responses import PlainTextResponse
+    from starlette.testclient import TestClient
+
+    app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
+
+    @app.get("/3d")
+    async def three_d():
+        return PlainTextResponse("3d", headers={"Content-Security-Policy": PACKAGE_CSP})
+
+    @app.get("/other")
+    async def other():
+        return PlainTextResponse("x", headers={"Content-Security-Policy": PACKAGE_CSP})
+
+    app.add_middleware(CspNonceMiddleware)
+    client = TestClient(app)
+    page = client.get("/3d").headers["content-security-policy"]
+    assert "https://maps.googleapis.com" in next(d for d in page.split("; ") if d.startswith("script-src"))
+    assert "'unsafe-inline'" not in next(d for d in page.split("; ") if d.startswith("script-src"))
+    assert "connect-src 'self' https://*.googleapis.com" in page and "worker-src blob:" in page
+    assert "googleapis" not in client.get("/other").headers["content-security-policy"]

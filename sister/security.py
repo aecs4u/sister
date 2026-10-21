@@ -23,6 +23,24 @@ _STRICT_DIRECTIVES = {
 }
 
 
+# Pages that load the Google Maps JavaScript API (Photorealistic 3D Maps) get these extra sources on top of the strict
+# policy; no other page does. Paths are matched exactly.
+_GOOGLE_3D_PATHS = ("/3d",)
+_GOOGLE_3D_SOURCES = {
+    "script-src": "https://maps.googleapis.com https://*.gstatic.com 'wasm-unsafe-eval'",
+    "connect-src": "https://*.googleapis.com https://*.gstatic.com https://*.google.com data: blob:",
+    "worker-src": "blob:",
+}
+
+# The cadastral document map uses the pinned Leaflet distribution and public
+# basemap tile services. Map APIs and all SISTER assets remain same-origin.
+_CADASTRAL_MAP_SOURCES = {
+    "script-src": "https://unpkg.com",
+    "style-src": "'self' 'unsafe-inline' https://unpkg.com",
+    "img-src": "'self' data: blob: https://unpkg.com https://*.tile.openstreetmap.org https://server.arcgisonline.com https://*.tile.opentopomap.org",
+}
+
+
 def strip_unsafe_eval(csp: str) -> str:
     """Remove ``'unsafe-eval'`` from every directive of a Content-Security-Policy value."""
     directives = []
@@ -33,9 +51,14 @@ def strip_unsafe_eval(csp: str) -> str:
     return "; ".join(directives)
 
 
-def apply_nonce_policy(csp: str, nonce: str) -> str:
-    """Rewrite *csp* so scripts need *nonce*: no ``'unsafe-inline'``/``'unsafe-eval'``, no third-party script hosts."""
+def apply_nonce_policy(csp: str, nonce: str, extra_sources: dict[str, str] | None = None) -> str:
+    """Rewrite *csp* so scripts need *nonce*: no ``'unsafe-inline'``/``'unsafe-eval'``, no third-party script hosts.
+
+    *extra_sources* (directive -> sources) widens the named directives for one page, e.g. the Google 3D map.
+    """
     replacements = {"script-src": f"'self' 'nonce-{nonce}' blob:", **_STRICT_DIRECTIVES}
+    for name, sources in (extra_sources or {}).items():
+        replacements[name] = f"{replacements[name]} {sources}" if name in replacements else sources
     directives = []
     seen = set()
     frame_src_seen = False
@@ -78,6 +101,13 @@ class CspNonceMiddleware:
             return await self.app(scope, receive, send)
 
         nonce = secrets.token_urlsafe(16)
+        query = scope.get("query_string", b"").decode("latin-1")
+        if scope["path"] in _GOOGLE_3D_PATHS:
+            extra = _GOOGLE_3D_SOURCES
+        elif scope["path"] == "/documents" and "view=cadastral-map" in query.split("&"):
+            extra = _CADASTRAL_MAP_SOURCES
+        else:
+            extra = None
         scope.setdefault("state", {})["csp_nonce"] = nonce
 
         async def send_with_policy(message):
@@ -85,7 +115,7 @@ class CspNonceMiddleware:
                 headers = []
                 for name, value in message.get("headers", []):
                     if name.lower() == b"content-security-policy":
-                        value = apply_nonce_policy(value.decode("latin-1"), nonce).encode("latin-1")
+                        value = apply_nonce_policy(value.decode("latin-1"), nonce, extra).encode("latin-1")
                     headers.append((name, value))
                 message = {**message, "headers": headers}
             await send(message)

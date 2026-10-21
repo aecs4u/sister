@@ -50,19 +50,6 @@
     border-color: var(--bs-primary) !important;
 }
 
-/* ── Nested data renderer ─────────────────────────────── */
-.nested-table { --bs-table-bg: transparent; margin-bottom: 0; }
-.nested-table > :not(caption) > * > * { padding: 0.35rem 0.5rem; vertical-align: top; }
-.nested-key { width: 16rem; min-width: 10rem; font-weight: 600; color: var(--bs-body-color); background: var(--bs-tertiary-bg); }
-.nested-index { width: 4rem; color: var(--bs-secondary-color); text-align: right; background: var(--bs-tertiary-bg); }
-.nested-value { min-width: 12rem; }
-.nested-scroll { overflow-x: auto; }
-.nested-empty { color: var(--bs-secondary-color); font-style: italic; }
-
-/* ── Detail metadata labels ───────────────────────────── */
-.detail-label { font-weight: 600; color: var(--bs-secondary-color); font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.03em; }
-.detail-value { font-size: 0.95rem; }
-
 /* ── Document / workflow meta tables ─────────────────── */
 .doc-meta th { width: 35%; font-weight: 500; }
 .workflow-step-title { min-width: 0; }
@@ -99,15 +86,6 @@
     max-width: 200px;
     overflow: hidden;
     text-overflow: ellipsis;
-}
-
-/* ── Hero section — base layout; each page CSS sets its background gradient ── */
-.page-hero { color: white; padding: 2rem 0; margin-bottom: 2rem; }
-
-/* ── Shared print rules ───────────────────────────────────────────────────── */
-@media print {
-    .no-print { display: none !important; }
-    .page-hero { background: #f8f9fa !important; color: #333 !important; }
 }
 
 /* ── Cadastral reference pills ────────────────────────────────────────────── */
@@ -160,11 +138,6 @@
 .tabulator-row .tabulator-cell { white-space: nowrap; }
 #tabulator-results .tabulator-row { min-height: 0; }
 
-/* D1–D3 · hero toolbars and pill rows must wrap on narrow screens */
-.page-hero .d-flex { flex-wrap: wrap; }
-.page-hero .btn { white-space: nowrap; }
-.page-hero h1 { overflow-wrap: anywhere; }
-@media (max-width: 575.98px) { .page-hero .btn { flex: 1 1 auto; } }
 .status-pills { display: flex; flex-wrap: wrap; gap: .25rem; }
 
 /* D5 · header action buttons never wrap onto two lines */

@@ -1,7 +1,7 @@
 """Web UI routes for sister.
 
 Serves HTML pages via aecs4u-theme and proxies API calls for form submissions.
-Auth: landing page is public; /web/* routes require authentication.
+Auth: landing page is public; authenticated UI routes require authentication.
 """
 
 from __future__ import annotations
@@ -47,7 +47,7 @@ from .visura_view import build_visura_view
 _OPENDATA_API_URL = os.getenv("OPENDATA_API_URL", "http://localhost:8024")
 
 
-# Base directory for the document browser (/web/documents).
+# Base directory for the document browser (/documents).
 # Defaults to the parent of the DB data folder (the project data root).
 def _files_base() -> "Path":
     from pathlib import Path
@@ -253,6 +253,75 @@ def _collapse_to_logical_docs(docs: list[dict]) -> list[dict]:
     return logical
 
 
+def _link_related_visura_docs(docs: list[dict]) -> None:
+    """Attach reciprocal links between subject and property visure by CF/VAT.
+
+    A subject visura's ``intestati_json`` lists co-owners of its properties, so
+    the queried subject is identified only from the visura's object or filename.
+    Property visure identify their owners through ``intestati_json``.
+    """
+    import json
+
+    subjects_by_cf: dict[str, list[dict]] = {}
+    properties_by_id: dict[int, dict] = {}
+
+    def _subject_cf(doc: dict) -> str | None:
+        for source in (doc.get("oggetto") or "", doc.get("filename") or ""):
+            match = _CF_RE.search(source.upper())
+            if match:
+                return match.group(1).upper()
+        return None
+
+    def _owner_cfs(raw: Any) -> set[str]:
+        if not raw:
+            return set()
+        try:
+            rows = json.loads(raw) if isinstance(raw, str) else raw
+        except (TypeError, ValueError):
+            return set()
+        if not isinstance(rows, list):
+            return set()
+        return {
+            str(row["CF"]).strip().upper()
+            for row in rows
+            if isinstance(row, dict) and row.get("CF")
+        }
+
+    for doc in docs:
+        doc_type = doc.get("document_type") or ""
+        if doc_type == "visura_soggetto":
+            cf = _subject_cf(doc)
+            if cf:
+                subjects_by_cf.setdefault(cf, []).append(doc)
+        elif doc_type in _VISURA_TYPES and doc.get("id") is not None:
+            properties_by_id[doc["id"]] = doc
+
+    subject_links: dict[int, dict[int, dict[str, Any]]] = {}
+    property_links: dict[int, dict[int, dict[str, Any]]] = {}
+    for property_doc in properties_by_id.values():
+        property_id = property_doc["id"]
+        for cf in _owner_cfs(property_doc.get("intestati_json")):
+            for subject_doc in subjects_by_cf.get(cf, []):
+                subject_id = subject_doc.get("id")
+                if subject_id is None:
+                    continue
+                subject_links.setdefault(subject_id, {})[property_id] = {
+                    "id": property_id,
+                    "label": property_doc.get("oggetto") or property_doc.get("filename") or f"Doc {property_id}",
+                }
+                property_links.setdefault(property_id, {})[subject_id] = {
+                    "id": subject_id,
+                    "label": subject_doc.get("oggetto") or subject_doc.get("filename") or f"Doc {subject_id}",
+                }
+
+    for doc in docs:
+        doc_id = doc.get("id")
+        if doc.get("document_type") == "visura_soggetto":
+            doc["related_immobile_docs"] = list(subject_links.get(doc_id, {}).values())
+        elif (doc.get("document_type") or "") in _VISURA_TYPES:
+            doc["related_soggetto_docs"] = list(property_links.get(doc_id, {}).values())
+
+
 def _build_property_map(docs: list[dict]) -> dict:
     """Group documents by cadastral coordinates into a nested property map.
 
@@ -419,23 +488,47 @@ def _build_property_map(docs: list[dict]) -> dict:
         return result
 
     def _build_soggetti(immobili_tree):
-        """Soggetti not linked to any property doc, grouped by person (CF)."""
-        by_cf: dict[str, dict] = {}
+        """Soggetti not linked to property docs, grouped by CF or subject name."""
+        by_person: dict[tuple[str, str], dict] = {}
         for d in docs:
             if (d.get("document_type") or "") != _SOGGETTO_TYPE:
                 continue
             if d.get("id") in claimed_ids:
                 continue
             oggetto = d.get("oggetto") or ""
-            m = re.search(r"\(([A-Z0-9]{11,16})\)", oggetto)
-            cf = m.group(1) if m else "__no_cf__"
-            label = oggetto[: m.start()].strip() if m else (oggetto or d.get("filename") or "—")
-            if cf not in by_cf:
-                by_cf[cf] = {"cf": cf if cf != "__no_cf__" else None, "label": label, "docs": []}
-            by_cf[cf]["docs"].append(_decorate_one(d))
-        for entry in by_cf.values():
+            filename = d.get("filename") or ""
+
+            # The queried subject's CF can be present in either display field,
+            # and is not guaranteed to be parenthesized. Avoid intestati_json
+            # here: for a soggetto visura it describes property co-owners and
+            # can incorrectly merge different queried subjects.
+            cf = None
+            for source in (oggetto, filename):
+                match = _CF_RE.search(source.upper())
+                if match:
+                    cf = match.group(1).upper()
+                    break
+
+            label_source = oggetto or filename
+            label = _CF_RE.sub("", label_source)
+            label = label.strip(" ()-_\t\r\n") or filename or "Soggetto"
+            compact_label = re.sub(r"[^a-z0-9]+", " ", label.casefold()).strip()
+            if compact_label in {"soggetto", "visura soggetto", "visura per soggetto"} and filename:
+                label = _CF_RE.sub("", filename).strip(" ()-_") or filename
+            if not cf:
+                # Without a CF, group by the best available subject name. Use
+                # the document id only when neither field provides a name.
+                normalized_label = re.sub(r"\s+", " ", label).strip().casefold()
+                identity = ("name", normalized_label or str(d.get("id") or filename))
+            else:
+                identity = ("cf", cf)
+
+            if identity not in by_person:
+                by_person[identity] = {"cf": cf, "label": label, "docs": []}
+            by_person[identity]["docs"].append(_decorate_one(d))
+        for entry in by_person.values():
             entry["docs"].sort(key=lambda d: d.get("filename") or "")
-        return sorted(by_cf.values(), key=lambda x: x["label"])
+        return sorted(by_person.values(), key=lambda x: x["label"].casefold())
 
     immobili_tree = _build_tree()
     return {"immobili": immobili_tree, "soggetti": _build_soggetti(immobili_tree)}
@@ -1291,7 +1384,7 @@ async def _require_auth(request: Request):
         if not _auth_required():
             if not _auth_disabled_warned:
                 _auth_disabled_warned = True
-                logger.warning("REQUIRE_AUTHENTICATION=false: le rotte /web/* accettano richieste anonime")
+                logger.warning("REQUIRE_AUTHENTICATION=false: le rotte UI accettano richieste anonime")
             return _get_user(request)
         if "text/html" in request.headers.get("accept", "") and request.method == "GET":
             raise RedirectToLogin(return_url=str(request.url))
@@ -1411,7 +1504,7 @@ def _build_url(path: str, **params) -> str:
 
 def _filter_remove_url(key: str, filters: dict) -> str:
     params = {k: v for k, v in filters.items() if k != key and k != "offset"}
-    return _build_url("/web/results", **params)
+    return _build_url("/results", **params)
 
 
 def _format_timestamp(value: Optional[str | datetime]) -> Optional[str]:
@@ -1808,13 +1901,8 @@ async def favicon():
 
 @router.get("/dashboard", include_in_schema=False)
 async def dashboard_redirect():
-    """Redirect /dashboard to /web/."""
-    return RedirectResponse(url="/web/")
-
-
-@router.get("/", include_in_schema=False)
-async def root_redirect():
-    return RedirectResponse(url="/web/")
+    """Redirect the explicit dashboard URL to the dashboard at /."""
+    return RedirectResponse(url="/")
 
 
 @router.get("/landing", response_class=HTMLResponse)
@@ -1839,7 +1927,7 @@ def _get_auth_status() -> dict:
     return {"state": "unavailable", "message": "Browser service not initialized"}
 
 
-@router.get("/web/", response_class=HTMLResponse)
+@router.get("/", response_class=HTMLResponse)
 async def web_index(request: Request, user=Depends(_require_auth)):
     """Dashboard — service health and recent activity."""
     theme = _get_theme(request)
@@ -1970,7 +2058,7 @@ def _missing_pair_job_view(job: dict[str, Any] | None) -> dict[str, Any]:
     }
 
 
-@router.post("/web/documents/retrieve-missing-pairs", response_class=JSONResponse)
+@router.post("/documents/retrieve-missing-pairs", response_class=JSONResponse)
 @_audited("documents.retrieve_missing_pairs")
 async def web_retrieve_missing_pairs(request: Request, user=Depends(_require_admin)):
     """Find missing PDF/P7M pairs and start a free-visura recovery batch."""
@@ -2031,18 +2119,18 @@ async def web_retrieve_missing_pairs(request: Request, user=Depends(_require_adm
     return JSONResponse(_missing_pair_job_view(job), status_code=202 if batch["requests"] else 200)
 
 
-@router.get("/web/documents/retrieve-missing-pairs/status", response_class=JSONResponse)
+@router.get("/documents/retrieve-missing-pairs/status", response_class=JSONResponse)
 async def web_retrieve_missing_pairs_status(request: Request, user=Depends(_require_auth)):
     async with _missing_pair_job_lock:
         return JSONResponse(_missing_pair_job_view(_missing_pair_job))
 
 
-@router.get("/web/forms", response_class=HTMLResponse)
+@router.get("/forms", response_class=HTMLResponse)
 async def web_forms(request: Request, user=Depends(_require_auth)):
     """Query submission forms."""
     theme = _get_theme(request)
     return theme.render(
-        "forms.html",
+        "catasto/forms.html",
         request,
         user=user,
         form_groups=get_available_form_groups(),
@@ -2051,7 +2139,7 @@ async def web_forms(request: Request, user=Depends(_require_auth)):
     )
 
 
-@router.post("/web/results/refresh", response_class=HTMLResponse)
+@router.post("/results/refresh", response_class=HTMLResponse)
 async def web_results_refresh(request: Request, user=Depends(_require_admin)):
     """Import exported response JSON files into the configured database."""
     import importlib.util
@@ -2102,10 +2190,10 @@ async def web_results_refresh(request: Request, user=Depends(_require_admin)):
         client_ip=_client_ip(request),
     )
 
-    return RedirectResponse("/web/results", status_code=303)
+    return RedirectResponse("/results", status_code=303)
 
 
-@router.get("/web/results", response_class=HTMLResponse)
+@router.get("/results", response_class=HTMLResponse)
 async def web_results(
     request: Request,
     user=Depends(_require_auth),
@@ -2196,21 +2284,21 @@ async def web_results(
         "source": source,
     }
     stats_urls = {
-        "total": _build_url("/web/results", **stats_filters),
-        "completed": _build_url("/web/results", status="completed", **stats_filters),
-        "partial": _build_url("/web/results", status="partial", **stats_filters),
-        "failed": _build_url("/web/results", status="failed", **stats_filters),
-        "pending": _build_url("/web/results", status="pending", **stats_filters),
+        "total": _build_url("/results", **stats_filters),
+        "completed": _build_url("/results", status="completed", **stats_filters),
+        "partial": _build_url("/results", status="partial", **stats_filters),
+        "failed": _build_url("/results", status="failed", **stats_filters),
+        "pending": _build_url("/results", status="pending", **stats_filters),
     }
     prev_url = None
     if offset > 0:
-        prev_url = _build_url("/web/results", offset=max(offset - limit, 0), **current_filters)
+        prev_url = _build_url("/results", offset=max(offset - limit, 0), **current_filters)
     next_url = None
     if offset + len(results) < total_count:
-        next_url = _build_url("/web/results", offset=offset + limit, **current_filters)
+        next_url = _build_url("/results", offset=offset + limit, **current_filters)
 
     return theme.render(
-        "results.html",
+        "catasto/results.html",
         request,
         user=user,
         results=results,
@@ -2282,7 +2370,7 @@ async def get_workflow_result_record(request_id: str) -> Optional[dict]:
     return None
 
 
-@router.get("/web/results/{request_id}", response_class=HTMLResponse)
+@router.get("/results/{request_id}", response_class=HTMLResponse)
 async def web_result_detail(request: Request, request_id: str, user=Depends(_require_auth)):
     """Single result detail page."""
     theme = _get_theme(request)
@@ -2392,7 +2480,7 @@ async def find_workflow_runs(status: Optional[str] = None, limit: int = 50, offs
     return []
 
 
-@router.get("/web/workflows", response_class=HTMLResponse)
+@router.get("/workflows", response_class=HTMLResponse)
 async def web_workflows(
     request: Request,
     user=Depends(_require_auth),
@@ -2424,7 +2512,7 @@ async def web_workflows(
     )
 
 
-@router.get("/web/workflows/{workflow_id}", response_class=HTMLResponse)
+@router.get("/workflows/{workflow_id}", response_class=HTMLResponse)
 async def web_workflow_detail(request: Request, workflow_id: str, user=Depends(_require_auth)):
     """Workflow detail page — proxied from opendata."""
     theme = _get_theme(request)
@@ -2472,7 +2560,7 @@ async def web_profile(request: Request, user=Depends(_require_auth)):
     return theme.render("profile.html", request, user=user or _get_user(request))
 
 
-@router.get("/web/about", response_class=HTMLResponse)
+@router.get("/about", response_class=HTMLResponse)
 async def web_about(request: Request):
     """About page (public)."""
     theme = _get_theme(request)
@@ -2480,7 +2568,7 @@ async def web_about(request: Request):
     return theme.render("about.html", request, user=user)
 
 
-@router.get("/web/privacy", response_class=HTMLResponse)
+@router.get("/privacy", response_class=HTMLResponse)
 async def web_privacy(request: Request):
     """Privacy policy (public)."""
     theme = _get_theme(request)
@@ -2488,13 +2576,7 @@ async def web_privacy(request: Request):
     return theme.render("legal_privacy.html", request, user=user)
 
 
-@router.get("/privacy", include_in_schema=False)
-async def privacy_redirect():
-    """Target of the theme's cookie-modal/menu privacy links."""
-    return RedirectResponse(url="/web/privacy")
-
-
-@router.get("/web/guide", response_class=HTMLResponse)
+@router.get("/guide", response_class=HTMLResponse)
 async def web_guide(request: Request):
     """User guide for the SISTER portal."""
     theme = _get_theme(request)
@@ -2502,7 +2584,7 @@ async def web_guide(request: Request):
     return theme.render("guide.html", request, user=user)
 
 
-@router.get("/web/cheatsheet", response_class=HTMLResponse)
+@router.get("/cheatsheet", response_class=HTMLResponse)
 async def web_cheatsheet(request: Request):
     """Quick-reference cheat sheet for SISTER."""
     theme = _get_theme(request)
@@ -2510,7 +2592,7 @@ async def web_cheatsheet(request: Request):
     return theme.render("cheatsheet.html", request, user=user)
 
 
-@router.get("/web/glossary", response_class=HTMLResponse)
+@router.get("/glossary", response_class=HTMLResponse)
 async def web_glossary(request: Request):
     """Glossary of document types and cadastral terms."""
     theme = _get_theme(request)
@@ -2519,7 +2601,109 @@ async def web_glossary(request: Request):
 
 
 # ---------------------------------------------------------------------------
-# Document browser + structured viewers  (/web/documents/*)
+# 3D building view (Google Photorealistic 3D Maps, the data behind Google Earth)
+# ---------------------------------------------------------------------------
+
+_GEOCODE_CACHE: dict[str, dict[str, Any] | None] = {}
+_NOMINATIM_URL = "https://nominatim.openstreetmap.org/search"
+
+
+async def _geocode_address(query: str) -> dict[str, Any] | None:
+    """Resolve an address to coordinates with OpenStreetMap Nominatim (no API key); results are cached per process."""
+    key = re.sub(r"\s+", " ", query).strip().casefold()
+    if key in _GEOCODE_CACHE:
+        return _GEOCODE_CACHE[key]
+    import httpx
+
+    try:
+        async with httpx.AsyncClient(timeout=6.0, headers={"User-Agent": "sister/1 (info@aecs4u.com)"}) as client:
+            response = await client.get(
+                _NOMINATIM_URL, params={"q": query, "format": "jsonv2", "limit": 1, "countrycodes": "it"}
+            )
+            response.raise_for_status()
+            rows = response.json()
+    except Exception as exc:
+        logger.warning("Geocoding unavailable: %s", type(exc).__name__)
+        return None  # not cached: a network error should not stick
+    hit = None
+    if rows:
+        hit = {
+            "lat": float(rows[0]["lat"]),
+            "lng": float(rows[0]["lon"]),
+            "label": rows[0].get("display_name", query),
+            "kind": rows[0].get("type", ""),
+        }
+    _GEOCODE_CACHE[key] = hit
+    return hit
+
+
+@router.get("/3d", response_class=HTMLResponse)
+async def web_building_3d(
+    request: Request,
+    q: str = "Via El Alamein 2, 48124 Ravenna",
+    lat: Optional[float] = None,
+    lng: Optional[float] = None,
+    user=Depends(_require_auth),
+):
+    """3D view of a building: Google Photorealistic 3D Maps centred on an address (or on explicit ``lat``/``lng``)."""
+    theme = _get_theme(request)
+    query = q.strip()[:200]
+    place: dict[str, Any] | None = None
+    if lat is not None and lng is not None and -90 <= lat <= 90 and -180 <= lng <= 180:
+        place = {"lat": lat, "lng": lng, "label": query or f"{lat:.6f}, {lng:.6f}", "kind": "coordinate"}
+    elif query:
+        place = await _geocode_address(query)
+    api_key = os.getenv("GOOGLE_MAPS_API_KEY", "").strip()
+    earth_url = ""
+    if place:
+        # Opens the same view in Google Earth Web (cannot be embedded: it sends X-Frame-Options).
+        earth_url = f"https://earth.google.com/web/@{place['lat']:.7f},{place['lng']:.7f},0a,300d,35y,0h,60t,0r"
+    return theme.render(
+        "building.html",
+        request,
+        user=user,
+        query=query,
+        place=place,
+        maps_api_key=api_key,
+        earth_url=earth_url,
+    )
+
+
+@router.get("/3d/kmz")
+async def web_building_3d_kmz(
+    lat: float,
+    lng: float,
+    radius: int = 80,
+    name: str = "Edificio",
+    user=Depends(_require_auth),
+):
+    """KMZ of the OpenStreetMap building volumes around a point (viewer on ``/3d`` and download)."""
+    from fastapi import HTTPException
+    from fastapi.responses import Response
+
+    from .building_kmz import OverpassUnavailable, build_kmz, fetch_buildings
+
+    if not (-90 <= lat <= 90 and -180 <= lng <= 180):
+        raise HTTPException(status_code=422, detail="Coordinate non valide")
+    radius = max(20, min(radius, 300))
+    label = name.strip()[:120] or "Edificio"
+    try:
+        data = await fetch_buildings(lat, lng, radius)
+    except OverpassUnavailable:
+        raise HTTPException(status_code=503, detail="OpenStreetMap (Overpass) non disponibile, riprova tra poco")
+    payload, count = build_kmz(data, lat, lng, label, radius=radius)
+    if not count:
+        raise HTTPException(status_code=404, detail="Nessun edificio trovato in OpenStreetMap vicino a questo punto")
+    filename = re.sub(r"[^a-z0-9]+", "_", label.casefold()).strip("_") or "edificio"
+    return Response(
+        payload,
+        media_type="application/vnd.google-earth.kmz",
+        headers={"Content-Disposition": f'attachment; filename="{filename}_3d.kmz"', "Cache-Control": "private, max-age=600"},
+    )
+
+
+# ---------------------------------------------------------------------------
+# Document browser + structured viewers  (/documents/*)
 # ---------------------------------------------------------------------------
 
 
@@ -2613,12 +2797,12 @@ async def _render_doc_from_db(doc: dict, request, theme, user, force_template: s
         key in xml_p
         for key in ("VisuraFabbricatiStorica", "VisuraFabbricatiAttuale", "VisuraFabbricatiSintetica", "VisuraFabbricati")
     ):
-        template = "visura_fabbricati.html"
+        template = "catasto/visura_fabbricati.html"
     elif any(
         key in xml_p
         for key in ("VisuraSoggettoAttuale", "VisuraSoggettoStorica", "VisuraSoggettoSintetica", "VisuraSoggetto")
     ):
-        template = "visura_soggetto.html"
+        template = "catasto/visura_soggetto.html"
     elif any(
         key in xml_p
         for key in (
@@ -2631,7 +2815,7 @@ async def _render_doc_from_db(doc: dict, request, theme, user, force_template: s
             "VisuraTerreno",
         )
     ):
-        template = "visura_terreni.html"
+        template = "catasto/visura_terreni.html"
     else:
         template = "result_detail.html"
     if template == "result_detail.html":
@@ -2648,7 +2832,7 @@ async def _render_doc_from_db(doc: dict, request, theme, user, force_template: s
         request,
         user=user,
         doc=doc,
-        google_maps=await _google_maps_context(doc) if template == "visura_fabbricati.html" else None,
+        google_maps=await _google_maps_context(doc) if template == "catasto/visura_fabbricati.html" else None,
     )
 
 
@@ -2725,7 +2909,7 @@ async def _google_maps_context(doc: dict) -> dict[str, Any] | None:
             context["related_subunits"] = [
                 {
                     **sibling,
-                    "url": f"/web/documents/{sibling['document_id']}",
+                    "url": f"/documents/{sibling['document_id']}",
                 }
                 for sibling in siblings
             ]
@@ -2949,7 +3133,7 @@ def _doc_as_result(doc: dict) -> dict:
     }
 
 
-@router.get("/web/documents/view/{path:path}", response_class=HTMLResponse)
+@router.get("/documents/view/{path:path}", response_class=HTMLResponse)
 async def web_document_view(request: Request, path: str, user=Depends(_require_auth)):
     """Parse a p7m/xml file from the data directory and render it in the matching visura template."""
     from pathlib import Path
@@ -3051,12 +3235,12 @@ async def web_document_view(request: Request, path: str, user=Depends(_require_a
         key in xml_parsed
         for key in ("VisuraFabbricatiStorica", "VisuraFabbricatiAttuale", "VisuraFabbricatiSintetica", "VisuraFabbricati")
     ):
-        template = "visura_fabbricati.html"
+        template = "catasto/visura_fabbricati.html"
     elif any(
         key in xml_parsed
         for key in ("VisuraSoggettoAttuale", "VisuraSoggettoStorica", "VisuraSoggettoSintetica", "VisuraSoggetto")
     ):
-        template = "visura_soggetto.html"
+        template = "catasto/visura_soggetto.html"
     elif any(
         key in xml_parsed
         for key in (
@@ -3069,7 +3253,7 @@ async def web_document_view(request: Request, path: str, user=Depends(_require_a
             "VisuraTerreno",
         )
     ):
-        template = "visura_terreni.html"
+        template = "catasto/visura_terreni.html"
     else:
         template = "result_detail.html"
 
@@ -3078,18 +3262,18 @@ async def web_document_view(request: Request, path: str, user=Depends(_require_a
         request,
         user=user,
         doc=doc,
-        google_maps=await _google_maps_context(doc) if template == "visura_fabbricati.html" else None,
+        google_maps=await _google_maps_context(doc) if template == "catasto/visura_fabbricati.html" else None,
     )
 
 
-@router.get("/web/files")
-@router.get("/web/files/{path:path}")
+@router.get("/files")
+@router.get("/files/{path:path}")
 async def web_files_redirect(request: Request, path: str = ""):
-    target = "/web/documents" + (f"/{path}" if path else "")
+    target = "/documents" + (f"/{path}" if path else "")
     return RedirectResponse(url=target, status_code=301)
 
 
-@router.post("/web/documents/export-named")
+@router.post("/documents/export-named")
 @_audited("documents.export_named")
 async def web_documents_export_named(request: Request, user=Depends(_require_auth)):
     """Copy all documents to documents/named/ using the display name stored in oggetto."""
@@ -3132,7 +3316,7 @@ async def web_documents_export_named(request: Request, user=Depends(_require_aut
     }
 
 
-@router.get("/web/documents/{doc_id}/view")
+@router.get("/documents/{doc_id}/view")
 async def web_document_view_by_id(request: Request, doc_id: int, user=Depends(_require_auth)):
     """Serve the document file inline (for in-browser PDF viewing)."""
     from pathlib import Path
@@ -3153,7 +3337,7 @@ async def web_document_view_by_id(request: Request, doc_id: int, user=Depends(_r
     return Response(content=p.read_bytes(), media_type=media_type, headers=headers)
 
 
-@router.get("/web/documents/{doc_id}/download")
+@router.get("/documents/{doc_id}/download")
 async def web_document_download(request: Request, doc_id: int, user=Depends(_require_auth)):
     """Download the original file backing a DB-indexed document."""
     from pathlib import Path
@@ -3511,7 +3695,7 @@ def _build_plan_data(file_path: str) -> dict | None:
     return result
 
 
-@router.get("/web/documents/{doc_id}/plan")
+@router.get("/documents/{doc_id}/plan")
 async def web_document_plan(doc_id: int, request: Request, user=Depends(_require_auth)):
     """Return parsed cadastral entity data for CXF/CMF/DXF planimetrie."""
     from fastapi import HTTPException
@@ -3529,7 +3713,7 @@ async def web_document_plan(doc_id: int, request: Request, user=Depends(_require
     return JSONResponse(result)
 
 
-@router.get("/web/documents/{doc_id}/geojson")
+@router.get("/documents/{doc_id}/geojson")
 async def web_document_geojson(doc_id: int, request: Request, user=Depends(_require_auth)):
     """Return the GeoJSON payload extracted from a planimetria P7M document."""
     from fastapi import HTTPException
@@ -3682,7 +3866,7 @@ async def _backfill_document_metadata(base: Path, parsed_by_stem: dict) -> None:
         logger.info("Rescan backfill: %d path(s) fixed, %d metadata row(s) created", fixed, backfilled)
 
 
-@router.post("/web/documents/rescan", response_class=HTMLResponse)
+@router.post("/documents/rescan", response_class=HTMLResponse)
 async def web_documents_rescan(request: Request, user=Depends(_require_admin)):
     """Scan the documents directory for files not yet indexed in the DB and register them."""
     started = datetime.now(timezone.utc)
@@ -3705,7 +3889,7 @@ async def web_documents_rescan(request: Request, user=Depends(_require_admin)):
         started_at=started,
         client_ip=_client_ip(request),
     )
-    return RedirectResponse("/web/documents", status_code=303)
+    return RedirectResponse("/documents", status_code=303)
 
 
 async def _rescan_documents_dir() -> int | None:
@@ -3832,7 +4016,7 @@ async def _rescan_documents_dir() -> int | None:
 _documents_import_lock = asyncio.Lock()
 
 
-@router.post("/web/documents/import", response_class=JSONResponse)
+@router.post("/documents/import", response_class=JSONResponse)
 async def web_documents_import(request: Request, force: bool = False, user=Depends(_require_admin)):
     """Index new files, then fill the typed tables from their XML (what ``sister db backfill xml`` does).
 
@@ -3866,26 +4050,27 @@ async def web_documents_import(request: Request, force: bool = False, user=Depen
     return JSONResponse({"indexed": indexed, "xml": xml, "force": force})
 
 
-@router.get("/web/documents", response_class=HTMLResponse)
-@router.get("/web/documents/{path:path}", response_class=HTMLResponse)
+@router.get("/documents", response_class=HTMLResponse)
+@router.get("/documents/{path:path}", response_class=HTMLResponse)
 async def web_documents(
     request: Request, path: str = "", template: str = "", view: str = "", user=Depends(_require_auth)
 ):
     """Documents hub — single-step query responses.
 
-    Root (``/web/documents``) shows the hierarchical per-type index built from the
-    indexed ``visura_documents`` rows. ``?view=files`` browses the raw documents
-    filesystem instead. Pure-integer paths dispatch to the single-document viewer.
+    Root (``/documents``) shows the category, location, and filesystem views in
+    one tabbed hub. ``?view=map`` and ``?view=files`` select the matching tab;
+    filesystem paths keep their location while browsing. Pure-integer paths
+    dispatch to the single-document viewer.
 
     Query params:
-        view: ``files`` to show the raw filesystem browser at the root.
+        view: ``map`` to select the location tab or ``files`` to select the filesystem tab.
         template: force a viewer template, e.g. ``?template=result_detail`` for
             the exhaustive field-by-field view.
     """
 
     theme = _get_theme(request)
 
-    # Normalize trailing slash (e.g. /web/documents/21/ → "21")
+    # Normalize trailing slash (e.g. /documents/21/ → "21")
     path = path.strip("/")
 
     # Integer path → DB-backed structured single-document viewer
@@ -3966,15 +4151,15 @@ async def web_documents(
                     "id": file_id,
                     "parsed": parsed,
                     "file_url": (
-                        f"/web/documents/{file_id}/view" if file_id else None
+                        f"/documents/{file_id}/view" if file_id else None
                     ),
-                    "download_url": f"/web/documents/{file_id}/download" if file_id else None,
+                    "download_url": f"/documents/{file_id}/download" if file_id else None,
                 }
 
             inspection_documents = await asyncio.gather(*(_parse_sibling(path) for path in siblings))
             ocular_extraction = await get_document_structured_extraction(int(doc["id"]))
             return theme.render(
-                "ispezione_ipotecaria.html",
+                "catasto/ispezione_ipotecaria.html",
                 request,
                 user=user,
                 doc=doc,
@@ -3984,28 +4169,19 @@ async def web_documents(
             )
         return await _render_doc_from_db(doc, request, theme, user, force_template=template or None)
 
-    # Root with no explicit path → hierarchical document index (unless browsing files)
-    if not path and view != "files":
+    # The cadastral map remains a separate experience. All document browser
+    # views share the tabbed documents hub below.
+    if not path and view == "cadastral-map":
         files = await get_all_documents(limit=10000)
         logical = _collapse_to_logical_docs(files)
-        if view == "map":
-            prop_map = _build_property_map(logical)
-            return theme.render(
-                "documents_map.html",
-                request,
-                user=user,
-                prop_map=prop_map,
-                total=len(logical),
-                n_files=len(files),
-            )
-        tree = _build_document_tree(logical)
         return theme.render(
-            "documents_index.html",
+            "documents_map.html",
             request,
             user=user,
-            tree=tree,
             total=len(logical),
             n_files=len(files),
+            land_registry_api_base="/land-registry/api",
+            land_registry_static_base="/land-registry/static",
         )
 
     base = _files_base()
@@ -4086,16 +4262,38 @@ async def web_documents(
     n_dirs = sum(1 for e in entries if e["is_dir"])
     n_files = len(entries) - n_dirs
 
+    active_view = (
+        "files"
+        if path or view == "files"
+        else "location"
+        if view in ("map", "tree")
+        else "categories"
+    )
+    try:
+        document_files = await get_all_documents(limit=10000)
+    except Exception:
+        if active_view != "files":
+            raise
+        logger.exception("Document index unavailable while opening filesystem browser")
+        document_files = []
+    logical = _collapse_to_logical_docs(document_files)
+    _link_related_visura_docs(logical)
+    tree = _build_document_tree(logical)
+    prop_map = _build_property_map(logical)
     return theme.render(
-        "files_browser.html",
+        "documents.html",
         request,
         user=user,
+        tree=tree,
+        prop_map=prop_map,
+        total=len(logical),
+        document_file_count=len(document_files),
+        active_view=active_view,
         entries=entries,
         current_path=path,
         breadcrumbs=breadcrumbs,
-        base_name=base.name,
         n_dirs=n_dirs,
-        n_files=n_files,
+        fs_n_files=n_files,
         total_size=_human_size(total_size) if total_size else None,
     )
 
@@ -4118,7 +4316,7 @@ def _safe_dossier_path(path: str) -> "Path":
     return target
 
 
-@router.get("/web/dossiers/view/{path:path}", response_class=HTMLResponse)
+@router.get("/dossiers/view/{path:path}", response_class=HTMLResponse)
 async def web_dossier_view(request: Request, path: str, user=Depends(_require_auth)):
     """Render a single dossier JSON via the result_detail template."""
     import json as _json
@@ -4146,13 +4344,13 @@ async def web_dossier_view(request: Request, path: str, user=Depends(_require_au
     return theme.render("result_detail.html", request, user=user, result=result, request_id=target.name)
 
 
-@router.get("/web/dossiers", response_class=HTMLResponse)
-@router.get("/web/dossiers/{path:path}", response_class=HTMLResponse)
+@router.get("/dossiers", response_class=HTMLResponse)
+@router.get("/dossiers/{path:path}", response_class=HTMLResponse)
 async def web_dossiers(request: Request, path: str = "", download: str = "", user=Depends(_require_auth)):
     """Dossiers hub — multi-step (workflow) and single-step query responses.
 
     Root lists the dossier JSON files; a file path serves the raw JSON
-    (``?download=1`` forces an attachment). Use /web/dossiers/view/<file> for the
+    (``?download=1`` forces an attachment). Use /dossiers/view/<file> for the
     rendered view.
     """
     theme = _get_theme(request)
@@ -4195,7 +4393,7 @@ async def web_dossiers(request: Request, path: str = "", download: str = "", use
 # ---------------------------------------------------------------------------
 
 
-@router.get("/web/browser", response_class=HTMLResponse)
+@router.get("/browser", response_class=HTMLResponse)
 async def web_browser(request: Request, user=Depends(_require_admin)):
     """Browser session control panel."""
     from .main import visura_service
@@ -4219,7 +4417,7 @@ async def web_browser(request: Request, user=Depends(_require_admin)):
     return theme.render("browser_control.html", request, user=user, status=status, **extra)
 
 
-@router.get("/web/browser/status", response_class=JSONResponse)
+@router.get("/browser/status", response_class=JSONResponse)
 async def web_browser_status(request: Request, user=Depends(_require_auth)):
     """JSON status for live polling from the control panel."""
     from .main import visura_service
@@ -4251,7 +4449,7 @@ async def web_browser_status(request: Request, user=Depends(_require_auth)):
     )
 
 
-@router.post("/web/browser/start", response_class=JSONResponse)
+@router.post("/browser/start", response_class=JSONResponse)
 @_audited("browser.start")
 async def web_browser_start(request: Request, user=Depends(_require_admin)):
     from .main import visura_service
@@ -4262,7 +4460,7 @@ async def web_browser_start(request: Request, user=Depends(_require_admin)):
     return JSONResponse(result)
 
 
-@router.post("/web/browser/stop", response_class=JSONResponse)
+@router.post("/browser/stop", response_class=JSONResponse)
 @_audited("browser.stop")
 async def web_browser_stop(request: Request, force: bool = False, user=Depends(_require_admin)):
     from .main import visura_service
@@ -4273,7 +4471,7 @@ async def web_browser_stop(request: Request, force: bool = False, user=Depends(_
     return JSONResponse(result)
 
 
-@router.post("/web/browser/restart", response_class=JSONResponse)
+@router.post("/browser/restart", response_class=JSONResponse)
 @_audited("browser.restart")
 async def web_browser_restart(request: Request, user=Depends(_require_admin)):
     from .main import visura_service
@@ -4284,7 +4482,7 @@ async def web_browser_restart(request: Request, user=Depends(_require_admin)):
     return JSONResponse(result)
 
 
-@router.post("/web/browser/launch-chrome", response_class=JSONResponse)
+@router.post("/browser/launch-chrome", response_class=JSONResponse)
 @_audited("browser.launch_chrome")
 async def web_browser_launch_chrome(request: Request, user=Depends(_require_admin)):
     """Launch Google Chrome with CDP if not already running, then start the browser session."""
@@ -4384,7 +4582,7 @@ async def web_browser_launch_chrome(request: Request, user=Depends(_require_admi
 # ---------------------------------------------------------------------------
 
 
-@router.post("/web/api/batch", response_class=JSONResponse)
+@router.post("/api/ui/batch", response_class=JSONResponse)
 async def web_api_batch(request: Request, user=Depends(_require_auth)):
     """Parse CSV text and submit each row as a separate API request."""
     import csv
@@ -4481,7 +4679,7 @@ async def web_api_batch(request: Request, user=Depends(_require_auth)):
     )
 
 
-@router.post("/web/api/workflow/stream")
+@router.post("/api/ui/workflow/stream")
 async def web_api_workflow_stream(request: Request, user=Depends(_require_auth)):
     """Run a multi-step workflow through Sister's own query API and stream progress."""
     body = await request.json()
@@ -4511,15 +4709,15 @@ def _internal_api_headers() -> dict:
 
 
 def _web_query_command(endpoint: str) -> Optional[str]:
-    """The ``sister query`` command a /web/forms endpoint submits (None for workflows, batch, ipotecaria...)."""
+    """The ``sister query`` command a /forms endpoint submits (None for workflows, batch, ipotecaria...)."""
     from .query_forms import command_for_path
 
     return command_for_path("/visura/" + endpoint.strip("/")) if endpoint.strip("/") else "search"
 
 
-@router.post("/web/api/{endpoint:path}", response_class=JSONResponse)
+@router.post("/api/ui/{endpoint:path}", response_class=JSONResponse)
 async def web_api_proxy(endpoint: str, request: Request, user=Depends(_require_auth)):
-    """Submit /web/forms requests: single-step queries go through the CLI's client code, the rest is proxied."""
+    """Submit /forms requests: single-step queries go through the CLI's client code, the rest is proxied."""
     import os
 
     import httpx
@@ -4554,7 +4752,7 @@ async def web_api_proxy(endpoint: str, request: Request, user=Depends(_require_a
     return JSONResponse(content=content, status_code=resp.status_code)
 
 
-@router.get("/web/api/visura/{request_id}", response_class=JSONResponse)
+@router.get("/api/ui/visura/{request_id}", response_class=JSONResponse)
 async def web_api_poll(request_id: str, request: Request, user=Depends(_require_auth)):
     """Poll for result status (proxy)."""
     import httpx

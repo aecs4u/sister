@@ -20,44 +20,44 @@
     </button>
     <div class="sidebar-group-content" id="sidebar-group-main">
         <div class="nav-item">
-            <a class="nav-link{% if request.url.path == '/web/' %} active{% endif %}" href="/web/">
+            <a class="nav-link{% if request.url.path == '/' %} active{% endif %}" href="/">
                 <i class="fas fa-tachometer-alt"></i>
                 <span>Dashboard</span>
             </a>
         </div>
         <div class="nav-item">
-            <a class="nav-link{% if '/web/forms' in request.url.path %} active{% endif %}" href="/web/forms">
+            <a class="nav-link{% if '/forms' in request.url.path %} active{% endif %}" href="/forms">
                 <i class="fas fa-clipboard-list"></i>
                 <span>Query</span>
             </a>
         </div>
         <div class="nav-item">
-            <a class="nav-link{% if '/web/results' in request.url.path %} active{% endif %}" href="/web/results">
+            <a class="nav-link{% if '/results' in request.url.path %} active{% endif %}" href="/results">
                 <i class="fas fa-database"></i>
                 <span>Risultati</span>
             </a>
         </div>
         <div class="nav-item">
-            <a class="nav-link{% if '/web/workflows' in request.url.path %} active{% endif %}" href="/web/workflows">
+            <a class="nav-link{% if '/workflows' in request.url.path %} active{% endif %}" href="/workflows">
                 <i class="fas fa-diagram-project"></i>
                 <span>Workflow OpenData</span>
             </a>
         </div>
         <div class="nav-item">
-            <a class="nav-link{% if '/web/documents' in request.url.path %} active{% endif %}" href="/web/documents">
+            <a class="nav-link{% if '/documents' in request.url.path %} active{% endif %}" href="/documents">
                 <i class="fas fa-file-alt"></i>
                 <span>Documenti</span>
             </a>
         </div>
         <div class="nav-item">
-            <a class="nav-link{% if '/web/dossiers' in request.url.path %} active{% endif %}" href="/web/dossiers">
+            <a class="nav-link{% if '/dossiers' in request.url.path %} active{% endif %}" href="/dossiers">
                 <i class="fas fa-folder-open"></i>
                 <span>Dossier</span>
             </a>
         </div>
         {% if can_admin(user) %}
         <div class="nav-item">
-            <a class="nav-link{% if '/web/browser' in request.url.path %} active{% endif %}" href="/web/browser">
+            <a class="nav-link{% if '/browser' in request.url.path %} active{% endif %}" href="/browser">
                 <i class="fas fa-window-maximize"></i>
                 <span>Browser</span>
             </a>
@@ -78,25 +78,25 @@
     </button>
     <div class="sidebar-group-content" id="sidebar-group-info">
         <div class="nav-item">
-            <a class="nav-link{% if request.url.path == '/web/guide' %} active{% endif %}" href="/web/guide">
+            <a class="nav-link{% if request.url.path == '/guide' %} active{% endif %}" href="/guide">
                 <i class="fas fa-book-open"></i>
                 <span>Guida Utente</span>
             </a>
         </div>
         <div class="nav-item">
-            <a class="nav-link{% if request.url.path == '/web/cheatsheet' %} active{% endif %}" href="/web/cheatsheet">
+            <a class="nav-link{% if request.url.path == '/cheatsheet' %} active{% endif %}" href="/cheatsheet">
                 <i class="fas fa-bolt"></i>
                 <span>Cheat Sheet</span>
             </a>
         </div>
         <div class="nav-item">
-            <a class="nav-link{% if request.url.path == '/web/glossary' %} active{% endif %}" href="/web/glossary">
+            <a class="nav-link{% if request.url.path == '/glossary' %} active{% endif %}" href="/glossary">
                 <i class="fas fa-book"></i>
                 <span>Glossario</span>
             </a>
         </div>
         <div class="nav-item">
-            <a class="nav-link{% if request.url.path == '/web/about' %} active{% endif %}" href="/web/about">
+            <a class="nav-link{% if request.url.path == '/about' %} active{% endif %}" href="/about">
                 <i class="fas fa-building"></i>
                 <span>Informazioni</span>
             </a>
@@ -108,7 +108,7 @@
             </a>
         </div>
         <div class="nav-item">
-            <a class="nav-link{% if request.url.path == '/web/privacy' %} active{% endif %}" href="/web/privacy">
+            <a class="nav-link{% if request.url.path == '/privacy' %} active{% endif %}" href="/privacy">
                 <i class="fas fa-shield-alt"></i>
                 <span>Privacy</span>
             </a>
@@ -121,8 +121,8 @@
 <div class="footer-section">
     <h2 class="footer-title h6">SISTER</h2>
     <ul class="footer-links">
-        <li><a href="/web/about"><i class="fas fa-info-circle"></i>Informazioni</a></li>
-        <li><a href="/web/privacy"><i class="fas fa-shield-alt"></i>Informativa privacy</a></li>
+        <li><a href="/about"><i class="fas fa-info-circle"></i>Informazioni</a></li>
+        <li><a href="/privacy"><i class="fas fa-shield-alt"></i>Informativa privacy</a></li>
         <li><a href="/docs"><i class="fas fa-book"></i>API Documentation</a></li>
     </ul>
 </div>

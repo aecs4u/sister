@@ -66,7 +66,7 @@
           return response.json();
         })
         .then(function (data) {
-          window.location.assign(data.redirect_url || login.elements.next.value || '/web/');
+          window.location.assign(data.redirect_url || login.elements.next.value || '/');
         })
         .catch(function (failure) {
           busy(submit, false);

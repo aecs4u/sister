@@ -12,7 +12,7 @@ SISTER is a FastAPI service + Typer CLI for automated cadastral data extraction 
   - `services.py` — VisuraService (queue, worker, cache)
   - `browser.py` — BrowserManager: attaches to the SISTER session, dispatches the portal automations
   - `query_forms.py` — single definition of every single-step query (see "Single-step queries")
-  - `form_config.py` — `/web/forms` groups (single-step params are generated from `query_forms.py`)
+  - `form_config.py` — `/forms` groups (single-step params are generated from `query_forms.py`)
   - `models.py` — Pydantic input models, dataclasses, exceptions
   - `db_models.py` — SQLModel ORM table classes
   - `database.py` — Async SQLAlchemy engine, SQLModel sessions, cache functions
@@ -22,6 +22,11 @@ SISTER is a FastAPI service + Typer CLI for automated cadastral data extraction 
   - `client.py` — VisuraClient async HTTP client
   - `mcp_server.py` — optional local MCP server over stdio; wraps `VisuraClient` and `query_forms.py`
   - `cli.py` — Typer CLI with query, db, and top-level commands
+  - `building_kmz.py` + `building_overrides.json` — OSM footprints → 3D KMZ (extruded volumes, roads, optional gabled roofs);
+    served by `/3d/kmz`, drawn by `/3d` (`templates/building.html`, `static/js/building_kmz_viewer.js` with self-hosted
+    three.js; "Vista realistica" uses the procedural textures in `building_textures.js`). Verified facts (floors, roof ridges,
+    facade palette) per OSM way go in the overrides file; the Google 3D tiles view needs `GOOGLE_MAPS_API_KEY` (see `.env.example`).
+    Google Earth/Street View imagery is only looked at by eye, never traced or copied into the model.
 - **`tests/`** — pytest test suite
 - **`alembic/`** — Database migrations
 - **`data/`** — documenti, dossier e output generati
@@ -88,7 +93,7 @@ uv run sister-mcp
 - uvicorn runs with `--reload` over every `*.py` (also `scripts/`, `tests/`): editing Python while a batch/crawler
   runs restarts the service and drops the request in flight. A restart does **not** log out (CDP mode).
 - Operational endpoints need `X-API-Key` when `API_KEY` is set (CLI: `VISURA_API_KEY`).
-- Web UI (`/web/*`, `/profile`) **fails closed** (`sister/web.py::_require_auth`): browsers are redirected to `/auth/login?next=…`,
+- Web UI routes (including `/`, `/profile`) **fail closed** (`sister/web.py::_require_auth`): browsers are redirected to `/auth/login?next=…`,
   other clients get 401. Only an explicit `REQUIRE_AUTHENTICATION=false` (dev) lets anonymous requests through; `.env` is `true`
   and `tests/conftest.py` sets the switch for the suite. Local logins: `local_users.txt` (outside the repo).
 - **Templates must not use inline event handlers** (`onclick="..."`): the CSP blocks them (`script-src` needs the per-request nonce,
@@ -103,7 +108,7 @@ uv run sister-mcp
 - Front-end assets are self-hosted in `sister/static/vendor/` (official Bootstrap 5.3.2, Font Awesome 6.5.0, Tabulator 6.3.1,
   Chart.js 4.4.4 — do not use crowdaction's trimmed CSS copies). No third-party requests remain (fonts included).
 - `OPENDATA_API_URL` (workflow storage, separate service) is called with a 1 s connect / 4 s total timeout and a 30 s circuit
-  breaker (`web._opendata_get`); when it is down `/web/workflows` shows a notice instead of stalling.
+  breaker (`web._opendata_get`); when it is down `/workflows` shows a notice instead of stalling.
 - Environment: keep `httpx` below 1.0 (`pyproject.toml` pins `<1`; 1.0 pre-releases have no `AsyncClient` and break `VisuraClient`).
   Test baseline 2026-10-11 (`/opt/venv/.aecs4u_venv/bin/python -m pytest -p no:logfire --continue-on-collection-errors`):
   863 passed, 52 failed, 4 collection errors (825 passed with the same 52/4 on 2026-10-10). DB tests run on a throwaway local schema (`tests/pg_isolation.py`: `fresh_db` fixture; skipped
@@ -114,10 +119,14 @@ uv run sister-mcp
 - Saved results are kept in the database indefinitely. `RESPONSE_TTL_SECONDS` (6 h) only governs the in-memory cache; deleting
   database rows is opt-in via `DB_RETENTION_SECONDS` (default 0 = never). (It used to reuse the cache TTL, which silently purged
   jobs/responses older than 6 h every minute.) After switching `DATABASE_DSN` to an empty database, rebuild jobs/responses from
-  `outputs/` with the admin "Importa output" button on `/web/results`; it is idempotent.
+  `outputs/` with the admin "Importa output" button on `/results`; it is idempotent.
 - Logins: `LOCAL_USERS_FILE` (in `.env`) points at `local_users.sister.txt` — hashed, mode 600, git-ignored (`local_users*.txt`). Regenerate or add users with `scripts/hash_local_password.py <user>`; plain entries still work but log a warning.
 - Static files: SISTER's own `/static` assets revalidate via ETag (no long cache); only versioned `aecs4u-theme` assets are immutable.
   Presentation formatting (dates, money, enum labels) lives in `sister/display.py` as Jinja filters.
+- **Shared templates live in `aecs4u-theme`** (`catasto/forms|results|ispezione_ipotecaria|visura_*.html`, `components/{hero,nested,timeline,
+  table_filter,kpi_card,related_links}.html`); they extend `base_template`, which `main.py` sets to SISTER's `_base.html` (sidebar). Sister
+  keeps only SISTER-specific pages. Edit those in `../aecs4u-theme`, then bump the theme in `uv.lock`; SISTER's `display.py` filters are
+  required by `catasto/ispezione_ipotecaria.html`.
 - UI audit and its fixes: `docs/ui_audit_2026-10-09.md` (§1b = what changed / what is left, mostly in the aecs4u-auth/theme packages).
 - Each query sets its SISTER office through `_set_office` (NAZIONALE for persons/companies, the province for
   property queries) and verifies it; a multi-step flow calls it again to change level.
@@ -145,7 +154,7 @@ indirizzo or ipotecaria. It is never automated: `_wait_for_captcha` raises `Capt
 ## Single-step queries
 
 Defined once in `sister/query_forms.py` (portal input → parameter, submit metadata); the CLI commands,
-CLI batch, `/web/forms` and the generic API route are generated from it and submit through
+CLI batch, `/forms` and the generic API route are generated from it and submit through
 `VisuraClient.submit`. To add a query or an input, edit that table (see `docs/query_forms.md`); do not hand-write
 CLI options or web params. `uv run python -m pytest tests/test_query_forms.py` checks the spec against the
 saved portal forms in `tests/fixtures/portal_forms/`.
@@ -189,8 +198,8 @@ saved portal forms in `tests/fixtures/portal_forms/`.
   is invisible to the throwaway test schema (built from the models), so **add the Alembic revision together with the model change**
   and bump `DATABASE_REVISION` only after `alembic upgrade head` has run. Still open: the catasto comune code (`visImmSel`, XML
   `CodiceComune`) has no column in `visura_properties`; `feedback_*` drift comes from `aecs4u-domain` 0.17.0.
-- The document page (`/web/documents/<id>`) renders `doc.view` from `sister/visura_view.py` (current state, history by period,
-  ownership acts newest first) through `templates/parts/_visura_story.html`; the generic `xml_parsed` dict is only used for the
+- The document page (`/documents/<id>`) renders `doc.view` from `sister/visura_view.py` (current state, history by period,
+  ownership acts newest first) through `catasto/visura_story.html` (aecs4u-theme); the generic `xml_parsed` dict is only used for the
   "Dati completi" dump and as fallback. `IndiceMutazione` runs oldest→newest in Terreni and newest→oldest in Fabbricati.
 - Browser flow changes in `utils.py` cannot be exercised without a live SISTER session; verify them with a real run
   (`search ... --richiedi-documenti false` first: no CAPTCHA).

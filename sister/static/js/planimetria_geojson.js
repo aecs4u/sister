@@ -98,7 +98,7 @@
     var geojsonGroup = L.featureGroup().addTo(map);
     var selectedLayer = null;
 
-    fetch('/web/documents/' + DOC_ID + '/geojson')
+    fetch('/documents/' + DOC_ID + '/geojson')
         .then(function (r) {
             if (!r.ok) throw new Error('HTTP ' + r.status);
             return r.json();

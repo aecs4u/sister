@@ -12,3 +12,4 @@ time (copied from the identical versions vendored in the sibling `crowdaction` p
 | Inter (latin) | 5.2.8 | SIL OFL 1.1 (`fonts/OFL-Inter.txt`) | <https://github.com/rsms/inter> via `@fontsource/inter` |
 | Lexend (latin) | 5.2.11 | SIL OFL 1.1 (`fonts/OFL-Lexend.txt`) | <https://github.com/googlefonts/lexend> via `@fontsource/lexend` |
 | SheetJS (xlsx) | 0.18.5 | Apache-2.0 (`xlsx-0.18.5/LICENSE`) | <https://github.com/SheetJS/sheetjs> |
+| three.js | 0.160.1 | MIT (`three-0.160.1/LICENSE`) | <https://github.com/mrdoob/three.js> (`build/three.module.min.js`), used by the KMZ viewer on `/3d` |

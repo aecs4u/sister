@@ -136,13 +136,13 @@
 
     // Determine the API URL to post to
     let apiUrl;
-    if (path.startsWith('/web/api/')) {
-      // Direct proxy path (e.g. /web/api/batch) — use as-is
+    if (path.startsWith('/api/ui/')) {
+      // Direct proxy path (e.g. /api/ui/batch) — use as-is
       apiUrl = path;
     } else {
       // Sister API path (e.g. /visura/soggetto) — route through proxy
       const proxyEndpoint = path.replace(/^\/visura\//, '').replace(/^\/visura$/, '');
-      apiUrl = proxyEndpoint ? '/web/api/' + proxyEndpoint : '/web/api/';
+      apiUrl = proxyEndpoint ? '/api/ui/' + proxyEndpoint : '/api/ui/';
     }
 
     // Collect form parameters (inputs, selects, and textareas) of the selected endpoint
@@ -269,7 +269,7 @@
 
     while (true) {
       try {
-        const res = await fetch('/web/api/visura/' + requestId, { signal: signal });
+        const res = await fetch('/api/ui/visura/' + requestId, { signal: signal });
         const data = await res.json();
 
         if (data.status === 'completed' || data.status === 'error' || data.status === 'expired' || data.status === 'needs_human') {
@@ -303,7 +303,7 @@
     // Initialise the accordion container
     if (pvContainer) pvContainer.innerHTML = '<div class="accordion" id="' + accId + '"></div>';
 
-    const res = await fetch('/web/api/workflow/stream', {
+    const res = await fetch('/api/ui/workflow/stream', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),

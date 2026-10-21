@@ -364,8 +364,8 @@ try:
         auth_config = AuthConfig(
             AECS4U_SITE_ID="sister",
             AECS4U_SITE_NAME="SISTER",
-            CLERK_AFTER_SIGN_IN_URL="/web/",
-            CLERK_AFTER_SIGN_UP_URL="/web/",
+            CLERK_AFTER_SIGN_IN_URL="/",
+            CLERK_AFTER_SIGN_UP_URL="/",
         )
         require_auth = os.getenv("REQUIRE_AUTHENTICATION", "true").lower() not in ("false", "0", "no")
         # Per-path rate limits: /auth/* (login brute force) is much stricter than normal browsing/polling. The client
@@ -597,6 +597,8 @@ try:
         token = _csrf_token(ctx.get("request"))
         return Markup(f'<input type="hidden" name="{_CSRF_FIELD}" value="{token}">') if token else Markup("")
 
+    # Theme pages (catasto/forms.html, catasto/results.html) extend this shell, which carries the SISTER sidebar.
+    theme_setup.templates.env.globals["base_template"] = "_base.html"
     theme_setup.templates.env.globals["csrf_token"] = _csrf_token
     theme_setup.templates.env.globals["csrf_input"] = _csrf_input
     # Templates hide operator-only controls with can_admin(user); a no-op until SISTER_ADMIN_USERS is configured.
@@ -739,7 +741,7 @@ async def _richiedi_generic(
     """Single-step query by search type (indirizzo, partita, nota, mappa, ...).
 
     Every other query parameter is an input of the SISTER form: the accepted ones are listed per query in
-    ``sister.query_forms`` (the same spec that generates ``sister query <command>`` and ``/web/forms``).
+    ``sister.query_forms`` (the same spec that generates ``sister query <command>`` and ``/forms``).
     """
     from .query_forms import QUERY_FORMS
 

@@ -31,7 +31,7 @@ def _fake_request():
     return SimpleNamespace(
         app=SimpleNamespace(state=SimpleNamespace(theme_setup=_FakeTheme())),
         state=SimpleNamespace(user=None),
-        url=SimpleNamespace(path="/web/results"),
+        url=SimpleNamespace(path="/results"),
     )
 
 
@@ -508,7 +508,7 @@ async def test_web_result_detail_workflow(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# /web/workflows routes
+# /workflows routes
 # ---------------------------------------------------------------------------
 
 
@@ -763,3 +763,76 @@ class TestIsDbWritable:
             assert database.is_db_writable() is True
         finally:
             database._db_writable = old
+
+
+@pytest.mark.asyncio
+async def test_building_3d_geocodes_the_address_and_builds_a_google_earth_link(monkeypatch):
+    async def _geocode(query):
+        assert query == "Via El Alamein, 48124 Ravenna"
+        return {"lat": 44.406153, "lng": 12.196336, "label": "Via El Alamein, Ravenna", "kind": "residential"}
+
+    monkeypatch.setattr(web, "_geocode_address", _geocode)
+    monkeypatch.setenv("GOOGLE_MAPS_API_KEY", "")
+
+    out = await web.web_building_3d(_fake_request(), q="Via El Alamein, 48124 Ravenna", user=None)
+
+    assert out["template"] == "building.html"
+    assert out["context"]["place"]["lat"] == 44.406153
+    assert out["context"]["maps_api_key"] == ""
+    assert out["context"]["earth_url"].startswith("https://earth.google.com/web/@44.4061530,12.1963360,")
+
+
+@pytest.mark.asyncio
+async def test_building_3d_explicit_coordinates_skip_geocoding(monkeypatch):
+    async def _boom(_query):
+        raise AssertionError("geocoder must not be called")
+
+    monkeypatch.setattr(web, "_geocode_address", _boom)
+    out = await web.web_building_3d(_fake_request(), q="Palazzo", lat=44.4, lng=12.2, user=None)
+    assert out["context"]["place"]["kind"] == "coordinate"
+
+    out = await web.web_building_3d(_fake_request(), q="", lat=999.0, lng=12.2, user=None)
+    assert out["context"]["place"] is None and out["context"]["earth_url"] == ""
+
+
+@pytest.mark.asyncio
+async def test_building_3d_kmz_route_returns_a_kmz_and_maps_errors(monkeypatch):
+    import io
+    import zipfile
+
+    from fastapi import HTTPException
+
+    import sister.building_kmz as building_kmz
+
+    way = {
+        "type": "way",
+        "id": 1,
+        "tags": {"building": "yes", "height": "12"},
+        "geometry": [
+            {"lat": 44.4060, "lon": 12.1960},
+            {"lat": 44.4060, "lon": 12.1962},
+            {"lat": 44.4062, "lon": 12.1962},
+            {"lat": 44.4060, "lon": 12.1960},
+        ],
+    }
+
+    async def _fetch(lat, lng, radius=80, tries=3):
+        return {"elements": [way]}
+
+    monkeypatch.setattr(building_kmz, "fetch_buildings", _fetch)
+    response = await web.web_building_3d_kmz(lat=44.4061, lng=12.1961, name="Via El Alamein, Ravenna", user=None)
+    assert response.media_type == "application/vnd.google-earth.kmz"
+    assert 'filename="via_el_alamein_ravenna_3d.kmz"' in response.headers["content-disposition"]
+    kml = zipfile.ZipFile(io.BytesIO(response.body)).read("doc.kml").decode()
+    assert "<extrude>1</extrude>" in kml and ",12.0" in kml
+
+    async def _down(*_a, **_k):
+        raise building_kmz.OverpassUnavailable("Timeout")
+
+    monkeypatch.setattr(building_kmz, "fetch_buildings", _down)
+    with pytest.raises(HTTPException) as err:
+        await web.web_building_3d_kmz(lat=44.4, lng=12.2, user=None)
+    assert err.value.status_code == 503
+    with pytest.raises(HTTPException) as err:
+        await web.web_building_3d_kmz(lat=99.0, lng=12.2, user=None)
+    assert err.value.status_code == 422

@@ -99,7 +99,7 @@ class VisuraService:
         self._cleanup_task = asyncio.create_task(self._periodic_cleanup(), name="visura-cache-cleanup")
 
         if defer_auth:
-            logger.info("Browser auth differita — usa /web/browser per avviare la sessione")
+            logger.info("Browser auth differita — usa /browser per avviare la sessione")
             return
 
         if attach_only:
@@ -118,7 +118,7 @@ class VisuraService:
                 self._auth_ready = True
                 logger.info("Browser agganciato a sessione SISTER esistente")
             else:
-                logger.info("Nessuna sessione SISTER attiva — esegui scripts/ade_login.py o usa /web/browser")
+                logger.info("Nessuna sessione SISTER attiva — esegui scripts/ade_login.py o usa /browser")
         except Exception as e:
             self._auth_failed_message = f"Aggancio sessione browser fallito: {type(e).__name__}: {e}"
             logger.error("Browser attach error: %s", e)

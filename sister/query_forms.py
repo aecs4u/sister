@@ -1,7 +1,7 @@
 """Single source of truth for the inputs of every single-step SISTER query form.
 
 Each :class:`FormField` ties one input element of the real SISTER form (its ``name`` attribute) to the
-parameter exposed by the CLI (``sister query <command> --<param>``), the API and the ``/web/forms`` page.
+parameter exposed by the CLI (``sister query <command> --<param>``), the API and the ``/forms`` page.
 The CLI options, the web form parameters and the browser form-filling are all generated from this table,
 and ``tests/test_query_forms.py`` checks it against saved copies of the portal forms
 (``tests/fixtures/portal_forms/*.html``), so a form that changes on the portal shows up as a failing test.

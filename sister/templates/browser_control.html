@@ -1,6 +1,6 @@
 {% extends "_base.html" %}
-{% from "parts/_hero.html" import hero_section %}
-{% from "parts/_related_links.html" import related_pages %}
+{% from "components/hero.html" import hero_section %}
+{% from "components/related_links.html" import related_pages %}
 
 {% block page_title %}Browser Control{% endblock %}
 
@@ -11,7 +11,7 @@
 
 {% block content %}
 {# ── Hero ────────────────────────────────────────────────────────────────── #}
-{% call hero_section('Browser Control', 'fa-window-maximize', '/web/', 'Dashboard',
+{% call hero_section('Browser Control', 'fa-window-maximize', '/', 'Dashboard',
                      breadcrumb_parent='Dashboard', breadcrumb_current='Browser Control') %}
 Gestisci la sessione Playwright / autenticazione SISTER
 {% endcall %}
@@ -126,10 +126,10 @@ Gestisci la sessione Playwright / autenticazione SISTER
 </div>{# /container #}
 <div class="container-fluid">
     {{ related_pages("Torna al lavoro", [
-        ("/web/forms", "Query", "Invia una richiesta con la sessione attiva.", "fa-clipboard-list"),
-        ("/web/results", "Risultati", "Segui lo stato e apri le risposte salvate.", "fa-database"),
-        ("/web/guide", "Guida utente", "Consulta istruzioni e passaggi operativi.", "fa-book-open"),
-        ("/web/cheatsheet", "Cheat sheet", "Rivedi rapidamente i dati da preparare.", "fa-bolt")
+        ("/forms", "Query", "Invia una richiesta con la sessione attiva.", "fa-clipboard-list"),
+        ("/results", "Risultati", "Segui lo stato e apri le risposte salvate.", "fa-database"),
+        ("/guide", "Guida utente", "Consulta istruzioni e passaggi operativi.", "fa-book-open"),
+        ("/cheatsheet", "Cheat sheet", "Rivedi rapidamente i dati da preparare.", "fa-bolt")
     ]) }}
 </div>
 {% endblock %}
@@ -173,7 +173,7 @@ Gestisci la sessione Playwright / autenticazione SISTER
 
     async function poll() {
         try {
-            const r = await fetch('/web/browser/status');
+            const r = await fetch('/browser/status');
             if (r.ok) applyStatus(await r.json());
         } catch (_) {}
     }
@@ -186,7 +186,7 @@ Gestisci la sessione Playwright / autenticazione SISTER
         res.textContent = 'Avvio Chrome in corso…';
         log('→ launch-chrome', 'warn');
         try {
-            const r = await fetch('/web/browser/launch-chrome', { method: 'POST' });
+            const r = await fetch('/browser/launch-chrome', { method: 'POST' });
             const data = await r.json();
             if (data.error && !data.status) {
                 res.className = 'alert alert-danger d-block';
@@ -224,7 +224,7 @@ Gestisci la sessione Playwright / autenticazione SISTER
         log(`→ ${action}${force === true ? ' (force)' : force === false ? ' (drain)' : ''}`, 'warn');
 
         try {
-            let url = `/web/browser/${action}`;
+            let url = `/browser/${action}`;
             if (force !== undefined) url += `?force=${force}`;
             const r = await fetch(url, { method: 'POST' });
             const data = await r.json();

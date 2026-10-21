@@ -13,7 +13,7 @@ The service does **not** log in to AdE/SISTER on its own. The login lives in a s
 2. **Start the service** (`./scripts/start.sh`). At startup it attaches to a valid SISTER tab
    (`BrowserManager.attach_existing_session`); a tab left on a result page is sent back to Visure without a
    login. With no session the service stays `idle` and queued requests wait.
-3. **`/web/browser`** shows the state. *Start* attaches to an existing session first and only falls back to a full
+3. **`/browser`** shows the state. *Start* attaches to an existing session first and only falls back to a full
    login when there is none; *Stop* closes the SISTER session on the server (`close_sister_session`) and
    disconnects.
 
@@ -63,4 +63,4 @@ code makes SISTER show a new CAPTCHA: the wait repeats (up to 5 attempts, 120 s 
 ## API key
 
 When `API_KEY` is set the operational endpoints require `X-API-Key`. The CLI/`VisuraClient` read
-`VISURA_API_KEY`; the `/web/forms` proxy uses `API_KEY` itself.
+`VISURA_API_KEY`; the `/forms` proxy uses `API_KEY` itself.

@@ -55,8 +55,13 @@ class CookieCSRFMiddleware:
         request = Request(scope, receive)
         replay = receive
         path = request.url.path
+        is_exempt_path = any(
+            path.startswith(prefix)
+            and not (prefix == "/api/" and path.startswith("/api/ui/"))
+            for prefix in self.exempt_paths
+        )
         if (
-            any(path.startswith(prefix) for prefix in self.exempt_paths)
+            is_exempt_path
             or request.headers.get("authorization")
             or request.headers.get("x-api-key")
             or not request.cookies.get(self.cookie_name)

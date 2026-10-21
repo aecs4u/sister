@@ -16,7 +16,7 @@ def _request() -> Request:
         {
             "type": "http",
             "method": "POST",
-            "path": "/web/documents/import",
+            "path": "/documents/import",
             "query_string": b"",
             "headers": [(b"host", b"localhost:8025")],
             "scheme": "http",
@@ -147,11 +147,11 @@ async def test_audited_route_marks_a_503_as_error_and_a_403_as_rejected(monkeypa
 def test_audited_routes_keep_their_admin_dependency():
     """Wrapping a handler must not hide its FastAPI dependencies (the admin gate)."""
     audited = {
-        "/web/browser/start",
-        "/web/browser/stop",
-        "/web/browser/restart",
-        "/web/browser/launch-chrome",
-        "/web/documents/retrieve-missing-pairs",
+        "/browser/start",
+        "/browser/stop",
+        "/browser/restart",
+        "/browser/launch-chrome",
+        "/documents/retrieve-missing-pairs",
     }
     found = set()
     for route in web.router.routes:

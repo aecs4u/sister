@@ -11,7 +11,7 @@
 <div class="container-fluid py-3">
   <nav class="mb-3" aria-label="breadcrumb">
     <ol class="breadcrumb">
-      <li class="breadcrumb-item"><a href="/web/documents">Documenti</a></li>
+      <li class="breadcrumb-item"><a href="/documents">Documenti</a></li>
       <li class="breadcrumb-item active">{{ doc.filename or ('Doc ' ~ doc_id) }}</li>
     </ol>
   </nav>
@@ -39,7 +39,7 @@
         <button class="btn btn-sm btn-outline-primary" id="btn-fit">
           <i class="fas fa-expand-arrows-alt me-1"></i>Adatta
         </button>
-        <a href="/web/documents/{{ doc_id }}/download" class="btn btn-sm btn-outline-secondary">
+        <a href="/documents/{{ doc_id }}/download" class="btn btn-sm btn-outline-secondary">
           <i class="fas fa-download me-1"></i>P7M
         </a>
       </div>

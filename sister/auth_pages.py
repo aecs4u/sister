@@ -16,7 +16,7 @@ logger = logging.getLogger("sister")
 
 router = APIRouter(include_in_schema=False)
 
-DEFAULT_AFTER_LOGIN = "/web/"
+DEFAULT_AFTER_LOGIN = "/"
 
 
 def _safe_next(value: str | None) -> str:

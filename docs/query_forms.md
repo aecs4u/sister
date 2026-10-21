@@ -16,7 +16,7 @@ Everything else is generated from that table:
 |---|---|
 | `sister query <command>` | `_make_query_command` in `cli.py` builds the Typer command (one option per parameter, required ones from the spec) |
 | `sister query batch` | CSV columns are the command's parameters; rows go through `VisuraClient.submit` |
-| `/web/forms` | `generate_single_step_params()` in `form_config.py` builds the group parameters |
+| `/forms` | `generate_single_step_params()` in `form_config.py` builds the group parameters |
 | `POST /visura/{search_type}` | the generic route reads the query string; valid types come from the spec |
 
 CLI, batch and web all submit through **`VisuraClient.submit(command, params)`**: the dedicated arguments of
@@ -57,7 +57,7 @@ The CLI option, the web input, the API parameter and the batch column then exist
   (a form that changes on the portal makes this fail);
 * every parameter is an option of the CLI command and reaches the client call;
 * every parameter reaches the service request through the API;
-* `/web/forms` takes exactly the CLI options and renders an input for each, and its submit goes through
+* `/forms` takes exactly the CLI options and renders an input for each, and its submit goes through
   `VisuraClient.submit`.
 
 Result fixtures of each query (anonymised real responses) are in `tests/fixtures/single_step/`.

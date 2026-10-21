@@ -1,4 +1,4 @@
-"""The /web/* dependency must fail closed (docs/ui_audit_2026-10-09.md, A1/A2)."""
+"""The authenticated UI dependency must fail closed (docs/ui_audit_2026-10-09.md, A1/A2)."""
 
 import pytest
 from fastapi import HTTPException
@@ -7,7 +7,7 @@ from starlette.requests import Request
 from sister import web
 
 
-def _request(method: str = "GET", accept: str = "text/html", path: str = "/web/results") -> Request:
+def _request(method: str = "GET", accept: str = "text/html", path: str = "/results") -> Request:
     return Request(
         {
             "type": "http",
@@ -45,7 +45,7 @@ async def test_anonymous_json_client_gets_401(anonymous, monkeypatch):
 async def test_anonymous_post_gets_401_even_from_a_browser(anonymous, monkeypatch):
     monkeypatch.setenv("REQUIRE_AUTHENTICATION", "true")
     with pytest.raises(HTTPException) as exc:
-        await web._require_auth(_request(method="POST", accept="text/html", path="/web/browser/stop"))
+        await web._require_auth(_request(method="POST", accept="text/html", path="/browser/stop"))
     assert exc.value.status_code == 401
 
 
@@ -56,7 +56,7 @@ async def test_anonymous_page_navigation_redirects_to_login(anonymous, monkeypat
     monkeypatch.setenv("REQUIRE_AUTHENTICATION", "true")
     with pytest.raises(RedirectToLogin) as exc:
         await web._require_auth(_request())
-    assert exc.value.return_url.endswith("/web/results")
+    assert exc.value.return_url.endswith("/results")
 
 
 @pytest.mark.asyncio
@@ -133,15 +133,15 @@ async def test_require_admin_returns_403_for_regular_users(monkeypatch):
 
 def test_operational_routes_require_admin():
     admin_only = {
-        "/web/browser",
-        "/web/browser/start",
-        "/web/browser/stop",
-        "/web/browser/restart",
-        "/web/browser/launch-chrome",
-        "/web/results/refresh",
-        "/web/documents/rescan",
-        "/web/documents/import",
-        "/web/documents/retrieve-missing-pairs",
+        "/browser",
+        "/browser/start",
+        "/browser/stop",
+        "/browser/restart",
+        "/browser/launch-chrome",
+        "/results/refresh",
+        "/documents/rescan",
+        "/documents/import",
+        "/documents/retrieve-missing-pairs",
     }
     found = set()
     for route in web.router.routes:

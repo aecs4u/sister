@@ -1,0 +1,25 @@
+{
+  "158282549": {
+    "levels": 4,
+    "note": "Via El Alamein 2, Ravenna: 4 piani (OSM/Regione indica 5 piani e 18 m). Verificato dall'utente il 2026-10-16.",
+    "roof": {
+      "type": "gabled",
+      "pitch_deg": 17,
+      "ridges": [
+        "u",
+        "v"
+      ],
+      "note": "Tetto a croce: ala nord con colmo est-ovest, ala sud con colmo nord-sud che si innesta nel colmo dell'ala nord. Interpretazione da viste aeree (Google Earth, 06/2024): da confermare."
+    },
+    "facade": {
+      "brick": "#c49a72",
+      "band": "#e8dcb0",
+      "plinth": "#5a463f",
+      "roof": "#b5573a",
+      "window_bay_m": 3.3,
+      "garage_doors": true,
+      "balconies": true,
+      "note": "Facciata procedurale ispirata a Street View (08/2022): pannelli in laterizio con fasce crema a ogni piano, zoccolo scuro con garage, finestre e balconi. Non e' una fotografia."
+    }
+  }
+}

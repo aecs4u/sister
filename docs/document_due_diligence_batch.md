@@ -23,7 +23,7 @@ The command prints aggregate coverage counts, including complete targets, partia
 
 ## Launch order and fee gate
 
-Submit one `workflow_payload` at a time through the authenticated workflow stream endpoint (`POST /web/api/workflow/stream`) and wait for its terminal event before submitting the next row. This keeps the shared browser session serialized and makes failures attributable to a single target. The manifest is a definition only; generating it does not launch the jobs.
+Submit one `workflow_payload` at a time through the authenticated workflow stream endpoint (`POST /api/ui/workflow/stream`) and wait for its terminal event before submitting the next row. This keeps the shared browser session serialized and makes failures attributable to a single target. The manifest is a definition only; generating it does not launch the jobs.
 
 The base payloads set `include_paid_steps=false` and `auto_confirm=false`. Each row lists the portal-paid steps that would complete the full scope in `paid_steps_deferred`. After reviewing the portal fees, an approved paid run must set both flags to `true`; the workflow engine requires both. Property jobs defer `ispezione_ipotecaria` and `portfolio_ipotecaria`; person jobs defer `portfolio_ipotecaria`. Do not enable these flags as a bulk default before reviewing the fees.
 

@@ -1,5 +1,5 @@
 {% extends "_base.html" %}
-{% from "parts/_related_links.html" import related_pages %}
+{% from "components/related_links.html" import related_pages %}
 {% block page_title %}Glossario{% endblock %}
 
 {% block extra_css %}
@@ -12,7 +12,7 @@
     <div class="container-fluid">
         <nav class="mb-3" aria-label="breadcrumb">
             <ol class="breadcrumb mb-0">
-                <li class="breadcrumb-item"><a href="/web/" class="text-white-50">Dashboard</a></li>
+                <li class="breadcrumb-item"><a href="/" class="text-white-50">Dashboard</a></li>
                 <li class="breadcrumb-item active text-white">Glossario</li>
             </ol>
         </nav>
@@ -228,7 +228,7 @@
                                     <li>Il <strong>dossier</strong> è la risposta JSON della singola richiesta SISTER</li>
                                     <li>Il <strong>documento</strong> (PDF/P7M/XML) è il file ufficiale scaricato che accompagna la risposta</li>
                                     <li>Più dossier possono puntare allo stesso documento se la stessa visura è richiesta più volte</li>
-                                    <li>I documenti sono visibili in <a href="/web/documents">Documenti</a>; i dossier in <a href="/web/dossiers">Dossier</a></li>
+                                    <li>I documenti sono visibili in <a href="/documents">Documenti</a>; i dossier in <a href="/dossiers">Dossier</a></li>
                                 </ul>
                             </div>
                         </div>
@@ -253,7 +253,7 @@
 
                 <div class="alert alert-secondary small py-2 mt-2">
                     <i class="fas fa-info-circle me-1"></i>
-                    I dossier sono la fonte primaria per le query recenti. I <strong>Documenti</strong> (<code>/web/documents</code>) rappresentano invece l'archivio strutturato di tutti i file scaricati, indicizzati dal parser XML.
+                    I dossier sono la fonte primaria per le query recenti. I <strong>Documenti</strong> (<code>/documents</code>) rappresentano invece l'archivio strutturato di tutti i file scaricati, indicizzati dal parser XML.
                 </div>
             </div>
 
@@ -304,10 +304,10 @@
             </div>
 
             {{ related_pages("Esplora i dati nell'app", [
-                ("/web/documents", "Documenti", "Consulta i file catastali indicizzati e le loro schede.", "fa-folder-tree"),
-                ("/web/dossiers", "Dossier", "Apri le risposte complete salvate per le query.", "fa-folder-open"),
-                ("/web/results", "Risultati", "Trova una richiesta e segui i riferimenti ai documenti.", "fa-database"),
-                ("/web/guide", "Guida utente", "Rivedi quando usare le diverse consultazioni.", "fa-book-open")
+                ("/documents", "Documenti", "Consulta i file catastali indicizzati e le loro schede.", "fa-folder-tree"),
+                ("/dossiers", "Dossier", "Apri le risposte complete salvate per le query.", "fa-folder-open"),
+                ("/results", "Risultati", "Trova una richiesta e segui i riferimenti ai documenti.", "fa-database"),
+                ("/guide", "Guida utente", "Rivedi quando usare le diverse consultazioni.", "fa-book-open")
             ], "I termini del glossario rimandano alle aree in cui puoi consultare i dati corrispondenti.") }}
         </div>{# /col #}
     </div>{# /row #}

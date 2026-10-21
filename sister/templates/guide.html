@@ -1,5 +1,5 @@
 {% extends "_base.html" %}
-{% from "parts/_related_links.html" import related_pages %}
+{% from "components/related_links.html" import related_pages %}
 {% block page_title %}Guida Utente{% endblock %}
 
 {% block extra_css %}
@@ -12,7 +12,7 @@
     <div class="container-fluid">
         <nav class="mb-3" aria-label="breadcrumb">
             <ol class="breadcrumb mb-0">
-                <li class="breadcrumb-item"><a href="/web/" class="text-white-50">Dashboard</a></li>
+                <li class="breadcrumb-item"><a href="/" class="text-white-50">Dashboard</a></li>
                 <li class="breadcrumb-item active text-white">Guida Utente</li>
             </ol>
         </nav>
@@ -376,10 +376,10 @@
             </div>
 
             {{ related_pages("Continua la consultazione", [
-                ("/web/forms", "Avvia una ricerca", "Apri i moduli per le query catastali e i workflow.", "fa-clipboard-list"),
-                ("/web/cheatsheet", "Cheat sheet", "Rivedi i passaggi essenziali in forma rapida.", "fa-bolt"),
-                ("/web/glossary", "Glossario", "Consulta i termini catastali, ipotecari e i formati.", "fa-book"),
-                ("/web/documents", "Documenti", "Apri e confronta i file scaricati.", "fa-folder-tree")
+                ("/forms", "Avvia una ricerca", "Apri i moduli per le query catastali e i workflow.", "fa-clipboard-list"),
+                ("/cheatsheet", "Cheat sheet", "Rivedi i passaggi essenziali in forma rapida.", "fa-bolt"),
+                ("/glossary", "Glossario", "Consulta i termini catastali, ipotecari e i formati.", "fa-book"),
+                ("/documents", "Documenti", "Apri e confronta i file scaricati.", "fa-folder-tree")
             ], "Passa dalla guida generale agli strumenti pratici dell'app.") }}
         </div>{# /col #}
     </div>{# /row #}

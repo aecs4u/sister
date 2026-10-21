@@ -1,5 +1,5 @@
 {% extends "_base.html" %}
-{% from "parts/_hero.html" import hero_section %}
+{% from "components/hero.html" import hero_section %}
 
 {% set subject = manifest.subject|default({}, true) %}
 
@@ -11,7 +11,7 @@
 {% endblock %}
 
 {% block content %}
-{% call hero_section('Property Dossier', 'fa-diagram-project', '/web/dossiers', 'Dossiers',
+{% call hero_section('Property Dossier', 'fa-diagram-project', '/dossiers', 'Dossiers',
                      breadcrumb_parent='Dossiers', breadcrumb_current=subject.name|default('Property dossier', true)) %}
 {{ subject.name|default('Subject', true) }}{% if subject.codice_fiscale %} · <span class="font-monospace">{{ subject.codice_fiscale }}</span>{% endif %}
 {% endcall %}
@@ -130,12 +130,12 @@
                 </div>
                 <div class="card-footer bg-white d-flex flex-wrap align-items-center gap-2 no-print">
                     {% if d.p7m and d.p7m.file %}
-                    <a class="btn btn-sm btn-outline-primary" href="/web/property-dossiers/{{ dossier_id }}/files/{{ d.p7m.file }}" download>
+                    <a class="btn btn-sm btn-outline-primary" href="/property-dossiers/{{ dossier_id }}/files/{{ d.p7m.file }}" download>
                         <i class="fas fa-file-signature me-1"></i>Signed P7M
                     </a>
                     {% endif %}
                     {% if d.xml and d.xml.file %}
-                    <a class="btn btn-sm btn-outline-secondary" href="/web/property-dossiers/{{ dossier_id }}/files/{{ d.xml.file }}" download>
+                    <a class="btn btn-sm btn-outline-secondary" href="/property-dossiers/{{ dossier_id }}/files/{{ d.xml.file }}" download>
                         <i class="fas fa-file-code me-1"></i>XML payload
                     </a>
                     {% endif %}

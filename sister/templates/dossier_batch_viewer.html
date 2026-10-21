@@ -1,5 +1,5 @@
 {% extends "_base.html" %}
-{% from "parts/_hero.html" import hero_section %}
+{% from "components/hero.html" import hero_section %}
 
 {% block page_title %}{{ name }}{% endblock %}
 
@@ -11,8 +11,8 @@
 
 {% block content %}
 {# ── Hero ──────────────────────────────────────────────────────────────────── #}
-{% set _dl_url = '/web/dossiers/' ~ name ~ '?download=1' %}
-{{ hero_section(name, 'fa-table-list', '/web/dossiers', 'Dossier',
+{% set _dl_url = '/dossiers/' ~ name ~ '?download=1' %}
+{{ hero_section(name, 'fa-table-list', '/dossiers', 'Dossier',
                 breadcrumb_parent='Dossier', breadcrumb_current=name,
                 extra_btn_url=_dl_url, extra_btn_label='JSON', extra_btn_icon='fa-download') }}
 

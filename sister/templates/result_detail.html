@@ -5,7 +5,7 @@
 {% from "_macros.html" import catasto_badge, param_label, jump_nav,
                                 section_icon, section_border, income_boxes,
                                 doc_accordion, render_workflow_steps %}
-{% from "parts/_related_links.html" import related_pages %}
+{% from "components/related_links.html" import related_pages %}
 {% block page_title %}Result {{ request_id[:20] }}{% endblock %}
 
 {% block extra_css %}
@@ -60,7 +60,7 @@
   {# Breadcrumb #}
   <nav class="mb-3" aria-label="breadcrumb">
     <ol class="breadcrumb">
-      <li class="breadcrumb-item"><a href="/web/results">Results</a></li>
+      <li class="breadcrumb-item"><a href="/results">Results</a></li>
       <li class="breadcrumb-item active" title="{{ request_id }}">
         {{ request_id[:30] }}{% if request_id|length > 30 %}&hellip;{% endif %}
       </li>
@@ -136,7 +136,7 @@
 
     {% elif section.kind == 'nested_table' %}
     <div class="card-body p-0">
-      {% from "_nested.html" import render_nested %}
+      {% from "components/nested.html" import render_nested %}
       {{ render_nested(section.value) }}
     </div>
 
@@ -149,7 +149,7 @@
           <tr>
             <th class="w-25 bg-light">{{ key }}</th>
             <td>
-              {% from "_nested.html" import render_nested %}
+              {% from "components/nested.html" import render_nested %}
               {% if val is mapping or (val is sequence and val is not string) %}
                 {{ render_nested(val) }}
               {% else %}
@@ -341,10 +341,10 @@
   {% endif %}{# /result.data #}
 
   {{ related_pages("Related pages", [
-      ("/web/results", "All results", "Return to the filtered list of executed requests.", "fa-database"),
-      ("/web/documents", "Documents", "Browse downloaded files linked to responses.", "fa-folder-tree"),
-      ("/web/dossiers", "Dossiers", "Review the complete saved query payloads.", "fa-folder-open"),
-      ("/web/forms", "Submit another query", "Open the single-step and workflow forms.", "fa-clipboard-list")
+      ("/results", "All results", "Return to the filtered list of executed requests.", "fa-database"),
+      ("/documents", "Documents", "Browse downloaded files linked to responses.", "fa-folder-tree"),
+      ("/dossiers", "Dossiers", "Review the complete saved query payloads.", "fa-folder-open"),
+      ("/forms", "Submit another query", "Open the single-step and workflow forms.", "fa-clipboard-list")
   ]) }}
 
   {% else %}
@@ -352,7 +352,7 @@
     <i class="fas fa-exclamation-triangle me-2"></i>
     Request not found for ID <code>{{ request_id }}</code>.
   </div>
-  <a href="/web/results" class="btn btn-primary">Back to Results</a>
+  <a href="/results" class="btn btn-primary">Back to Results</a>
   {% endif %}{# /result #}
 
 </div>
@@ -929,7 +929,7 @@
             resultWrap.classList.remove('d-none');
             resultMsg.innerHTML = '<div class="d-flex flex-wrap gap-1 mb-2">' + parts.join('') + '</div>';
             if (queued) {
-                resultMsg.innerHTML += '<p class="small text-muted mb-0">Le visure sono in coda. <a href="/web/results">Visualizza risultati</a></p>';
+                resultMsg.innerHTML += '<p class="small text-muted mb-0">Le visure sono in coda. <a href="/results">Visualizza risultati</a></p>';
             }
             if (failed.length) {
                 resultMsg.innerHTML += '<p class="small text-danger mb-0 mt-1">Falliti: sub. ' + failed.join(', ') + '</p>';

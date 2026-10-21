@@ -160,7 +160,7 @@
     }
 
     // ── Fetch and display ─────────────────────────────────────────────────────
-    fetch('/web/documents/' + DOC_ID + '/plan')
+    fetch('/documents/' + DOC_ID + '/plan')
         .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
         .then(function (data) {
             initProjection(data);

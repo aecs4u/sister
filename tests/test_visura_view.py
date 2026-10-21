@@ -125,12 +125,18 @@ def test_unknown_documents_have_no_view():
 
 
 def test_story_macros_render(tmp_path):
-    from jinja2 import Environment, FileSystemLoader
+    import aecs4u_theme
+    from jinja2 import ChoiceLoader, Environment, FileSystemLoader
 
-    env = Environment(loader=FileSystemLoader(str(Path(__file__).parents[1] / "sister" / "templates")), autoescape=True)
+    # The story macros live in aecs4u-theme (catasto/visura_story.html).
+    loaders = [
+        FileSystemLoader(str(Path(__file__).parents[1] / "sister" / "templates")),
+        FileSystemLoader(str(Path(aecs4u_theme.__file__).parent / "templates")),
+    ]
+    env = Environment(loader=ChoiceLoader(loaders), autoescape=True)
     view = build_visura_view(SUCCESSION)
     template = env.from_string(
-        '{% from "parts/_visura_story.html" import unit_facts, property_history, ownership_history %}'
+        '{% from "catasto/visura_story.html" import unit_facts, property_history, ownership_history %}'
         "{{ unit_facts(view, view.units[0]) }}{{ property_history(view) }}{{ ownership_history(view) }}"
     )
 

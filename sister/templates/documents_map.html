@@ -1,266 +1,68 @@
 {% extends "_base.html" %}
-{% block page_title %}Mappa Immobili{% endblock %}
+{% from "components/land_registry_map.html" import cadastral_map_assets, cadastral_map_scripts, cadastral_map_view, cadastral_layer_control %}
+
+{% block page_title %}Mappa catastale{% endblock %}
 
 {% block extra_css %}
 {{ super() }}
-<link rel="stylesheet" href="/static/css/doc_sections.css?v=20261009a">
-<link rel="stylesheet" href="/static/css/pages/documents_map.css?v=20261009a">
+{{ cadastral_map_assets() }}
+<link rel="stylesheet" href="/static/css/pages/documents_map_view.css?v=20261021a">
 {% endblock %}
 
-{% macro _chip(d) %}
-{% set dt = d.document_type or '' %}
-{% if dt == 'visura_storica' %}{% set cls = 'chip-sto' %}{% set ic = 'fa-clock-rotate-left' %}
-{% elif dt == 'visura_fabbricati' %}{% set cls = 'chip-fab' %}{% set ic = 'fa-building' %}
-{% elif dt == 'visura_terreni' %}{% set cls = 'chip-ter' %}{% set ic = 'fa-seedling' %}
-{% elif dt == 'visura_soggetto' %}{% set cls = 'chip-sogg' %}{% set ic = 'fa-user' %}
-{% elif dt == 'visura' %}{% set cls = 'chip-sto' %}{% set ic = 'fa-file-contract' %}
-{% elif dt in ('elaborato_planimetrico', 'epa') %}{% set cls = 'chip-epa' %}{% set ic = 'fa-drafting-compass' %}
-{% elif dt == 'planimetria' %}{% set cls = 'chip-plan' %}{% set ic = 'fa-ruler-combined' %}
-{% elif dt == 'elenco_immobili' %}{% set cls = 'chip-eln' %}{% set ic = 'fa-list' %}
-{% else %}{% set cls = 'chip-other' %}{% set ic = 'fa-file' %}
-{% endif %}
-{% set label = (d.oggetto or d.filename or ('Doc ' ~ d.id)) | truncate(40, True, '…') %}
-<a href="/web/documents/{{ d.id }}" class="tree-doc-chip {{ cls }}" title="{{ d.oggetto or d.filename or '' }}">
-    <i class="fas {{ ic }} fa-xs"></i>{{ label }}{% if d.n_files and d.n_files > 1 %} <span class="opacity-60 ms-1">+{{ d.n_files - 1 }}</span>{% endif %}
-</a>
-{% endmacro %}
-
-{% macro _doc_leaf(d) %}
-<li>
-    {{ _chip(d) }}
-    {% if d.owner_docs %}
-    <ul class="tree-list">
-        {% for od in d.owner_docs %}<li>{{ _chip(od) }}</li>{% endfor %}
-    </ul>
-    {% endif %}
-</li>
-{% endmacro %}
-
 {% block content %}
-{# ── Hero ───────────────────────────────────────────────────────────────── #}
 <div class="page-hero no-print">
     <div class="container-fluid">
         <nav class="mb-3" aria-label="breadcrumb">
             <ol class="breadcrumb mb-0">
-                <li class="breadcrumb-item"><a href="/web/" class="text-white-50">Dashboard</a></li>
-                <li class="breadcrumb-item"><a href="/web/documents" class="text-white-50">Documenti</a></li>
-                <li class="breadcrumb-item active text-white">Mappa Immobili</li>
+                <li class="breadcrumb-item"><a href="/" class="text-white-50">Dashboard</a></li>
+                <li class="breadcrumb-item"><a href="/documents" class="text-white-50">Documenti</a></li>
+                <li class="breadcrumb-item active text-white">Mappa catastale</li>
             </ol>
         </nav>
-        <div class="d-flex flex-wrap justify-content-between align-items-center">
+        <div class="d-flex flex-wrap justify-content-between align-items-center gap-3">
             <div>
-                <h1 class="display-6 fw-bold mb-2"><i class="fas fa-map-location-dot me-3"></i>Mappa Immobili</h1>
-                <p class="lead mb-0 opacity-75">
-                    <strong>{{ total }}</strong> documenti — raggruppati per ubicazione catastale
-                </p>
+                <h1 class="display-6 fw-bold mb-2"><i class="fas fa-map-location-dot me-3"></i>Mappa catastale</h1>
+                <p class="lead mb-0 opacity-75">Fogli e particelle catastali · {{ total }} documenti indicizzati</p>
             </div>
-            <div class="d-flex gap-2 mt-3 mt-md-0">
-                <a href="/web/documents" class="btn btn-outline-light"><i class="fas fa-folder-tree me-2"></i>Per tipo</a>
-                <a href="/web/documents?view=files" class="btn btn-outline-light"><i class="fas fa-hard-drive me-2"></i>File system</a>
-                <form method="post" action="/web/documents/rescan" class="d-inline">
-                    <button type="submit" class="btn btn-outline-warning no-print"><i class="fas fa-rotate me-2"></i>Aggiorna</button>
-                </form>
-                <button data-click="sisterActions.print" class="btn btn-outline-light no-print"><i class="fas fa-print me-2"></i>Stampa</button>
+            <div class="d-flex gap-2">
+                <a href="/documents" class="btn btn-outline-light"><i class="fas fa-folder-tree me-2"></i>Per tipo</a>
+                <a href="/documents?view=map" class="btn btn-outline-light"><i class="fas fa-diagram-project me-2"></i>Per ubicazione</a>
+                <a href="/documents?view=files" class="btn btn-outline-light"><i class="fas fa-hard-drive me-2"></i>File system</a>
             </div>
         </div>
     </div>
 </div>
 
-<div class="container-fluid">
-{% if not prop_map.immobili and not prop_map.soggetti %}
-<div class="alert alert-info"><i class="fas fa-circle-info me-2"></i>Nessun documento indicizzato.</div>
-{% else %}
-
-{# ── Jump bar ────────────────────────────────────────────────────────────── #}
-<div class="prov-jump no-print">
-    <a href="#immobili" class="btn btn-sm btn-outline-success">
-        <i class="fas fa-house me-1"></i>Immobili
-        <span class="badge bg-success ms-1 badge-count">{{ prop_map.immobili | sum(attribute='total_docs') }}</span>
-    </a>
-    {% if prop_map.soggetti %}
-    <a href="#soggetti" class="btn btn-sm btn-outline-info">
-        <i class="fas fa-user-group me-1"></i>Soggetti
-        <span class="badge bg-info ms-1 badge-count">{{ prop_map.soggetti | length }}</span>
-    </a>
-    {% endif %}
-    <div class="ms-auto d-flex gap-2 align-items-center">
-        <button class="btn btn-sm btn-outline-secondary" data-click="toggleAll" data-args='[true]'>
-            <i class="fas fa-expand me-1"></i>Espandi tutto
-        </button>
-        <button class="btn btn-sm btn-outline-secondary" data-click="toggleAll" data-args='[false]'>
-            <i class="fas fa-compress me-1"></i>Comprimi tutto
-        </button>
+<main class="container-fluid documents-cadastral-map-page">
+    <p class="text-muted small mb-2">Attiva o disattiva i fogli e le particelle dal controllo livelli. I confini catastali compaiono ai livelli di zoom supportati.</p>
+    {{ cadastral_layer_control(map_id="documents-cadastral-map", sheets_label="Fogli catastali", parcels_label="Particelle") }}
+    {{ cadastral_map_view(
+        map_id="documents-cadastral-map",
+        api_base=land_registry_api_base,
+        aria_label="Mappa catastale italiana",
+        center_lat=41.9028,
+        center_lng=12.4964,
+        zoom=6,
+        labels={
+            "streets": "Stradale",
+            "satellite": "Satellite",
+            "terrain": "Rilievo",
+            "sheets": "Fogli catastali",
+            "parcels": "Particelle",
+            "sheet": "Foglio",
+            "parcel": "Particella",
+            "municipality": "Comune",
+            "province": "Provincia",
+            "region": "Regione"
+        }
+    ) }}
+    <div class="documents-map-attribution small text-muted mt-2">
+        Cartografia di base: OpenStreetMap, Esri e OpenTopoMap. Confini catastali: Land Registry.
     </div>
-</div>
-
-{# ── TOP-LEVEL: Immobili ─────────────────────────────────────────────────── #}
-{% set imm_total = prop_map.immobili | sum(attribute='total_docs') %}
-<div class="tree-province" id="immobili">
-    <div class="tree-prov-hdr" data-bs-toggle="collapse" data-bs-target="#immobili-body"
-         aria-expanded="true" aria-controls="immobili-body" style="background:#157347">
-        <i class="fas fa-house"></i>
-        <span class="fw-bold fs-6 flex-grow-1">Immobili</span>
-        <span class="badge bg-light text-dark badge-count">
-            {{ prop_map.immobili | length }} province · {{ imm_total }} doc
-        </span>
-        <i class="fas fa-chevron-down chevron-icon small ms-2"></i>
-    </div>
-
-    <div class="collapse show" id="immobili-body">
-        <div class="p-2 d-flex flex-column gap-3">
-
-        {# Province #}
-        {% for prov in prop_map.immobili %}
-        {% set prov_id = 'prov-' ~ prov.provincia %}
-        <div class="tree-province mb-0" id="{{ prov_id }}" style="border-color:#adb5bd">
-
-            <div class="tree-prov-hdr" data-bs-toggle="collapse" data-bs-target="#{{ prov_id }}-body"
-                 aria-expanded="true" aria-controls="{{ prov_id }}-body" style="background:#495057">
-                <i class="fas fa-location-dot"></i>
-                <span class="fw-bold flex-grow-1">Provincia&nbsp;<strong>{{ prov.provincia }}</strong></span>
-                <span class="badge bg-light text-dark badge-count">
-                    {{ prov.fogli | length }} fogli · {{ prov.total_docs }} doc
-                </span>
-                <i class="fas fa-chevron-down chevron-icon small ms-2"></i>
-            </div>
-
-            <div class="collapse show" id="{{ prov_id }}-body">
-                <div class="p-2 d-flex flex-column gap-2">
-
-                {# Fogli #}
-                {% for foglio in prov.fogli %}
-                {% set fog_id = prov_id ~ '-fg' ~ foglio.foglio %}
-                <div class="tree-foglio">
-
-                    <div class="tree-fog-hdr" data-bs-toggle="collapse" data-bs-target="#{{ fog_id }}"
-                         aria-expanded="true" aria-controls="{{ fog_id }}">
-                        <i class="fas fa-table-cells fa-sm text-secondary"></i>
-                        <span class="fw-semibold">
-                            Foglio&nbsp;<span class="font-monospace">{{ foglio.foglio }}</span>
-                        </span>
-                        <span class="text-muted small ms-2">
-                            {{ foglio.particelle | length }} particell{{ 'a' if foglio.particelle | length == 1 else 'e' }}
-                            · {{ foglio.total_docs }} doc
-                        </span>
-                        <i class="fas fa-chevron-down chevron-icon small ms-auto"></i>
-                    </div>
-
-                    <div class="collapse show tree-fog-body" id="{{ fog_id }}">
-                        {% for pt in foglio.particelle %}
-                        {# Detect whether any sub has a named subalterno #}
-                        {% set ns = namespace(has_named=false) %}
-                        {% for sub in pt.subalternos %}{% if sub.subalterno is not none %}{% set ns.has_named = true %}{% endif %}{% endfor %}
-
-                        {# ── Every particella uses the folder-tree layout ── #}
-                        {% set pt_id = fog_id ~ '-pt' ~ pt.particella %}
-                        <div class="tree-particella-nested">
-                            <div class="tree-pt-hdr" data-bs-toggle="collapse" data-bs-target="#{{ pt_id }}"
-                                 aria-expanded="true" aria-controls="{{ pt_id }}">
-                                <span class="tree-pt-label">
-                                    <span>PT&nbsp;{{ pt.particella }}</span>
-                                    {% if pt.sezione_urbana %}
-                                    <span class="badge bg-secondary fw-normal" style="font-size:.68rem">Sez.&nbsp;{{ pt.sezione_urbana }}</span>
-                                    {% endif %}
-                                    {% if pt.comune %}
-                                    <span class="tree-pt-meta">{{ pt.comune }}</span>
-                                    {% endif %}
-                                </span>
-                                <span class="text-muted small ms-2">
-                                    {%- if ns.has_named %}{{ pt.subalternos | length }} sub · {% endif -%}
-                                    {{ pt.total_docs }} doc
-                                </span>
-                                <i class="fas fa-chevron-down chevron-icon small ms-auto"></i>
-                            </div>
-                            <div class="collapse show" id="{{ pt_id }}">
-                                <ul class="tree-list">
-                                    {% for sub in pt.subalternos %}
-                                    {% if sub.subalterno is not none %}
-                                    {# Named sub: label + docs as nested list #}
-                                    <li>
-                                        <div class="tree-item-row">
-                                            <span class="tree-sub-label fw-semibold">Sub&nbsp;{{ sub.subalterno }}</span>
-                                        </div>
-                                        <ul class="tree-list">
-                                            {% for d in sub.docs %}{{ _doc_leaf(d) }}{% endfor %}
-                                        </ul>
-                                    </li>
-                                    {% else %}
-                                    {# No-sub: docs directly as leaves #}
-                                    {% for d in sub.docs %}{{ _doc_leaf(d) }}{% endfor %}
-                                    {% endif %}
-                                    {% endfor %}
-                                </ul>
-                            </div>
-                        </div>
-
-                        {% endfor %}
-                    </div>
-
-                </div>{# /tree-foglio #}
-                {% endfor %}
-
-                </div>
-            </div>
-
-        </div>{# /prov #}
-        {% endfor %}
-
-        </div>
-    </div>
-</div>{# /immobili #}
-
-{# ── TOP-LEVEL: Soggetti ─────────────────────────────────────────────────── #}
-{% if prop_map.soggetti %}
-<div class="tree-province" id="soggetti">
-    <div class="tree-prov-hdr" data-bs-toggle="collapse" data-bs-target="#soggetti-body"
-         aria-expanded="true" aria-controls="soggetti-body" style="background:#0d6efd">
-        <i class="fas fa-user-group"></i>
-        <span class="fw-bold fs-6 flex-grow-1">Soggetti</span>
-        <span class="badge bg-light text-dark badge-count">{{ prop_map.soggetti | length }}</span>
-        <i class="fas fa-chevron-down chevron-icon small ms-2"></i>
-    </div>
-    <div class="collapse show tree-fog-body" id="soggetti-body">
-        {% for sg in prop_map.soggetti %}
-        {% set sg_id = 'sg-' ~ (sg.cf or loop.index | string) %}
-        <div class="tree-particella-nested">
-            <div class="tree-pt-hdr" data-bs-toggle="collapse" data-bs-target="#{{ sg_id }}"
-                 aria-expanded="true" aria-controls="{{ sg_id }}">
-                <span class="tree-pt-label">
-                    <span>{{ sg.label or '—' }}</span>
-                    {% if sg.cf %}<span class="tree-pt-meta">{{ sg.cf }}</span>{% endif %}
-                </span>
-                <span class="text-muted small ms-2">{{ sg.docs | length }} doc</span>
-                <i class="fas fa-chevron-down chevron-icon small ms-auto"></i>
-            </div>
-            <div class="collapse show" id="{{ sg_id }}">
-                <ul class="tree-list">
-                    {% for d in sg.docs %}{{ _doc_leaf(d) }}{% endfor %}
-                </ul>
-            </div>
-        </div>
-        {% endfor %}
-    </div>
-</div>
-{% endif %}
-
-{% endif %}
-</div>{# /container-fluid #}
+</main>
 {% endblock %}
 
 {% block extra_js %}
 {{ super() }}
-<script nonce="{{ csp_nonce }}">
-// Sync chevron with Bootstrap collapse events
-document.querySelectorAll('[data-bs-toggle="collapse"]').forEach(function(trigger) {
-    var target = document.querySelector(trigger.getAttribute('data-bs-target'));
-    if (!target) return;
-    target.addEventListener('show.bs.collapse', function() { trigger.setAttribute('aria-expanded','true'); });
-    target.addEventListener('hide.bs.collapse', function() { trigger.setAttribute('aria-expanded','false'); });
-});
-function toggleAll(show) {
-    document.querySelectorAll('.collapse').forEach(function(el) {
-        bootstrap.Collapse.getOrCreateInstance(el)[show ? 'show' : 'hide']();
-    });
-}
-</script>
+{{ cadastral_map_scripts(static_base=land_registry_static_base) }}
 {% endblock %}

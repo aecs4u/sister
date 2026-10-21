@@ -2,7 +2,7 @@
 {% from "components/index.html" import page_header, card %}
 {% from "components/job.html" import status_badge, response_summary %}
 {% from "macros/ui_base.html" import no_results %}
-{% from "parts/_related_links.html" import related_pages %}
+{% from "components/related_links.html" import related_pages %}
 {% block page_title %}Workflow{% endblock %}
 
 {% block content %}
@@ -11,7 +11,7 @@
         {{ page_header("Workflow OpenData", "Esecuzioni dei workflow registrate dal servizio OpenData", icon="fas fa-project-diagram text-primary", wrapper_class="mb-0") }}
         <div class="d-flex align-items-center gap-2">
             {% if status %}
-            <a href="/web/workflows" class="btn btn-outline-secondary btn-sm"><i class="fas fa-times me-1"></i>Rimuovi filtro</a>
+            <a href="/workflows" class="btn btn-outline-secondary btn-sm"><i class="fas fa-times me-1"></i>Rimuovi filtro</a>
             {% endif %}
         </div>
     </div>
@@ -33,25 +33,25 @@
 
     <div class="alert alert-info border-0 shadow-sm mb-4">
         <i class="fas fa-circle-info me-2"></i>
-        <span class="alert-text">I workflow multi-step inviati da <a href="/web/forms">Query</a> passano da Sister e mostrano il risultato in
-        streaming nel pannello di risposta. Usa <a href="/web/results">Risultati</a> per le richieste salvate e
-        <a href="/web/documents">Documenti</a> per i file scaricati.</span>
+        <span class="alert-text">I workflow multi-step inviati da <a href="/forms">Query</a> passano da Sister e mostrano il risultato in
+        streaming nel pannello di risposta. Usa <a href="/results">Risultati</a> per le richieste salvate e
+        <a href="/documents">Documenti</a> per i file scaricati.</span>
     </div>
 
     <!-- Status filter pills -->
     <div class="status-pills mb-4" role="group" aria-label="Filtra per stato">
-        <a href="/web/workflows" class="btn btn-sm {% if not status %}btn-primary{% else %}btn-outline-secondary{% endif %}">Tutti</a>
-        <a href="/web/workflows?status=completed" class="btn btn-sm {% if status == 'completed' %}btn-success{% else %}btn-outline-success{% endif %}">Completati</a>
-        <a href="/web/workflows?status=partial" class="btn btn-sm {% if status == 'partial' %}btn-warning{% else %}btn-outline-warning{% endif %}">Parziali</a>
-        <a href="/web/workflows?status=running" class="btn btn-sm {% if status == 'running' %}btn-info{% else %}btn-outline-info{% endif %}">In corso</a>
-        <a href="/web/workflows?status=failed" class="btn btn-sm {% if status == 'failed' %}btn-danger{% else %}btn-outline-danger{% endif %}">Falliti</a>
+        <a href="/workflows" class="btn btn-sm {% if not status %}btn-primary{% else %}btn-outline-secondary{% endif %}">Tutti</a>
+        <a href="/workflows?status=completed" class="btn btn-sm {% if status == 'completed' %}btn-success{% else %}btn-outline-success{% endif %}">Completati</a>
+        <a href="/workflows?status=partial" class="btn btn-sm {% if status == 'partial' %}btn-warning{% else %}btn-outline-warning{% endif %}">Parziali</a>
+        <a href="/workflows?status=running" class="btn btn-sm {% if status == 'running' %}btn-info{% else %}btn-outline-info{% endif %}">In corso</a>
+        <a href="/workflows?status=failed" class="btn btn-sm {% if status == 'failed' %}btn-danger{% else %}btn-outline-danger{% endif %}">Falliti</a>
     </div>
 
     {% if runs %}
     <div class="row g-3">
         {% for run in runs %}
         <div class="col-lg-6 col-xl-4">
-            <a href="/web/workflows/{{ run.workflow_id }}" class="text-decoration-none">
+            <a href="/workflows/{{ run.workflow_id }}" class="text-decoration-none">
                 <div class="card border-0 shadow-sm h-100">
                     <div class="card-body">
                         <div class="d-flex justify-content-between align-items-start mb-2">
@@ -86,13 +86,13 @@
     </div>
     {% else %}
     {{ no_results("Nessun workflow eseguito", "Avvia un workflow per vedere qui i passaggi e la risposta estratta.") }}
-    <div class="text-center"><a href="/web/forms" class="btn btn-primary">Avvia un workflow</a></div>
+    <div class="text-center"><a href="/forms" class="btn btn-primary">Avvia un workflow</a></div>
     {% endif %}
     {{ related_pages("Continua con le pagine correlate", [
-        ("/web/forms", "Query", "Avvia una query singola o un altro workflow multi-step.", "fa-clipboard-list"),
-        ("/web/results?source=workflow", "Risultati dei workflow OpenData", "Filtra i risultati salvati sulle richieste di workflow.", "fa-database"),
-        ("/web/documents", "Documenti", "Sfoglia i file scaricati dalle richieste.", "fa-folder-tree"),
-        ("/web/guide#flussi", "Guida utente", "Rivedi i workflow e i passaggi di preparazione.", "fa-book-open")
+        ("/forms", "Query", "Avvia una query singola o un altro workflow multi-step.", "fa-clipboard-list"),
+        ("/results?source=workflow", "Risultati dei workflow OpenData", "Filtra i risultati salvati sulle richieste di workflow.", "fa-database"),
+        ("/documents", "Documenti", "Sfoglia i file scaricati dalle richieste.", "fa-folder-tree"),
+        ("/guide#flussi", "Guida utente", "Rivedi i workflow e i passaggi di preparazione.", "fa-book-open")
     ]) }}
 </div>
 {% endblock %}
