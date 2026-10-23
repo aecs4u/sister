@@ -1,6 +1,7 @@
 """Response JSON → structured tables: every owner stays tied to its own property (via ``result_id``)."""
 
 import json
+from datetime import date
 from pathlib import Path
 
 import pytest
@@ -127,19 +128,14 @@ async def test_owners_and_properties_share_a_result_id():
 
 @pytest.mark.usefixtures("fresh_db")
 async def test_owner_property_view_input_is_exact_for_a_visura_response():
-    """``v_sister_owner_property_links`` joins on result_id first: owners must not meet every property."""
+    """``v_property_owner`` joins on the result first: owners must not meet every property."""
     await _save("v1", _two_property_visura())
 
     async with database._get_session_factory()() as session:
-        rows = (
-            await session.execute(
-                text(
-                    "SELECT count(*) FROM visura_owners o JOIN visura_properties p ON p.result_id = o.result_id "
-                    "WHERE o.response_id = 'v1'"
-                )
-            )
-        ).scalar_one()
-    assert rows == 2  # not 2 owners x 2 properties
+        by_result = (await session.execute(text("SELECT count(*) FROM v_property_owner WHERE link_scope = 'result'"))).scalar_one()
+        by_request = (await session.execute(text("SELECT count(*) FROM v_property_owner WHERE link_scope = 'request'"))).scalar_one()
+    assert by_result == 2  # not 2 owners x 2 properties
+    assert by_request == 0  # every owner has its result, so the request-wide fallback does not apply
 
 
 @pytest.mark.usefixtures("fresh_db")
@@ -151,12 +147,13 @@ async def test_subject_gets_birth_data_and_a_later_bare_row_does_not_erase_it():
         row = (
             await session.execute(
                 text(
-                    "SELECT s.display_name, s.date_of_birth, s.gender, g.municipality FROM cadastral_subjects s "
-                    "LEFT JOIN geographic_places g ON g.id = s.birth_place_id WHERE s.fiscal_code = 'RSSMRA70A01H501Z'"
+                    "SELECT s.name, s.birth_date, s.gender, upper(c.italian_name) FROM subject s "
+                    "LEFT JOIN municipalities c ON c.numeric_code = s.birth_comune_id "
+                    "WHERE s.fiscal_code = 'RSSMRA70A01H501Z'"
                 )
             )
         ).one()
-    assert tuple(row) == ("ROSSI MARIO", "01/01/1970", "M", "ROMA")
+    assert tuple(row) == ("ROSSI MARIO", date(1970, 1, 1), "M", "ROMA")
 
 
 @pytest.mark.usefixtures("fresh_db")
@@ -173,14 +170,14 @@ async def test_subject_query_links_the_queried_subject_to_each_property():
 
 @pytest.mark.usefixtures("fresh_db")
 async def test_backfill_relinks_old_rows_and_ties_documents_to_their_response():
-    from sister.db_models import VisuraDocument
+    from sister.db_models import Document
 
     await _save("v1", {**_two_property_visura(), "downloaded_pdfs": [{"filename": "vi_att_RA_FG103_PT1714_SUB2.p7m"}]})
     async with database._get_session_factory()() as session:
-        session.add(VisuraDocument(document_type="visura", file_format="P7M", filename="vi_att_RA_FG103_PT1714_SUB2.p7m"))
+        session.add(Document(file_format="P7M", file_name="vi_att_RA_FG103_PT1714_SUB2.p7m"))
         # the state before the fix: owners and properties without a result
-        await session.execute(text("UPDATE visura_owners SET result_id = NULL, owner_index = NULL"))
-        await session.execute(text("UPDATE visura_properties SET result_id = NULL"))
+        await session.execute(text("UPDATE result_owner SET result_id = NULL, owner_index = NULL"))
+        await session.execute(text("UPDATE property SET result_id = NULL"))
         await session.commit()
 
     stats = await database.backfill_projections()
@@ -189,7 +186,9 @@ async def test_backfill_relinks_old_rows_and_ties_documents_to_their_response():
     owners = await database.get_db_owners_for_response("v1")
     assert all(o["result_id"] is not None and o["owner_index"] == 1 for o in owners)
     async with database._get_session_factory()() as session:
-        linked = (await session.execute(text("SELECT response_id FROM visura_documents"))).scalar_one()
+        linked = (
+            await session.execute(text("SELECT r.request_ref FROM document d JOIN request r ON r.id = d.request_id"))
+        ).scalar_one()
     assert linked == "v1"
 
 

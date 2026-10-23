@@ -15,14 +15,14 @@ from dataclasses import dataclass
 from dataclasses import field as dc_field
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
-from zoneinfo import ZoneInfo
 from pathlib import Path
 from typing import Any, Optional
+from zoneinfo import ZoneInfo
 
 from dotenv import load_dotenv
 from sqlalchemy import delete, func, inspect, or_, text
-from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.engine import make_url
+from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import aliased, sessionmaker
 from sqlmodel import select
 
@@ -34,18 +34,18 @@ from .db_models import (
     ActivityLogAttribute,
     ActivityLogPayload,
     CadastralUnit,
-    Comune,
     Document,
     DocumentContent,
     DocumentExtraction,
+    IstatMunicipality,
     MortgageInspection,
     MortgageInspectionParty,
     MortgageInspectionProperty,
+    OwnershipRight,
     PageVisit,
     PageVisitError,
     PageVisitFormElement,
     Property,
-    OwnershipRight,
     Request,
     RequestPayload,
     RequestResult,
@@ -66,10 +66,6 @@ from .reference import (
     get_or_create_subject,
     place_name,
 )
-from .visura_xml_models import (
-    DocumentSubject,
-)
-
 from .result_parsers import (
     clean_amount,
     format_amount_it,
@@ -88,6 +84,7 @@ from .result_parsers import (
     parse_vis_imm_sel,
     split_foglio,
 )
+from .visura_xml_models import DocumentSubject
 
 logger = logging.getLogger("sister")
 
@@ -97,9 +94,10 @@ load_dotenv(PROJECT_ROOT.parent / ".env", override=False)
 DATA_ROOT = Path(os.getenv("SISTER_DATA_ROOT", str(PROJECT_ROOT))).expanduser().resolve()
 DATABASE_DSN = os.getenv("DATABASE_DSN")
 DATABASE_SCHEMA = os.getenv("DATABASE_SCHEMA", "sister")
+DATABASE_ISTAT_SCHEMA = os.getenv("DATABASE_ISTAT_SCHEMA", "istat")
 # raw payloads (response JSON, XML tree, extraction JSON) live in their own schema; tests point it at a throwaway one
 DATABASE_ARCHIVE_SCHEMA = os.getenv("DATABASE_ARCHIVE_SCHEMA", "sister_archive")
-DATABASE_REVISION = "20261027_flat_schema_app_fit"
+DATABASE_REVISION = "20261028_istat_municipalities"
 
 # ---------------------------------------------------------------------------
 # Engine and session
@@ -143,7 +141,12 @@ def _get_engine():
             url,
             echo=False,
             pool_pre_ping=True,
-            execution_options={"schema_translate_map": {"sister_archive": DATABASE_ARCHIVE_SCHEMA}},
+            execution_options={
+                "schema_translate_map": {
+                    "sister_archive": DATABASE_ARCHIVE_SCHEMA,
+                    "istat": DATABASE_ISTAT_SCHEMA,
+                }
+            },
         )
     return _engine
 
@@ -165,7 +168,6 @@ async def init_db() -> None:
             lambda sync_conn: set(inspect(sync_conn).get_table_names(schema=schema))
         )
         required_tables = {
-            "comune",
             "cadastral_unit",
             "subject",
             "right_kind",
@@ -194,6 +196,29 @@ async def init_db() -> None:
         if missing:
             raise RuntimeError(
                 "PostgreSQL schema is incomplete (missing: " + ", ".join(missing) + "). Run `alembic upgrade head`."
+            )
+        istat_columns = await conn.run_sync(
+            lambda sync_conn: {
+                column["name"]
+                for column in inspect(sync_conn).get_columns("municipalities", schema=DATABASE_ISTAT_SCHEMA)
+            }
+        )
+        missing_istat = sorted(
+            {
+                "numeric_code",
+                "name",
+                "italian_name",
+                "other_language_name",
+                "province_abbreviation",
+                "cadastral_code",
+            }
+            - istat_columns
+        )
+        if missing_istat:
+            raise RuntimeError(
+                f"Shared ISTAT table {DATABASE_ISTAT_SCHEMA}.municipalities is incomplete (missing: "
+                + ", ".join(missing_istat)
+                + ")."
             )
         archive_tables = await conn.run_sync(
             lambda sync_conn: set(inspect(sync_conn).get_table_names(schema=DATABASE_ARCHIVE_SCHEMA))
@@ -933,11 +958,14 @@ async def _replace_projection(session: AsyncSession, request_pk: int, tipo_catas
     # the request's own unit supplies the province/municipality a row of the list does not carry
     unit = (
         await session.execute(
-            text(
-                "SELECT c.province_code, c.name AS municipality FROM request r "
-                "JOIN cadastral_unit u ON u.id = r.cadastral_unit_id LEFT JOIN comune c ON c.id = u.comune_id WHERE r.id = :rid"
-            ),
-            {"rid": request_pk},
+            select(
+                IstatMunicipality.province_abbreviation.label("province_code"),
+                func.upper(func.coalesce(IstatMunicipality.italian_name, IstatMunicipality.name)).label("municipality"),
+            )
+            .select_from(Request)
+            .join(CadastralUnit, Request.cadastral_unit_id == CadastralUnit.id)
+            .outerjoin(IstatMunicipality, CadastralUnit.comune_id == IstatMunicipality.numeric_code)
+            .where(Request.id == request_pk)
         )
     ).first()
     await _persist_projection(session, request_pk, tipo_catasto, data, unit)
@@ -1199,10 +1227,10 @@ async def get_result_record(request_id: str) -> Optional[dict]:
     session_factory = _get_session_factory()
     async with session_factory() as session:
         stmt = (
-            select(Request, RequestPayload.data, CadastralUnit, Comune)
+            select(Request, RequestPayload.data, CadastralUnit, IstatMunicipality)
             .outerjoin(RequestPayload, RequestPayload.request_id == Request.id)
             .outerjoin(CadastralUnit, Request.cadastral_unit_id == CadastralUnit.id)
-            .outerjoin(Comune, CadastralUnit.comune_id == Comune.id)
+            .outerjoin(IstatMunicipality, CadastralUnit.comune_id == IstatMunicipality.numeric_code)
             .where(Request.request_ref == request_id)
         )
         row = (await session.execute(stmt)).first()
@@ -1219,8 +1247,8 @@ async def get_result_record(request_id: str) -> Optional[dict]:
         "request_id": req.request_ref,
         "request_type": req.request_type,
         "tipo_catasto": unit.cadastre_type if unit and unit.cadastre_type else "",
-        "provincia": _province_label(comune.province_code if comune else None),
-        "comune": comune.name if comune else "",
+        "provincia": _province_label(comune.province_abbreviation if comune else None),
+        "comune": _municipality_name(comune) or "",
         "foglio": unit.sheet if unit and unit.sheet else "",
         "particella": unit.parcel if unit and unit.parcel else "",
         "sezione": unit.section if unit else None,
@@ -1242,6 +1270,21 @@ def _province_label(code: Optional[str]) -> str:
     return province_name(code) or code or ""
 
 
+def _municipality_name(municipality: Optional[IstatMunicipality]) -> Optional[str]:
+    """Return the Italian municipality name in the uppercase form used by SISTER results."""
+    name = (municipality.italian_name or municipality.name or "").strip() if municipality else ""
+    return name.upper() or None
+
+
+def _birth_place(subject: Subject, municipality: Optional[IstatMunicipality]) -> Optional[str]:
+    """Format a resolved ISTAT birthplace or its preserved foreign/historical text."""
+    name = _municipality_name(municipality) or subject.birth_municipality_text
+    province = municipality.province_abbreviation if municipality else subject.birth_province_code
+    if name and province:
+        return f"{name} ({province})"
+    return name
+
+
 def _area_text(value: Optional[Decimal]) -> Optional[str]:
     """500.00 → ``500`` (the portal lists whole square metres)."""
     if value is None:
@@ -1252,15 +1295,15 @@ def _area_text(value: Optional[Decimal]) -> Optional[str]:
 async def get_db_properties_for_response(request_id: str) -> list[dict]:
     """Return the ``property`` rows of a request with unit and subject joins (display text, as before the typed schema)."""
     session_factory = _get_session_factory()
-    office = aliased(Comune)
+    office = aliased(IstatMunicipality)
     async with session_factory() as session:
         stmt = (
-            select(Property, CadastralUnit, Comune, Subject, office)
+            select(Property, CadastralUnit, IstatMunicipality, Subject, office)
             .join(Request, Request.id == Property.request_id)
             .outerjoin(CadastralUnit, Property.cadastral_unit_id == CadastralUnit.id)
-            .outerjoin(Comune, CadastralUnit.comune_id == Comune.id)
+            .outerjoin(IstatMunicipality, CadastralUnit.comune_id == IstatMunicipality.numeric_code)
             .outerjoin(Subject, Property.subject_id == Subject.id)
-            .outerjoin(office, Property.registered_office_comune_id == office.id)
+            .outerjoin(office, Property.registered_office_comune_id == office.numeric_code)
             .where(Request.request_ref == request_id)
             .order_by(Property.id)
         )
@@ -1280,11 +1323,15 @@ async def get_db_properties_for_response(request_id: str) -> list[dict]:
             "area": _area_text(prop.area_sqm),
             "dominical_income": format_amount_it(prop.dominical_income_eur),
             "agricultural_income": format_amount_it(prop.agricultural_income_eur),
-            "registered_office": f"{seat.name} ({seat.province_code})" if seat and seat.province_code else (seat.name if seat else None),
-            "subject_province": seat.province_code if seat else None,
-            "subject_municipality": seat.name if seat else None,
-            "province": (_province_label(comune.province_code) or None) if comune else None,
-            "municipality": comune.name if comune else None,
+            "registered_office": (
+                f"{_municipality_name(seat)} ({seat.province_abbreviation})"
+                if seat and seat.province_abbreviation
+                else _municipality_name(seat)
+            ),
+            "subject_province": seat.province_abbreviation if seat else None,
+            "subject_municipality": _municipality_name(seat),
+            "province": (_province_label(comune.province_abbreviation) or None) if comune else None,
+            "municipality": _municipality_name(comune),
             "sheet": unit.sheet if unit else None,
             "parcel": unit.parcel if unit else None,
             "subunit": unit.subunit if unit else None,
@@ -1339,7 +1386,7 @@ def _format_requested(value: Optional[datetime]) -> Optional[str]:
     return value.astimezone(_ROME).strftime("%d/%m/%Y %H:%M:%S") if value else None
 
 
-def _document_record(doc: Document, unit: Optional[CadastralUnit], comune: Optional[Comune], *, request_ref: Optional[str] = None,
+def _document_record(doc: Document, unit: Optional[CadastralUnit], comune: Optional[IstatMunicipality], *, request_ref: Optional[str] = None,
                      content: Optional[str] = None) -> dict[str, Any]:
     """One document + its cadastral unit as the dict the document pages and the browse list use."""
     return {
@@ -1352,8 +1399,8 @@ def _document_record(doc: Document, unit: Optional[CadastralUnit], comune: Optio
         "file_size": doc.file_size,
         "oggetto": doc.subject_text,
         "richiesta_del": _format_requested(doc.requested_at),
-        "provincia": (_province_label(comune.province_code) or None) if comune else None,
-        "comune": comune.name if comune else None,
+        "provincia": (_province_label(comune.province_abbreviation) or None) if comune else None,
+        "comune": _municipality_name(comune),
         "foglio": unit.sheet if unit else None,
         "particella": unit.parcel if unit else None,
         "subalterno": unit.subunit if unit else None,
@@ -1366,7 +1413,7 @@ def _document_record(doc: Document, unit: Optional[CadastralUnit], comune: Optio
     }
 
 
-_DOCUMENT_COLUMNS = (Document, CadastralUnit, Comune, DocumentContent.content, Request.request_ref)
+_DOCUMENT_COLUMNS = (Document, CadastralUnit, IstatMunicipality, DocumentContent.content, Request.request_ref)
 
 
 def _document_select():
@@ -1375,7 +1422,7 @@ def _document_select():
         select(*_DOCUMENT_COLUMNS)
         .select_from(Document)
         .outerjoin(CadastralUnit, Document.cadastral_unit_id == CadastralUnit.id)
-        .outerjoin(Comune, CadastralUnit.comune_id == Comune.id)
+        .outerjoin(IstatMunicipality, CadastralUnit.comune_id == IstatMunicipality.numeric_code)
         .outerjoin(DocumentContent, DocumentContent.document_id == Document.id)
         .outerjoin(Request, Document.request_id == Request.id)
     )
@@ -1431,8 +1478,8 @@ async def get_cadastral_visura_history_documents(properties: list[dict], *, per_
             continue
         seen.add(key)
         clauses.append(
-            (Comune.province_code == province)
-            & (Comune.name == municipality)
+            (func.upper(IstatMunicipality.province_abbreviation) == province)
+            & (func.upper(func.coalesce(IstatMunicipality.italian_name, IstatMunicipality.name)) == municipality)
             & (CadastralUnit.cadastre_type == cadastre_type)
             & (func.coalesce(CadastralUnit.section, "") == section)
             & func.upper(func.coalesce(CadastralUnit.sheet, "")).in_(_reference_values(sheet))
@@ -1453,8 +1500,8 @@ async def get_cadastral_visura_history_documents(properties: list[dict], *, per_
                 Document.reference_date.label("reference_date"),
                 DocumentContent.content.label("xml_content"),
                 CadastralUnit.cadastre_type.label("cadastre_type"),
-                Comune.province_code.label("province"),
-                Comune.name.label("municipality"),
+                IstatMunicipality.province_abbreviation.label("province"),
+                func.upper(func.coalesce(IstatMunicipality.italian_name, IstatMunicipality.name)).label("municipality"),
                 CadastralUnit.sheet.label("sheet"),
                 CadastralUnit.parcel.label("parcel"),
                 CadastralUnit.subunit.label("subunit"),
@@ -1466,7 +1513,7 @@ async def get_cadastral_visura_history_documents(properties: list[dict], *, per_
             )
             .join(DocumentContent, DocumentContent.document_id == Document.id)
             .join(CadastralUnit, Document.cadastral_unit_id == CadastralUnit.id)
-            .join(Comune, CadastralUnit.comune_id == Comune.id)
+            .join(IstatMunicipality, CadastralUnit.comune_id == IstatMunicipality.numeric_code)
             .where(
                 or_(*clauses),
                 Document.document_type.in_(("visura_fabbricati", "visura_terreni", "visura_storica", "visura")),
@@ -1542,11 +1589,11 @@ async def get_cadastral_sibling_visuras(
         result = await session.execute(
             select(Document.id, Document.created_at, CadastralUnit.subunit)
             .join(CadastralUnit, Document.cadastral_unit_id == CadastralUnit.id)
-            .join(Comune, CadastralUnit.comune_id == Comune.id)
+            .join(IstatMunicipality, CadastralUnit.comune_id == IstatMunicipality.numeric_code)
             .where(
                 CadastralUnit.cadastre_type == "F",
-                Comune.province_code == prov,
-                Comune.name == place,
+                func.upper(IstatMunicipality.province_abbreviation) == prov,
+                func.upper(func.coalesce(IstatMunicipality.italian_name, IstatMunicipality.name)) == place,
                 func.upper(func.coalesce(CadastralUnit.sheet, "")).in_(_reference_values(sheet)),
                 func.upper(func.coalesce(CadastralUnit.parcel, "")).in_(_reference_values(parcel)),
                 func.coalesce(CadastralUnit.section, "") == section.strip().upper(),
@@ -1592,21 +1639,21 @@ async def get_document_structured_extraction(doc_id: int) -> dict | None:
         inspection = (
             await session.execute(select(MortgageInspection).where(MortgageInspection.extraction_id == extraction.id))
         ).scalar_one_or_none()
-        party_comune = aliased(Comune)
+        party_comune = aliased(IstatMunicipality)
         parties = (
             await session.execute(
                 select(MortgageInspectionParty, Subject, party_comune)
                 .join(Subject, MortgageInspectionParty.subject_id == Subject.id)
-                .outerjoin(party_comune, Subject.birth_comune_id == party_comune.id)
+                .outerjoin(party_comune, Subject.birth_comune_id == party_comune.numeric_code)
                 .where(MortgageInspectionParty.inspection_id == extraction.id)
                 .order_by(MortgageInspectionParty.role, MortgageInspectionParty.ordinal)
             )
         ).all()
         properties = (
             await session.execute(
-                select(MortgageInspectionProperty, CadastralUnit, Comune)
+                select(MortgageInspectionProperty, CadastralUnit, IstatMunicipality)
                 .outerjoin(CadastralUnit, MortgageInspectionProperty.cadastral_unit_id == CadastralUnit.id)
-                .outerjoin(Comune, CadastralUnit.comune_id == Comune.id)
+                .outerjoin(IstatMunicipality, CadastralUnit.comune_id == IstatMunicipality.numeric_code)
                 .where(MortgageInspectionProperty.inspection_id == extraction.id)
                 .order_by(MortgageInspectionProperty.unit_number, MortgageInspectionProperty.property_number)
             )
@@ -1622,7 +1669,7 @@ async def get_document_structured_extraction(doc_id: int) -> dict | None:
             {
                 "property_number": prop.property_number,
                 "municipality_code": comune.cadastral_code if comune else None,
-                "municipality": comune.name if comune else None,
+                "municipality": _municipality_name(comune),
                 "cadastre_type": {"F": "fabbricati", "T": "terreni"}.get(unit.cadastre_type) if unit and unit.cadastre_type else None,
                 "urban_section": unit.section if unit else None,
                 "sheet": number(unit.sheet) if unit else None,
@@ -1713,7 +1760,7 @@ async def get_document_structured_extraction(doc_id: int) -> dict | None:
                 "surname": subject.last_name,
                 "given_name": subject.first_name,
                 "birth_date": _iso(subject.birth_date),
-                "birth_place": f"{birthplace.name} ({birthplace.province_code})" if birthplace and birthplace.province_code else (birthplace.name if birthplace else None),
+                "birth_place": _birth_place(subject, birthplace),
                 "gender": subject.gender,
                 "fiscal_code": subject.fiscal_code,
                 "entity_name": subject.name if is_entity else None,
@@ -1797,10 +1844,10 @@ async def find_responses(
     session_factory = _get_session_factory()
     async with session_factory() as session:
         stmt = (
-            select(Request, RequestPayload.data, CadastralUnit, Comune)
+            select(Request, RequestPayload.data, CadastralUnit, IstatMunicipality)
             .outerjoin(RequestPayload, RequestPayload.request_id == Request.id)
             .outerjoin(CadastralUnit, Request.cadastral_unit_id == CadastralUnit.id)
-            .outerjoin(Comune, CadastralUnit.comune_id == Comune.id)
+            .outerjoin(IstatMunicipality, CadastralUnit.comune_id == IstatMunicipality.numeric_code)
             .where(*_build_single_where(provincia, comune, foglio, particella, tipo_catasto))
             .order_by(Request.created_at.desc())
             .limit(limit)
@@ -1813,8 +1860,8 @@ async def find_responses(
             "request_id": req.request_ref,
             "request_type": req.request_type,
             "tipo_catasto": unit.cadastre_type if unit and unit.cadastre_type else "",
-            "provincia": _province_label(town.province_code if town else None),
-            "comune": town.name if town else "",
+            "provincia": _province_label(town.province_abbreviation if town else None),
+            "comune": _municipality_name(town) or "",
             "foglio": unit.sheet if unit and unit.sheet else "",
             "particella": unit.parcel if unit and unit.parcel else "",
             "sezione": unit.section if unit else None,
@@ -1882,8 +1929,8 @@ async def find_result_rows(
                 Request.request_ref.label("request_id"),
                 Request.request_type.label("request_type"),
                 CadastralUnit.cadastre_type.label("cadastre_type"),
-                Comune.province_code.label("province"),
-                Comune.name.label("municipality"),
+                IstatMunicipality.province_abbreviation.label("province"),
+                func.upper(func.coalesce(IstatMunicipality.italian_name, IstatMunicipality.name)).label("municipality"),
                 CadastralUnit.sheet.label("sheet"),
                 CadastralUnit.parcel.label("parcel"),
                 CadastralUnit.section.label("section"),
@@ -1899,7 +1946,7 @@ async def find_result_rows(
             )
             .select_from(Request)
             .outerjoin(CadastralUnit, Request.cadastral_unit_id == CadastralUnit.id)
-            .outerjoin(Comune, CadastralUnit.comune_id == Comune.id)
+            .outerjoin(IstatMunicipality, CadastralUnit.comune_id == IstatMunicipality.numeric_code)
             .where(*_build_single_where(provincia, comune, foglio, particella, tipo_catasto, status))
             .order_by(Request.created_at.desc())
         )
@@ -2033,9 +2080,14 @@ def _build_single_where(
     """Build portable ORM filters for single-result queries (province by sigla or name, comune by name)."""
     conditions = []
     if provincia:
-        conditions.append(Comune.province_code == (province_code(provincia) or str(provincia).strip().upper()))
+        conditions.append(
+            func.upper(IstatMunicipality.province_abbreviation) == (province_code(provincia) or str(provincia).strip().upper())
+        )
     if comune:
-        conditions.append(Comune.name == (place_name(comune) or str(comune).strip().upper()))
+        conditions.append(
+            func.upper(func.coalesce(IstatMunicipality.italian_name, IstatMunicipality.name))
+            == (place_name(comune) or str(comune).strip().upper())
+        )
     if foglio:
         conditions.append(CadastralUnit.sheet == str(foglio))
     if particella:
@@ -2074,7 +2126,7 @@ async def count_total_result_rows(
         select(func.count())
         .select_from(Request)
         .outerjoin(CadastralUnit, Request.cadastral_unit_id == CadastralUnit.id)
-        .outerjoin(Comune, CadastralUnit.comune_id == Comune.id)
+        .outerjoin(IstatMunicipality, CadastralUnit.comune_id == IstatMunicipality.numeric_code)
         .where(*_build_single_where(provincia, comune, foglio, particella, tipo_catasto, status))
     )
     async with _get_session_factory()() as session:
@@ -2109,7 +2161,7 @@ async def count_result_rows(
             )
             .select_from(Request)
             .outerjoin(CadastralUnit, Request.cadastral_unit_id == CadastralUnit.id)
-            .outerjoin(Comune, CadastralUnit.comune_id == Comune.id)
+            .outerjoin(IstatMunicipality, CadastralUnit.comune_id == IstatMunicipality.numeric_code)
             .where(*filters)
         )
         async with _get_session_factory()() as session:

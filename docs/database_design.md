@@ -1,8 +1,7 @@
 # Flat, normalised database design
 
-Status: migration `20261024_flat_normalised` is written and verified on a scratch copy of the database. It has **not**
-been applied to the live `sister` database, and the application code (`db_models.py`, `visura_xml_models.py`,
-`database.py`, `xml_ingest.py`, `web.py`, the CLI) still targets the old layout. See "What the application must change".
+Status: the normalized schema is live in the `sister` database. Revision `20261028_istat_municipalities` moves
+municipality lookups to the shared `istat.municipalities` foreign table; the application reads its `numeric_code` keys.
 
 Files: `alembic/versions/20261024_flat_normalised.py` runs the SQL in `alembic/sql/20261024_flat_normalised/`
 (`01_dedup` → `02_schema` → `03_load` → `04_validate` → `05_views` → `06_swap`; `07_down` is the downgrade).
@@ -12,11 +11,12 @@ ER diagram: `docs/schema_flat.svg` (regenerate with the command at the end).
 
 - **Flat**: one typed column per fact. No JSON or text blobs in the working schema, no EAV tree, no `x_json` copy of
   child rows, no 1:1 side tables, no polymorphic "one of these three parents" columns.
-- **Normalised**: every real-world thing exists once and is referenced by a `bigint` key (comune, cadastral unit,
-  subject, right kind, registry office). Composite source text is split into typed columns: a share `1/2` is two
+- **Normalised**: every real-world thing exists once and is referenced by a typed key (ISTAT numeric code for
+  municipalities; local keys for cadastral units, subjects, right kinds, and registry offices). Composite source text is split into typed columns: a share `1/2` is two
   integers, `R.Euro:1704,31` is a `numeric`, `dd/mm/yyyy` is a `date`, `RAVENNA (RA)` is a comune.
-- **Integrity in the database**: every relation has a foreign key and an index; natural keys are unique
-  (`NULLS NOT DISTINCT` where a part may be missing); closed vocabularies are `CHECK`s, open ones are lookup tables.
+- **Integrity in the database**: local relations have foreign keys and indexes; natural keys are unique
+  (`NULLS NOT DISTINCT` where a part may be missing). The shared ISTAT foreign table is the municipality authority;
+  PostgreSQL cannot enforce foreign keys to it.
 - **Raw payloads live elsewhere**: response JSON, the XML node tree, extraction JSON and document text moved to
   `sister_archive`. All of it can be rebuilt from the stored `.p7m` files and `outputs/`.
 
@@ -57,7 +57,7 @@ cache rows. These are counted in `04_validate.sql`.
 ## The new model
 
 ```
-comune ◄── cadastral_unit ◄── request ──► request_result ──► result_owner ──► subject, ownership_right ──► right_kind
+istat.municipalities ◄── cadastral_unit ◄── request ──► request_result ──► result_owner ──► subject, ownership_right ──► right_kind
    ▲            ▲    ▲           ▲  ▲                           │
    │            │    └── property ┘  └── page_visit ──► form_element, error
    │            │
@@ -71,7 +71,7 @@ comune ◄── cadastral_unit ◄── request ──► request_result ─�
 
 | Legacy | New |
 |---|---|
-| `cadastral_locations`, `geographic_places` | `cadastral_unit` + `comune` (province code, Belfiore code) |
+| `cadastral_locations`, `geographic_places` | `cadastral_unit` + `istat.municipalities` (province abbreviation, Belfiore code) |
 | `cadastral_subjects`, `document_subjects`, mortgage party identity | `subject` (+ `document_subject`) |
 | `ownership_right_catalog`, `ownership_rights` | `right_kind`, `ownership_right` (share as numerator/denominator, real dates) |
 | `visura_requests` + `visura_responses` | `request` (response columns inline; `data` → `sister_archive.request_payload`) |
@@ -123,15 +123,19 @@ Read views: `v_cadastral_unit`, `v_property`, `v_result_owner`, `v_property_owne
    them for 182 persons.
 9. **Search matviews** were not rebuilt (`sister_property_index` took over 10 minutes to refresh); rebuild over the new views if wanted.
 
-## What the application must change (not done)
+## Application alignment
 
-- ORM models: `sister/db_models.py`, `sister/visura_xml_models.py` follow the new tables; the old `OwnershipRightCatalog` becomes `right_kind`.
-- Writers: `database._project_response` / `save_response`, `xml_ingest.ingest_visura_xml` and `_persist_flattened_xml` must
-  upsert `comune`, `cadastral_unit`, `subject`, `right_kind`, `ownership_right` and the lookup rows (the trigger-fed
-  `enum_*` tables no longer exist), parse shares/dates/amounts with `result_parsers`, and write raw payloads to `sister_archive`.
-- Readers: `web.py`, `visura_view.py` and the document page read `document`/`building_unit`/`ownership_mutation`; the path
-  of a document is `<documents dir>/<file_name>`; map code looks geometry up by comune/section/sheet/parcel.
-- Tests: `tests/pg_isolation.py` builds its throwaway schema from the models, so it follows the model change.
+The application models map municipality data to `istat.municipalities`; projection, XML ingestion, result queries,
+document views, and map-cache writes all use ISTAT `numeric_code` values. Tests build an isolated copy of the shared
+municipality rows in a throwaway schema.
+
+## Shared municipality reference
+
+SISTER stores `istat.municipalities.numeric_code` in the existing `comune_id` columns and joins to the shared foreign
+table. PostgreSQL does not support foreign keys referencing foreign tables, so these integer columns are indexed but
+not constrained to that relation. Foreign and historical birthplaces that have no current ISTAT row are retained in
+`subject.birth_municipality_text` and `subject.birth_province_code`. The previous local dimension is retained as
+`comune_pre_istat` only so the migration can be downgraded; application queries do not use it.
 
 ## Databases that ran the first variant (including live)
 

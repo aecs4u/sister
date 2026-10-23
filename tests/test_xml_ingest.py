@@ -1,5 +1,6 @@
 """Visura XML → typed document tables (shapes taken from real SISTER documents, with invented data)."""
 
+import itertools
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
@@ -66,9 +67,12 @@ def test_parse_rejects_what_is_not_a_visura(content):
 # --- database ---------------------------------------------------------------------------------------------
 
 
+_documents = itertools.count(1)
+
+
 async def _document(session, xml: str) -> int:
     await ensure_lookup(session, "document_type", "visura")
-    row = Document(document_type="visura", file_format="P7M", file_name="x.p7m")
+    row = Document(document_type="visura", file_format="P7M", file_name=f"x{next(_documents)}.p7m")  # file names are unique
     session.add(row)
     await session.flush()
     session.add(DocumentContent(document_id=row.id, content=xml))
@@ -97,7 +101,8 @@ async def test_ingest_fabbricati_storica_fills_unit_owners_and_header():
                 {"d": doc},
             )
         ).one()
-        assert tuple(classification) == ("A/4", "04", Decimal("557.77"), Decimal("6.0"), "vani", "1")
+        # class and unit are stored normalised: "04" → "4", "vani" → "VANI"
+        assert tuple(classification) == ("A/4", "4", Decimal("557.77"), Decimal("6.0"), "VANI", "1")
         assert await _scalar(session, "SELECT total_area_sqm FROM building_unit WHERE document_id = :d AND is_current", d=doc) == 120
         assert await _scalar(session, "SELECT address_text FROM building_unit WHERE document_id = :d AND is_current", d=doc) == (
             "VIA EL ALAMEIN n. 2 Piano T-1"
@@ -129,7 +134,7 @@ async def test_ingest_fabbricati_storica_fills_unit_owners_and_header():
                     "SELECT d.title, d.registry_view_type, c.cadastral_code, d.requester, d.liquidation_units "
                     "FROM document d JOIN building_unit b ON b.document_id = d.id "
                     "JOIN cadastral_unit u ON u.id = b.cadastral_unit_id "
-                    "JOIN comune c ON c.id = u.comune_id WHERE d.id = :d"
+                    "JOIN municipalities c ON c.numeric_code = u.comune_id WHERE d.id = :d"
                 ),
                 {"d": doc},
             )
@@ -148,9 +153,9 @@ async def test_ingest_soggetto_fills_subject_groups_units_and_land():
         subject = (
             await session.execute(
                 text(
-                    "SELECT s.fiscal_code, s.last_name, s.first_name, s.birth_date, g.name, "
+                    "SELECT s.fiscal_code, s.last_name, s.first_name, s.birth_date, upper(g.italian_name), "
                     "g.cadastral_code FROM document_subject d JOIN subject s ON s.id = d.subject_id "
-                    "LEFT JOIN comune g ON g.id = s.birth_comune_id WHERE d.document_id = :d"
+                    "LEFT JOIN municipalities g ON g.numeric_code = s.birth_comune_id WHERE d.document_id = :d"
                 ),
                 {"d": doc},
             )

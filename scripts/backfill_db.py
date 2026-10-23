@@ -2,7 +2,7 @@
 """Backfill immobili and intestati tables from existing output JSON files.
 
 Reads all response JSON files from the outputs directory and populates
-visura_requests, visura_responses, immobili, and intestati tables.
+request, property and result_owner (and the archived response JSON).
 Safe to re-run: existing rows are replaced (upsert behaviour in save_response).
 """
 
@@ -21,8 +21,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 load_dotenv(PROJECT_ROOT / ".env")
 load_dotenv(PROJECT_ROOT.parent / ".env", override=False)
 
-from sister.database import _get_session_factory, init_db, save_response
-from sister.db_models import VisuraRequest
+from sister.database import _get_session_factory, init_db, save_request, save_response
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 log = logging.getLogger(__name__)
@@ -54,27 +53,25 @@ def _parse_request_id(request_id: str) -> tuple[str, str]:
 
 
 async def _ensure_request(session_factory, request_id: str, tipo_catasto: str, request_type: str) -> None:
-    """Insert a minimal visura_requests row if it doesn't exist."""
+    """Insert a minimal request row if it doesn't exist."""
     from sqlalchemy import text
 
     async with session_factory() as session:
         existing = await session.execute(
-            text("SELECT request_id FROM visura_requests WHERE request_id = :rid"),
+            text("SELECT id FROM request WHERE request_ref = :rid"),
             {"rid": request_id},
         )
         if existing.fetchone():
             return
-        req = VisuraRequest(
-            request_id=request_id,
-            request_type=request_type,
-            tipo_catasto=tipo_catasto,
-            provincia="",
-            comune="",
-            foglio="",
-            particella="",
-        )
-        session.add(req)
-        await session.commit()
+    await save_request(
+        request_id=request_id,
+        request_type=request_type,
+        tipo_catasto=tipo_catasto,
+        provincia="",
+        comune="",
+        foglio="",
+        particella="",
+    )
 
 
 async def backfill(outputs_dir: str) -> None:

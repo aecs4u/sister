@@ -51,44 +51,47 @@ RECROWD_PROPONENTS_SQL = text("""
     ORDER BY p.organization_name
 """)
 
+# raw response JSON lives in the archive schema
+ARCHIVE = '"' + os.getenv("DATABASE_ARCHIVE_SCHEMA", "sister_archive") + '"'
+
 HAS_PROPERTY_VISURA_SQL = text("""
     SELECT EXISTS (
         SELECT 1
-        FROM visura_documents AS vd
-        JOIN document_metadata AS dm ON dm.id = vd.id
-        JOIN cadastral_locations AS loc ON loc.id = dm.location_id
-        WHERE UPPER(COALESCE(loc.cadastre_type, '')) = :cadastre_type
-          AND UPPER(BTRIM(COALESCE(loc.province, ''))) IN (:province, :province_code)
-          AND UPPER(BTRIM(COALESCE(loc.municipality, ''))) = :municipality
+        FROM document AS vd
+        JOIN cadastral_unit AS loc ON loc.id = vd.cadastral_unit_id
+        JOIN comune AS com ON com.id = loc.comune_id
+        WHERE COALESCE(loc.cadastre_type, '') = :cadastre_type
+          AND com.province_code IN (:province, :province_code)
+          AND com.name = :municipality
           AND BTRIM(COALESCE(loc.sheet, '')) = :sheet
           AND BTRIM(COALESCE(loc.parcel, '')) = :parcel
           AND UPPER(BTRIM(COALESCE(loc.subunit, ''))) = :subunit
           AND UPPER(BTRIM(COALESCE(loc.section, ''))) = :section
           AND (
-              REPLACE(REPLACE(LOWER(COALESCE(dm.view_subtype, '')), '_', ' '), '-', ' ')
+              REPLACE(REPLACE(LOWER(COALESCE(vd.view_subtype, '')), '_', ' '), '-', ' ')
                   = 'storica analitica'
-              OR REPLACE(REPLACE(LOWER(COALESCE(dm.title, '')), '_', ' '), '-', ' ')
+              OR REPLACE(REPLACE(LOWER(COALESCE(vd.title, '')), '_', ' '), '-', ' ')
                   LIKE '%storica analitica%'
-              OR REPLACE(REPLACE(LOWER(COALESCE(vd.subject, '')), '_', ' '), '-', ' ')
+              OR REPLACE(REPLACE(LOWER(COALESCE(vd.subject_text, '')), '_', ' '), '-', ' ')
                   LIKE '%storica analitica%'
-              OR REPLACE(REPLACE(LOWER(COALESCE(vd.filename, '')), '_', ' '), '-', ' ')
+              OR REPLACE(REPLACE(LOWER(COALESCE(vd.file_name, '')), '_', ' '), '-', ' ')
                   LIKE '%storica analitica%'
           )
     )
 """)
 
-RECENT_REQUEST_SQL = text("""
+RECENT_REQUEST_SQL = text(f"""
     SELECT CASE
-        WHEN resp.request_id IS NULL THEN 'queued'
-        WHEN COALESCE(resp.data::jsonb, '{}'::jsonb) ? 'needs_human' THEN 'needs_human'
+        WHEN vr.responded_at IS NULL THEN 'queued'
+        WHEN COALESCE(payload.data::jsonb, '{{}}'::jsonb) ? 'needs_human' THEN 'needs_human'
         ELSE 'recent_response'
     END
-    FROM visura_requests AS vr
-    LEFT JOIN visura_responses AS resp ON resp.request_id = vr.request_id
+    FROM request AS vr
+    LEFT JOIN {ARCHIVE}.request_payload AS payload ON payload.request_id = vr.id
     WHERE vr.cache_key = :cache_key
       AND vr.request_type = 'visura_storica'
       AND vr.created_at >= CURRENT_TIMESTAMP - (:days * INTERVAL '1 day')
-      AND (resp.request_id IS NULL OR resp.success IS TRUE)
+      AND (vr.responded_at IS NULL OR vr.success IS TRUE)
     ORDER BY vr.created_at DESC
     LIMIT 1
 """)
@@ -96,11 +99,10 @@ RECENT_REQUEST_SQL = text("""
 RECENT_QUEUED_SQL = text("""
     SELECT EXISTS (
         SELECT 1
-        FROM visura_requests AS vr
-        LEFT JOIN visura_responses AS resp ON resp.request_id = vr.request_id
+        FROM request AS vr
         WHERE vr.cache_key = :cache_key
           AND vr.request_type = 'visura_storica'
-          AND resp.request_id IS NULL
+          AND vr.responded_at IS NULL
           AND vr.created_at >= CURRENT_TIMESTAMP - (:minutes * INTERVAL '1 minute')
     )
 """)
@@ -258,11 +260,15 @@ def _request_cache_key(location: dict[str, str]) -> str:
 
 
 def _has_property_visura(engine, location: dict[str, str], province_code: str = "") -> bool:
+    from sister.provinces import province_code as to_sigla
+    from sister.reference import place_name
+
     params = {
         **location,
-        "province": location["province"].strip().upper(),
-        "province_code": province_code.strip().upper() or location["province"].strip().upper(),
-        "municipality": location["municipality"].strip().upper(),
+        # the database stores the sigla: accept the province as a name or a sigla, in either argument
+        "province": to_sigla(location["province"]) or "",
+        "province_code": to_sigla(province_code) or to_sigla(location["province"]) or "",
+        "municipality": place_name(location["municipality"]) or "",
         "sheet": location["sheet"].strip(),
         "parcel": location["parcel"].strip(),
         "subunit": location.get("subunit", "").strip().upper(),

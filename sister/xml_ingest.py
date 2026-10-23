@@ -495,7 +495,6 @@ async def ingest_visura_xml(session, document_id: int, content: str | bytes | No
     """
     from .db_models import Document
     from .reference import get_or_create_comune, get_or_create_office
-    from .result_parsers import parse_it_date
     from .visura_xml_models import DocumentAddress, DocumentSubject, PropertyGroup
 
     parsed = parse_visura_xml(content) if content else None
@@ -514,7 +513,6 @@ async def ingest_visura_xml(session, document_id: int, content: str | bytes | No
         document.registry_view_type = header.get("TipoVisura") or document.registry_view_type
         document.service_type = header.get("TipoServizio") or document.service_type
         document.generated_at = _generated_at(header.get("Data", ""), header.get("Ora", "")) or document.generated_at
-        document.reference_date = parse_it_date(header.get("SituazioneAl")) or document.reference_date
         document.land_registry_office_id = await get_or_create_office(session, header.get("Provenienza")) or document.land_registry_office_id
         document.protocol = request.get("Protocollo") or document.protocol
         document.protocol_year = _int(request.get("Anno")) or document.protocol_year

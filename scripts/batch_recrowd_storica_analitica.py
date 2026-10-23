@@ -47,71 +47,75 @@ RECROWD_PROPONENTS_SQL = text("""
     ORDER BY p.organization_name
 """)
 
-HAS_ANALYTICAL_VISURA_SQL = text("""
+# raw payloads (response JSON, document text, XML tree) live in the archive schema
+ARCHIVE = '"' + os.getenv("DATABASE_ARCHIVE_SCHEMA", "sister_archive") + '"'
+
+HAS_ANALYTICAL_VISURA_SQL = text(f"""
     SELECT EXISTS (
         SELECT 1
-        FROM visura_documents AS vd
-        JOIN document_metadata AS dm ON dm.id = vd.id
+        FROM document AS vd
         WHERE (
             LOWER(COALESCE(vd.document_type, '')) = 'visura_soggetto'
             OR (
                 LOWER(COALESCE(vd.document_type, '')) = 'visura'
                 AND (
-                    LOWER(COALESCE(vd.subject, '')) LIKE '%soggetto%'
-                    OR LOWER(COALESCE(dm.title, '')) LIKE '%soggetto%'
+                    LOWER(COALESCE(vd.subject_text, '')) LIKE '%soggetto%'
+                    OR LOWER(COALESCE(vd.title, '')) LIKE '%soggetto%'
                 )
             )
         )
           AND (
-              LOWER(COALESCE(dm.view_subtype, '')) = 'storica_analitica'
-              OR LOWER(COALESCE(dm.title, '')) LIKE '%storica analitica%'
-              OR LOWER(COALESCE(vd.subject, '')) LIKE '%storica analitica%'
+              LOWER(COALESCE(vd.view_subtype, '')) = 'storica_analitica'
+              OR LOWER(COALESCE(vd.title, '')) LIKE '%storica analitica%'
+              OR LOWER(COALESCE(vd.subject_text, '')) LIKE '%storica analitica%'
           )
           AND (
               EXISTS (
                   SELECT 1
-                  FROM document_subjects AS ds
-                  JOIN cadastral_subjects AS cs ON cs.id = ds.subject_id
-                  WHERE ds.id = vd.id AND UPPER(BTRIM(cs.fiscal_code)) = :code
+                  FROM document_subject AS ds
+                  JOIN subject AS cs ON cs.id = ds.subject_id
+                  WHERE ds.document_id = vd.id AND cs.fiscal_code = :code
               )
-              OR POSITION(:code IN UPPER(COALESCE(vd.filename, ''))) > 0
-              OR POSITION(:code IN UPPER(COALESCE(vd.subject, ''))) > 0
-              OR POSITION(:code IN UPPER(COALESCE(dm.content, ''))) > 0
+              OR POSITION(:code IN UPPER(COALESCE(vd.file_name, ''))) > 0
+              OR POSITION(:code IN UPPER(COALESCE(vd.subject_text, ''))) > 0
               OR EXISTS (
-                  SELECT 1 FROM document_xml_nodes AS n
+                  SELECT 1 FROM {ARCHIVE}.document_content AS dc
+                  WHERE dc.document_id = vd.id AND POSITION(:code IN UPPER(dc.content)) > 0
+              )
+              OR EXISTS (
+                  SELECT 1 FROM {ARCHIVE}.document_xml_node AS n
                   WHERE n.document_id = vd.id AND UPPER(BTRIM(COALESCE(n.text, ''))) = :code
               )
               OR EXISTS (
                   SELECT 1
-                  FROM document_xml_nodes AS n
-                  JOIN document_xml_attributes AS a ON a.node_id = n.id
+                  FROM {ARCHIVE}.document_xml_node AS n
+                  JOIN {ARCHIVE}.document_xml_attribute AS a ON a.node_id = n.id
                   WHERE n.document_id = vd.id AND UPPER(BTRIM(a.value)) = :code
               )
           )
     )
 """)
 
-HAS_RECENT_SUBMISSION_SQL = text("""
+HAS_RECENT_SUBMISSION_SQL = text(f"""
     SELECT EXISTS (
         SELECT 1
-        FROM visura_requests AS vr
-        JOIN visura_responses AS resp ON resp.request_id = vr.request_id
+        FROM request AS vr
+        JOIN {ARCHIVE}.request_payload AS payload ON payload.request_id = vr.id
         WHERE vr.request_type = 'soggetto_documento'
-          AND resp.success IS TRUE
-          AND resp.created_at >= CURRENT_TIMESTAMP - (:days * INTERVAL '1 day')
-          AND resp.data ->> 'soggetto' = :code
-          AND resp.data ->> 'vista' = 'analitica'
-          AND COALESCE(resp.data ->> 'richieste', '[]') <> '[]'
+          AND vr.success IS TRUE
+          AND vr.responded_at >= CURRENT_TIMESTAMP - (:days * INTERVAL '1 day')
+          AND payload.data::jsonb ->> 'soggetto' = :code
+          AND payload.data::jsonb ->> 'vista' = 'analitica'
+          AND COALESCE(payload.data::jsonb ->> 'richieste', '[]') <> '[]'
     )
 """)
 
 HAS_RECENT_QUEUED_REQUEST_SQL = text("""
     SELECT EXISTS (
         SELECT 1
-        FROM visura_requests AS vr
-        LEFT JOIN visura_responses AS resp ON resp.request_id = vr.request_id
+        FROM request AS vr
         WHERE vr.cache_key = :cache_key
-          AND resp.request_id IS NULL
+          AND vr.responded_at IS NULL
           AND vr.created_at >= CURRENT_TIMESTAMP - (:minutes * INTERVAL '1 minute')
     )
 """)

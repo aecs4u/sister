@@ -1,6 +1,6 @@
 """Clean up after documents were removed by hand: database rows and aliases that point at a file that is gone.
 
-For every ``visura_documents`` row (and ``document_links`` alias) whose file no longer exists, the surviving file of
+For every ``document`` row (and ``document_links`` alias) whose file no longer exists, the surviving file of
 the same document is looked up: the old name, or the name without its practice-id suffix, followed through the renames
 recorded by ``rename_documents_with_date.py`` / ``normalize_documents.py``. It counts as the same document only when
 its content equals the XML kept in the database (the PDFs have no stored content: their rows are only reported).
@@ -72,7 +72,7 @@ async def extraction_counts() -> dict[int, int]:
     async with engine.connect() as conn:
         rows = (
             await conn.execute(
-                text("SELECT document_id, count(*) FROM document_structured_extractions GROUP BY document_id")
+                text("SELECT document_id, count(*) FROM document_extraction GROUP BY document_id")
             )
         ).all()
     await engine.dispose()
@@ -80,15 +80,15 @@ async def extraction_counts() -> dict[int, int]:
 
 
 async def load_rows() -> list:
-    from sister.database import _get_engine
+    from sister.database import DATABASE_ARCHIVE_SCHEMA, _get_engine
 
     engine = _get_engine()
     async with engine.connect() as conn:
         rows = (
             await conn.execute(
                 text(
-                    "SELECT d.id, d.filename, d.response_id, m.content FROM visura_documents d"
-                    " LEFT JOIN document_metadata m ON m.id = d.id"
+                    "SELECT d.id, d.file_name AS filename, d.request_id AS response_id, c.content FROM document d"  # noqa: S608
+                    f' LEFT JOIN "{DATABASE_ARCHIVE_SCHEMA}".document_content c ON c.document_id = d.id'
                 )
             )
         ).all()
@@ -106,13 +106,13 @@ async def remove_rows(pairs: list[tuple[int, int]], commit: bool) -> dict[str, i
         for gone_id, keeper_id in pairs:
             await conn.execute(
                 text(
-                    "UPDATE visura_documents SET response_id = (SELECT response_id FROM visura_documents WHERE id = :g)"
-                    " WHERE id = :k AND response_id IS NULL"
+                    "UPDATE document SET request_id = (SELECT request_id FROM document WHERE id = :g)"
+                    " WHERE id = :k AND request_id IS NULL"
                 ),
                 {"g": gone_id, "k": keeper_id},
             )
         if pairs:
-            await delete_tree(conn, "visura_documents", "id = ANY(:ids)", {"ids": [g for g, _ in pairs]}, counts)
+            await delete_tree(conn, "document", "id = ANY(:ids)", {"ids": [g for g, _ in pairs]}, counts)
         await (transaction.commit() if commit else transaction.rollback())
     await engine.dispose()
     return counts

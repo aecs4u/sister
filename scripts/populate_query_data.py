@@ -27,7 +27,7 @@ from sister.database import (  # noqa: E402
     save_request,
     save_response,
 )
-from sister.db_models import PageVisit, VisuraOwner, VisuraProperty  # noqa: E402
+from sister.db_models import PageVisit, Property, ResultOwner  # noqa: E402
 
 REQUEST_TYPE_BY_PREFIX = {
     "req": "visura",
@@ -266,16 +266,16 @@ async def populate(source: Path, dry_run: bool, manifest_path: Path | None = Non
 
     counts = await count_responses()
     async with _get_session_factory()() as session:
-        properties = await session.scalar(select(func.count()).select_from(VisuraProperty)) or 0
-        owners = await session.scalar(select(func.count()).select_from(VisuraOwner)) or 0
+        properties = await session.scalar(select(func.count()).select_from(Property)) or 0
+        owners = await session.scalar(select(func.count()).select_from(ResultOwner)) or 0
         page_visits = await session.scalar(select(func.count()).select_from(PageVisit)) or 0
     return {
         "files_new": len(processed),
         "files_skipped": len({path for path, _ in payloads}) - len(processed),
-        "visura_requests": counts["total_requests"],
-        "visura_responses": counts["total_responses"],
-        "visura_properties": properties,
-        "visura_owners": owners,
+        "requests": counts["total_requests"],
+        "responses": counts["total_responses"],
+        "properties": properties,
+        "owners": owners,
         "page_visits": page_visits,
     }
 

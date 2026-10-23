@@ -4,7 +4,7 @@ The ``.p7m`` is the only stored copy; its XML is read in memory (``sister.utils.
 wrote ``<stem>.xml`` and, through ``_parse_visura_xml``, an extensionless ``<stem>`` next to every ``.p7m``, and the
 folder imports indexed all three as separate documents.
 
-A file is removed only when its bytes equal the payload of ``<stem>.p7m``. A ``visura_documents`` row is removed
+A file is removed only when its bytes equal the payload of ``<stem>.p7m``. A ``document`` row is removed
 (with everything that hangs off it, children first, in one transaction) only when its file is such a copy and the
 ``.p7m`` has its own row with the XML content. Dry run unless ``--apply``.
 
@@ -66,7 +66,7 @@ async def fk_children(conn, table: str) -> list[tuple[str, str, str]]:
         ),
         {"t": table},
     )
-    return [(r[0].split(".")[-1], r[1], r[2]) for r in rows]
+    return [(r[0], r[1], r[2]) for r in rows]  # keep the schema: the archive tables are not on the search path
 
 
 async def delete_tree(conn, table: str, where: str, params: dict, counts: dict[str, int]) -> None:
@@ -80,20 +80,22 @@ async def delete_tree(conn, table: str, where: str, params: dict, counts: dict[s
 
 
 async def clean_database(copies: dict[str, Path], apply: bool) -> dict[str, int]:
-    from sister.database import _get_engine
+    from sister.database import DATABASE_ARCHIVE_SCHEMA, _get_engine, document_file_path
 
     engine = _get_engine()
     counts: dict[str, int] = {}
     # A dry run executes the same deletes and rolls them back, so the counts are exact.
     async with engine.connect() as conn:
         transaction = await conn.begin()
-        rows = (await conn.execute(text("SELECT id, filename, file_path FROM visura_documents"))).all()
+        rows = (await conn.execute(text("SELECT id, file_name AS filename FROM document"))).all()
+        archive = f'"{DATABASE_ARCHIVE_SCHEMA}"'
         with_content = {
             r[0]
             for r in await conn.execute(
                 text(
-                    "SELECT d.filename FROM visura_documents d JOIN document_metadata m ON m.id = d.id"
-                    " WHERE d.filename LIKE '%.p7m' AND m.content IS NOT NULL AND m.content <> ''"
+                    "SELECT d.file_name FROM document d"  # noqa: S608 (quoted schema name)
+                    f" JOIN {archive}.document_content c ON c.document_id = d.id"
+                    " WHERE d.file_name LIKE '%.p7m' AND c.content <> ''"
                 )
             )
         }
@@ -107,7 +109,8 @@ async def clean_database(copies: dict[str, Path], apply: bool) -> dict[str, int]
             if name.endswith(".xml") or "." not in name:
                 if f"{stem}.p7m" in with_content:
                     # the row is a copy when its file is a verified copy (or is already gone)
-                    path = Path(row.file_path) if row.file_path else None
+                    stored = document_file_path(name)
+                    path = Path(stored) if stored else None
                     if name in copies or path is None or not path.exists():
                         duplicate_ids.append(row.id)
                         continue
@@ -116,7 +119,7 @@ async def clean_database(copies: dict[str, Path], apply: bool) -> dict[str, int]
         if skipped:
             print("rows kept (no complete .p7m row or file not a verified copy):", *skipped[:10], sep="\n  ")
         if duplicate_ids:
-            await delete_tree(conn, "visura_documents", "id = ANY(:ids)", {"ids": duplicate_ids}, counts)
+            await delete_tree(conn, "document", "id = ANY(:ids)", {"ids": duplicate_ids}, counts)
         counts["_documents"] = len(duplicate_ids)
         await (transaction.commit() if apply else transaction.rollback())
     await engine.dispose()

@@ -1,9 +1,9 @@
-"""Backfill visura_documents from /data/aecs4u.it/sister/reports/ using rename_map.json.
+"""Backfill the document table from /data/aecs4u.it/sister/reports/ using rename_map.json.
 
 For each file in the rename_map old_to_new:
   - Parses the file (P7M/XML via _parse_visura_xml, PDF via filename convention)
   - Derives structured fields from the new meaningful filename
-  - Inserts a row into visura_documents (skips duplicates by file_path)
+  - Inserts a row into document (skips duplicates by file name)
 
 Usage:
     uv run python scripts/backfill_reports.py [--dry-run]
@@ -127,8 +127,10 @@ def _re_soggetto_match(stem: str) -> dict | None:
 async def run(dry_run: bool = False):
     from sqlalchemy import select
 
-    from sister.database import _get_session_factory, get_or_create_location, init_db
-    from sister.db_models import DocumentMetadata, VisuraDocument
+    from sister.database import _get_session_factory, init_db
+    from sister.db_models import Document, DocumentContent
+    from sister.reference import clean, ensure_lookup, get_or_create_cadastral_unit
+    from sister.result_parsers import parse_it_datetime
     from sister.utils import _parse_visura_xml
 
     await init_db()
@@ -137,10 +139,9 @@ async def run(dry_run: bool = False):
     rename_map = json.loads(RENAME_MAP_PATH.read_text())
     old_to_new: dict[str, str] = rename_map["old_to_new"]
 
-    # Pre-fetch existing file_paths to avoid duplicates
+    # Pre-fetch the stored file names to avoid duplicates
     async with session_factory() as session:
-        existing = set((await session.execute(select(VisuraDocument.file_path))).scalars().all())
-        existing.discard(None)
+        existing = set((await session.execute(select(Document.file_name))).scalars().all())
 
     inserted = 0
     skipped = 0
@@ -152,7 +153,7 @@ async def run(dry_run: bool = False):
             continue
 
         abs_path = str(file_path.resolve())
-        if abs_path in existing:
+        if old_name in existing:
             print(f"  EXISTS   {old_name}")
             skipped += 1
             continue
@@ -176,14 +177,13 @@ async def run(dry_run: bool = False):
                         fields[key] = xml_data[key]
                 fields["xml_content"] = xml_data.get("xml_content", "")
 
-        doc = VisuraDocument(
+        doc = Document(
             document_type=fields.get("document_type", "visura"),
             file_format=fields.get("file_format", ext.lstrip(".").upper()),
-            filename=fields["filename"],
-            file_path=fields["file_path"],
+            file_name=fields["filename"],  # the database keeps the name only; the directory is configuration
             file_size=fields.get("file_size"),
-            subject=fields.get("oggetto") or new_name,
-            requested_at=fields.get("richiesta_del"),
+            subject_text=fields.get("oggetto") or new_name,
+            requested_at=parse_it_datetime(fields.get("richiesta_del")),
         )
 
         action = "DRY-RUN" if dry_run else "INSERT "
@@ -195,27 +195,24 @@ async def run(dry_run: bool = False):
 
         if not dry_run:
             async with session_factory() as session:
-                session.add(doc)
-                await session.flush()  # get doc.id
-
+                await ensure_lookup(session, "document_type", doc.document_type)
                 has_location = fields.get("foglio") or fields.get("xml_content")
                 if has_location:
-                    location_id = await get_or_create_location(
+                    doc.cadastral_unit_id = await get_or_create_cadastral_unit(
                         session,
-                        cadastre_type=fields.get("tipo_catasto") or "",
-                        province=fields.get("provincia") or "",
-                        municipality=fields.get("comune") or "",
-                        sheet=fields.get("foglio") or "",
-                        parcel=fields.get("particella") or "",
-                        subunit=fields.get("subalterno") or "",
-                        section=fields.get("sezione_urbana") or "",
+                        cadastre_type=fields.get("tipo_catasto"),
+                        province=fields.get("provincia"),
+                        municipality=fields.get("comune"),
+                        sheet=fields.get("foglio"),
+                        parcel=fields.get("particella"),
+                        subunit=fields.get("subalterno"),
+                        section=fields.get("sezione_urbana"),
                     )
-                    meta = DocumentMetadata(
-                        id=doc.id,
-                        location_id=location_id,
-                        content=fields.get("xml_content") or None,
-                    )
-                    session.add(meta)
+                doc.file_format = clean(str(doc.file_format or "").upper())
+                session.add(doc)
+                await session.flush()  # get doc.id
+                if fields.get("xml_content"):
+                    session.add(DocumentContent(document_id=doc.id, content=fields["xml_content"]))
 
                 await session.commit()
             inserted += 1

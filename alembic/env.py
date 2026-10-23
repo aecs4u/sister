@@ -38,7 +38,6 @@ from sister.db_models import (  # noqa: F401, E402
     ActivityLogPayload,
     CadastralCategory,
     CadastralUnit,
-    Comune,
     Document,
     DocumentContent,
     DocumentExtraction,
@@ -130,6 +129,8 @@ def run_migrations_online() -> None:
         context.configure(
             connection=connection,
             target_metadata=target_metadata,
+            sister_schema=os.getenv("DATABASE_SCHEMA", "sister"),
+            istat_schema=os.getenv("DATABASE_ISTAT_SCHEMA", "istat"),
         )
         with context.begin_transaction():
             context.run_migrations()

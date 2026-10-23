@@ -19,9 +19,11 @@ import re
 from datetime import date
 from typing import Any, Optional
 
-from sqlalchemy import text
+from sqlalchemy import func, or_, text
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlmodel import select
 
+from .db_models import IstatMunicipality
 from .provinces import province_code
 from .result_parsers import parse_it_date, parse_share, squeeze
 
@@ -105,7 +107,7 @@ async def ensure_lookup(session: AsyncSession, table: str, code: Any, descriptio
 
 
 # ---------------------------------------------------------------------------------------------------------
-# Comune
+# ISTAT municipality
 # ---------------------------------------------------------------------------------------------------------
 
 
@@ -115,61 +117,36 @@ async def get_or_create_comune(
     province: Any = None,
     cadastral_code: Any = None,
 ) -> Optional[int]:
-    """The comune for a name (+ province name or sigla) and/or Belfiore code; None when neither identifies one.
+    """Resolve an existing ISTAT ``numeric_code`` from a name and/or Belfiore code.
 
-    A known code wins (it is unique). A name seen with exactly one province takes that province where the source left
-    it blank, so ``PALERMO`` with and without ``PA`` is one comune.
+    This compatibility-named helper no longer creates reference rows. A known cadastral code wins; otherwise a name
+    must resolve uniquely, with a province sigla used when supplied. When the province is absent, homonyms remain
+    unresolved.
     """
     place = place_name(name)
     prov = province_code(province)
     code = belfiore_code(cadastral_code)
 
     if code:
-        row = await _one(session, "SELECT id, province_code FROM comune WHERE cadastral_code = :c", c=code)
-        if row:
-            if prov and row.province_code is None:
-                await session.execute(
-                    text("UPDATE comune SET province_code = :p WHERE id = :i AND province_code IS NULL"), {"p": prov, "i": row.id}
-                )
-            return row.id
+        row = await session.execute(
+            select(IstatMunicipality.numeric_code).where(func.upper(func.trim(IstatMunicipality.cadastral_code)) == code).limit(1)
+        )
+        numeric_code = row.scalar_one_or_none()
+        if numeric_code is not None:
+            return numeric_code
     if not place:
         return None
 
-    if prov is None:
-        provinces = (
-            await session.execute(
-                text("SELECT DISTINCT province_code FROM comune WHERE name = :n AND province_code IS NOT NULL"), {"n": place}
-            )
-        ).scalars().all()
-        if len(provinces) == 1:
-            prov = provinces[0]
-
-    row = await _one(
-        session, "SELECT id, cadastral_code FROM comune WHERE name = :n AND province_code IS NOT DISTINCT FROM :p", n=place, p=prov
+    names = or_(
+        func.upper(func.trim(IstatMunicipality.name)) == place,
+        func.upper(func.trim(IstatMunicipality.italian_name)) == place,
+        func.upper(func.trim(IstatMunicipality.other_language_name)) == place,
     )
-    if row is None:
-        row = await _one(
-            session,
-            "INSERT INTO comune (name, province_code, cadastral_code) VALUES (:n, :p, :c) "
-            "ON CONFLICT ON CONSTRAINT uq_comune_province_name DO NOTHING RETURNING id, cadastral_code",
-            n=place,
-            p=prov,
-            c=code,
-        )
-        if row is None:  # lost a race with another writer
-            row = await _one(
-                session, "SELECT id, cadastral_code FROM comune WHERE name = :n AND province_code IS NOT DISTINCT FROM :p", n=place, p=prov
-            )
-        return row.id
-    if code and row.cadastral_code is None:
-        await session.execute(
-            text(
-                "UPDATE comune SET cadastral_code = :c WHERE id = :i AND cadastral_code IS NULL "
-                "AND NOT EXISTS (SELECT 1 FROM comune WHERE cadastral_code = :c)"
-            ),
-            {"c": code, "i": row.id},
-        )
-    return row.id
+    statement = select(IstatMunicipality.numeric_code).where(names)
+    if prov:
+        statement = statement.where(func.upper(func.trim(IstatMunicipality.province_abbreviation)) == prov)
+    matches = list(dict.fromkeys((await session.execute(statement)).scalars().all()))
+    return matches[0] if len(matches) == 1 else None
 
 
 # ---------------------------------------------------------------------------------------------------------
@@ -248,6 +225,8 @@ async def get_or_create_subject(
     birth_comune_id = None
     if clean(birth_municipality) or belfiore_code(birth_municipality_code):
         birth_comune_id = await get_or_create_comune(session, birth_municipality, birth_province, birth_municipality_code)
+    birth_municipality_text = place_name(birth_municipality) if birth_comune_id is None else None
+    birth_province_code = province_code(birth_province) if birth_municipality_text else None
     sex = (clean(gender) or "").upper()
     sex = sex if sex in {"M", "F"} else None
     kind = clean(subject_type)
@@ -261,10 +240,13 @@ async def get_or_create_subject(
         existing = await _one(
             session,
             "SELECT id FROM subject WHERE fiscal_code IS NULL AND upper(name) = upper(:n) AND birth_date IS NOT DISTINCT FROM :b "
-            "AND birth_comune_id IS NOT DISTINCT FROM :bc AND subject_type IS NOT DISTINCT FROM :k ORDER BY id LIMIT 1",
+            "AND birth_comune_id IS NOT DISTINCT FROM :bc AND birth_municipality_text IS NOT DISTINCT FROM :bt "
+            "AND birth_province_code IS NOT DISTINCT FROM :bp AND subject_type IS NOT DISTINCT FROM :k ORDER BY id LIMIT 1",
             n=name,
             b=born,
             bc=birth_comune_id,
+            bt=birth_municipality_text,
+            bp=birth_province_code,
             k=kind,
         )
     if existing is not None:
@@ -272,19 +254,45 @@ async def get_or_create_subject(
             text(
                 "UPDATE subject SET last_name = coalesce(last_name, :l), first_name = coalesce(first_name, :f), "
                 "gender = coalesce(gender, :g), birth_date = coalesce(birth_date, :b), "
-                "birth_comune_id = coalesce(birth_comune_id, :bc), subject_type = coalesce(subject_type, :k), "
+                "birth_comune_id = coalesce(birth_comune_id, :bc), "
+                "birth_municipality_text = coalesce(birth_municipality_text, :bt), "
+                "birth_province_code = coalesce(birth_province_code, :bp), subject_type = coalesce(subject_type, :k), "
                 "name = CASE WHEN name IN ('(sconosciuto)', fiscal_code) AND :n NOT IN ('(sconosciuto)') THEN :n ELSE name END "
                 "WHERE id = :i"
             ),
-            {"l": last, "f": first, "g": sex, "b": born, "bc": birth_comune_id, "k": kind, "n": name, "i": existing.id},
+            {
+                "l": last,
+                "f": first,
+                "g": sex,
+                "b": born,
+                "bc": birth_comune_id,
+                "bt": birth_municipality_text,
+                "bp": birth_province_code,
+                "k": kind,
+                "n": name,
+                "i": existing.id,
+            },
         )
         return existing.id
 
-    params = {"c": code, "n": name, "l": last, "f": first, "g": sex, "b": born, "bc": birth_comune_id, "k": kind}
+    params = {
+        "c": code,
+        "n": name,
+        "l": last,
+        "f": first,
+        "g": sex,
+        "b": born,
+        "bc": birth_comune_id,
+        "bt": birth_municipality_text,
+        "bp": birth_province_code,
+        "k": kind,
+    }
     row = await _one(
         session,
-        "INSERT INTO subject (fiscal_code, name, last_name, first_name, gender, birth_date, birth_comune_id, subject_type) "
-        "VALUES (:c, :n, :l, :f, :g, :b, :bc, :k) ON CONFLICT ON CONSTRAINT uq_subject_fiscal_code DO NOTHING RETURNING id",
+        "INSERT INTO subject (fiscal_code, name, last_name, first_name, gender, birth_date, birth_comune_id, "
+        "birth_municipality_text, birth_province_code, subject_type) "
+        "VALUES (:c, :n, :l, :f, :g, :b, :bc, :bt, :bp, :k) "
+        "ON CONFLICT ON CONSTRAINT uq_subject_fiscal_code DO NOTHING RETURNING id",
         **params,
     )
     if row is None:  # a concurrent writer inserted the same fiscal code

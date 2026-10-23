@@ -3027,6 +3027,7 @@ async def _write_visura_cadastral_map_cache(records: list[tuple]) -> None:
         if not is_db_writable():
             return
         import psycopg
+        from psycopg import sql
 
         dsn = os.getenv("DATABASE_DSN", "").strip()
         if not dsn:
@@ -3057,25 +3058,28 @@ async def _write_visura_cadastral_map_cache(records: list[tuple]) -> None:
                     for (feature_type, _key, municipality, province, municipality_code, section, sheet, parcel,
                          source_reference, geojson) in records
                 ]
+                istat_schema = os.getenv("DATABASE_ISTAT_SCHEMA", "istat")
+                municipalities = sql.SQL("{}.municipalities").format(sql.Identifier(istat_schema))
                 await cursor.executemany(
-                    """WITH target AS (
-                           SELECT id FROM sister.comune
-                           WHERE (%(code)s::text IS NOT NULL AND cadastral_code = %(code)s::text)
-                              OR (%(name)s::text IS NOT NULL AND name = %(name)s::text
-                                  AND (%(prov)s::text IS NULL OR province_code = %(prov)s::text))
-                           ORDER BY (cadastral_code = %(code)s::text) DESC NULLS LAST, id
+                    sql.SQL("""WITH target AS (
+                           SELECT numeric_code FROM {}
+                           WHERE (%(code)s::text IS NOT NULL AND upper(btrim(cadastral_code)) = upper(btrim(%(code)s::text)))
+                              OR (%(name)s::text IS NOT NULL
+                                  AND upper(btrim(coalesce(italian_name, name))) = upper(btrim(%(name)s::text))
+                                  AND (%(prov)s::text IS NULL OR upper(btrim(province_abbreviation)) = upper(btrim(%(prov)s::text))))
+                           ORDER BY (upper(btrim(cadastral_code)) = upper(btrim(%(code)s::text))) DESC NULLS LAST, numeric_code
                            LIMIT 1
                        )
                        INSERT INTO sister.parcel_geometry_cache (
                            feature_type, comune_id, section, sheet, parcel, source_reference, geom, checked_at
                        )
-                       SELECT %(feature_type)s, target.id, %(section)s, %(sheet)s, %(parcel)s, %(source_reference)s,
+                       SELECT %(feature_type)s, target.numeric_code, %(section)s, %(sheet)s, %(parcel)s, %(source_reference)s,
                               ST_SetSRID(ST_GeomFromGeoJSON((%(geom)s)::text), 4326), now()
                        FROM target
                        ON CONFLICT (feature_type, comune_id, section, sheet, parcel) DO UPDATE SET
                            source_reference = EXCLUDED.source_reference,
                            geom = COALESCE(EXCLUDED.geom, sister.parcel_geometry_cache.geom),
-                           checked_at = now()""",
+                           checked_at = now()""").format(municipalities),
                     rows,
                 )
             await connection.commit()

@@ -20,7 +20,7 @@ import uuid
 
 import pytest
 
-_SCHEMA_RE = re.compile(r"^sister_test_[0-9a-f]{8}(?:_archive)?$")
+_SCHEMA_RE = re.compile(r"^sister_test_[0-9a-f]{8}(?:_(?:archive|istat))?$")
 _LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1"}
 
 
@@ -46,14 +46,14 @@ def _drop(admin, schema: str) -> None:
         conn.execute(text(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE'))
 
 
-def _apply_table_migrations(engine) -> None:
+def _apply_table_migrations(engine, schema: str, istat_schema: str) -> None:
     """Create the tables that exist only as Alembic migrations (no ORM model), by running those migrations' DDL."""
     import importlib.util
     from pathlib import Path
 
-    from sqlalchemy import text
     from alembic.migration import MigrationContext
     from alembic.operations import Operations
+    from sqlalchemy import text
 
     migration_dir = Path(__file__).resolve().parent.parent / "alembic" / "versions"
     migrations = []
@@ -66,7 +66,7 @@ def _apply_table_migrations(engine) -> None:
         spec.loader.exec_module(migration)
         migrations.append(migration)
     with engine.begin() as conn:
-        with Operations.context(MigrationContext.configure(conn)):
+        with Operations.context(MigrationContext.configure(conn, opts={"sister_schema": schema, "istat_schema": istat_schema})):
             for migration in migrations:
                 migration.upgrade()
         conn.execute(
@@ -91,9 +91,16 @@ def _apply_table_migrations(engine) -> None:
                 "ON sister_request_jobs (status, lease_until)"
             )
         )
+    migration_path = migration_dir / "20261028_istat_municipalities.py"
+    spec = importlib.util.spec_from_file_location("_20261028_istat_municipalities_migration", migration_path)
+    migration = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(migration)
+    with engine.begin() as conn:
+        with Operations.context(MigrationContext.configure(conn, opts={"sister_schema": schema, "istat_schema": istat_schema})):
+            migration.upgrade()
 
 
-def _apply_flat_schema(engine, schema: str, archive_schema: str) -> None:
+def _apply_flat_schema(engine, schema: str, archive_schema: str, istat_schema: str) -> None:
     """Build the flat/normalised tables and views from the migration's own SQL, in the throwaway schemas.
 
     ``02_schema.sql`` and ``05_views.sql`` are the single definition of the layout (the ORM models only describe columns
@@ -111,7 +118,11 @@ def _apply_flat_schema(engine, schema: str, archive_schema: str) -> None:
         sql = (sql_dir / name).read_text(encoding="utf-8")
         sql = _re.sub(r"^CREATE SCHEMA[^;]*;\n", "", sql, flags=_re.MULTILINE)  # the schemas exist already
         sql = _re.sub(r"^SET LOCAL search_path[^;]*;\n", "", sql, flags=_re.MULTILINE)
-        return sql.replace("sister_next", f'"{schema}"').replace("sister_archive", f'"{archive_schema}"')
+        return (
+            sql.replace("sister_next", f'"{schema}"')
+            .replace("sister_archive", f'"{archive_schema}"')
+            .replace("istat.", f'"{istat_schema}".')
+        )
 
     with engine.begin() as conn:
         postgis_schema = conn.execute(
@@ -138,11 +149,16 @@ def pg_test_schema():
     import sister.visura_xml_models  # noqa: F401
 
     url = _local_dsn()
+    source_istat_schema = os.getenv("DATABASE_ISTAT_SCHEMA", "istat")
     sync_url = url.set(drivername="postgresql+psycopg")
     admin = create_engine(sync_url, isolation_level="AUTOCOMMIT")
     try:
         with admin.connect() as conn:
             conn.execute(text("SELECT 1"))
+            if conn.execute(
+                text("SELECT to_regclass(:relation)"), {"relation": f'{source_istat_schema}.municipalities'}
+            ).scalar_one() is None:
+                pytest.skip(f"DB tests need {source_istat_schema}.municipalities for ISTAT references")
             orphans = conn.execute(
                 text("SELECT schema_name FROM information_schema.schemata WHERE schema_name LIKE 'sister\\_test\\_%'")
             ).scalars().all()
@@ -156,17 +172,28 @@ def pg_test_schema():
 
     schema = "sister_test_" + uuid.uuid4().hex[:8]
     archive_schema = schema + "_archive"
-    assert _SCHEMA_RE.fullmatch(schema) and _SCHEMA_RE.fullmatch(archive_schema)
+    istat_schema = schema + "_istat"
+    assert _SCHEMA_RE.fullmatch(schema) and _SCHEMA_RE.fullmatch(archive_schema) and _SCHEMA_RE.fullmatch(istat_schema)
     with admin.connect() as conn:
         conn.execute(text(f'CREATE SCHEMA "{schema}"'))
         conn.execute(text(f'CREATE SCHEMA "{archive_schema}"'))
+        conn.execute(text(f'CREATE SCHEMA "{istat_schema}"'))
+        source = admin.dialect.identifier_preparer.quote_schema(source_istat_schema)
+        conn.execute(
+            text(
+                f'CREATE TABLE "{istat_schema}".municipalities AS '
+                f'SELECT numeric_code, name, italian_name, other_language_name, province_abbreviation, cadastral_code '
+                f'FROM {source}.municipalities'
+            )
+        )
+        conn.execute(text(f'ALTER TABLE "{istat_schema}".municipalities ADD PRIMARY KEY (numeric_code)'))
     try:
         query = dict(url.query)
-        query["options"] = f"-csearch_path={schema}"
+        query["options"] = f"-csearch_path={schema},{istat_schema}"
         schema_sync_url = sync_url.set(query=query)
         engine = create_engine(schema_sync_url)
-        _apply_flat_schema(engine, schema, archive_schema)
-        _apply_table_migrations(engine)
+        _apply_flat_schema(engine, schema, archive_schema, istat_schema)
+        _apply_table_migrations(engine, schema, istat_schema)
         with engine.begin() as conn:
             conn.execute(text("CREATE TABLE alembic_version (version_num varchar(64) NOT NULL PRIMARY KEY)"))
             conn.execute(text("INSERT INTO alembic_version VALUES (:v)"), {"v": database.DATABASE_REVISION})
@@ -175,6 +202,7 @@ def pg_test_schema():
     finally:
         _drop(admin, schema)
         _drop(admin, archive_schema)
+        _drop(admin, istat_schema)
         admin.dispose()
 
 
@@ -206,6 +234,7 @@ async def fresh_db(pg_test_schema, monkeypatch):
     monkeypatch.setattr(database, "DATABASE_DSN", async_dsn)
     monkeypatch.setattr(database, "DATABASE_SCHEMA", schema)
     monkeypatch.setattr(database, "DATABASE_ARCHIVE_SCHEMA", archive_schema)
+    monkeypatch.setattr(database, "DATABASE_ISTAT_SCHEMA", schema + "_istat")
     monkeypatch.setattr(database, "_engine", None)
     monkeypatch.setattr(database, "_db_writable", None)
     yield

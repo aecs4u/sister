@@ -28,7 +28,8 @@ load_dotenv(PROJECT_ROOT.parent / ".env", override=False)
 load_dotenv(OCULAR_ROOT / ".env", override=False)
 
 from sister.database import _get_session_factory  # noqa: E402
-from sister.db_models import StructuredDocumentExtraction, VisuraDocument  # noqa: E402
+from sister.database import document_file_path  # noqa: E402
+from sister.db_models import Document, DocumentExtraction  # noqa: E402
 from import_ocular_extraction import import_extraction  # noqa: E402
 
 
@@ -40,8 +41,8 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-def schema_for(document: VisuraDocument) -> str:
-    filename = (document.filename or "").casefold()
+def schema_for(document: Document) -> str:
+    filename = (document.file_name or "").casefold()
     if filename.startswith("isp_"):
         return "ispezione_ipotecaria_schema"
     if (document.document_type or "").casefold() in {
@@ -101,17 +102,17 @@ def normalize_and_validate_json(path: Path, schema_name: str, source_filename: s
         return None
 
 
-async def load_work() -> tuple[list[tuple[str, str, list[VisuraDocument]]], int, int]:
+async def load_work() -> tuple[list[tuple[str, str, list[Document]]], int, int]:
     async with _get_session_factory()() as session:
         docs = (await session.execute(
-            select(VisuraDocument).where(VisuraDocument.file_format == "PDF")
+            select(Document).where(Document.file_format == "PDF")
         )).scalars().all()
         existing_rows = (await session.execute(
-            select(StructuredDocumentExtraction.document_id, StructuredDocumentExtraction.schema_name)
+            select(DocumentExtraction.document_id, DocumentExtraction.schema_name)
         )).all()
 
     existing = {(document_id, schema_name) for document_id, schema_name in existing_rows}
-    grouped: dict[tuple[str, str], list[VisuraDocument]] = defaultdict(list)
+    grouped: dict[tuple[str, str], list[Document]] = defaultdict(list)
     skipped_db = 0
     missing_file = 0
     for document in docs:
@@ -119,7 +120,7 @@ async def load_work() -> tuple[list[tuple[str, str, list[VisuraDocument]]], int,
         if (document.id, schema_name) in existing:
             skipped_db += 1
             continue
-        path = Path(document.file_path or "")
+        path = Path(document_file_path(document.file_name) or "")
         if not path.is_file():
             missing_file += 1
             continue
@@ -252,7 +253,7 @@ async def run_batch(output_root: Path, workers: int) -> int:
     started = time.monotonic()
     done_documents = 0
 
-    async def record(document: VisuraDocument, digest: str, schema: str, status: str, **metadata: Any) -> None:
+    async def record(document: Document, digest: str, schema: str, status: str, **metadata: Any) -> None:
         nonlocal done_documents
         entry = {
             "document_id": document.id,
@@ -275,8 +276,8 @@ async def run_batch(output_root: Path, workers: int) -> int:
                     flush=True,
                 )
 
-    async def process_group(index: int, digest: str, schema: str, records: list[VisuraDocument]) -> None:
-        first_path = Path(records[0].file_path or "")
+    async def process_group(index: int, digest: str, schema: str, records: list[Document]) -> None:
+        first_path = Path(document_file_path(records[0].file_name) or "")
         document_root = output_root / digest[:8]
         structured_path = document_root / "final" / "structured.json"
         async with hash_locks[digest]:
@@ -310,7 +311,7 @@ async def run_batch(output_root: Path, workers: int) -> int:
                 schema_errors = normalize_and_validate_json(
                     structured_path,
                     schema,
-                    Path(records[0].filename or first_path.name).name,
+                    Path(records[0].file_name or first_path.name).name,
                 )
 
                 for document in records:
@@ -335,7 +336,7 @@ async def run_batch(output_root: Path, workers: int) -> int:
                 for document in records:
                     await record(document, digest, schema, "failed", error_type=type(exc).__name__)
 
-    queue: asyncio.Queue[tuple[int, str, str, list[VisuraDocument]] | None] = asyncio.Queue()
+    queue: asyncio.Queue[tuple[int, str, str, list[Document]] | None] = asyncio.Queue()
     for index, (digest, schema, records) in enumerate(work, start=1):
         queue.put_nowait((index, digest, schema, records))
     for _ in range(workers):

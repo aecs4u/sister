@@ -1,12 +1,12 @@
 """Give every stored document the ISO request date as the last part of its name (``<name>_2026-10-06.<ext>``).
 
 Same convention as new downloads (``utils._unique_document_stem``): the date, never the time. For a file already
-in the folder the date is, in this order, the ``requested_at`` of its ``visura_documents`` row, the date printed in
+in the folder the date is, in this order, the ``requested_at`` of its ``document`` row, the date printed in
 the document (XML ``TitoloVisura@Data``, PDF ``Data dd/mm/yyyy``), then the file's modification date. Visure
 (``vi_*`` / ``vs_*``) lose their old collision suffix (``_T265733_2026``, ``_DOC_<id>``), which comes back after the
 date only when two files would otherwise share a name.
 
-Renames the files, the ``.plan.json`` sidecars, ``visura_documents.filename/file_path`` and the aliases in the links
+Renames the files, the ``.plan.json`` sidecars, ``document.file_name`` and the aliases in the links
 directory. The plan is written next to the database backup, so ``--revert <plan.json>`` undoes it. Dry run unless
 ``--apply``.
 
@@ -134,37 +134,35 @@ async def update_database(plan: list[dict], documents: Path, commit: bool) -> di
     from sister.database import _get_engine
 
     mapping = {e["old"]: e["new"] for e in plan}
-    counts = {"visura_documents": 0, "document_structured_extractions": 0}
+    counts = {"document": 0, "document_extraction": 0}
     engine = _get_engine()
     async with engine.connect() as conn:
         transaction = await conn.begin()
         rows = (
             await conn.execute(
-                text("SELECT id, filename, file_path FROM visura_documents WHERE filename = ANY(:names)"),
+                text("SELECT id, file_name FROM document WHERE file_name = ANY(:names)"),
                 {"names": list(mapping)},
             )
         ).all()
-        for row in rows:
-            new = mapping[row.filename]
-            new_path = posixpath.join(posixpath.dirname(row.file_path), new) if row.file_path else None
+        for row in rows:  # the database keeps the file name only: the directory is configuration
             await conn.execute(
-                text("UPDATE visura_documents SET filename = :f, file_path = :p WHERE id = :id"),
-                {"f": new, "p": new_path, "id": row.id},
+                text("UPDATE document SET file_name = :f WHERE id = :id"),
+                {"f": mapping[row.file_name], "id": row.id},
             )
-            counts["visura_documents"] += 1
+            counts["document"] += 1
         extractions = (
             await conn.execute(
-                text("SELECT id, output_path FROM document_structured_extractions WHERE output_path IS NOT NULL")
+                text("SELECT id, output_path FROM document_extraction WHERE output_path IS NOT NULL")
             )
         ).all()
         for row in extractions:
             new = mapping.get(posixpath.basename(row.output_path))
             if new:
                 await conn.execute(
-                    text("UPDATE document_structured_extractions SET output_path = :p WHERE id = :id"),
+                    text("UPDATE document_extraction SET output_path = :p WHERE id = :id"),
                     {"p": posixpath.join(posixpath.dirname(row.output_path), new), "id": row.id},
                 )
-                counts["document_structured_extractions"] += 1
+                counts["document_extraction"] += 1
         if commit:
             await transaction.commit()
         else:
@@ -224,9 +222,16 @@ async def load_requested_at() -> dict[str, str]:
 
     engine = _get_engine()
     async with engine.connect() as conn:
-        rows = (await conn.execute(text("SELECT filename, requested_at FROM visura_documents"))).all()
+        rows = (
+            await conn.execute(
+                text(
+                    "SELECT file_name, to_char(requested_at AT TIME ZONE 'Europe/Rome', 'DD/MM/YYYY HH24:MI:SS') AS requested_at "
+                    "FROM document"
+                )
+            )
+        ).all()
     await engine.dispose()
-    return {r.filename: r.requested_at for r in rows if r.requested_at}
+    return {r.file_name: r.requested_at for r in rows if r.requested_at}
 
 
 def main() -> None:

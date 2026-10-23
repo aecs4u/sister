@@ -7,11 +7,12 @@ property group or one land parcel. ``DocumentXmlNode`` / ``DocumentXmlAttribute`
 the ``sister_archive`` schema.
 """
 
-from datetime import date, datetime
+from datetime import date
 from decimal import Decimal
 from typing import Optional
 
 from sqlmodel import Field, SQLModel
+
 
 class DocumentSubject(SQLModel, table=True):
     __tablename__ = "document_subject"
@@ -36,7 +37,7 @@ class PropertyGroup(SQLModel, table=True):
     document_id: int = Field(foreign_key="document.id")
     group_index: Optional[int] = Field(default=None)
     cadastre_type: Optional[str] = Field(default=None)
-    comune_id: Optional[int] = Field(default=None, foreign_key="comune.id")
+    comune_id: Optional[int] = Field(default=None)
     description: Optional[str] = Field(default=None)
 
 

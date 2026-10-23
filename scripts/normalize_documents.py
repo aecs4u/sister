@@ -224,7 +224,7 @@ async def update_database(plan: dict, commit: bool) -> dict[str, int]:
             r.filename: r
             for r in (
                 await conn.execute(
-                    text("SELECT id, filename, file_path, response_id FROM visura_documents WHERE filename = ANY(:n)"),
+                    text("SELECT id, file_name AS filename, request_id AS response_id FROM document WHERE file_name = ANY(:n)"),
                     {"n": sorted(wanted)},
                 )
             ).all()
@@ -237,20 +237,19 @@ async def update_database(plan: dict, commit: bool) -> dict[str, int]:
             ids.append(gone.id)
             if gone.response_id and keeper is not None and not keeper.response_id:
                 await conn.execute(
-                    text("UPDATE visura_documents SET response_id = :r WHERE id = :id"),
+                    text("UPDATE document SET request_id = :r WHERE id = :id"),
                     {"r": gone.response_id, "id": keeper.id},
                 )
                 counts["_relinked"] += 1
         if ids:
-            await delete_tree(conn, "visura_documents", "id = ANY(:ids)", {"ids": ids}, counts)
+            await delete_tree(conn, "document", "id = ANY(:ids)", {"ids": ids}, counts)
         for entry in plan["renames"]:
             row = rows.get(entry["old"])
             if row is None:
                 continue
-            new_path = posixpath.join(posixpath.dirname(row.file_path), entry["new"]) if row.file_path else None
-            await conn.execute(
-                text("UPDATE visura_documents SET filename = :f, file_path = :p WHERE id = :id"),
-                {"f": entry["new"], "p": new_path, "id": row.id},
+            await conn.execute(  # the database keeps the file name only: the directory is configuration
+                text("UPDATE document SET file_name = :f WHERE id = :id"),
+                {"f": entry["new"], "id": row.id},
             )
             counts["_renamed"] += 1
         await (transaction.commit() if commit else transaction.rollback())

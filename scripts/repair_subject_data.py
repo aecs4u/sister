@@ -1,4 +1,4 @@
-"""Complete and correct the birth data of ``cadastral_subjects`` (dry run unless ``--apply``).
+"""Complete and correct the birth data of ``subject`` rows (dry run unless ``--apply``).
 
 For every subject: a display name that still carries the Intestati-page text (``... nato a ROMA (RM) il 01/01/1970``) is
 cleaned, a missing birth date / sex / birth-place code is taken from the codice fiscale (only when that is unambiguous),
@@ -30,16 +30,39 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from cleanup_extracted_xml import backup  # noqa: E402
 from sqlalchemy import text  # noqa: E402
 
+from sister.result_parsers import parse_it_date  # noqa: E402
 from sister.subject_repair import plan_subject  # noqa: E402
 
+# The planner (sister.subject_repair) speaks in the portal's terms; the database stores typed values. The loader gives the
+# planner its terms back (name → display_name, birth_date → dd/mm/yyyy, birth comune → its Belfiore code) and
+# ``apply_plan`` translates a planned change into the typed update.
 COLUMNS = ("display_name", "last_name", "first_name", "gender", "date_of_birth", "birth_municipality_code")
+
+_LOAD = """
+    SELECT s.id, s.fiscal_code, s.name AS display_name, s.last_name, s.first_name, s.gender,
+           to_char(s.birth_date, 'DD/MM/YYYY') AS date_of_birth, c.cadastral_code AS birth_municipality_code
+    FROM subject s LEFT JOIN comune c ON c.id = s.birth_comune_id ORDER BY s.id
+"""
+
+# column → (SET expression for :wanted, "still holds the value the plan was made from" test for :current)
+_UPDATES = {
+    "display_name": ("name = :wanted", "name IS NOT DISTINCT FROM :current"),
+    "last_name": ("last_name = :wanted", "last_name IS NOT DISTINCT FROM :current"),
+    "first_name": ("first_name = :wanted", "first_name IS NOT DISTINCT FROM :current"),
+    "gender": ("gender = :wanted", "gender IS NOT DISTINCT FROM :current"),
+    "date_of_birth": ("birth_date = :wanted", "birth_date IS NOT DISTINCT FROM :current"),
+    "birth_municipality_code": (
+        "birth_comune_id = (SELECT id FROM comune WHERE cadastral_code = :wanted)",
+        "(SELECT cadastral_code FROM comune WHERE id = subject.birth_comune_id) IS NOT DISTINCT FROM :current",
+    ),
+}
 
 
 async def load_rows() -> list[dict]:
     from sister.database import _get_engine
 
     async with _get_engine().connect() as conn:
-        result = await conn.execute(text(f"SELECT id, fiscal_code, {', '.join(COLUMNS)} FROM cadastral_subjects ORDER BY id"))
+        result = await conn.execute(text(_LOAD))
         return [dict(row._mapping) for row in result]
 
 
@@ -65,9 +88,12 @@ async def apply_plan(plan: list[dict], *, revert: bool) -> int:
                 if column not in COLUMNS:
                     raise SystemExit(f"unexpected column in plan: {column}")
                 wanted, current = (old, new) if revert else (new, old)
-                clause = "IS NOT DISTINCT FROM :current"  # only touch what still holds the value the plan was made from
+                if column == "date_of_birth":  # the plan carries dd/mm/yyyy text, the column is a date
+                    wanted, current = parse_it_date(wanted), parse_it_date(current)
+                assignment, still_holds = _UPDATES[column]  # only touch what still holds the value the plan was made from
+                guard = " AND EXISTS (SELECT 1 FROM comune WHERE cadastral_code = :wanted)" if column == "birth_municipality_code" and wanted else ""
                 result = await conn.execute(
-                    text(f"UPDATE cadastral_subjects SET {column} = :wanted WHERE id = :id AND {column} {clause}"),  # noqa: S608
+                    text(f"UPDATE subject SET {assignment} WHERE id = :id AND {still_holds}{guard}"),  # noqa: S608
                     {"wanted": wanted, "current": current, "id": entry["id"]},
                 )
                 done += result.rowcount or 0

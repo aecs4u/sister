@@ -5,7 +5,7 @@ layout in ``docs/database_design.md``). Columns, primary keys and foreign keys a
 (checks, unique keys, indexes) is the SQL file, which the test schema is built from, so the two cannot drift.
 
 * ``Request`` holds the request and its response in one row (the old ``visura_requests`` + ``visura_responses``).
-* Dates are ``date``, amounts ``Decimal``, shares are numerator/denominator, places are ``Comune`` + ``CadastralUnit``.
+* Dates are ``date``, amounts ``Decimal``, shares are numerator/denominator, places are ISTAT municipalities + ``CadastralUnit``.
 * Raw payloads (response JSON, extraction JSON, document text) are in the ``sister_archive`` schema.
 
 Note: do NOT use ``from __future__ import annotations`` here, it breaks SQLAlchemy's annotation handling with SQLModel.
@@ -21,12 +21,23 @@ from sqlalchemy import Column
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlmodel import Field, SQLModel
 
-class Comune(SQLModel, table=True):
-    __tablename__ = "comune"
 
-    id: Optional[int] = Field(default=None, primary_key=True)
+class IstatMunicipality(SQLModel, table=True):
+    """Read-only mapping to the shared ISTAT foreign table.
+
+    PostgreSQL does not permit foreign keys to foreign tables, so the app's
+    ``*_comune_id`` columns store ``numeric_code`` and join to this table
+    explicitly.
+    """
+
+    __tablename__ = "municipalities"
+    __table_args__ = {"schema": "istat"}
+
+    numeric_code: int = Field(primary_key=True)
     name: str
-    province_code: Optional[str] = Field(default=None)
+    italian_name: str
+    other_language_name: Optional[str] = Field(default=None)
+    province_abbreviation: Optional[str] = Field(default=None)
     cadastral_code: Optional[str] = Field(default=None)
 
 
@@ -35,7 +46,7 @@ class CadastralUnit(SQLModel, table=True):
 
     id: Optional[int] = Field(default=None, primary_key=True)
     cadastre_type: Optional[str] = Field(default=None)
-    comune_id: Optional[int] = Field(default=None, foreign_key="comune.id")
+    comune_id: Optional[int] = Field(default=None)
     section: Optional[str] = Field(default=None)
     sheet: Optional[str] = Field(default=None)
     parcel: Optional[str] = Field(default=None)
@@ -53,7 +64,9 @@ class Subject(SQLModel, table=True):
     first_name: Optional[str] = Field(default=None)
     gender: Optional[str] = Field(default=None)
     birth_date: Optional[date] = Field(default=None)
-    birth_comune_id: Optional[int] = Field(default=None, foreign_key="comune.id")
+    birth_comune_id: Optional[int] = Field(default=None)
+    birth_municipality_text: Optional[str] = Field(default=None)
+    birth_province_code: Optional[str] = Field(default=None)
 
 
 class RightKind(SQLModel, table=True):
@@ -157,7 +170,7 @@ class Property(SQLModel, table=True):
     income_eur: Optional[Decimal] = Field(default=None)
     dominical_income_eur: Optional[Decimal] = Field(default=None)
     agricultural_income_eur: Optional[Decimal] = Field(default=None)
-    registered_office_comune_id: Optional[int] = Field(default=None, foreign_key="comune.id")
+    registered_office_comune_id: Optional[int] = Field(default=None)
 
 
 class ResultOwner(SQLModel, table=True):
@@ -313,7 +326,7 @@ class MortgageInspection(SQLModel, table=True):
     inspection_time: Optional[time] = Field(default=None)
     inspection_number: Optional[str] = Field(default=None)
     inspection_number_date: Optional[date] = Field(default=None)
-    inspection_started_at: Optional[datetime] = Field(default=None)
+    inspection_started_at: Optional[datetime] = Field(default=None, sa_column=Column(sa.DateTime(timezone=False), nullable=True))  # portal local time
     requester: Optional[str] = Field(default=None)
     tax_paid_eur: Optional[int] = Field(default=None)
     page_count: Optional[int] = Field(default=None)
