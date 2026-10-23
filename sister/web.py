@@ -3047,7 +3047,7 @@ async def _write_visura_cadastral_map_cache(records: list[tuple]) -> None:
                            sheet = EXCLUDED.sheet,
                            parcel = EXCLUDED.parcel,
                            source_reference = EXCLUDED.source_reference,
-                           geom = EXCLUDED.geom,
+                           geom = COALESCE(EXCLUDED.geom, sister.cadastral_map_geometry_cache.geom),
                            checked_at = now()""",
                     records,
                 )
@@ -3671,6 +3671,10 @@ async def _google_maps_context(doc: dict) -> dict[str, Any] | None:
     adjacent_rows = []
     marker_rows = []
     sheet_rows = []
+    # A query that raised (statement timeout under load) says nothing about the parcel or sheet: such results must
+    # not be stored as "checked, no geometry", which the cache treats as a fresh answer for 30 days.
+    parcel_lookup_failed = False
+    sheet_lookup_failed = False
     try:
         import psycopg
 
@@ -3781,6 +3785,7 @@ async def _google_maps_context(doc: dict) -> dict[str, Any] | None:
                             )
                             marker_rows.extend(await marker_cursor.fetchall())
                     except Exception as exc:
+                        parcel_lookup_failed = True
                         logger.warning("Cadastral parcel markers unavailable: %s: %s", type(exc).__name__, exc)
 
                 if is_subject_visura:
@@ -3842,6 +3847,7 @@ async def _google_maps_context(doc: dict) -> dict[str, Any] | None:
                                 )
                                 sheet_rows = await sheet_cursor.fetchall()
                         except Exception as exc:
+                            sheet_lookup_failed = True
                             logger.warning("Cadastral sheet geometries unavailable: %s: %s", type(exc).__name__, exc)
             if len(rows) == 1 and rows[0][0]:
                 try:
@@ -3953,6 +3959,8 @@ async def _google_maps_context(doc: dict) -> dict[str, Any] | None:
         cache_records = []
         for index, item in enumerate(parcel_identifiers):
             geometry = parcel_geometries.get(index)
+            if geometry is None and parcel_lookup_failed:
+                continue
             cache_records.append((
                 "parcel",
                 _cadastral_map_lookup_key(item, feature_type="parcel"),
@@ -3967,6 +3975,8 @@ async def _google_maps_context(doc: dict) -> dict[str, Any] | None:
             ))
         for index, item in enumerate(sheet_identifiers):
             geometry = sheet_geometries.get(index)
+            if geometry is None and sheet_lookup_failed:
+                continue
             cache_records.append((
                 "sheet",
                 _cadastral_map_lookup_key(item, feature_type="sheet"),
