@@ -3461,7 +3461,7 @@ wheels = [
 [[package]]
 name = "land-registry"
 version = "0.1.4"
-source = { git = "https://github.com/aecs4u/land-registry.git?branch=main#53c8a31dd928f4439d90d5d0f6a13044b27bcba4" }
+source = { git = "https://github.com/aecs4u/land-registry.git?branch=main#71e4a5fecf4ebcdddebd5a4fd7de184d67ca3a69" }
 dependencies = [
     { name = "aecs4u-auth" },
     { name = "aecs4u-billing" },
