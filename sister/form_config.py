@@ -177,7 +177,10 @@ SINGLE_STEP_GROUPS: list[FormGroup] = [
     FormGroup(
         id="property-search",
         name="Ricerca immobili",
-        description="Cerca gli immobili per dati catastali (foglio + particella).",
+        description=(
+            "Richiede per impostazione predefinita la visura storica analitica gratuita, "
+            "con titolarità e variazioni nel tempo."
+        ),
         icon="fa-search",
         color="primary",
         category="single",
@@ -202,10 +205,13 @@ SINGLE_STEP_GROUPS: list[FormGroup] = [
                 name="Storica analitica per immobile",
                 path="/visura/visura-storica",
                 method="POST",
-                description="Richiede la visura storica analitica dell'immobile",
+                description=(
+                    "Documento gratuito con titolarità e variazioni catastali nel tempo; "
+                    "più completo della sola situazione attuale."
+                ),
             ),
         ],
-        default_endpoint_id="visura",
+        default_endpoint_id="visura-storica",
     ),
     FormGroup(
         id="person-search",
@@ -239,7 +245,10 @@ SINGLE_STEP_GROUPS: list[FormGroup] = [
     FormGroup(
         id="company-search",
         name="Ricerca società",
-        description="Cerca per P.IVA o denominazione.",
+        description=(
+            "Richiede per impostazione predefinita la visura storica analitica gratuita, "
+            "utile per ricostruire immobili intestati e variazioni nel tempo."
+        ),
         icon="fa-building",
         color="warning",
         category="single",
@@ -267,10 +276,13 @@ SINGLE_STEP_GROUPS: list[FormGroup] = [
                 name="Visura storica analitica per soggetto",
                 path="/visura/soggetto-documento",
                 method="POST",
-                description="Richiede il documento analitico storico per una persona giuridica",
+                description=(
+                    "Documento gratuito con immobili intestati e variazioni nel tempo; "
+                    "offre una ricostruzione più completa della sola ricerca corrente."
+                ),
             ),
         ],
-        default_endpoint_id="persona-giuridica",
+        default_endpoint_id="soggetto-documento",
     ),
     FormGroup(
         id="property-list",
@@ -492,8 +504,9 @@ SINGLE_STEP_GROUPS: list[FormGroup] = [
         id="ispezione-ipotecaria",
         name="Ispezione ipotecaria",
         description=(
-            "Ispezione immobiliare a pagamento (per immobile, persona, società o nota). "
-            "Ogni richiesta ha un costo."
+            "Consultazione a pagamento delle formalità nei registri immobiliari per immobile, persona, "
+            "società o nota. Completa la visura catastale con trascrizioni e iscrizioni, incluse le ipoteche; "
+            "ogni richiesta ha un costo."
         ),
         icon="fa-file-invoice-dollar",
         color="danger",
@@ -580,7 +593,10 @@ SINGLE_STEP_GROUPS: list[FormGroup] = [
                 name="Ispezione ipotecaria",
                 path="/visura/ispezione-ipotecaria",
                 method="POST",
-                description="Ispezione immobiliare a pagamento (richiede la conferma del costo)",
+                description=(
+                    "A pagamento: integra la visura catastale con trascrizioni e iscrizioni, "
+                    "per verificare ipoteche e altri gravami. Il costo va confermato."
+                ),
             ),
         ],
         default_endpoint_id="ispezione-ipotecaria",
@@ -637,14 +653,15 @@ _WORKFLOW_DEPTH = EndpointParam(
     input_type="select",
     required=False,
     options=[
-        ("light", "Light — core steps only"),
+        ("full", "Full — analisi estesa e passaggi gratuiti disponibili"),
+        ("deep", "Deep — espansione degli intestatari"),
         ("standard", "Standard — con arricchimento"),
-        ("deep", "Deep — owner expansion + paid"),
-        ("full", "Full — multi-hop graph expansion"),
+        ("light", "Light — passaggi essenziali"),
     ],
     help_text=(
-        "Controlla quali passaggi vengono eseguiti. "
-        "«Full» aggiunge l'analisi del patrimonio, i pacchetti storici e le verifiche ipotecarie a pagamento."
+        "Predefinito: Full, per eseguire l'analisi più ampia e raccogliere i passaggi gratuiti disponibili, "
+        "inclusi i dati storici. Le ispezioni ipotecarie a pagamento richiedono anche l'attivazione separata "
+        "dei passaggi a pagamento e della conferma automatica del costo."
     ),
 )
 
@@ -654,8 +671,12 @@ _WORKFLOW_PAID = EndpointParam(
     placeholder="",
     input_type="select",
     required=False,
-    options=[("false", "No"), ("true", "Yes — include paid inspections")],
-    help_text="Abilita i passaggi a pagamento di ispezione ipotecaria (richiede profondità Deep o Full).",
+    options=[("false", "No — solo passaggi gratuiti"), ("true", "Sì — includi ispezioni a pagamento")],
+    help_text=(
+        "Le ispezioni ipotecarie integrano i dati catastali con trascrizioni e iscrizioni, "
+        "incluse le ipoteche e altri gravami. Sono a pagamento e vengono eseguite solo se attivi anche "
+        "la conferma automatica del costo."
+    ),
 )
 
 _WORKFLOW_CONFIRM = EndpointParam(
@@ -866,6 +887,11 @@ def _web_param(fld, required: bool, endpoint_id: str) -> EndpointParam:
     input_type = "text"
     if fld.param == "tipo_catasto":
         input_type, options = "select", _CATASTO_OPTIONS
+    elif fld.param == "richiedi_documenti":
+        input_type, options = "select", [
+            ("true", "Sì — richiedi e scarica i documenti"),
+            ("false", "No — solo dati delle pagine HTML"),
+        ]
     elif fld.kind in ("select", "radio") and fld.choices:
         input_type, options = "select", [("", "—")] + [(key, key) for key in fld.choices]
     elif fld.kind == "checkbox":

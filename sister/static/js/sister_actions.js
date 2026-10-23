@@ -58,4 +58,40 @@
     dropOver: function (event, el) { event.preventDefault(); el.classList.add('border-primary', 'bg-light'); },
     dropLeave: function (el) { el.classList.remove('border-primary', 'bg-light'); },
   };
+
+  // Theme templates still ship <button onclick="window.print()">, which the CSP blocks (the button did nothing).
+  // Bind the same action here until the theme uses data-click.
+  document.addEventListener('click', function (event) {
+    var button = event.target.closest && event.target.closest('[onclick="window.print()"]');
+    if (!button) return;
+    event.preventDefault();
+    window.print();
+  });
+
+  // Folded <details> (e.g. the ownership history per property) hide their content from print: open them for the
+  // duration of the print and put them back afterwards.
+  var reopened = [];
+  window.addEventListener('beforeprint', function () {
+    reopened = Array.prototype.filter.call(document.querySelectorAll('details:not([open])'), function (el) {
+      el.open = true;
+      return true;
+    });
+  });
+  window.addEventListener('afterprint', function () {
+    reopened.forEach(function (el) { el.open = false; });
+    reopened = [];
+  });
+
+  // "Dati completi" shows raw CamelCase XML names; give the words a break so they read as words.
+  function spaceCamelCase(root) {
+    root.querySelectorAll('.nested-key, .nested-table thead th').forEach(function (el) {
+      if (el.children.length || el.dataset.spaced) return;
+      el.textContent = el.textContent.replace(/([a-z0-9])([A-Z])/g, '$1 $2');
+      el.dataset.spaced = 'true';
+    });
+  }
+  document.addEventListener('DOMContentLoaded', function () {
+    var dump = document.getElementById('complete-data');
+    if (dump) spaceCamelCase(dump);
+  });
 })();

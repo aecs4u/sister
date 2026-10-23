@@ -569,7 +569,7 @@ uv run sister query workflow \
     -o full_report.json
 ```
 
-### Batch (ricerca multipla da CSV)
+### Batch (query multiple da JSON o CSV)
 
 ```bash
 # Ricerca immobili da CSV
@@ -581,8 +581,13 @@ uv run sister query batch -I codici_fiscali.csv --command soggetto --wait
 # Comandi misti in un CSV (colonna 'command' per riga)
 uv run sister query batch -I mixed.csv --command auto --wait -o batch.json
 
-# Anteprima
+# Anteprima: valida tutto il file senza inviare nulla
 uv run sister query batch -I parcelle.csv --dry-run
+
+# File JSON (defaults, options, queries): formato in docs/batch_format.md, schema con `sister query batch-schema`
+uv run sister query batch -I docs/examples/batch_example.json -O outputs/run1
+# Dopo un'interruzione: salta il completato, riattende le richieste gia' inviate (senza reinviarle), ripete le fallite
+uv run sister query batch -I docs/examples/batch_example.json -O outputs/run1 --resume
 ```
 
 Formato CSV (ricerca immobili):

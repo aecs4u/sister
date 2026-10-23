@@ -30,7 +30,7 @@ import httpx
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from .client import VisuraAPIError, VisuraClient
-from .query_forms import QUERY_FORMS, _ALIASES, get_query_form, param_names, validate_params
+from .query_forms import _ALIASES, QUERY_FORMS, get_query_form, param_names, validate_params
 
 BATCH_FORMAT_VERSION = 1
 DEFAULT_COMMAND = "search"
@@ -102,8 +102,10 @@ class BatchOptions(_Strict):
     retry_delay: float = Field(5.0, ge=0, description="Seconds before the first retry; doubles on each further retry.")
     poll_interval: float | None = Field(None, gt=0, description="Seconds between result polls (client default).")
     poll_timeout: float | None = Field(
-        None, gt=0, description="Seconds to wait for one request before giving up (client default). A CAPTCHA row needs "
-        "enough time for a human to type it."
+        None,
+        gt=0,
+        description="Seconds to wait for one request before giving up (client default). A CAPTCHA row needs "
+        "enough time for a human to type it.",
     )
     on_error: Literal["continue", "stop"] = Field(
         "continue", description="'stop' = after the first failed row, do not start the others (they stay pending)."
@@ -129,7 +131,9 @@ class BatchQuery(_Strict):
     """One query of the batch."""
 
     id: str | None = Field(
-        None, pattern=_ID_PATTERN, description="Unique id, used by the journal and for resume. Default: q0001, q0002, ..."
+        None,
+        pattern=_ID_PATTERN,
+        description="Unique id, used by the journal and for resume. Default: q0001, q0002, ...",
     )
     command: str | None = Field(None, description="A `sister query` command (see `sister queries`).")
     params: dict[str, ParamValue] = Field(
@@ -467,7 +471,10 @@ class BatchRunner:
             status = prior.get("status")
             if status == COMPLETED or (status == QUEUED and not self.options.wait):
                 self.emit("skip", item, status=status, resumed=True)
-                return {**self._entry(item, status), **{k: prior[k] for k in ("request_ids", "result_file") if k in prior}}
+                return {
+                    **self._entry(item, status),
+                    **{k: prior[k] for k in ("request_ids", "result_file") if k in prior},
+                }
             if status in (QUEUED, TIMEOUT) and prior.get("request_ids"):
                 request_ids = list(prior["request_ids"])  # already sent: only wait for it again
             else:
@@ -546,7 +553,9 @@ class BatchRunner:
         extra: dict[str, Any] = {"request_ids": request_ids, "results": results}
         if status == ERROR:
             extra["error"] = "; ".join(
-                f"{rid}: {r.get('error') or r.get('status')}" for rid, r in results.items() if r.get("status") != COMPLETED
+                f"{rid}: {r.get('error') or r.get('status')}"
+                for rid, r in results.items()
+                if r.get("status") != COMPLETED
             )
         return self._entry(item, status, **extra)
 

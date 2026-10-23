@@ -180,7 +180,7 @@ def test_public_pages_resolve_the_signed_in_user():
     """The personalised public pages must look the user up instead of relying on request.state.user (never set)."""
     import inspect
 
-    for name in ("web_about", "web_privacy", "web_guide", "web_cheatsheet", "web_glossary"):
+    for name in ("web_about", "web_privacy", "web_guide", "web_cheatsheet", "web_glossary", "web_valuation"):
         assert "_optional_user" in inspect.getsource(getattr(web, name)), name
 
 

@@ -9,15 +9,104 @@
 {% block extra_css %}
 {{ super() }}
 {{ document_parcel_map_assets(land_registry_map) }}
+<link rel="stylesheet" href="/static/css/pages/document_visura.css?v=20261023c">
+{% if land_map_slot == 'sidecar' and not land_registry_map %}
+<link rel="stylesheet" href="/static/css/pages/document_parcel_map.css?v=20261023e">
+{% endif %}
 {% endblock %}
 
 {# Layouts that end in a single `content` block get the map after it ... #}
 {% block content %}
-{% if land_map_slot == 'sidecar' and land_registry_map %}
+{% if land_map_slot == 'sidecar' and (land_registry_map or land_registry_kpis) %}
 <div class="document-land-map-layout">
-    <div class="document-land-map-content">{{ super() }}</div>
-    <aside class="document-land-map-aside" aria-label="Mappa delle particelle del soggetto">
-        {{ document_parcel_map(land_registry_map) }}
+    <div class="document-land-map-content">
+        {{ super() }}
+        {% if land_registry_kpis %}
+        <span hidden data-distinct-municipality-count="{{ land_registry_kpis.distinct_comuni }}"></span>
+        <script type="application/json" nonce="{{ csp_nonce }}" data-land-map-omi-estimates>{{ land_registry_kpis.table_estimates | tojson }}</script>
+        <script type="application/json" nonce="{{ csp_nonce }}" data-land-map-owner-assessment>{{ land_registry_kpis.owner_assessment | tojson }}</script>
+        {% endif %}
+        {% if land_registry_history %}
+        <script type="application/json" nonce="{{ csp_nonce }}" data-land-map-ownership-history>{{ land_registry_history | tojson }}</script>
+        {% endif %}
+    </div>
+    <aside class="document-land-map-aside" aria-label="{% if land_registry_map %}Indicatori e mappa delle particelle del soggetto{% else %}Indicatori del patrimonio catastale{% endif %}">
+        {% if land_registry_kpis %}
+        <section class="document-land-map-kpis" aria-label="Indicatori del patrimonio catastale">
+            <article class="card border-0 shadow-sm mb-3">
+                <div class="card-body py-3">
+                    <div class="d-flex align-items-center gap-2 text-muted small mb-1">
+                        <i class="fas fa-euro-sign text-success" aria-hidden="true"></i>
+                        <span>Valore OMI fabbricati</span>
+                    </div>
+                    <div class="fs-5 fw-semibold">{{ land_registry_kpis.asset_value }}</div>
+                    <small class="text-muted">{{ land_registry_kpis.asset_value_note }} <a href="/valuation#stima-omi">Come si calcola</a></small>
+                </div>
+            </article>
+            <article class="card border-0 shadow-sm mb-3">
+                <div class="card-body py-3">
+                    <div class="d-flex align-items-center gap-2 text-muted small mb-1">
+                        <i class="fas fa-landmark text-primary" aria-hidden="true"></i>
+                        <span>Valore catastale (base IMU)</span>
+                    </div>
+                    <div class="fs-5 fw-semibold">{{ land_registry_kpis.cadastral_value }}</div>
+                    <small class="text-muted d-block">Fabbricati {{ land_registry_kpis.cadastral_value_buildings }} · Terreni {{ land_registry_kpis.cadastral_value_lands if land_registry_kpis.land_rows else 'nessuno' }}</small>
+                    <small class="text-muted">{{ land_registry_kpis.cadastral_value_note }} <a href="/valuation#valore-catastale">Come si calcola</a></small>
+                </div>
+            </article>
+            <article class="card border-0 shadow-sm mb-3">
+                <div class="card-body py-3">
+                    <div class="d-flex align-items-center gap-2 text-muted small mb-1">
+                        <i class="fas fa-building text-warning" aria-hidden="true"></i>
+                        <span>Superficie fabbricati</span>
+                    </div>
+                    <div class="fs-5 fw-semibold">{{ land_registry_kpis.building_area }}</div>
+                    <small class="text-muted">{{ land_registry_kpis.building_area_note }}</small>
+                </div>
+            </article>
+            <article class="card border-0 shadow-sm mb-3">
+                <div class="card-body py-3">
+                    <div class="d-flex align-items-center gap-2 text-muted small mb-1">
+                        <i class="fas fa-seedling text-success" aria-hidden="true"></i>
+                        <span>Superficie terreni</span>
+                    </div>
+                    <div class="fs-5 fw-semibold">{{ land_registry_kpis.grounds_area }}</div>
+                    <small class="text-muted">{{ land_registry_kpis.grounds_area_note }}</small>
+                </div>
+            </article>
+            <article class="card border-0 shadow-sm mb-3">
+                <div class="card-body py-3">
+                    <div class="d-flex align-items-center gap-2 text-muted small mb-2">
+                        <i class="fas fa-coins text-warning" aria-hidden="true"></i>
+                        <span>Redditi catastali annui</span>
+                    </div>
+                    <div class="d-flex justify-content-between align-items-start gap-3 py-2 border-top">
+                        <div>
+                            <div class="small text-muted">Reddito fabbricati (rendita catastale)</div>
+                            <small class="text-muted">{{ land_registry_kpis.building_income_note }}</small>
+                        </div>
+                        <strong class="text-end">{{ land_registry_kpis.building_income }}</strong>
+                    </div>
+                    <div class="d-flex justify-content-between align-items-start gap-3 py-2 border-top">
+                        <div>
+                            <div class="small text-muted">Reddito dominicale</div>
+                            <small class="text-muted">{{ land_registry_kpis.dominical_income_note }}</small>
+                        </div>
+                        <strong class="text-end">{{ land_registry_kpis.dominical_income }}</strong>
+                    </div>
+                    <div class="d-flex justify-content-between align-items-start gap-3 py-2 border-top">
+                        <div>
+                            <div class="small text-muted">Reddito agricolo (agrario)</div>
+                            <small class="text-muted">{{ land_registry_kpis.agricultural_income_note }}</small>
+                        </div>
+                        <strong class="text-end">{{ land_registry_kpis.agricultural_income }}</strong>
+                    </div>
+                    <small class="text-muted">Valori catastali annui sommati dalla visura, non redditi effettivi e non ponderati per quota di proprietà.</small>
+                </div>
+            </article>
+        </section>
+        {% endif %}
+        {% if land_registry_map %}{{ document_parcel_map(land_registry_map) }}{% endif %}
     </aside>
 </div>
 {% else %}
@@ -41,4 +130,507 @@
 {% block extra_js %}
 {{ super() }}
 {{ document_parcel_map_scripts(land_registry_map, nonce=csp_nonce) }}
+{# PDF export: the page's own print layout rendered by headless Chromium (/documents/<id>/pdf). #}
+{% if doc and doc.id %}
+<script nonce="{{ csp_nonce }}">
+(function () {
+    var printButton = document.querySelector('button[onclick="window.print()"]');
+    if (!printButton || document.querySelector('[data-document-pdf]')) return;
+    var link = document.createElement('a');
+    link.className = printButton.className;
+    link.href = '/documents/{{ doc.id }}/pdf';
+    link.dataset.documentPdf = 'true';
+    link.title = 'Scarica la visura in PDF (A4 orizzontale)';
+    link.innerHTML = '<i class="fas fa-file-pdf me-2" aria-hidden="true"></i>PDF';
+    printButton.before(link);
+})();
+</script>
+{% endif %}
+<script nonce="{{ csp_nonce }}">
+(function () {
+    function splitCategoryColumns() {
+        document.querySelectorAll('table.cat-compact-table').forEach(function (table) {
+            if (table.dataset.landCategorySplit) return;
+            var headers = Array.from(table.querySelectorAll('thead th'));
+            var categoryIndex = headers.findIndex(function (header) {
+                return ['cat.', 'cat', 'categoria', 'categoria catastale'].indexOf(
+                    header.textContent.trim().toLocaleLowerCase()
+                ) !== -1;
+            });
+            if (categoryIndex === -1) return;
+
+            var categoryHeader = headers[categoryIndex];
+            categoryHeader.scope = 'col';
+            categoryHeader.textContent = 'Category';
+            var descriptionHeader = document.createElement('th');
+            descriptionHeader.scope = 'col';
+            descriptionHeader.textContent = 'Category Description';
+            categoryHeader.after(descriptionHeader);
+
+            table.querySelectorAll('tbody tr').forEach(function (row) {
+                var categoryCell = row.cells[categoryIndex];
+                if (!categoryCell) return;
+                var rawCategory = categoryCell.textContent.trim().replace(/\s+/g, ' ');
+                var match = rawCategory.match(/^([A-Z]\s*\/?\s*\d{1,2})(?:\s*[:\-–—]\s*|\s+)?(.*)$/i);
+                var category = match ? match[1].replace(/\s*\/\s*/g, '/') : rawCategory;
+                var description = match ? match[2].trim() : '';
+                var badge = document.createElement('span');
+                badge.className = 'cat-categoria';
+                badge.textContent = category;
+                categoryCell.replaceChildren(badge);
+
+                var descriptionCell = document.createElement('td');
+                descriptionCell.className = 'small';
+                descriptionCell.textContent = description || '—';
+                categoryCell.after(descriptionCell);
+            });
+            table.dataset.landCategorySplit = 'true';
+        });
+    }
+
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', splitCategoryColumns, { once: true });
+    } else {
+        splitCategoryColumns();
+    }
+})();
+</script>
+{% if land_map_parent == 'catasto/visura_soggetto.html' %}
+<script src="/static/js/visura_global_filter.js?v=20261023c" defer></script>
+{% if land_registry_kpis %}
+<script nonce="{{ csp_nonce }}">
+(function () {
+    // A figure the page could not compute reads as a reason ("Non stimabile: …", "Nessun terreno in visura"), not as a number.
+    function isMissingValue(text) {
+        return /^(Non |Nessun|Quota non|Stima OMI non|Età|Durata|Metodo non)/.test(String(text || ''));
+    }
+
+    function addSubjectFinancialAssessment() {
+        var source = document.querySelector('[data-land-map-owner-assessment]');
+        var card = document.querySelector('.document-land-map-content .persona-header');
+        var body = card && card.querySelector('.card-body');
+        if (!source || !body || body.querySelector('[data-owner-financial-assessment]')) return;
+
+        var assessment;
+        try {
+            assessment = JSON.parse(source.textContent || '{}');
+        } catch (error) {
+            return;
+        }
+
+        var section = document.createElement('section');
+        section.className = 'border-top mt-3 pt-3';
+        section.dataset.ownerFinancialAssessment = 'true';
+        section.setAttribute('aria-label', 'Valutazione patrimoniale per quota e diritto');
+        var heading = document.createElement('h6');
+        heading.className = 'mb-2';
+        heading.innerHTML = '<i class="fas fa-scale-balanced text-info me-2" aria-hidden="true"></i>Valutazione patrimoniale per quota e diritto';
+        section.appendChild(heading);
+
+        if (!assessment.has_rights) {
+            var unavailable = document.createElement('p');
+            unavailable.className = 'small text-muted mb-0';
+            unavailable.textContent = 'Non è stato possibile associare al soggetto una titolarità corrente. Non è stata presunta la piena proprietà.';
+            section.appendChild(unavailable);
+            body.appendChild(section);
+            return;
+        }
+
+        var byKind = {};
+        (assessment.rights || []).forEach(function (right) {
+            if (right.kind !== 'other') byKind[right.kind] = right;
+        });
+        var metrics = (assessment.tiles || []).map(function (tile) {
+            return [tile.label, tile.value, tile.hint, tile.missing];
+        });
+        var metricRow = document.createElement('div');
+        metricRow.className = 'row row-cols-2 row-cols-md-3 g-2 mb-2';
+        metrics.forEach(function (metric) {
+            var column = document.createElement('div');
+            column.className = 'col';
+            var tile = document.createElement('div');
+            tile.className = 'h-100 rounded border bg-light px-2 py-2';
+            var label = document.createElement('div');
+            label.className = 'small text-muted';
+            label.textContent = metric[0];
+            var value = document.createElement('div');
+            value.className = metric[3] ? 'small text-muted' : 'fw-semibold small';
+            value.textContent = metric[1];
+            tile.title = metric[2];
+            tile.append(label, value);
+            column.appendChild(tile);
+            metricRow.appendChild(column);
+        });
+        section.appendChild(metricRow);
+
+        if ((assessment.rights || []).length) {
+            var tableWrap = document.createElement('div');
+            tableWrap.className = 'table-responsive';
+            var table = document.createElement('table');
+            table.className = 'table table-sm align-middle mb-2';
+            table.innerHTML = '<thead><tr><th scope="col">Diritto</th><th scope="col">Beni e quote</th><th scope="col">Stima OMI attribuibile</th></tr></thead><tbody></tbody>';
+            var tableBody = table.querySelector('tbody');
+            assessment.rights.forEach(function (right) {
+                var row = document.createElement('tr');
+                var title = document.createElement('th');
+                title.scope = 'row';
+                title.textContent = right.label || 'Altro diritto';
+                var details = document.createElement('td');
+                var detailsText = (right.assets || 0) + ((right.assets === 1) ? ' bene' : ' beni') + ' · ' + (right.shares || 'quota non indicata');
+                if (right.unvalued_assets) {
+                    detailsText += ' · stima su ' + (right.valued_assets || 0) + ' di ' + right.assets;
+                    if (right.unvalued_reasons && right.valued_assets) detailsText += ' · non stimati: ' + right.unvalued_reasons;
+                }
+                details.textContent = detailsText;
+                var value = document.createElement('td');
+                value.className = isMissingValue(right.value) ? 'text-muted small' : 'text-nowrap';
+                value.textContent = right.value || 'Non disponibile';
+                row.append(title, details, value);
+                tableBody.appendChild(row);
+            });
+            tableWrap.appendChild(table);
+            section.appendChild(tableWrap);
+        }
+
+        var note = document.createElement('p');
+        note.className = 'small text-muted mb-1';
+        note.textContent = (assessment.coefficient_note ? assessment.coefficient_note + ' ' : '') + (assessment.method_note || 'Valori indicativi; non costituiscono una perizia.');
+        section.appendChild(note);
+        var methodLink = document.createElement('a');
+        methodLink.className = 'small';
+        methodLink.href = assessment.source_url || '#';
+        methodLink.textContent = 'Prospetto fiscale usufrutto 2026';
+        methodLink.target = '_blank';
+        methodLink.rel = 'noopener noreferrer';
+        section.appendChild(methodLink);
+
+        var exclusions = [];
+        if (assessment.unmatched_assets) {
+            exclusions.push(assessment.unmatched_assets + ' elementi senza titolarità associabile al soggetto');
+        }
+        if (assessment.unknown_quota_assets) {
+            exclusions.push(assessment.unknown_quota_assets + ' elementi con quota assente o non interpretabile, esclusi dal calcolo pro-quota');
+        }
+        if (exclusions.length) {
+            var excluded = document.createElement('p');
+            excluded.className = 'small text-warning-emphasis mb-0 mt-1';
+            excluded.textContent = exclusions.join('; ') + '.';
+            section.appendChild(excluded);
+        }
+        body.appendChild(section);
+    }
+
+    function addDistinctMunicipalityCard() {
+        var source = document.querySelector('[data-distinct-municipality-count]');
+        if (!source) return;
+        var rows = Array.from(document.querySelectorAll('.document-land-map-content .row.g-4.mb-4'));
+        var row = rows.find(function (candidate) {
+            return Array.from(candidate.children).some(function (column) {
+                return column.textContent.indexOf('Gruppi Comuni') !== -1;
+            });
+        });
+        if (!row || row.querySelector('[data-distinct-municipality-card]')) return;
+        var firstColumn = Array.from(row.children).find(function (column) {
+            var label = column.querySelector('.card-body small.text-muted');
+            return label && label.textContent.trim() === 'Gruppi Comuni';
+        });
+        if (!firstColumn) return;
+        var cardColumn = firstColumn.cloneNode(true);
+        var value = cardColumn.querySelector('.card-body h4');
+        var label = cardColumn.querySelector('.card-body small.text-muted');
+        if (!value || !label) return;
+        cardColumn.dataset.distinctMunicipalityCard = 'true';
+        value.textContent = source.dataset.distinctMunicipalityCount;
+        label.textContent = 'Gruppi Comuni Distinti';
+        Array.from(row.children).concat(cardColumn).forEach(function (column) {
+            column.className = 'col-6 col-lg';
+        });
+        firstColumn.after(cardColumn);
+    }
+    // Columns appended to the theme's property tables. Estimates are matched to rows by position, so a table whose
+    // row count differs from the estimates is left untouched instead of showing values against the wrong row.
+    var BUILDING_COLUMNS = [
+        {
+            valueKey: 'cadastral_value', noteKey: 'cadastral_note', missingKey: 'cadastral_missing', heading: 'Valore catastale',
+            title: 'Valore catastale ai fini IMU (rendita × 1,05 × moltiplicatore di categoria). Base imponibile fiscale, non è un valore di mercato.',
+            missing: 'Valore catastale non disponibile.'
+        },
+        {
+            valueKey: 'range', noteKey: 'note', missingKey: 'missing', heading: 'Stima OMI indicativa',
+            title: 'Intervallo OMI basato sulla superficie catastale; non è una perizia.',
+            missing: 'Stima OMI non disponibile.'
+        }
+    ];
+    var LAND_COLUMNS = [
+        {
+            valueKey: 'cadastral_value', noteKey: 'cadastral_note', missingKey: 'cadastral_missing', heading: 'Valore catastale',
+            title: 'Valore catastale ai fini IMU (reddito dominicale × 1,25 × 135). Base imponibile fiscale, non è un valore di mercato.',
+            missing: 'Valore catastale non disponibile.'
+        }
+    ];
+    var TABLE_COLUMNS = { buildings: BUILDING_COLUMNS, lands: LAND_COLUMNS };
+
+    // `present` says which columns have a value somewhere in the document: a column is drawn in every table of its
+    // kind (so the tables line up) and a row without a value says why, instead of an unexplained dash.
+    function appendColumns(table, estimates, columns, present) {
+        var headerRow = table.querySelector('thead tr');
+        var bodyRows = Array.from(table.querySelectorAll('tbody tr'));
+        if (!headerRow || !bodyRows.length || bodyRows.length !== estimates.length) return;
+        columns.forEach(function (column) {
+            if (!present[column.valueKey]) return;
+            var heading = document.createElement('th');
+            heading.scope = 'col';
+            heading.className = 'text-nowrap';
+            heading.textContent = column.heading;
+            heading.title = column.title;
+            headerRow.appendChild(heading);
+            bodyRows.forEach(function (row, rowIndex) {
+                var estimate = estimates[rowIndex] || {};
+                var cell = document.createElement('td');
+                var hasValue = !!estimate[column.valueKey];
+                cell.className = hasValue ? 'text-nowrap' : 'text-muted small';
+                cell.textContent = estimate[column.valueKey] || estimate[column.missingKey] || 'Non disponibile';
+                cell.title = estimate[column.noteKey] || column.missing;
+                cell.setAttribute('aria-label', cell.textContent + '. ' + cell.title);
+                row.appendChild(cell);
+            });
+        });
+    }
+    function addValueColumns() {
+        var source = document.querySelector('[data-land-map-omi-estimates]');
+        if (!source) return;
+        var groups;
+        try {
+            groups = JSON.parse(source.textContent || '[]');
+        } catch (error) {
+            return;
+        }
+        var present = {buildings: {}, lands: {}};
+        groups.forEach(function (group) {
+            Object.keys(present).forEach(function (kind) {
+                (group[kind] || []).forEach(function (estimate) {
+                    TABLE_COLUMNS[kind].forEach(function (column) {
+                        if (estimate && estimate[column.valueKey]) present[kind][column.valueKey] = true;
+                    });
+                });
+            });
+        });
+        document.querySelectorAll('.document-land-map-content .imm-tables').forEach(function (wrapper, groupIndex) {
+            var group = groups[groupIndex] || {};
+            wrapper.querySelectorAll('table.cat-compact-table').forEach(function (table) {
+                var kind = table.dataset.landMapKind;
+                if (!kind || table.dataset.valueColumnsAdded) return;
+                appendColumns(table, group[kind] || [], TABLE_COLUMNS[kind], present[kind]);
+                table.dataset.valueColumnsAdded = 'true';
+            });
+        });
+    }
+    function linkBuildingCategoriesToOmi() {
+        var source = document.querySelector('[data-land-map-omi-estimates]');
+        if (!source) return;
+        var groups;
+        try {
+            groups = JSON.parse(source.textContent || '[]');
+        } catch (error) {
+            return;
+        }
+        document.querySelectorAll('.document-land-map-content .imm-tables').forEach(function (wrapper, groupIndex) {
+            var entries = (groups[groupIndex] || {}).buildings || [];
+            var table = Array.from(wrapper.querySelectorAll('table.cat-compact-table')).find(function (candidate) {
+                return candidate.dataset.landMapKind === 'buildings';
+            });
+            if (!table) return;
+            var rows = Array.from(table.querySelectorAll('tbody tr'));
+            if (rows.length !== entries.length) return;
+            rows.forEach(function (row, rowIndex) {
+                var entry = entries[rowIndex] || {};
+                if (!entry.category || !entry.omi_comune) return;
+                var cell = row.cells[6];
+                if (!cell) return;
+                var params = new URLSearchParams({comune: entry.omi_comune});
+                if (entry.omi_zona) params.set('zona', entry.omi_zona);
+                var link = document.createElement('a');
+                link.href = '/omi/valuation?' + params.toString();
+                link.target = '_blank';
+                link.rel = 'noopener noreferrer';
+                link.className = 'omi-category-valuation-link text-decoration-none';
+                link.dataset.omiValuationLink = 'true';
+                var categoryBadge = cell.querySelector('.cat-categoria');
+                var category = categoryBadge ? categoryBadge.textContent.trim() : entry.category;
+                link.title = entry.omi_zona
+                    ? 'Apri le quotazioni OMI per ' + category + ' nella zona ' + entry.omi_zona
+                    : 'Apri le quotazioni OMI per ' + category + ' in tutte le zone del comune ' + entry.omi_comune;
+                link.setAttribute('aria-label', link.title);
+                // Rebuild the category cell on every run so it can never retain or
+                // nest a second link to the same OMI page.
+                if (categoryBadge) {
+                    link.appendChild(categoryBadge.cloneNode(true));
+                } else {
+                    link.appendChild(document.createTextNode(category));
+                }
+                var icon = document.createElement('i');
+                icon.className = 'fas fa-chart-line ms-1 small';
+                icon.setAttribute('aria-hidden', 'true');
+                link.appendChild(icon);
+                cell.replaceChildren(link);
+            });
+        });
+    }
+    // The category split adds a 12th building column; lands tables still have 9 columns.
+    function tagTables() {
+        var kinds = { 11: 'buildings', 12: 'buildings', 9: 'lands' };
+        document.querySelectorAll('.document-land-map-content .imm-tables table.cat-compact-table').forEach(function (table) {
+            var kind = kinds[table.querySelectorAll('thead th').length];
+            if (kind && !table.dataset.landMapKind) table.dataset.landMapKind = kind;
+        });
+    }
+    function addOwnershipHistoryToTables() {
+        var source = document.querySelector('[data-land-map-ownership-history]');
+        if (!source) return;
+        var groups;
+        try {
+            groups = JSON.parse(source.textContent || '[]');
+        } catch (error) {
+            return;
+        }
+        if (!groups.some(function (group) {
+            return ['buildings', 'lands'].some(function (tableName) {
+                return (group[tableName] || []).some(function (row) {
+                    return row && (row.sources || []).length;
+                });
+            });
+        })) return;
+
+        function appendText(parent, tagName, className, text) {
+            var element = document.createElement(tagName);
+            if (className) element.className = className;
+            element.textContent = text;
+            parent.appendChild(element);
+            return element;
+        }
+        function ownershipCell(entry) {
+            var cell = document.createElement('td');
+            cell.className = 'small';
+            var sources = (entry || {}).sources || [];
+            if (!sources.length) {
+                cell.textContent = 'Nessuna visura per immobile collegata';
+                return cell;
+            }
+            var totalActs = sources.reduce(function (sum, item) {
+                return sum + (item.event_count || (item.ownership || []).length);
+            }, 0);
+            var details = document.createElement('details');
+            details.className = 'land-map-ownership-details';
+            appendText(details, 'summary', 'text-nowrap', totalActs + (totalActs === 1 ? ' atto · ' : ' atti · ') + sources.length + (sources.length === 1 ? ' visura' : ' visure'));
+
+            sources.forEach(function (item) {
+                var sourceBlock = document.createElement('div');
+                sourceBlock.className = 'border rounded p-2 mt-2';
+                var title = item.label || 'Visura per immobile';
+                if (item.reference_date) title += ' · situazione al ' + item.reference_date;
+                appendText(sourceBlock, 'div', 'fw-semibold mb-1', title);
+                var link = document.createElement('a');
+                link.href = '/documents/' + encodeURIComponent(item.document_id);
+                link.className = 'd-inline-block mb-1';
+                link.textContent = 'Apri visura sorgente #' + item.document_id;
+                sourceBlock.appendChild(link);
+
+                var events = item.ownership || [];
+                events.forEach(function (event) {
+                    var eventBlock = document.createElement('div');
+                    eventBlock.className = 'border-top pt-2 mt-1';
+                    var act = event.act || 'Mutazione';
+                    if (event.date) act += ' · ' + event.date;
+                    var actNode = appendText(eventBlock, 'div', 'fw-semibold', act);
+                    if (event.current) appendText(actNode, 'span', 'badge bg-success ms-2', 'Attuale');
+                    var owners = event.owners || [];
+                    if (owners.length) {
+                        var ownerList = document.createElement('ul');
+                        ownerList.className = 'mb-1 ps-3';
+                        owners.forEach(function (owner) {
+                            var parts = [owner.name || 'Intestatario non indicato', owner.right, owner.quota, owner.period];
+                            appendText(ownerList, 'li', '', parts.filter(Boolean).join(' · '));
+                        });
+                        eventBlock.appendChild(ownerList);
+                    } else if (event.start || event.end) {
+                        var period = event.ongoing
+                            ? 'in corso' + (event.start ? ' dal ' + event.start : '')
+                            : [event.start && 'dal ' + event.start, event.end && 'al ' + event.end].filter(Boolean).join(' ');
+                        appendText(eventBlock, 'div', 'text-muted', period);
+                    }
+                    sourceBlock.appendChild(eventBlock);
+                });
+                if (item.omitted_events) {
+                    appendText(sourceBlock, 'small', 'text-muted d-block mt-1', 'Mostrati i 25 atti più recenti; apri la visura per la cronologia completa.');
+                }
+                details.appendChild(sourceBlock);
+            });
+            cell.appendChild(details);
+            return cell;
+        }
+        function addColumn(table, entries) {
+            if (!table || table.dataset.ownershipHistoryAdded) return;
+            var headerRow = table.querySelector('thead tr');
+            var bodyRows = Array.from(table.querySelectorAll('tbody tr'));
+            if (!headerRow || !bodyRows.length) return;
+            appendText(headerRow, 'th', 'text-nowrap', 'Tracciabilità titolarità').scope = 'col';
+            bodyRows.forEach(function (row, rowIndex) {
+                row.appendChild(ownershipCell((entries || [])[rowIndex]));
+            });
+            table.dataset.ownershipHistoryAdded = 'true';
+        }
+
+        var wrappers = document.querySelectorAll('.document-land-map-content .imm-tables');
+        wrappers.forEach(function (wrapper, groupIndex) {
+            var group = groups[groupIndex] || {};
+            Array.from(wrapper.querySelectorAll('table.cat-compact-table')).forEach(function (table) {
+                var kind = table.dataset.landMapKind;
+                if (kind) addColumn(table, group[kind]);
+            });
+        });
+    }
+    // When a stored *Visura storica per immobile* backs a group, its ownership timeline opens in full: the theme only
+    // opens the newest mutation, but the older ones are exactly what the per-property visura documents.
+    function expandOwnershipTimelines() {
+        var source = document.querySelector('[data-land-map-ownership-history]');
+        if (!source) return;
+        var groups;
+        try {
+            groups = JSON.parse(source.textContent || '[]');
+        } catch (error) {
+            return;
+        }
+        document.querySelectorAll('.document-land-map-content .imm-tables').forEach(function (wrapper, groupIndex) {
+            var group = groups[groupIndex] || {};
+            var hasHistory = ['buildings', 'lands'].some(function (kind) {
+                return (group[kind] || []).some(function (row) { return row && (row.sources || []).length; });
+            });
+            if (!hasHistory) return;
+            for (var node = wrapper.nextElementSibling; node && !node.classList.contains('imm-tables'); node = node.nextElementSibling) {
+                node.querySelectorAll('.ownership-timeline .tl-body.d-none').forEach(function (body) {
+                    body.classList.remove('d-none');
+                    var chevron = body.previousElementSibling && body.previousElementSibling.querySelector('.tl-chevron');
+                    if (chevron) chevron.classList.add('open');
+                });
+            }
+        });
+    }
+    function enhanceVisura() {
+        tagTables();
+        addSubjectFinancialAssessment();
+        addDistinctMunicipalityCard();
+        addValueColumns();
+        linkBuildingCategoriesToOmi();
+        addOwnershipHistoryToTables();
+        expandOwnershipTimelines();
+    }
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', enhanceVisura, { once: true });
+    } else {
+        enhanceVisura();
+    }
+})();
+</script>
+{% endif %}
+{% endif %}
 {% endblock %}

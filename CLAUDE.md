@@ -19,7 +19,16 @@ SISTER is a FastAPI service + Typer CLI for automated cadastral data extraction 
   - `utils.py` — SISTER portal browser automation (run_visura, run_visura_soggetto, etc.); `run_visura` is two-phase (see "Data extraction")
   - `result_parsers.py` — pure parsers for the composite portal cells (`RA/103`, `Proprieta' per 1/2`, name + birth data, `visImmSel`, owner radios)
   - `xml_ingest.py` — visura XML → typed document tables (`building_*`, `land_*`, `property_groups`, `ownership_mutations`, `property_owners`, …) + backfill
+  - `cadastral_values.py` / `omi_quotes.py` / `land_registry_kpis.py` / `valuation_docs.py` — valore catastale (IMU base) and indicative OMI estimate
+    on the subject-visura page, and the data behind `/valuation`. OMI quotes come from the local `omi` database (`public` schema;
+    `OMI_POSTGRES_DSN`); OMI has no land quotes, so terreni get the cadastral value only. Details and gotchas: `docs/valuation.md`
+  - `omi_zone_overview.py` — `/omi/valuation` zone overview: OMI quote history, variations, yield, successor hint, ISTAT/MEF/Eurostat
+    context from the `omi` and `aecs4u-stats` databases (`docs/valuation.md`)
+  - `pdf_export.py` + `GET /documents/<id>/pdf` — PDF of a document page: the page's own print CSS (`static/css/pages/document_visura.css`, A4 landscape)
+    rendered by a **separate** headless Chromium on loopback with the caller's cookies (never the shared Chrome that holds the SISTER session). The theme's
+    `onclick="window.print()"` is blocked by the CSP; `sister_actions.js` binds it (and opens folded `<details>` for print).
   - `client.py` — VisuraClient async HTTP client
+  - `batch.py` — `query batch` engine: JSON/CSV submission file → validated plan → runner with retries, journal and `--resume` (format: `docs/batch_format.md`, schema `docs/batch_submission.schema.json`)
   - `mcp_server.py` — optional local MCP server over stdio; wraps `VisuraClient` and `query_forms.py`
   - `cli.py` — Typer CLI with query, db, and top-level commands
   - `building_kmz.py` + `building_overrides.json` — OSM footprints → 3D KMZ (extruded volumes, roads, optional gabled roofs);
@@ -123,7 +132,7 @@ uv run sister-mcp
 - Logins: `LOCAL_USERS_FILE` (in `.env`) points at `local_users.sister.txt` — hashed, mode 600, git-ignored (`local_users*.txt`). Regenerate or add users with `scripts/hash_local_password.py <user>`; plain entries still work but log a warning.
 - Static files: SISTER's own `/static` assets revalidate via ETag (no long cache); only versioned `aecs4u-theme` assets are immutable.
   Presentation formatting (dates, money, enum labels) lives in `sister/display.py` as Jinja filters.
-- **Shared templates live in `aecs4u-theme`** (`catasto/forms|results|ispezione_ipotecaria|visura_*.html`, `components/{hero,nested,timeline,
+- **Shared templates live in `aecs4u-theme`** (`catasto/forms|results|ispezione_ipotecaria|omi_valuation|visura_*.html` (`omi_valuation` = `/omi/valuation`, built from `components/omi_zone_overview.html`), `components/{hero,nested,timeline,
   table_filter,kpi_card,related_links}.html`); they extend `base_template`, which `main.py` sets to SISTER's `_base.html` (sidebar). Sister
   keeps only SISTER-specific pages. Edit those in `../aecs4u-theme`, then bump the theme in `uv.lock`; SISTER's `display.py` filters are
   required by `catasto/ispezione_ipotecaria.html`.
@@ -186,6 +195,9 @@ saved portal forms in `tests/fixtures/portal_forms/`.
   and lists the names that still cover different contents. After removing files by hand run
   `scripts/reconcile_missing_documents.py` (dry run by default): it drops the rows/aliases of a deleted `.p7m` only when a
   surviving file has the same XML as the row, never a row that has extraction results its equivalent lacks.
+- **`query batch` never re-sends a submitted row on `--resume`** (it re-polls the journaled request ids; a repeat can be paid twice) and
+  validates the whole file before sending. After changing `query_forms.py` or `batch.py` models regenerate the schema:
+  `sister query batch-schema -o docs/batch_submission.schema.json` (`tests/test_batch.py` fails on drift).
 - **`sister query ...` / `query batch` do not silently re-run an answered query** (the service reuses an identical request only
   for `RESPONSE_TTL_SECONDS`, 6 h): with `?reuse_previous=true` it returns the previous answer marked `stale`, and the CLI asks
   "Download it again?" (default no; `--yes` downloads, `--no` reuses, without a terminal the answer is no; `--force` = `--yes`).

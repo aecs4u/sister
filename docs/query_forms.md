@@ -15,7 +15,7 @@ Everything else is generated from that table:
 | Front end | How |
 |---|---|
 | `sister query <command>` | `_make_query_command` in `cli.py` builds the Typer command (one option per parameter, required ones from the spec) |
-| `sister query batch` | CSV columns are the command's parameters; rows go through `VisuraClient.submit` |
+| `sister query batch` | JSON file (`docs/batch_format.md`) or CSV; `params` are the command's parameters, validated against the spec before anything is sent; rows go through `VisuraClient.submit` |
 | `/forms` | `generate_single_step_params()` in `form_config.py` builds the group parameters |
 | `POST /visura/{search_type}` | the generic route reads the query string; valid types come from the spec |
 

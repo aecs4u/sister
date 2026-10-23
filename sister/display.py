@@ -98,6 +98,38 @@ def inspection_ref(value: Any) -> str:
     return f"T{match.group(1)}" if match else str(value).strip()
 
 
+def merge_identifiers(node: Any) -> Any:
+    """Copy of a parsed visura tree where a unit with several ``IdentificativoDefinitivo`` shows them all.
+
+    A unit that merges parcels (fusione) lists one identifier per parcel; the theme tables read a single mapping and
+    printed dashes for foglio, particella and sub. Values that differ are joined in order (``522, 2206``), equal ones
+    stay single. Only meant for rendering: lookups (map, OMI zone, history) keep working on the original tree.
+    """
+    if isinstance(node, list):
+        return [merge_identifiers(item) for item in node]
+    if not isinstance(node, dict):
+        return node
+    merged = {}
+    for key, value in node.items():
+        if key == "IdentificativoDefinitivo" and isinstance(value, list) and len(value) > 1:
+            items = [item for item in value if isinstance(item, dict)]
+            combined: dict[str, Any] = {}
+            for item in items:
+                for field, field_value in item.items():
+                    if isinstance(field_value, (dict, list)):
+                        combined.setdefault(field, merge_identifiers(field_value))
+                        continue
+                    seen = combined.setdefault(field, [])
+                    if isinstance(seen, list) and str(field_value).strip() and field_value not in seen:
+                        seen.append(field_value)
+            value = {
+                field: (", ".join(str(v).strip() for v in found) if isinstance(found, list) else found)
+                for field, found in combined.items()
+            }
+        merged[key] = merge_identifiers(value)
+    return merged
+
+
 def register(env) -> None:
     """Attach the filters to a Jinja environment."""
     env.filters.update(

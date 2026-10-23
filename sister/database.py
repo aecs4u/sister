@@ -1197,6 +1197,103 @@ async def get_documents_for_response(request_id: str, foglio: str = None, partic
     return docs
 
 
+async def get_cadastral_visura_history_documents(properties: list[dict], *, per_location: int = 5) -> list[dict]:
+    """Fetch recent XML visure for the exact cadastral units in a subject visura."""
+    from sqlalchemy import or_
+
+    if not properties:
+        return []
+
+    def reference_values(value: str) -> set[str]:
+        raw = str(value or "").strip().upper()
+        values = {raw}
+        if raw.isdigit():
+            normalized = str(int(raw))
+            values.add(normalized)
+            values.update(normalized.zfill(width) for width in (2, 3, 4, 5))
+        return values
+
+    clauses = []
+    seen = set()
+    for item in properties:
+        if not isinstance(item, dict):
+            continue
+        province = str(item.get("province") or "").strip()
+        municipality = str(item.get("municipality") or "").strip()
+        sheet = str(item.get("sheet") or "").strip()
+        parcel = str(item.get("parcel") or "").strip()
+        cadastre_type = str(item.get("cadastre_type") or "").strip().upper()
+        subunit = str(item.get("subunit") or "").strip()
+        section = str(item.get("section") or "").strip().upper()
+        if not all((province, municipality, sheet, parcel)) or cadastre_type not in {"F", "T"}:
+            continue
+        key = (province.casefold(), municipality.casefold(), cadastre_type, section,
+               tuple(sorted(reference_values(sheet))), tuple(sorted(reference_values(parcel))),
+               tuple(sorted(reference_values(subunit))))
+        if key in seen:
+            continue
+        seen.add(key)
+        clauses.append(
+            (func.lower(func.trim(CadastralLocation.province)) == province.casefold())
+            & (func.lower(func.trim(CadastralLocation.municipality)) == municipality.casefold())
+            & (func.upper(func.trim(CadastralLocation.cadastre_type)) == cadastre_type)
+            & (func.upper(func.trim(CadastralLocation.section)) == section)
+            & func.upper(func.trim(CadastralLocation.sheet)).in_(reference_values(sheet))
+            & func.upper(func.trim(CadastralLocation.parcel)).in_(reference_values(parcel))
+            & func.upper(func.trim(CadastralLocation.subunit)).in_(reference_values(subunit))
+        )
+    if not clauses:
+        return []
+
+    session_factory = _get_session_factory()
+    async with session_factory() as session:
+        ranked = (
+            select(
+                VisuraDocument.id.label("document_id"),
+                VisuraDocument.document_type.label("document_type"),
+                VisuraDocument.filename.label("filename"),
+                VisuraDocument.created_at.label("created_at"),
+                DocumentMetadata.view_subtype.label("view_subtype"),
+                DocumentMetadata.reference_date.label("reference_date"),
+                DocumentMetadata.content.label("xml_content"),
+                CadastralLocation.cadastre_type.label("cadastre_type"),
+                CadastralLocation.province.label("province"),
+                CadastralLocation.municipality.label("municipality"),
+                CadastralLocation.sheet.label("sheet"),
+                CadastralLocation.parcel.label("parcel"),
+                CadastralLocation.subunit.label("subunit"),
+                CadastralLocation.section.label("section"),
+                func.row_number().over(
+                    partition_by=CadastralLocation.id,
+                    order_by=(VisuraDocument.created_at.desc(), VisuraDocument.id.desc()),
+                ).label("location_rank"),
+            )
+            .join(DocumentMetadata, VisuraDocument.id == DocumentMetadata.id)
+            .join(CadastralLocation, DocumentMetadata.location_id == CadastralLocation.id)
+            .where(
+                or_(*clauses),
+                DocumentMetadata.content.is_not(None),
+                VisuraDocument.document_type.in_(
+                    ("visura_fabbricati", "visura_terreni", "visura_storica", "visura")
+                ),
+            )
+            .subquery()
+        )
+        result = await session.execute(
+            select(ranked)
+            .where(ranked.c.location_rank <= max(1, min(int(per_location), 10)))
+            .order_by(ranked.c.created_at.desc(), ranked.c.document_id.desc())
+        )
+        rows = result.mappings().all()
+    return [
+        {
+            **dict(row),
+            "created_at": row["created_at"].isoformat() if row["created_at"] else None,
+        }
+        for row in rows
+    ]
+
+
 async def get_document_by_id(doc_id: int) -> dict | None:
     """Fetch a single visura_document by primary key."""
     session_factory = _get_session_factory()

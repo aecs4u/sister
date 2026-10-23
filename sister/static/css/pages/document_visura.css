@@ -1,0 +1,86 @@
+/* Subject-visura document page (/documents/<id>): dark-mode fixes for the theme's ownership timeline, the
+   "Dati completi" dump, and the print / PDF layout. Loaded by catasto/land_map.html after the theme's CSS. */
+
+/* ── Ownership timeline in dark mode ──────────────────────────────────────────
+   The theme hard-codes light backgrounds (#fff, #f8f9fa) but leaves the text colour inherited, which in dark mode is
+   light grey on white: owner names, periods and quotas become unreadable. */
+[data-bs-theme="dark"] .tl-card { border-color: var(--bs-border-color); }
+[data-bs-theme="dark"] .tl-header { background: var(--bs-tertiary-bg); }
+[data-bs-theme="dark"] .tl-header:hover { background: var(--bs-secondary-bg); }
+[data-bs-theme="dark"] .tl-header-current,
+[data-bs-theme="dark"] .tl-header-current:hover {
+    background: color-mix(in srgb, var(--tl-color, #28a745) 16%, var(--bs-body-bg));
+}
+[data-bs-theme="dark"] .tl-body { border-top-color: var(--bs-border-color); }
+[data-bs-theme="dark"] .tl-desc { color: var(--bs-secondary-color); }
+[data-bs-theme="dark"] .tl-date-tag,
+[data-bs-theme="dark"] .tl-chevron,
+[data-bs-theme="dark"] .tl-owner-cf { color: var(--bs-secondary-color); }
+[data-bs-theme="dark"] .tl-owner-row { background: var(--bs-tertiary-bg); color: var(--bs-body-color); }
+[data-bs-theme="dark"] .tl-owner-row.tl-owner-active { background: var(--bs-body-bg); }
+[data-bs-theme="dark"] .tl-dot { border-color: var(--bs-body-bg); }
+
+/* ── "Dati completi" ──────────────────────────────────────────────────────────
+   Keys are CamelCase XML names; the theme upper-cases them, which glues the words together
+   (VISURASOGGETTOATTUALE). sister_actions.js adds word breaks, so show them as written. */
+.nested-key { text-transform: none; letter-spacing: 0; }
+/* Open state: the outline button turned teal-on-teal. Keep the text readable. */
+button[data-bs-target="#complete-data"][aria-expanded="true"] {
+    background: color-mix(in srgb, currentColor 14%, transparent);
+    color: var(--bs-body-color) !important;
+}
+
+/* ── Print and PDF export ─────────────────────────────────────────────────────
+   Landscape A4: the property tables have 13-14 columns and the last two (valore catastale, stima OMI) are the
+   ones that matter. The export (/documents/<id>/pdf) prints this same page, so the two cannot drift apart. */
+@page { size: A4 landscape; margin: 10mm; }
+
+@media print {
+    html[data-bs-theme] {
+        color-scheme: light;
+        --bs-body-color: #212529;
+        --bs-body-bg: #fff;
+        --bs-emphasis-color: #000;
+        --bs-secondary-color: rgba(33, 37, 41, .75);
+        --bs-secondary-bg: #e9ecef;
+        --bs-tertiary-bg: #f8f9fa;
+        --bs-border-color: #dee2e6;
+        --bs-link-color: #0b5ed7;
+    }
+    html, body { background: #fff !important; color: #212529 !important; font-size: 9pt; }
+
+    /* application chrome */
+    .navbar-main, #sidebar, .site-footer, #cookieConsent, .sidebar-backdrop,
+    .page-hero .btn, [data-bs-target="#complete-data"], #complete-data,
+    search, .leaflet-control-container, .document-parcel-map-card .btn, .document-parcel-map-card input[type="checkbox"] {
+        display: none !important;
+    }
+    /* the theme's mobile-sidebar scrim (.sidebar-visible::before, 50% black) is painted over every page otherwise */
+    body.sidebar-visible::before, body::before { content: none !important; display: none !important; }
+    body, body.sidebar-visible { padding: 0 !important; margin: 0 !important; }
+    main { margin: 0 !important; padding: 0 !important; }
+
+    /* one column: the aside (indicators + map) follows the content */
+    .document-land-map-layout { display: block !important; }
+    .document-land-map-aside { position: static !important; margin-top: 1rem !important; }
+    .document-land-map-kpis { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .5rem; }
+    .document-land-map-kpis article { margin-bottom: 0 !important; }
+
+    /* tables must not scroll: show every column */
+    .cat-table-wrap, .nested-scroll, .table-responsive { overflow: visible !important; }
+    .cat-compact-table { width: 100% !important; table-layout: auto; font-size: 7.5pt; }
+    .cat-compact-table th, .cat-compact-table td { white-space: normal !important; padding: .15rem .25rem !important; }
+
+    /* flat cards, no splitting of a card or a table row across pages */
+    .card { box-shadow: none !important; border: 1px solid #ced4da !important; background: #fff !important; }
+    .card, .tl-node, .tl-card, tr, article, .persona-header { break-inside: avoid; }
+    h2, h3, h5 { break-after: avoid; }
+    .imm-tables { break-inside: avoid; }
+    .tl-owner-row, .tl-owner-row.tl-owner-active { background: #fff !important; color: #212529 !important; }
+    .tl-header, .tl-header-current { background: #f1f3f5 !important; }
+    .tl-desc { white-space: normal; overflow: visible; text-overflow: clip; }
+    /* folded <details> (ownership history per property) are opened by sisterActions on beforeprint */
+
+    a[href] { color: inherit; text-decoration: none; }
+    .document-parcel-map-card [role="region"], .document-parcel-map-card .leaflet-container { break-inside: avoid; }
+}

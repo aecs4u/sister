@@ -1913,6 +1913,66 @@ async def landing(request: Request):
     return theme.render("_landing.html", request, user=user)
 
 
+@router.get("/omi/valuation", response_class=HTMLResponse, name="omi_valuation")
+async def web_omi_valuation(
+    request: Request,
+    comune: Optional[str] = None,
+    zona: Optional[str] = None,
+    refresh: bool = False,
+    user=Depends(_optional_user),
+):
+    """Overview of one OMI zone (quotes over time, variations, context), or the zone list of a municipality."""
+    from .omi_zone_overview import load_zone_overview, overview_chart_data
+
+    theme = _get_theme(request)
+    locale = getattr(request.state, "locale", "it")
+    normalized_comune = (comune or "").strip().upper()
+    normalized_zona = (zona or "").strip().upper()
+    search_submitted = bool(normalized_comune or normalized_zona)
+    error_message = None
+    overview: dict[str, Any] = {}
+    response_status = 200
+
+    if search_submitted and not normalized_comune:
+        error_message = "Inserisci il codice del comune."
+        response_status = 422
+    elif len(normalized_comune) > 24 or len(normalized_zona) > 24:
+        error_message = "Il codice del comune e la zona OMI devono contenere al massimo 24 caratteri."
+        response_status = 422
+    elif search_submitted:
+        try:
+            loaded = await load_zone_overview(normalized_comune, normalized_zona, refresh=refresh)
+        except Exception:
+            logger.exception(
+                "OMI valuation page lookup failed for comune=%s zona=%s", normalized_comune, normalized_zona
+            )
+            loaded = None
+        if loaded is None:
+            error_message = "Le quotazioni OMI non sono temporaneamente disponibili."
+            response_status = 503
+        else:
+            overview = loaded
+
+    response = theme.render(
+        "catasto/omi_valuation.html",
+        request,
+        user=user,
+        locale=locale,
+        page_title="Valutazione OMI per zona",
+        comune=normalized_comune,
+        zona=normalized_zona,
+        search_submitted=search_submitted,
+        error_message=error_message,
+        overview=overview,
+        chart_data=overview_chart_data(overview) if overview.get("zone_found") else None,
+        omi_url="/omi/valuation",
+        omi_method_url="/valuation",
+        chart_js_url="/static/vendor/chart.js-4.4.4/chart.umd.min.js",
+    )
+    response.status_code = response_status
+    return response
+
+
 # ---------------------------------------------------------------------------
 # Authenticated web routes
 # ---------------------------------------------------------------------------
@@ -2600,6 +2660,16 @@ async def web_glossary(request: Request):
     return theme.render("glossary.html", request, user=user)
 
 
+@router.get("/valuation", response_class=HTMLResponse)
+async def web_valuation(request: Request):
+    """How properties are valued: statutory cadastral (IMU) value and the indicative OMI estimate."""
+    from .valuation_docs import valuation_page_context
+
+    theme = _get_theme(request)
+    user = await _optional_user(request)
+    return theme.render("valuation.html", request, user=user, **valuation_page_context())
+
+
 # ---------------------------------------------------------------------------
 # 3D building view (Google Photorealistic 3D Maps, the data behind Google Earth)
 # ---------------------------------------------------------------------------
@@ -2830,6 +2900,17 @@ async def _render_doc_from_db(doc: dict, request, theme, user, force_template: s
             result=result,
             request_id=str(doc.get("id") or doc.get("filename") or ""),
         )
+    land_registry_kpis = None
+    land_registry_history = None
+    if land_map_kind == "soggetto":
+        from .land_registry_kpis import subject_land_registry_kpis
+        from .land_registry_history import subject_land_registry_history
+
+        land_registry_kpis = await subject_land_registry_kpis(xml_p, map_lookup)
+        land_registry_history = await subject_land_registry_history(xml_p)
+    from .display import merge_identifiers
+
+    doc = {**doc, "xml_parsed": merge_identifiers(xml_p)}  # after the lookups above, which need the original tree
     return theme.render(
         "catasto/land_map.html",
         request,
@@ -2837,6 +2918,8 @@ async def _render_doc_from_db(doc: dict, request, theme, user, force_template: s
         doc=doc,
         google_maps=map_lookup if land_map_kind == "fabbricati" else None,
         land_registry_map=doc.get("land_registry_map"),
+        land_registry_kpis=land_registry_kpis,
+        land_registry_history=land_registry_history,
         **_land_map_layout(land_map_kind),
     )
 
@@ -2976,6 +3059,9 @@ async def _google_maps_context(doc: dict) -> dict[str, Any] | None:
                 identifiers = as_items(dati.get("IdentificativoDefinitivo")) if isinstance(dati, dict) else []
                 for table_identifier in identifiers:
                     item = dict(table_identifier)
+                    classamento = property_row.get("DatiClassamentoF") or {}
+                    if isinstance(classamento, dict):
+                        item["Categoria"] = classamento.get("Categoria") or ""
                     if not item.get("CodiceComune") and group.get("CodiceComune"):
                         item["CodiceComune"] = group["CodiceComune"]
                     if not item.get("Comune") and group.get("Descrizione"):
@@ -3066,9 +3152,16 @@ async def _google_maps_context(doc: dict) -> dict[str, Any] | None:
         if not isinstance(current_unit, dict):
             continue
         if isinstance(current_unit.get("identifier"), dict):
-            unit_identifiers.append(current_unit["identifier"])
+            classification = current_unit.get("classification") or {}
+            unit_identifiers.append({
+                **current_unit["identifier"],
+                "category": classification.get("category", "") if isinstance(classification, dict) else "",
+            })
+        classification = current_unit.get("classification") or {}
+        category = classification.get("category", "") if isinstance(classification, dict) else ""
         unit_identifiers.extend(
-            related for related in current_unit.get("related", []) if isinstance(related, dict)
+            {**related, "category": category}
+            for related in current_unit.get("related", []) if isinstance(related, dict)
         )
     if is_subject_visura:
         candidates = subject_table_identifiers
@@ -3088,6 +3181,7 @@ async def _google_maps_context(doc: dict) -> dict[str, Any] | None:
         ) or section
         candidate_sheet = parcel_field(candidate, "sheet", "Foglio")
         candidate_parcel = parcel_field(candidate, "parcel", "ParticellaNum", "Particella")
+        candidate_category = parcel_field(candidate, "category", "Categoria")
         if not (candidate_municipality and candidate_province and candidate_sheet and candidate_parcel):
             continue
         key = (
@@ -3104,6 +3198,7 @@ async def _google_maps_context(doc: dict) -> dict[str, Any] | None:
             "section": candidate_section.upper(),
             "sheet": candidate_sheet,
             "parcel": candidate_parcel,
+            "category": candidate_category,
             "reference": parcel_field(candidate, "reference") or " · ".join(
                 part for part in (
                     f"{candidate_municipality} ({candidate_code.upper()})" if candidate_code else candidate_municipality,
@@ -3153,6 +3248,18 @@ async def _google_maps_context(doc: dict) -> dict[str, Any] | None:
             }
         )
 
+    def parcel_map_reference(item: dict[str, str]) -> dict[str, str]:
+        return {
+            "reference": item["reference"],
+            "municipality": item["municipality"],
+            "municipality_code": item["municipality_code"],
+            "province": item["province"],
+            "section": item["section"],
+            "sheet": item["sheet"],
+            "parcel": item["parcel"],
+            "category": item.get("category", ""),
+        }
+
     context: dict[str, Any] = {
         "document_id": doc.get("id"),
         "location": location,
@@ -3182,6 +3289,7 @@ async def _google_maps_context(doc: dict) -> dict[str, Any] | None:
         "parcel_count": len(parcel_identifiers),
     }
     context["unmapped_parcels"] = [item["reference"] for item in parcel_identifiers]
+    context["unmapped_parcel_items"] = [parcel_map_reference(item) for item in parcel_identifiers]
 
     sheet_identifiers = []
     if is_subject_visura:
@@ -3239,9 +3347,11 @@ async def _google_maps_context(doc: dict) -> dict[str, Any] | None:
                     "reference": item["reference"],
                     "sheet": item["sheet"],
                     "parcel": item["parcel"],
+                    "section": item["section"],
                     "municipality": item["municipality"],
                     "municipality_code": item["municipality_code"],
                     "province": item["province"],
+                    "category": item.get("category", ""),
                 },
                 "geometry": geometry,
             })
@@ -3258,8 +3368,10 @@ async def _google_maps_context(doc: dict) -> dict[str, Any] | None:
                 "municipality": item["municipality"],
                 "municipality_code": item["municipality_code"],
                 "province": item["province"],
+                "section": item["section"],
                 "sheet": item["sheet"],
                 "parcel": item["parcel"],
+                "category": item.get("category", ""),
                 "selected": item["key"] == selected_key,
             })
 
@@ -3279,6 +3391,7 @@ async def _google_maps_context(doc: dict) -> dict[str, Any] | None:
                 "properties": {
                     "reference": f"{item['municipality']} ({item['municipality_code']}) · Foglio {item['sheet']}",
                     "sheet": item["sheet"],
+                    "section": item["section"],
                     "municipality": item["municipality"],
                     "municipality_code": item["municipality_code"],
                 },
@@ -3288,6 +3401,10 @@ async def _google_maps_context(doc: dict) -> dict[str, Any] | None:
         context["mapped_sheet_count"] = len(context["sheet_features"])
         context["unmapped_parcels"] = [
             item["reference"] for index, item in enumerate(parcel_identifiers) if index not in matched_indices
+        ]
+        context["unmapped_parcel_items"] = [
+            parcel_map_reference(item)
+            for index, item in enumerate(parcel_identifiers) if index not in matched_indices
         ]
         context["mapped_parcel_count"] = len(context["parcel_markers"])
         if context["parcel_markers"] and not any(marker["selected"] for marker in context["parcel_markers"]):
@@ -3732,6 +3849,7 @@ async def _google_maps_context(doc: dict) -> dict[str, Any] | None:
             "municipality": item["municipality"],
             "municipality_code": item["municipality_code"],
             "province": item["province"],
+            "section": item["section"],
             "sheet": item["sheet"],
             "parcel": item["parcel"],
             "selected": item["key"] == selected_key,
@@ -3748,9 +3866,11 @@ async def _google_maps_context(doc: dict) -> dict[str, Any] | None:
                                 "reference": item["reference"],
                                 "sheet": item["sheet"],
                                 "parcel": item["parcel"],
+                                "section": item["section"],
                                 "municipality": item["municipality"],
                                 "municipality_code": item["municipality_code"],
                                 "province": item["province"],
+                                "category": item.get("category", ""),
                             },
                             "geometry": geometry,
                         })
@@ -3783,6 +3903,7 @@ async def _google_maps_context(doc: dict) -> dict[str, Any] | None:
                 "properties": {
                     "reference": f"{item['municipality']} ({item['municipality_code']}) · Foglio {item['sheet']}",
                     "sheet": item["sheet"],
+                    "section": item["section"],
                     "municipality": item["municipality"],
                     "municipality_code": item["municipality_code"],
                 },
@@ -3824,6 +3945,10 @@ async def _google_maps_context(doc: dict) -> dict[str, Any] | None:
 
     context["unmapped_parcels"] = [
         item["reference"] for index, item in enumerate(parcel_identifiers) if index not in matched_indices
+    ]
+    context["unmapped_parcel_items"] = [
+        parcel_map_reference(item)
+        for index, item in enumerate(parcel_identifiers) if index not in matched_indices
     ]
     if context["parcel_markers"] and not any(marker["selected"] for marker in context["parcel_markers"]):
         context["parcel_markers"][0]["selected"] = True
@@ -4270,6 +4395,37 @@ async def web_document_view_by_id(request: Request, doc_id: int, user=Depends(_r
     return Response(content=p.read_bytes(), media_type=media_type, headers=headers)
 
 
+@router.get("/documents/{doc_id}/pdf")
+async def web_document_pdf(request: Request, doc_id: int, user=Depends(_require_auth)):
+    """PDF of a visura (A4 landscape), typeset with Typst from the same data the page shows."""
+    from fastapi import HTTPException
+    from fastapi.responses import Response
+
+    from .land_registry_kpis import subject_land_registry_kpis
+    from .pdf_typst import PdfExportError, build_context, pdf_filename, render_pdf
+
+    doc = await get_document_by_id(doc_id)
+    if doc is None:
+        raise HTTPException(status_code=404, detail="Document not found")
+    xml_content = doc.pop("xml_content", "") or ""
+    doc["xml_parsed"] = _parse_xml_to_dict(xml_content)
+    doc["view"] = build_visura_view(xml_content)
+    lookup = await _google_maps_context(doc)
+    kpis = None
+    if any(key in doc["xml_parsed"] for key in ("VisuraSoggettoAttuale", "VisuraSoggettoStorica",
+                                                "VisuraSoggettoSintetica", "VisuraSoggetto")):
+        kpis = await subject_land_registry_kpis(doc["xml_parsed"], lookup)
+    try:
+        context = build_context(doc, kpis, lookup)
+        content = await run_in_threadpool(render_pdf, context)
+    except PdfExportError as exc:
+        logger.warning("PDF export of document %s failed: %s", doc_id, exc)
+        raise HTTPException(status_code=422, detail=f"PDF export not available: {exc}") from exc
+    stem = Path(str(doc.get("filename") or "")).stem
+    headers = {"Content-Disposition": f'attachment; filename="{pdf_filename(stem, doc_id)}"', "Cache-Control": "no-store"}
+    return Response(content=content, media_type="application/pdf", headers=headers)
+
+
 @router.get("/documents/{doc_id}/download")
 async def web_document_download(request: Request, doc_id: int, user=Depends(_require_auth)):
     """Download the original file backing a DB-indexed document."""
@@ -4695,6 +4851,7 @@ async def web_document_parcel_map_data(doc_id: int, user=Depends(_require_auth))
                 "type": "FeatureCollection",
                 "features": lookup.get("sheet_features") or [],
             },
+            "unmapped_parcels": lookup.get("unmapped_parcel_items") or [],
         },
         headers={"Cache-Control": "private, max-age=300"},
     )

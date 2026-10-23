@@ -26,11 +26,12 @@ from typing import Optional
 
 import typer
 from rich.console import Console
+from rich.markup import escape
 from rich.table import Table
 
 from . import batch as batch_engine
 from .client import VisuraAPIError, VisuraClient
-from .query_forms import QUERY_FORMS, get_query_form, option_flags, param_names, validate_params
+from .query_forms import QUERY_FORMS, option_flags, validate_params
 
 app = typer.Typer(
     name="sister",
@@ -1132,9 +1133,9 @@ def _batch_printer(total: int):
             why = "already done (resume)" if info.get("resumed") else info["status"]
             detail = item.error or (f"same as {item.duplicate_of}" if item.duplicate_of else "")
             style = "red" if info["status"] == "invalid" else "yellow"
-            console.print(f"  {tag} [{style}]{why}[/{style}] {item.id} {item.label} {detail}".rstrip())
+            console.print(f"  {tag} [{style}]{why}[/{style}] {item.id} {escape(item.label)} {detail}".rstrip())
         elif event == "start":
-            console.print(f"\n{tag} {item.id} {item.label}")
+            console.print(f"\n{tag} {item.id} {escape(item.label)}")
         elif event == "submitted":
             console.print(f"  Submitted: {', '.join(info['request_ids'])}")
         elif event == "result":
@@ -1260,7 +1261,7 @@ def batch(
         for item in plan:
             note = {"duplicate": f" (duplicate of {item.duplicate_of})", "disabled": " (disabled)"}.get(item.state, "")
             if item.state != "invalid":
-                console.print(f"  {item.index}. {item.id} {item.label}{note}")
+                console.print(f"  {item.index}. {item.id} {escape(item.label)}{note}")
         return
 
     journal_path = Path(journal) if journal else (Path(options.output_dir) / batch_engine.JOURNAL_NAME if options.output_dir else None)

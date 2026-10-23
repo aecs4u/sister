@@ -4,7 +4,7 @@
 <link rel="stylesheet" href="/static/vendor/leaflet/leaflet.css">
 <link rel="stylesheet" href="{{ static_url_path|default('/static/aecs4u-theme') }}/css/components/land_registry_map.css">
 {% endif %}
-<link rel="stylesheet" href="/static/css/pages/document_parcel_map.css?v=20261022e">
+<link rel="stylesheet" href="/static/css/pages/document_parcel_map.css?v=20261023e">
 {% endif %}
 {%- endmacro %}
 
@@ -14,7 +14,7 @@
 <script src="/static/vendor/leaflet/leaflet.js" data-document-map-script defer></script>
 {% endif %}
 <script src="/land-registry/static/consumer-map.js" data-document-map-script defer></script>
-<script src="/static/js/document_parcel_map.js?v=20261022e" data-document-map-script defer></script>
+<script src="/static/js/document_parcel_map.js?v=20261023e" data-document-map-script defer></script>
 <script nonce="{{ nonce }}">
 document.addEventListener('error', function (event) {
     var script = event.target;
@@ -102,11 +102,18 @@ document.addEventListener('click', function (event) {
                  data-labels="{{ {'streets': 'Stradale', 'satellite': 'Satellite', 'terrain': 'Rilievo', 'cadastral': 'Confini catastali', 'parcel': 'Particella'}|tojson|forceescape }}"
                  role="region"
                  aria-label="{% if map_data.listed_only %}Mappa catastale di {{ map_data.parcel_count }} particelle elencate, {{ map_data.mapped_parcel_count }} con geometria{% else %}Mappa catastale per foglio {{ map_data.sheet }}, particella {{ map_data.parcel }}{% endif %}"></div>
+            <button class="btn btn-sm btn-light document-map-fit-all shadow-sm" type="button"
+                    data-document-map-fit-all disabled
+                    aria-label="Adatta la mappa a tutte le particelle" title="Adatta tutte le particelle">
+                <i class="fas fa-expand me-1" aria-hidden="true"></i>Adatta particelle
+            </button>
         </div>
         <noscript><p class="alert alert-warning mt-3 mb-0">Per visualizzare la mappa catastale è necessario attivare JavaScript.</p></noscript>
         <p class="small text-muted mt-2 mb-0">
             {% if map_data.listed_only %}
             La mappa mostra esclusivamente i fogli e le particelle elencati nelle tabelle della visura. Le geometrie provengono dal database catastale PostgreSQL locale. Seleziona una particella sulla mappa o nella tabella per collegare le due viste.
+            A zoom ridotto i marcatori riportano comune, foglio e particella; ingrandisci per vedere meglio i confini.
+            {% if map_data.mapped_parcel_count < map_data.parcel_count %}Per le particelle senza geometria, il marcatore indica la posizione approssimativa al centro del foglio; “Adatta particelle” include il perimetro del foglio disponibile.{% endif %}
             {% elif map_data.parcel_count > 1 %}
             La mappa mostra {{ map_data.mapped_parcel_count }} posizioni catastali trovate tra le {{ map_data.parcel_count }} particelle del documento. Attiva o disattiva i confini catastali dai controlli.
             {% elif map_data.center_kind == 'parcel' %}

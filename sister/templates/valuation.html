@@ -1,0 +1,221 @@
+{#
+  Documentation page: how SISTER values properties. Every table and worked example comes from the valuation code
+  (`valuation_docs.valuation_page_context`), so this page and the calculation cannot disagree.
+#}
+{% extends "_base.html" %}
+{% from "components/related_links.html" import related_pages %}
+{% block page_title %}Metodo di valutazione{% endblock %}
+
+{% block extra_css %}
+{{ super() }}
+<link rel="stylesheet" href="/static/css/pages/glossary.css?v=20261009a">
+{% endblock %}
+
+{% block content %}
+<div class="page-hero no-print">
+    <div class="container-fluid">
+        <nav class="mb-3" aria-label="breadcrumb">
+            <ol class="breadcrumb mb-0">
+                <li class="breadcrumb-item"><a href="/" class="text-white-50">Dashboard</a></li>
+                <li class="breadcrumb-item active text-white">Metodo di valutazione</li>
+            </ol>
+        </nav>
+        <h1 class="display-6 fw-bold mb-1"><i class="fas fa-scale-balanced me-3"></i>Metodo di valutazione</h1>
+        <p class="lead mb-0 opacity-75">Come SISTER calcola il valore catastale e la stima OMI degli immobili di un soggetto</p>
+    </div>
+</div>
+
+<div class="container-fluid">
+    <div class="row">
+        <details class="col-12 d-lg-none mb-3">
+            <summary class="btn btn-outline-primary w-100 text-start"><i class="fas fa-list me-2"></i>Indice della pagina</summary>
+            <div class="list-group list-group-flush small border rounded mt-2">
+                <a href="#panoramica" class="list-group-item list-group-item-action">Due misure diverse</a>
+                <a href="#valore-catastale" class="list-group-item list-group-item-action">Valore catastale (base IMU)</a>
+                <a href="#stima-omi" class="list-group-item list-group-item-action">Stima OMI indicativa</a>
+                <a href="#terreni" class="list-group-item list-group-item-action">Perché i terreni non hanno una stima OMI</a>
+                <a href="#lettura" class="list-group-item list-group-item-action">Come leggere la pagina</a>
+                <a href="#limiti" class="list-group-item list-group-item-action">Limiti e avvertenze</a>
+                <a href="#fonti" class="list-group-item list-group-item-action">Fonti</a>
+            </div>
+        </details>
+        {# TOC #}
+        <div class="col-lg-3 d-none d-lg-block">
+            <div class="card border-0 shadow-sm sticky-top" style="top:1rem">
+                <div class="card-header py-2" style="background:#6f42c1;color:white">
+                    <small class="fw-semibold"><i class="fas fa-list me-2"></i>Sezioni</small>
+                </div>
+                <div class="list-group list-group-flush small">
+                    <a href="#panoramica" class="list-group-item list-group-item-action py-2">Due misure diverse</a>
+                    <a href="#valore-catastale" class="list-group-item list-group-item-action py-2">Valore catastale (base IMU)</a>
+                    <a href="#stima-omi" class="list-group-item list-group-item-action py-2">Stima OMI indicativa</a>
+                    <a href="#terreni" class="list-group-item list-group-item-action py-2">Terreni</a>
+                    <a href="#lettura" class="list-group-item list-group-item-action py-2">Come leggere la pagina</a>
+                    <a href="#limiti" class="list-group-item list-group-item-action py-2">Limiti e avvertenze</a>
+                    <a href="#fonti" class="list-group-item list-group-item-action py-2">Fonti</a>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-lg-9">
+
+            {# ── Panoramica ─────────────────────────────────── #}
+            <div class="gl-section" id="panoramica">
+                <h2><i class="fas fa-scale-balanced me-2"></i>Due misure diverse</h2>
+                <p>Nella pagina di una visura per soggetto compaiono due valori per ogni immobile. Non sono alternativi e non vanno confusi: rispondono a domande diverse.</p>
+                <div class="table-responsive">
+                    <table class="table table-bordered table-sm align-middle">
+                        <thead class="table-light">
+                            <tr><th></th><th>Valore catastale</th><th>Stima OMI indicativa</th></tr>
+                        </thead>
+                        <tbody>
+                            <tr><th scope="row">Che cos'è</th><td>La base imponibile fiscale (IMU) calcolata dalla rendita catastale.</td><td>Un intervallo di valore di mercato ottenuto dalle quotazioni ufficiali dell'Osservatorio del Mercato Immobiliare.</td></tr>
+                            <tr><th scope="row">Si applica a</th><td>Fabbricati e terreni.</td><td>Solo fabbricati, e solo per alcune categorie.</td></tr>
+                            <tr><th scope="row">Da cosa dipende</th><td>Solo dai dati della visura (rendita, categoria, reddito dominicale).</td><td>Dalla zona OMI in cui si trova la particella, dalla tipologia e dalla superficie catastale.</td></tr>
+                            <tr><th scope="row">È un valore di mercato?</th><td><strong>No.</strong> È un valore convenzionale a fini fiscali.</td><td>È un'indicazione di ordine di grandezza, <strong>non una perizia</strong>.</td></tr>
+                            <tr><th scope="row">Quando manca</th><td>Se la rendita è assente o la categoria non ha un moltiplicatore.</td><td>Se la zona non è individuata, la categoria non ha una tipologia OMI o la quotazione è ambigua.</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            {# ── Valore catastale ───────────────────────────── #}
+            <div class="gl-section" id="valore-catastale">
+                <h2><i class="fas fa-landmark me-2"></i>Valore catastale (base IMU)</h2>
+                <p>È il valore che il catasto attribuisce all'immobile ai fini dell'IMU (art. 13, commi 4 e 5, D.L. 201/2011, convertito dalla L. 214/2011). Si calcola solo con i dati della visura, senza fonti esterne.</p>
+
+                <h3>Fabbricati</h3>
+                <p class="mb-2"><span class="term-dt">rendita catastale × {{ building_revaluation }} × moltiplicatore</span></p>
+                <p class="text-muted small">La rendita viene rivalutata del 5% e poi moltiplicata per un coefficiente che dipende dalla categoria catastale:</p>
+                <div class="table-responsive">
+                    <table class="table table-bordered table-sm align-middle">
+                        <thead class="table-light"><tr><th style="width:7rem">Moltiplicatore</th><th>Categorie</th><th>Esempi</th></tr></thead>
+                        <tbody>
+                            {% for row in multipliers %}
+                            <tr><td><strong>{{ row.multiplier }}</strong></td><td>{{ row.label }}</td><td class="font-monospace small">{{ row.examples }}</td></tr>
+                            {% endfor %}
+                            <tr><td><strong>—</strong></td><td>Gruppi E ed F e categorie non riconosciute: nessun valore calcolato</td><td class="font-monospace small">E/1, F/1, F/2…</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+                <p><strong>Esempio.</strong> Un'abitazione A/2 con rendita {{ example_building.rendita }}:
+                    {{ example_building.rendita }} × {{ building_revaluation }} × {{ example_building.multiplier }} = <strong>{{ example_building.value }}</strong>.</p>
+
+                <h3>Terreni</h3>
+                <p class="mb-2"><span class="term-dt">reddito dominicale × {{ land_revaluation }} × {{ land_multiplier }}</span></p>
+                <p class="text-muted small">Il reddito dominicale è rivalutato del 25%. Il moltiplicatore {{ land_multiplier }} vale per i proprietari in genere; per coltivatori diretti e imprenditori agricoli professionali (IAP) il moltiplicatore è {{ land_multiplier_farmer }}. La visura non indica questa qualifica, quindi <strong>SISTER applica sempre {{ land_multiplier }}</strong>: per un coltivatore diretto o un IAP il valore reale è inferiore.</p>
+                <p><strong>Esempio.</strong> Un terreno con reddito dominicale {{ example_land.reddito }}:
+                    {{ example_land.reddito }} × {{ land_revaluation }} × {{ land_multiplier }} = <strong>{{ example_land.value }}</strong>.</p>
+            </div>
+
+            {# ── Stima OMI ──────────────────────────────────── #}
+            <div class="gl-section" id="stima-omi">
+                <h2><i class="fas fa-euro-sign me-2"></i>Stima OMI indicativa</h2>
+                <p>L'Osservatorio del Mercato Immobiliare (OMI) dell'Agenzia delle Entrate pubblica, ogni semestre, un intervallo di prezzi al metro quadro per zona, tipologia e stato di conservazione. SISTER usa queste quotazioni ufficiali, lette dal database locale <code>omi</code>.</p>
+
+                <h3>Come si arriva alla stima</h3>
+                <ol>
+                    <li><strong>Zona.</strong> La posizione della particella sulla mappa catastale viene confrontata con le zone OMI del comune. Se la particella non è sulla mappa, la zona non si individua e non c'è stima.</li>
+                    <li><strong>Tipologia.</strong> La categoria catastale viene associata a una tipologia OMI (tabella sotto). Le categorie senza una tipologia corrispondente non vengono valutate.</li>
+                    <li><strong>Quotazione.</strong> Tra le quotazioni della tipologia si usa quella che OMI indica come <em>prevalente</em>; se manca l'indicazione, l'unica in stato <em>NORMALE</em>. Se resta un dubbio la riga resta senza stima: SISTER non sceglie a caso.</li>
+                    <li><strong>Calcolo.</strong> Si moltiplica la <strong>superficie catastale totale</strong> dell'unità per il prezzo minimo e per il prezzo massimo al metro quadro.</li>
+                </ol>
+                <p><strong>Esempio.</strong> Un'unità di {{ example_omi.area }} m² in una zona con quotazione {{ example_omi.low }}–{{ example_omi.high }} al m²: {{ example_omi.area }} × {{ example_omi.low }} = {{ example_omi.value_low }} e {{ example_omi.area }} × {{ example_omi.high }} = {{ example_omi.value_high }}, quindi <strong>{{ example_omi.value_low }} – {{ example_omi.value_high }}</strong>. (I prezzi dell'esempio sono inventati: servono solo a mostrare l'aritmetica.)</p>
+
+                <h3>Da categoria catastale a tipologia OMI</h3>
+                <div class="table-responsive">
+                    <table class="table table-bordered table-sm align-middle">
+                        <thead class="table-light"><tr><th style="width:9rem">Categoria</th><th>Tipologia OMI</th></tr></thead>
+                        <tbody>
+                            {% for row in omi_map %}
+                            <tr><td class="font-monospace">{{ row.category }}</td><td>{{ row.typologies | join(', se non quotata: ') }}</td></tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+
+                <h3>Categorie senza stima OMI</h3>
+                <div class="table-responsive">
+                    <table class="table table-bordered table-sm align-middle">
+                        <thead class="table-light"><tr><th style="width:9rem">Categoria</th><th>Motivo</th></tr></thead>
+                        <tbody>
+                            {% for category, reason in omi_unvalued %}
+                            <tr><td class="font-monospace">{{ category }}</td><td>{{ reason }}</td></tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            {# ── Terreni ────────────────────────────────────── #}
+            <div class="gl-section" id="terreni">
+                <h2><i class="fas fa-seedling me-2"></i>Perché i terreni non hanno una stima OMI</h2>
+                <p>Le quotazioni OMI riguardano solo fabbricati (abitazioni, box, negozi, uffici, magazzini, capannoni…). <strong>Non esistono quotazioni OMI per i terreni agricoli</strong>: per questo i terreni hanno il valore catastale e nessuna stima di mercato.</p>
+                <p class="text-muted small mb-0">Alcune tabelle derivate da OMI riportano righe con nomi di colture (seminativo, vigneto, uliveto…). Non risultano prezzi di terreni (le quotazioni OMI ufficiali non le contengono) e SISTER non le usa.</p>
+            </div>
+
+            {# ── Come leggere la pagina ─────────────────────── #}
+            <div class="gl-section" id="lettura">
+                <h2><i class="fas fa-table me-2"></i>Come leggere la pagina</h2>
+                <ul>
+                    <li><strong>Colonne nelle tabelle.</strong> «Valore catastale» compare nelle tabelle di fabbricati e terreni; «Stima OMI indicativa» solo nelle tabelle di fabbricati. Una colonna compare in tutte le tabelle dello stesso tipo se almeno una riga del documento ha un valore; le righe senza valore ne indicano il motivo.</li>
+                    <li><strong>Suggerimento sulla cella.</strong> Passando il mouse su un valore (o su «Non disponibile») si vede il calcolo o il motivo: formula usata, tipologia, stato di conservazione, semestre OMI, zona, prezzi al m².</li>
+                    <li><strong>Riquadri a destra.</strong> «Valore catastale (base IMU)» somma i valori di fabbricati e terreni. «Valore OMI fabbricati» somma gli intervalli delle sole unità valutate e indica quante sono su quante.</li>
+                </ul>
+                <h3>Perché una riga è «Non disponibile»</h3>
+                <div class="table-responsive">
+                    <table class="table table-bordered table-sm align-middle">
+                        <thead class="table-light"><tr><th>Messaggio</th><th>Significato</th></tr></thead>
+                        <tbody>
+                            <tr><td>Rendita catastale assente</td><td>La visura non riporta la rendita: nessun valore catastale.</td></tr>
+                            <tr><td>Categoria catastale senza moltiplicatore IMU</td><td>Gruppo E o F, o categoria non riconosciuta.</td></tr>
+                            <tr><td>Reddito dominicale assente</td><td>Terreno senza reddito dominicale in visura.</td></tr>
+                            <tr><td>Superficie catastale assente</td><td>Senza superficie non si può calcolare la stima OMI.</td></tr>
+                            <tr><td>Categoria catastale senza una tipologia OMI corrispondente</td><td>Vedi la tabella «Categorie senza stima OMI».</td></tr>
+                            <tr><td>Tipologia OMI non quotata in questa zona</td><td>La zona non ha una quotazione per quella tipologia.</td></tr>
+                            <tr><td>Stato di conservazione OMI non determinabile in modo univoco</td><td>Più quotazioni possibili e nessuna indicata come prevalente.</td></tr>
+                            <tr><td>Database OMI non disponibile</td><td>Il database OMI non risponde: la stima manca temporaneamente, il valore catastale no.</td></tr>
+                            <tr><td>Stima OMI non disponibile per zona o categoria catastale</td><td>La particella non è sulla mappa catastale locale o la sua zona OMI non è stata individuata.</td></tr>
+                            <tr><td>Nessuna quotazione OMI disponibile per il comune</td><td>Il database OMI non contiene quotazioni per il comune: non c'è nemmeno un intervallo comunale.</td></tr>
+                            <tr><td>Nessun terreno / fabbricato in visura</td><td>La visura non elenca immobili di quel tipo: non è un dato mancante, non c'è nulla da sommare. «Non disponibile» significa invece che gli immobili ci sono ma manca il dato (rendita, superficie, quota).</td></tr>
+                            <tr><td>Non stimabile: …</td><td>Per un diritto (usufrutto, nuda proprietà) o per il totale: i beni ci sono ma nessuno è stimabile; il motivo segue (es. «Non quotata da OMI (3)», «Durata determinata»). Con zona della particella ignota si usa l'intervallo OMI comunale (minimo e massimo tra tutte le zone del comune).</td></tr>
+                            <tr><td>Nessuno / Nessuna intestata al soggetto</td><td>Il soggetto non ha quel diritto su nessun bene della visura (l'usufrutto può essere di altre persone).</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            {# ── Limiti ─────────────────────────────────────── #}
+            <div class="gl-section" id="limiti">
+                <h2><i class="fas fa-triangle-exclamation me-2"></i>Limiti e avvertenze</h2>
+                <ul>
+                    <li><strong>Non sono perizie.</strong> Né il valore catastale né la stima OMI sostituiscono una valutazione di un tecnico abilitato.</li>
+                    <li><strong>Quote di proprietà non applicate.</strong> Ogni valore è riferito all'intera unità, non alla quota di cui il soggetto è titolare, né al tipo di diritto (proprietà, usufrutto, nuda proprietà…).</li>
+                    <li><strong>Superficie catastale come approssimazione.</strong> La stima OMI usa la superficie catastale totale, che non coincide con la superficie commerciale né con la lorda o netta a cui si riferisce la quotazione.</li>
+                    <li><strong>Intervalli, non prezzi.</strong> Le quotazioni OMI sono medie di zona per immobili in stato ordinario: piano, esposizione, condizioni reali, pertinenze e vincoli non sono considerati. Il semestre della quotazione usata è indicato nel suggerimento della cella.</li>
+                    <li><strong>Norma fiscale.</strong> Rivalutazioni e moltiplicatori sono quelli della normativa IMU; se cambiano, i valori catastali vanno aggiornati nel codice.</li>
+                    <li><strong>Zona dalla mappa.</strong> La zona OMI dipende dalla posizione della particella sulla mappa catastale locale: se la geometria manca o è imprecisa, la stima non compare.</li>
+                </ul>
+            </div>
+
+            {# ── Fonti ──────────────────────────────────────── #}
+            <div class="gl-section" id="fonti">
+                <h2><i class="fas fa-database me-2"></i>Fonti</h2>
+                <ul>
+                    <li><strong>Visura catastale</strong> (XML): categoria, rendita, redditi dominicale e agrario, superficie catastale.</li>
+                    <li><strong>Quotazioni OMI</strong>: Agenzia delle Entrate, Osservatorio del Mercato Immobiliare, banca dati delle quotazioni immobiliari (semestrali), importate nel database locale <code>omi</code>.</li>
+                    <li><strong>Mappa catastale locale</strong>: per posizionare la particella e individuarne la zona OMI.</li>
+                    <li><strong>Normativa</strong>: art. 13, commi 4 e 5, D.L. 6 dicembre 2011, n. 201, convertito dalla L. 22 dicembre 2011, n. 214.</li>
+                </ul>
+                <p class="text-muted small mb-0">Documentazione tecnica per sviluppatori: <code>docs/valuation.md</code>.</p>
+            </div>
+
+            {{ related_pages("Continua", [
+                ("/glossary#catasto", "Glossario", "Rendita, categoria, classamento e altri termini catastali.", "fa-book"),
+                ("/guide", "Guida utente", "Quando usare le diverse consultazioni.", "fa-book-open"),
+                ("/documents", "Documenti", "Apri una visura per soggetto e guarda i valori in contesto.", "fa-folder-tree")
+            ], "I valori sono indicativi e non sostituiscono una perizia.") }}
+        </div>{# /col #}
+    </div>{# /row #}
+</div>
+{% endblock %}

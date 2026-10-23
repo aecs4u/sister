@@ -31,9 +31,9 @@
     {
       "id": "storica-9-166-3",
       "command": "visura-storica",
-      "params": { "provincia": "Trieste", "comune": "TRIESTE", "foglio": 9, "particella": 166, "subalterno": 3, "vista": "analitica" },
+      "params": { "provincia": "Trieste", "comune": "TRIESTE", "foglio": 9, "particella": 166, "subalterno": 3 },
       "reuse": "reuse",
-      "metadata": { "scope_note": "Storica analitica per immobile" }
+      "metadata": { "scope_note": "Storica analitica per immobile", "vista": "analitica" }
     },
     {
       "id": "da-fare-dopo",

@@ -50,6 +50,7 @@ dependencies = [
     "starlette>=1.6.0",
     "python-multipart>=0.0.32",
     "ezdxf>=1.4.4",
+    "typst>=0.14",  # PDF export (sister/pdf_typst.py, template in sister/typst/)
 ]
 
 [project.optional-dependencies]
