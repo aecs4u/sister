@@ -2908,9 +2908,9 @@ async def _render_doc_from_db(doc: dict, request, theme, user, force_template: s
 
         land_registry_kpis = await subject_land_registry_kpis(xml_p, map_lookup)
         land_registry_history = await subject_land_registry_history(xml_p)
-    from .display import merge_identifiers
+    from .display import merge_identifiers, readable_owners, subject_for_theme
 
-    doc = {**doc, "xml_parsed": merge_identifiers(xml_p)}  # after the lookups above, which need the original tree
+    doc = {**doc, "xml_parsed": merge_identifiers(subject_for_theme(readable_owners(xml_p)))}  # after the lookups above, which need the original tree
     return theme.render(
         "catasto/land_map.html",
         request,

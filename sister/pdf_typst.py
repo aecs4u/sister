@@ -18,7 +18,7 @@ from datetime import date
 from pathlib import Path
 from typing import Any
 
-from .display import merge_identifiers
+from .display import merge_identifiers, owner_details
 from .land_registry_kpis import (
     _SUBJECT_KEYS,
     _first,
@@ -29,7 +29,7 @@ from .land_registry_kpis import (
     _quota_label,
     _share_fraction,
 )
-from .result_parsers import clean_quota, clean_right_description, parse_xml_nominativo
+from .result_parsers import clean_quota, clean_right_description
 
 logger = logging.getLogger("sister")
 
@@ -84,30 +84,34 @@ def _kv(rows: list[list[str]], columns: int = 4) -> dict[str, Any]:
 # ── ownership ───────────────────────────────────────────────────────────────────────────────────────────
 
 
-def _owner_row(owner: dict[str, Any]) -> dict[str, str]:
+def _owner_row(owner: dict[str, Any], as_of: date | None = None) -> dict[str, str]:
     right = _first(owner.get("DirittiReali"))
-    parsed = parse_xml_nominativo(owner.get("Nominativo"))
+    cf = _s(owner.get("CF") or owner.get("CodiceFiscale")).upper()
+    details = owner_details(owner.get("Nominativo"), cf, as_of)
     sub = ""
-    if parsed.get("birth_date"):
-        sub = f"nato/a il {parsed['birth_date']}" + (f" · {parsed['birth_place']}" if parsed.get("birth_place") else "")
-    elif parsed.get("registered_office"):
-        sub = f"sede {parsed['registered_office']}"
+    if details["birth_date"]:
+        verb = {"F": "nata", "M": "nato"}.get(details["sex"], "nato/a")
+        sub = f"{verb} il {details['birth_date']}" + (f" · {details['birth_place']}" if details["birth_place"] else "")
+    elif details["birth_place"]:
+        sub = f"nato/a a {details['birth_place']}"
+    elif details["office"]:
+        sub = f"sede {details['office']}"
     description = clean_right_description(right.get("Descrizione", "")) or "Diritto non specificato"
     code = _s(right.get("CodiceDiritto"))
     quota = clean_quota(right.get("Quota", ""))
     share = _share_fraction(quota)
     period = _s(right.get("FineDiritto"))
     return {
-        "name": parsed.get("name") or _s(owner.get("Nominativo")) or "Intestatario non indicato",
+        "name": details["name"] or _s(owner.get("Nominativo")) or "Intestatario non indicato",
         "sub": sub,
-        "cf": _s(owner.get("CF") or owner.get("CodiceFiscale")).upper(),
+        "cf": cf,
         "right": f"{description} ({code})" if code else description,
         "period": f"Periodo: {period}" if period else "",
         "quota": _quota_label({"share": share, "quota": quota}) if quota else "",
     }
 
 
-def _mutations(group: dict[str, Any]) -> list[dict[str, Any]]:
+def _mutations(group: dict[str, Any], as_of: date | None = None) -> list[dict[str, Any]]:
     """The group's ownership acts, newest first (the portal lists them oldest first)."""
     events = _items(_first(group.get("IntestazioneGruppo")).get("MutazioneSoggettiva"))
     out = []
@@ -120,7 +124,7 @@ def _mutations(group: dict[str, Any]) -> list[dict[str, Any]]:
             "index": _s(event.get("IndiceMutazione")) or str(len(events) - position),
             "act": act or "—",
             "date": found.group(1) if found else "",
-            "owners": [_owner_row(owner) for owner in owners],
+            "owners": [_owner_row(owner, as_of) for owner in owners],
         })
     return out
 
@@ -384,20 +388,26 @@ def subject_context(doc: dict[str, Any], kpis: dict[str, Any] | None, lookup: di
     province = _s(request.get("Provincia") or doc.get("provincia"))
     protocol = f"{_s(request.get('Protocollo')) or '-'} / {_s(request.get('Anno')) or '-'}"
     as_of = _it_date(title_block.get("SituazioneAl"))
+    as_of_date = None
+    if re.fullmatch(r"\d{2}/\d{2}/\d{4}", as_of):
+        as_of_date = date(int(as_of[6:]), int(as_of[3:5]), int(as_of[:2]))
 
     meta = [["Tipo catasto", _TIPO_CATASTO.get(tipo, tipo or "—")], ["Provincia", province or "—"],
             ["Situazione al", as_of or "—"], ["Protocollo", protocol]]
     if doc.get("id"):
         meta.append(["ID documento", str(doc["id"])])
-    sections: list[dict[str, Any]] = [{
-        "title": "Soggetto individuato", "badges": [], "items": [_kv([
+    if subject.get("Denominazione") and not subject.get("Cognome"):  # persona giuridica
+        subject_rows = [["Denominazione", name, _s(subject.get("CodiceFiscale"))],
+                        ["Sede", _s(subject.get("Sede")) or "—", _s(subject.get("CodiceSede"))]]
+    else:
+        subject_rows = [
             ["Nominativo", name, _s(subject.get("CodiceFiscale"))],
             ["Nascita", _s(subject.get("DataNascita")) or "—",
              " ".join(x for x in (_s(subject.get("ComuneNascita")), f"({_s(subject.get('Provincia'))})" if subject.get("Provincia") else "") if x)],
             ["Sesso", _s(subject.get("Sesso")) or "—"],
-            ["Visura del", f"{_it_date(title_block.get('Data'))} {_s(title_block.get('Ora'))[:2]}:{_s(title_block.get('Ora'))[2:4]}".strip(" :")],
-        ])],
-    }]
+        ]
+    subject_rows.append(["Visura del", f"{_it_date(title_block.get('Data'))} {_s(title_block.get('Ora'))[:2]}:{_s(title_block.get('Ora'))[2:4]}".strip(" :")])
+    sections: list[dict[str, Any]] = [{"title": "Soggetto individuato", "badges": [], "items": [_kv(subject_rows)]}]
     if kpis:
         assessment = kpis.get("owner_assessment") or {}
         sections.append({"title": "Valutazione patrimoniale per quota e diritto", "badges": [], "items": _assessment_items(assessment)})
@@ -421,7 +431,7 @@ def subject_context(doc: dict[str, Any], kpis: dict[str, Any] | None, lookup: di
                                 buildings))
         if lands:
             items.append(_table("Terreni (Catasto Terreni)", _LAND_HEADER, _LAND_WIDTHS, _LAND_ALIGN, lands))
-        mutations = _mutations(group)
+        mutations = _mutations(group, as_of_date)
         if mutations:
             items.append({"kind": "mutations", "title": f"Titolarità · {len(mutations)} {'mutazione' if len(mutations) == 1 else 'mutazioni'}", "items": mutations})
         sections.append({"title": _s(group.get("Descrizione")) or _s(group.get("CodiceComune")) or f"Gruppo {index + 1}",

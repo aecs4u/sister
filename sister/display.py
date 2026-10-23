@@ -130,6 +130,92 @@ def merge_identifiers(node: Any) -> Any:
     return merged
 
 
+def subject_for_theme(tree: Any) -> Any:
+    """Copy of a parsed subject visura where a legal entity reads like the person the theme expects.
+
+    The theme prints ``Cognome Nome``, birth date, birth place and sex of ``SoggettoPF``; a company
+    (``SoggettoPNF``: Denominazione, Sede) came out as "-" in every field and the title fell back to the portal's
+    object string. The denomination goes in ``Cognome`` and the registered office in ``ComuneNascita`` (the page script
+    relabels it "Sede"). Only for rendering: the original tree is left alone.
+    """
+    if isinstance(tree, list):
+        return [subject_for_theme(item) for item in tree]
+    if not isinstance(tree, dict):
+        return tree
+    out = {}
+    for key, value in tree.items():
+        if key == "SoggettoPNF" and isinstance(value, dict) and value.get("Denominazione") and not value.get("Cognome"):
+            value = {**value, "Cognome": value["Denominazione"], "ComuneNascita": value.get("Sede", ""), "Provincia": ""}
+        out[key] = subject_for_theme(value)
+    return out
+
+
+def owner_details(nominativo: Any, codice_fiscale: Any = "", as_of: date | None = None) -> dict[str, str]:
+    """An owner's ``Nominativo`` from a visura XML as readable parts: name, sex, birth place, birth date, office.
+
+    The XML spells a person as ``ROSSI MARIO 04/07/1974; Comune PALERMO (PA)`` or, when the cadastre has lost the
+    date, ``ROSSI MARIO /0/04/ il ; Comune Nato a PALERMO (PA)``. A missing date is recovered from the codice fiscale
+    when that is unambiguous (see ``birth_date_from_codice_fiscale``).
+    """
+    from .result_parsers import (
+        birth_date_from_codice_fiscale,
+        correct_century,
+        gender_from_codice_fiscale,
+        parse_xml_nominativo,
+    )
+
+    parsed = parse_xml_nominativo(nominativo)
+    date_text = correct_century(parsed.get("birth_date") or "", codice_fiscale, as_of)
+    if not date_text:
+        date_text = birth_date_from_codice_fiscale(codice_fiscale, as_of, partial=parsed.get("birth_date_partial", "")) or ""
+    return {
+        "name": parsed.get("name") or "",
+        "sex": gender_from_codice_fiscale(codice_fiscale) or parsed.get("sex", ""),
+        "birth_place": parsed.get("birth_place", ""),
+        "birth_date": date_text,
+        "office": parsed.get("registered_office", ""),
+    }
+
+
+def owner_label(nominativo: Any, codice_fiscale: Any = "", as_of: date | None = None) -> str:
+    """``GRISTINA Antonio, nato a PALERMO (PA) il 08/04/1962`` instead of the portal's ``... /0/08/ il ; Comune Nato a ...``."""
+    details = owner_details(nominativo, codice_fiscale, as_of)
+    if not details["name"]:
+        return " ".join(str(nominativo or "").split())
+    if details["office"]:
+        return f"{details['name']}, sede {details['office']}"
+    verb = {"F": "nata", "M": "nato"}.get(details["sex"], "nato/a")
+    label = details["name"]
+    if details["birth_place"] or details["birth_date"]:
+        label += f", {verb}"
+        if details["birth_place"]:
+            label += f" a {details['birth_place']}"
+        if details["birth_date"]:
+            label += f" il {details['birth_date']}"
+    return label
+
+
+def readable_owners(tree: Any, as_of: date | None = None) -> Any:
+    """Copy of a parsed visura where every ``Nominativo`` next to a ``CF`` reads as ``owner_label``.
+
+    The original text stays under ``NominativoOriginale`` (the "Dati completi" dump is meant to be exhaustive). Only for
+    rendering.
+    """
+    if isinstance(tree, list):
+        return [readable_owners(item, as_of) for item in tree]
+    if not isinstance(tree, dict):
+        return tree
+    title = tree.get("TitoloVisura")
+    if isinstance(title, dict) and re.fullmatch(r"\d{8}", str(title.get("SituazioneAl") or "")):
+        text = str(title["SituazioneAl"])
+        as_of = date(int(text[:4]), int(text[4:6]), int(text[6:]))
+    out = {key: readable_owners(value, as_of) for key, value in tree.items()}
+    if isinstance(tree.get("Nominativo"), str) and "CF" in tree:
+        out["Nominativo"] = owner_label(tree["Nominativo"], tree.get("CF"), as_of)
+        out["NominativoOriginale"] = tree["Nominativo"]
+    return out
+
+
 def register(env) -> None:
     """Attach the filters to a Jinja environment."""
     env.filters.update(

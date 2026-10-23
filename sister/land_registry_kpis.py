@@ -15,13 +15,13 @@ import logging
 import re
 import unicodedata
 from datetime import date, datetime
-from fractions import Fraction
 from decimal import Decimal, InvalidOperation
+from fractions import Fraction
 from typing import Any
 
 from . import omi_quotes
 from .cadastral_values import building_cadastral_value, building_multiplier, land_cadastral_value, normalize_category
-from .result_parsers import clean_quota, parse_right_period
+from .result_parsers import clean_quota, clean_right_description, parse_right_period
 
 logger = logging.getLogger("sister")
 
@@ -111,7 +111,8 @@ def _right_kind(description: Any, code: Any) -> str:
         return "bare"
     if "usufrutto" in text or (not text and str(code or "").strip().zfill(2) == "02"):
         return "usufruct"
-    if "proprieta" in text and not any(term in text for term in ("superficiar", "separata", "concedente")):
+    # "proprieta per l'area" (01T) is the landowner of a surface right: the building belongs to the superficiario
+    if "proprieta" in text and not any(term in text for term in ("superficiar", "separata", "concedente", "per l area")):
         return "full"
     if not text and str(code or "").strip().zfill(2) == "01":
         return "full"
@@ -387,7 +388,8 @@ def _owner_assessment(
             bucket_key = kind if kind != "other" else f"other:{right['label'].casefold()}"
             bucket = accumulators.setdefault(bucket_key, {
                 "kind": kind,
-                "label": {"full": "Piena proprietà", "usufruct": "Usufrutto", "bare": "Nuda proprietà"}.get(kind, right["label"]),
+                "label": {"full": "Piena proprietà", "usufruct": "Usufrutto", "bare": "Nuda proprietà"}.get(
+                    kind, clean_right_description(right["label"])),
                 "assets": set(),
                 "shares": set(),
                 "value_low": Decimal(0),
@@ -603,8 +605,27 @@ def _format_currency_it(value: float, *, decimals: int = 0) -> str:
     return f"€ {whole},{fraction}" if decimals else f"€ {whole}"
 
 
+def _initial_omi_note(category: Any, area: float | None) -> str:
+    """Why a building has no OMI range before any lookup: the category is checked first, it is the real obstacle
+    for F/D units, which usually also lack a surface."""
+    normalized = normalize_category(category)
+    if not normalized:
+        return "Categoria catastale assente."
+    if not omi_quotes.OMI_TYPOLOGY_BY_CATEGORY.get(normalized):
+        return "Categoria catastale senza una tipologia OMI corrispondente."
+    if area is None:
+        return "Superficie catastale assente."
+    return "Stima OMI non disponibile per zona o categoria catastale."
+
+
+def _note_amount(value: Any) -> str:
+    """'217.710,2' -> '217.710,20': an amount in a note keeps both decimals (whole amounts stay '1.000')."""
+    text = _format_number_it(float(value), decimals=2)
+    return text + "0" if "," in text and len(text.rsplit(",", 1)[1]) == 1 else text
+
+
 def _building_value_note(value: Any, category: Any) -> str:
-    base = _format_number_it(float(value.base), decimals=2)
+    base = _note_amount(value.base)
     return (
         f"Valore catastale ai fini IMU: rendita € {base} × {_format_number_it(float(value.revaluation))} × "
         f"{int(value.multiplier)} (categoria {normalize_category(category)}). Base imponibile fiscale, "
@@ -613,7 +634,7 @@ def _building_value_note(value: Any, category: Any) -> str:
 
 
 def _land_value_note(value: Any) -> str:
-    base = _format_number_it(float(value.base), decimals=2)
+    base = _note_amount(value.base)
     return (
         f"Valore catastale ai fini IMU: reddito dominicale € {base} × {_format_number_it(float(value.revaluation))} × "
         f"{int(value.multiplier)}. Base imponibile fiscale, non è un valore di mercato; moltiplicatore 135 "
@@ -744,11 +765,7 @@ async def subject_land_registry_kpis(
                 "range": "",
                 "value_min": None,
                 "value_max": None,
-                "note": (
-                    "Superficie catastale assente."
-                    if area is None
-                    else "Stima OMI non disponibile per zona o categoria catastale."
-                ),
+                "note": _initial_omi_note(classamento.get("Categoria"), area),
                 "cadastral_value": cadastral_value,
                 "cadastral_note": cadastral_note,
                 "category": normalize_category(classamento.get("Categoria")),
@@ -833,7 +850,7 @@ async def subject_land_registry_kpis(
         "land_rows": land_rows,
         "building_area": building_figure(f"{_format_number_it(building_area)} m²" if building_area_units else None),
         "building_area_note": (
-            f"{building_area_units} unità con superficie in visura" if building_units else "La visura non elenca fabbricati"
+            f"{building_area_units} di {building_units} unità con superficie in visura" if building_units else "La visura non elenca fabbricati"
         ),
         "grounds_area": land_figure(f"{_format_number_it(grounds_area)} m²" if grounds_area_rows else None),
         "grounds_area_note": land_note(grounds_area_rows, "superficie in visura"),
@@ -841,7 +858,7 @@ async def subject_land_registry_kpis(
             _format_currency_it(building_income, decimals=2) if building_income_units else None
         ),
         "building_income_note": (
-            f"{building_income_units} fabbricati con rendita in visura" if building_units
+            f"{building_income_units} di {building_units} fabbricati con rendita in visura" if building_units
             else "La visura non elenca fabbricati"
         ),
         "dominical_income": land_figure(
@@ -864,8 +881,9 @@ async def subject_land_registry_kpis(
             _format_currency_it(float(cadastral_lands)) if cadastral_land_rows else None
         ),
         "cadastral_value_note": (
-            f"Valore catastale (base imponibile IMU) di {cadastral_building_units} fabbricati con rendita e "
-            f"{cadastral_land_rows} classamenti con reddito dominicale: rendita × 1,05 × moltiplicatore di categoria, "
+            f"Valore catastale (base imponibile IMU) di {cadastral_building_units} "
+            f"{'fabbricato' if cadastral_building_units == 1 else 'fabbricati'} con rendita e "
+            f"{cadastral_land_rows} {'classamento' if cadastral_land_rows == 1 else 'classamenti'} con reddito dominicale: rendita × 1,05 × moltiplicatore di categoria, "
             "reddito dominicale × 1,25 × 135. È un valore fiscale, non di mercato; quote di proprietà non applicate."
         ),
         "asset_value": NOT_AVAILABLE if building_units else NO_BUILDINGS,

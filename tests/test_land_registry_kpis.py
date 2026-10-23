@@ -63,7 +63,7 @@ async def test_cadastral_values_per_row_and_in_the_totals():
     assert kpis["cadastral_value_buildings"] == "€ 168.000"
     assert kpis["cadastral_value_lands"] == "€ 2.700"
     assert kpis["cadastral_value"] == "€ 170.700"
-    assert "1 fabbricati con rendita e 3 classamenti" in kpis["cadastral_value_note"]
+    assert "1 fabbricato con rendita e 3 classamenti" in kpis["cadastral_value_note"]
 
 
 async def test_nothing_to_value_is_reported_as_not_available():
@@ -127,7 +127,7 @@ async def test_omi_estimate_uses_the_zone_quote_for_the_category_and_the_catastr
 
 
 async def test_omi_leaves_unmatched_categories_unvalued_with_a_reason(omi_stubs):
-    xml = visura(buildings=[building("11", "100", "A04", "100,00", "60"), building("11", "101", "C01", "100,00", "40")])
+    xml = visura(buildings=[building("11", "100", "A09", "100,00", "60"), building("11", "101", "C01", "100,00", "40")])
 
     kpis = await subject_land_registry_kpis(xml, MAP_LOOKUP)
 
@@ -164,7 +164,7 @@ def test_old_label_matching_helpers_are_gone():
 
 
 async def test_omi_reason_is_visible_and_summarised_when_no_range_can_be_computed(omi_stubs):
-    xml = visura(buildings=[building("11", "100", "A04", "100,00", "60"), building("11", "101", "C01", "100,00", "40")])
+    xml = visura(buildings=[building("11", "100", "A09", "100,00", "60"), building("11", "101", "C01", "100,00", "40")])
 
     kpis = await subject_land_registry_kpis(xml, MAP_LOOKUP)
 
@@ -193,7 +193,7 @@ async def test_comune_range_reads_the_omi_database_when_the_zone_is_unknown(monk
         ]
 
     monkeypatch.setattr(omi_quotes, "omi_comune_quotes", comune_quotes)
-    xml = visura(buildings=[building("99", "1", "A02", "1.000,00", "100"), building("99", "2", "A04", "100,00", "50")])
+    xml = visura(buildings=[building("99", "1", "A02", "1.000,00", "100"), building("99", "2", "A09", "100,00", "50")])
 
     kpis = await subject_land_registry_kpis(xml, {"parcel_markers": []})
 
@@ -309,3 +309,39 @@ def test_a_unit_with_several_identifiers_shows_them_all_in_the_tables():
     assert ident["Foglio"] == "4" and ident["ParticellaNum"] == "522, 2206" and ident["Subalterno"] == "18, 1"
     assert tree["Immobile"]["DatiIdentificativi"]["IdentificativoDefinitivo"][0]["ParticellaNum"] == "522"  # original untouched
     assert merged["Altro"][0]["IdentificativoDefinitivo"] == {"Foglio": "1"}
+
+
+def test_property_right_of_the_landowner_in_a_surface_right_is_not_full_ownership():
+    from sister.land_registry_kpis import _right_kind
+
+    assert _right_kind("Proprieta' per l'area", "01T") == "other"  # the building is the superficiario's
+    assert _right_kind("Proprieta' superficiaria", "01S") == "other"
+    assert _right_kind("Proprieta'", "01") == "full"
+
+
+async def test_category_without_an_omi_typology_is_the_reason_even_when_the_surface_is_missing():
+    xml = visura(buildings=[building("1", "1", "F07", None, None), building("1", "2", "D02", "217.710,20", None)])
+
+    kpis = await subject_land_registry_kpis(xml, None)
+
+    rows = kpis["table_estimates"][0]["buildings"]
+    assert all("senza una tipologia OMI" in row["note"] for row in rows)  # not "Superficie assente"
+    assert "1 fabbricato con rendita" in kpis["cadastral_value_note"]
+
+
+def test_a_company_reads_like_the_subject_the_theme_expects():
+    from sister.display import subject_for_theme
+
+    tree = {"V": {"DatiRichiesta": {"SoggettoIndividuato": {"SoggettoPNF": {
+        "CodiceFiscale": "00110110822", "Denominazione": "S.I.A.T. S.P.A.", "Sede": "PALERMO (PA)"}}}}}
+
+    subject = subject_for_theme(tree)["V"]["DatiRichiesta"]["SoggettoIndividuato"]["SoggettoPNF"]
+
+    assert subject["Cognome"] == "S.I.A.T. S.P.A." and subject["ComuneNascita"] == "PALERMO (PA)"
+    assert "Cognome" not in tree["V"]["DatiRichiesta"]["SoggettoIndividuato"]["SoggettoPNF"]  # original untouched
+
+
+def test_amounts_in_value_notes_keep_both_decimals():
+    from sister.land_registry_kpis import _note_amount
+
+    assert [_note_amount(v) for v in (217710.2, 1000, 2540.97, 199.87)] == ["217.710,20", "1.000", "2.540,97", "199,87"]

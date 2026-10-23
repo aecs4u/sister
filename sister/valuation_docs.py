@@ -22,10 +22,9 @@ from .omi_quotes import OMI_TYPOLOGY_BY_CATEGORY, OMI_TYPOLOGY_LABELS
 
 # Cadastral categories that get no OMI estimate, with the reason shown on the page.
 OMI_UNVALUED_CATEGORIES: tuple[tuple[str, str], ...] = (
-    ("A/4, A/5, A/6", "abitazioni popolari, ultrapopolari e rurali: OMI non ha una tipologia corrispondente"),
     ("A/9", "castelli e palazzi di eminente pregio: valutazione caso per caso"),
     ("B/*", "collegi, ospedali, scuole, uffici pubblici: non quotati da OMI"),
-    ("C/4, C/5, C/7", "locali per esercizi sportivi, stabilimenti balneari, tettoie: nessuna tipologia OMI corrispondente"),
+    ("C/4, C/5", "locali per esercizi sportivi e stabilimenti balneari: nessuna tipologia OMI corrispondente"),
     ("D/*", "fabbricati a destinazione speciale: rendita a stima diretta, non quotati per zona da OMI"),
     ("E/*, F/*", "categorie a destinazione particolare (E) e unità senza rendita (F): non valutate"),
 )

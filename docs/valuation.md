@@ -17,6 +17,62 @@ generated from the code described here, so the two cannot disagree.
 Both are computed per table row and summed into the KPI cards by `sister/land_registry_kpis.py`
 (`subject_land_registry_kpis`). Ownership shares and the type of right are **not** applied anywhere.
 
+## Proprietà per l'area (01T) e proprietà superficiaria (01S)
+
+Una visura può indicare separatamente la proprietà per l'area (`01T`) e la proprietà superficiaria (`01S`). Sono diritti
+distinti, non semplici quote percentuali della stessa proprietà. Il titolo costitutivo stabilisce come possono essere
+usati, trasferiti e, se previsto, quando si estinguono. Gli articoli 952–953 del [Codice civile](https://www.normattiva.it/eli/stato/REGIO_DECRETO/1942/03/16/262/CONSOLIDATED/20260612)
+disciplinano la proprietà separata della costruzione e gli effetti della scadenza del diritto di superficie. L'Agenzia
+delle Entrate distingue i due diritti anche nei [codici della dichiarazione di successione](https://www1.agenziaentrate.gov.it/allegati_grandi/Specifiche_SUC13_20180307.pdf).
+
+Non esiste una ripartizione universale del valore tra fabbricato e area. Come schema economico, i valori dei diritti
+possono essere ricondotti al valore della piena proprietà solo quando la stima considera la stessa data, gli stessi
+presupposti e tutti gli oneri rilevanti. Non è una formula automatica prevista per ogni caso.
+
+### Valutazione commerciale
+
+Per una compravendita occorre leggere il titolo e, se presente, la convenzione urbanistica o PEEP. Sono rilevanti almeno:
+
+- la durata del diritto e la data di scadenza;
+- eventuali limiti al prezzo o alle condizioni di trasferimento;
+- canoni, obblighi e modalità di rinnovo, riscatto o trasformazione;
+- gli effetti della scadenza, inclusa l'eventuale devoluzione della costruzione al proprietario del suolo.
+
+Una convenzione comunale può vincolare il prezzo fino al riscatto, ma non è corretto sottrarre sempre un costo di riscatto
+da un valore OMI: importo e condizioni dipendono dalla convenzione e dalle regole applicabili. Per un diritto a termine,
+la durata residua e gli effetti della scadenza incidono sulla stima; una formula finanziaria come
+`valore terminale / (1 + tasso)^anni residui` è soltanto un modello semplificato, che richiede ipotesi esplicite sul
+valore terminale e sul tasso. La proprietà per l'area non equivale automaticamente al valore attuale del terreno libero.
+
+Anche quando il diritto non ha una scadenza indicata, non si può presumere che la proprietà superficiaria valga sempre
+come la piena proprietà o che il valore dell'area sia nullo: fanno fede il titolo, gli eventuali canoni e gli altri vincoli.
+Una stima di mercato richiede quindi dati contrattuali e comparabili adeguati; le quotazioni OMI da sole non valorizzano
+la ripartizione dei diritti.
+
+Per impostare una stima specifica bisogna chiarire se serve un valore di mercato (acquisto/vendita) o un valore fiscale,
+se il diritto è a termine o senza scadenza e quali limiti o costi risultano dal titolo e dalla convenzione.
+
+### Valutazione fiscale
+
+Le regole dipendono dal tributo e dall'atto: successione, donazione, imposta di registro e base IMU non sono intercambiabili.
+Per le successioni, l'articolo 14 del testo unico (come modificato dal [D.Lgs. 139/2024](https://www.normattiva.it/atto/caricaDettaglioAtto?atto.codiceRedazionale=24G00157&atto.dataPubblicazioneGazzetta=2024-10-02&bloccoAggiornamentoBreadCrumb=true&classica=true&tipoDettaglio=vigente))
+prevede criteri distinti per piena proprietà, proprietà gravata da diritti reali di godimento e diritti di usufrutto, uso e
+abitazione. Per gli acquisti abitativi ammessi al sistema del prezzo-valore, la rendita catastale rivalutata può usare il
+coefficiente 110 per la prima casa (equivalente a `1,05 x 110 = 115,5` applicato alla rendita non rivalutata); la regola
+ha specifiche condizioni e non è un criterio generale per successioni o donazioni. Si veda la [guida dell'Agenzia delle
+Entrate sull'acquisto della casa](https://www1.agenziaentrate.gov.it/web_app_entrate/guida_acquisto_casa.html).
+
+Di conseguenza, formule basate solo sugli anni residui e su un tasso non vanno presentate come metodo fiscale universale.
+Per un calcolo fiscale occorre identificare il diritto esatto risultante dal titolo e applicare la disciplina vigente per
+quel tributo e per quell'atto.
+
+### Limite attuale di SISTER
+
+Le KPI di questa pagina continuano a sommare i valori catastali e le stime OMI per riga, senza applicare la quota di
+titolarità né ripartire il valore tra `01T` e `01S`, usufrutto e nuda proprietà. Sono valori riferiti agli immobili censiti,
+non una stima della ricchezza attribuibile al singolo soggetto. La visura, da sola, inoltre non contiene tutti i termini
+contrattuali necessari per stimare questi diritti.
+
 ## Valore catastale (`cadastral_values.py`)
 
 Pure functions, no I/O. Basis: art. 13, commi 4-5, D.L. 201/2011 (conv. L. 214/2011).
@@ -69,8 +125,32 @@ Pipeline per building unit (`subject_land_registry_kpis`):
    reported, never guessed.
 4. Estimate = `superficie catastale totale x prezzo_min` ... `x prezzo_max`; per-unit ranges are summed for the card.
 
-Category to typology: A/1 -> 19, A/2 -> 20, A/3 -> 21, A/7 and A/8 -> 1, A/10 -> 6, A/11 -> 22, C/1 -> 5, C/2 -> 9,
-C/3 -> 10, C/6 -> 13 (else 16). Everything else is left unvalued with a reason (`OMI_UNVALUED_CATEGORIES` documents why).
+Category to typology (`OMI_TYPOLOGY_BY_CATEGORY`), following the Agenzia delle Entrate's correspondence
+([Manuale OMI 2025, allegati, Tabella 1](https://www.agenziaentrate.gov.it/portale/documents/20143/265514/Manuale_OMI_ALLEGATI_2025_03_20.pdf/e5d8121b-0cb5-2e80-32db-fe6ddf3186ff?t=1742814287718)):
+
+| Cadastral category | OMI typology (code) |
+|---|---|
+| A/1 | Abitazioni signorili (19) |
+| A/8 | Abitazioni signorili (19), else Ville e villini (1) |
+| A/2, A/3 | Abitazioni civili (20) |
+| A/4, A/5, A/6 | Abitazioni di tipo economico (21) |
+| A/7 | Ville e villini (1) |
+| A/10 | Uffici (6) |
+| A/11 | Abitazioni tipiche dei luoghi (22) |
+| C/1 | Negozi (5) |
+| C/2 | Magazzini (9) |
+| C/3 | Laboratori (10) |
+| C/6 | Box (13), else Autorimesse (16) |
+| C/7 | Posti auto coperti (14), else scoperti (15) |
+
+Two choices are ours, not the Agency's: A/8 falls back to *Ville e villini* because *signorili* is quoted in only ~65
+comuni, and C/7 (tettoie) is valued as a parking space. The Agency also treats C/2 up to 30 m² and C/6-C/7 up to 50 m² as
+*pertinenze* (a share of the house value); SISTER does not apply those caps. Before 2026-10-23 A/3 was mapped to
+*economico* and A/4-A/6 were unvalued; economico quotes are about 20% below civili (median over 28,552 zones). Everything
+else (A/9, B, C/4-C/5, D, E, F) is left unvalued with a reason (`OMI_UNVALUED_CATEGORIES` documents why). The non-residential
+typologies OMI quotes but SISTER does not use yet (capannoni tipici/industriali for D/1 and D/7, centri commerciali for D/8,
+uffici strutturati) have no official category correspondence; the Manuale only notes that D/8 covers both shopping centres
+and structured offices.
 
 ## How the numbers reach the page
 

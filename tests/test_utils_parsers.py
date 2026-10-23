@@ -416,3 +416,24 @@ def test_empty_downloads_are_not_kept_so_a_pending_request_is_fetched_again():
     source = inspect.getsource(utils._download_richieste_documents)
 
     assert "os.path.getsize(temp_path) == 0" in source and "non ancora pronto" in source
+
+
+_COMPANY_VISURA = (
+    b'<VisuraSoggettoAttuale><TitoloVisura Titolo="Visura attuale soggetto" SituazioneAl="20261022"/>'
+    b'<DatiRichiesta TipoCatasto="E" Provincia="PA" Protocollo="T359476" Anno="2026"><SoggettoIndividuato>'
+    b'<SoggettoPNF CodiceFiscale="00110110822" Denominazione="S.I.A.T. S.P.A." Sede="PALERMO (PA)"/>'
+    b'</SoggettoIndividuato></DatiRichiesta><GruppoUnitaImmobiliari><ImmobileFabbricatiS><DatiIdentificativi>'
+    b'<IdentificativoDefinitivo Foglio="5" ParticellaNum="1" Subalterno="6"/></DatiIdentificativi>'
+    b'</ImmobileFabbricatiS></GruppoUnitaImmobiliari></VisuraSoggettoAttuale>'
+)
+
+
+def test_a_company_subject_visura_is_named_after_its_partita_iva_not_its_first_property(tmp_path, monkeypatch):
+    _fake_p7m_payload(monkeypatch, _COMPANY_VISURA)
+    p7m = tmp_path / "x.p7m"
+    p7m.write_bytes(b"signed")
+
+    parsed = utils._parse_visura_xml(str(p7m))
+
+    assert parsed["tipo"] == "visura_soggetto" and parsed["identificativo"] == "00110110822"
+    assert utils._descriptive_filename(parsed, requested_at="2026-10-22") == "vs_att_00110110822_PA_CE"

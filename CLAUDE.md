@@ -24,9 +24,10 @@ SISTER is a FastAPI service + Typer CLI for automated cadastral data extraction 
     `OMI_POSTGRES_DSN`); OMI has no land quotes, so terreni get the cadastral value only. Details and gotchas: `docs/valuation.md`
   - `omi_zone_overview.py` — `/omi/valuation` zone overview: OMI quote history, variations, yield, successor hint, ISTAT/MEF/Eurostat
     context from the `omi` and `aecs4u-stats` databases (`docs/valuation.md`)
-  - `pdf_export.py` + `GET /documents/<id>/pdf` — PDF of a document page: the page's own print CSS (`static/css/pages/document_visura.css`, A4 landscape)
-    rendered by a **separate** headless Chromium on loopback with the caller's cookies (never the shared Chrome that holds the SISTER session). The theme's
-    `onclick="window.print()"` is blocked by the CSP; `sister_actions.js` binds it (and opens folded `<details>` for print).
+  - `pdf_typst.py` + `typst/visura.typ` + `GET /documents/<id>/pdf` — PDF of a visura (subject or property), typeset with **Typst** (`typst` package, no browser):
+    `build_context` turns the page data (xml_parsed, `doc.view`, `subject_land_registry_kpis`, parcel geometries) into plain JSON, the template only reads
+    `data.json`, so no visura text is ever Typst source. Browser print uses `static/css/pages/document_visura.css` (A4 landscape); the theme's blocked
+    `onclick="window.print()"` is now `data-aecs4u-print` (theme.js) with a fallback in `sister_actions.js`. Page-level polish (labels, headings, dates, aria) is `static/js/document_visura.js`.
   - `client.py` — VisuraClient async HTTP client
   - `batch.py` — `query batch` engine: JSON/CSV submission file → validated plan → runner with retries, journal and `--resume` (format: `docs/batch_format.md`, schema `docs/batch_submission.schema.json`)
   - `mcp_server.py` — optional local MCP server over stdio; wraps `VisuraClient` and `query_forms.py`

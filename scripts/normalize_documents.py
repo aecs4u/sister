@@ -15,6 +15,7 @@ re-derived. Dry run unless ``--apply``; ``--apply`` writes a database backup, a 
 
     ../.venv/bin/python scripts/normalize_documents.py --documents <dir> --links <dir>           # report
     ../.venv/bin/python scripts/normalize_documents.py --documents <dir> --links <dir> --apply
+    ../.venv/bin/python scripts/normalize_documents.py --documents <dir> --links <dir> --only <name> [<name> ...]  # just these
 """
 
 from __future__ import annotations
@@ -150,6 +151,9 @@ def _derived_core(path: Path, core: str, date: str) -> str:
         derived = _descriptive_filename(parsed, requested_at=requested)
         return derived if derived.startswith("vs_") else core
     derived = _descriptive_filename(parsed, requested_at=requested)
+    if parsed["tipo"] == "visura_soggetto" and derived.startswith("vs_") and core.startswith("vi_"):
+        # a subject visura that was named after its first property (the old parser did not know companies)
+        return derived
     new_kind, old_kind = KIND.match(derived), KIND.match(core)
     return new_kind.group(0) + core[old_kind.end() :] if new_kind and old_kind else core
 
@@ -306,10 +310,20 @@ def main() -> None:
     parser.add_argument("--links", type=Path)
     parser.add_argument("--backup-dir", type=Path, default=None, help="default: <documents>/../backups")
     parser.add_argument("--apply", action="store_true")
+    parser.add_argument(
+        "--only", nargs="+", metavar="NAME",
+        help="rename just these files (current names); no other rename and no duplicate is touched",
+    )
     args = parser.parse_args()
 
     documents = args.documents.resolve()
     plan = build_plan(documents)
+    if args.only:
+        wanted = set(args.only)
+        unknown = wanted - {entry["old"] for entry in plan["renames"]}
+        if unknown:
+            parser.error(f"nothing to rename for: {', '.join(sorted(unknown))}")
+        plan = {"renames": [e for e in plan["renames"] if e["old"] in wanted], "redundant": [], "distinct": []}
     renames, redundant, distinct = plan["renames"], plan["redundant"], plan["distinct"]
     recomputed = [e for e in renames if e["renamed_core"]]
     print(f"names re-derived from content: {len(recomputed)}")

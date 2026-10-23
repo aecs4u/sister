@@ -63,6 +63,7 @@
   // Bind the same action here until the theme uses data-click.
   document.addEventListener('click', function (event) {
     var button = event.target.closest && event.target.closest('[onclick="window.print()"]');
+    // data-aecs4u-print (theme >= next release) is bound by the theme itself
     if (!button) return;
     event.preventDefault();
     window.print();

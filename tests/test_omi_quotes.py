@@ -22,7 +22,7 @@ def test_category_selects_its_typology(category, code):
     assert chosen["cod_tipologia"] == code and reason == ""
 
 
-@pytest.mark.parametrize("category", ["A04", "A05", "A06", "B01", "D01", "E01", "F01", "", None])
+@pytest.mark.parametrize("category", ["A09", "B01", "C04", "D01", "E01", "F01", "", None])
 def test_categories_without_an_omi_typology_are_left_unvalued(category):
     chosen, reason = select_quote(QUOTES, category)
     assert chosen is None and "tipologia OMI corrispondente" in reason
@@ -93,3 +93,34 @@ async def test_unconfigured_database_means_no_data_source_not_no_quote(monkeypat
     for name in ("OMI_POSTGRES_DSN", "STATS_POSTGRES_DSN", "CADASTRAL_POSTGRES_DSN"):
         monkeypatch.delenv(name, raising=False)
     assert await omi_quotes.omi_zone_quotes("G273", "D1") is None
+
+
+ALL_RESIDENTIAL = [
+    quote(19, "Abitazioni signorili", low=3000.0, high=4000.0), quote(20, "Abitazioni civili", low=2000.0, high=2600.0),
+    quote(21, "Abitazioni di tipo economico", low=1500.0, high=1900.0), quote(1, "Ville e Villini", low=2300.0, high=3000.0),
+    quote(14, "Posti auto coperti"), quote(15, "Posti auto scoperti", low=500.0, high=700.0),
+]
+
+
+@pytest.mark.parametrize(
+    "category, code",
+    [("A01", 19), ("A02", 20), ("A03", 20), ("A04", 21), ("A05", 21), ("A06", 21), ("A07", 1), ("A08", 19), ("C07", 14)],
+)
+def test_residential_categories_use_the_typology_the_agenzia_assigns(category, code):
+    chosen, reason = select_quote(ALL_RESIDENTIAL, category)
+    assert chosen["cod_tipologia"] == code and reason == ""
+
+
+def test_a8_falls_back_to_ville_where_signorili_is_not_quoted():
+    without_signorili = [q for q in ALL_RESIDENTIAL if q["cod_tipologia"] != 19]
+
+    chosen, _reason = select_quote(without_signorili, "A08")
+
+    assert chosen["cod_tipologia"] == 1  # signorili is quoted in very few comuni; A/1 has no such fallback
+    assert select_quote(without_signorili, "A01")[0] is None
+
+
+def test_c7_falls_back_to_uncovered_parking():
+    chosen, _reason = select_quote([q for q in ALL_RESIDENTIAL if q["cod_tipologia"] != 14], "C07")
+
+    assert chosen["cod_tipologia"] == 15

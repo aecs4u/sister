@@ -9,7 +9,7 @@
 {% block extra_css %}
 {{ super() }}
 {{ document_parcel_map_assets(land_registry_map) }}
-<link rel="stylesheet" href="/static/css/pages/document_visura.css?v=20261023c">
+<link rel="stylesheet" href="/static/css/pages/document_visura.css?v=20261023g">
 {% if land_map_slot == 'sidecar' and not land_registry_map %}
 <link rel="stylesheet" href="/static/css/pages/document_parcel_map.css?v=20261023e">
 {% endif %}
@@ -134,7 +134,7 @@
 {% if doc and doc.id %}
 <script nonce="{{ csp_nonce }}">
 (function () {
-    var printButton = document.querySelector('button[onclick="window.print()"]');
+    var printButton = document.querySelector('button[onclick="window.print()"], button[data-aecs4u-print]');
     if (!printButton || document.querySelector('[data-document-pdf]')) return;
     var link = document.createElement('a');
     link.className = printButton.className;
@@ -161,10 +161,10 @@
 
             var categoryHeader = headers[categoryIndex];
             categoryHeader.scope = 'col';
-            categoryHeader.textContent = 'Category';
+            categoryHeader.textContent = 'Cat.';
             var descriptionHeader = document.createElement('th');
             descriptionHeader.scope = 'col';
-            descriptionHeader.textContent = 'Category Description';
+            descriptionHeader.textContent = 'Descrizione categoria';
             categoryHeader.after(descriptionHeader);
 
             table.querySelectorAll('tbody tr').forEach(function (row) {
@@ -197,6 +197,7 @@
 </script>
 {% if land_map_parent == 'catasto/visura_soggetto.html' %}
 <script src="/static/js/visura_global_filter.js?v=20261023c" defer></script>
+<script src="/static/js/document_visura.js?v=20261023b" defer></script>
 {% if land_registry_kpis %}
 <script nonce="{{ csp_nonce }}">
 (function () {
@@ -236,10 +237,6 @@
             return;
         }
 
-        var byKind = {};
-        (assessment.rights || []).forEach(function (right) {
-            if (right.kind !== 'other') byKind[right.kind] = right;
-        });
         var metrics = (assessment.tiles || []).map(function (tile) {
             return [tile.label, tile.value, tile.hint, tile.missing];
         });
@@ -292,17 +289,26 @@
             section.appendChild(tableWrap);
         }
 
+        var disclaimer = document.createElement('p');
+        disclaimer.className = 'small text-muted mb-1';
+        disclaimer.textContent = 'Valori indicativi, non una perizia. Il valore catastale è una base fiscale, non di mercato.';
+        section.appendChild(disclaimer);
+        var method = document.createElement('details');
+        method.className = 'small mb-1 assessment-method';
+        var summary = document.createElement('summary');
+        summary.textContent = 'Come si calcola (coefficienti e avvertenze)';
+        method.appendChild(summary);
         var note = document.createElement('p');
-        note.className = 'small text-muted mb-1';
-        note.textContent = (assessment.coefficient_note ? assessment.coefficient_note + ' ' : '') + (assessment.method_note || 'Valori indicativi; non costituiscono una perizia.');
-        section.appendChild(note);
+        note.className = 'text-muted mb-1 mt-1';
+        note.textContent = (assessment.coefficient_note ? assessment.coefficient_note + ' ' : '') + (assessment.method_note || '');
+        method.appendChild(note);
         var methodLink = document.createElement('a');
-        methodLink.className = 'small';
         methodLink.href = assessment.source_url || '#';
         methodLink.textContent = 'Prospetto fiscale usufrutto 2026';
         methodLink.target = '_blank';
         methodLink.rel = 'noopener noreferrer';
-        section.appendChild(methodLink);
+        method.appendChild(methodLink);
+        section.appendChild(method);
 
         var exclusions = [];
         if (assessment.unmatched_assets) {
@@ -341,7 +347,7 @@
         if (!value || !label) return;
         cardColumn.dataset.distinctMunicipalityCard = 'true';
         value.textContent = source.dataset.distinctMunicipalityCount;
-        label.textContent = 'Gruppi Comuni Distinti';
+        label.textContent = 'Comuni distinti';
         Array.from(row.children).concat(cardColumn).forEach(function (column) {
             column.className = 'col-6 col-lg';
         });
@@ -391,7 +397,6 @@
                 cell.className = hasValue ? 'text-nowrap' : 'text-muted small';
                 cell.textContent = estimate[column.valueKey] || estimate[column.missingKey] || 'Non disponibile';
                 cell.title = estimate[column.noteKey] || column.missing;
-                cell.setAttribute('aria-label', cell.textContent + '. ' + cell.title);
                 row.appendChild(cell);
             });
         });
@@ -468,10 +473,6 @@
                 } else {
                     link.appendChild(document.createTextNode(category));
                 }
-                var icon = document.createElement('i');
-                icon.className = 'fas fa-chart-line ms-1 small';
-                icon.setAttribute('aria-hidden', 'true');
-                link.appendChild(icon);
                 cell.replaceChildren(link);
             });
         });
@@ -508,85 +509,117 @@
             parent.appendChild(element);
             return element;
         }
-        function ownershipCell(entry) {
-            var cell = document.createElement('td');
-            cell.className = 'small';
-            var sources = (entry || {}).sources || [];
-            if (!sources.length) {
-                cell.textContent = 'Nessuna visura per immobile collegata';
-                return cell;
+        function sourceBlock(item) {
+            var block = document.createElement('div');
+            block.className = 'border rounded p-2 mt-2';
+            var title = item.label || 'Visura per immobile';
+            if (item.reference_date) title += ' · situazione al ' + item.reference_date;
+            appendText(block, 'div', 'fw-semibold mb-1', title);
+            var link = document.createElement('a');
+            link.href = '/documents/' + encodeURIComponent(item.document_id);
+            link.className = 'd-inline-block mb-1';
+            link.textContent = 'Apri visura sorgente #' + item.document_id;
+            block.appendChild(link);
+
+            (item.ownership || []).forEach(function (event) {
+                var eventBlock = document.createElement('div');
+                eventBlock.className = 'border-top pt-2 mt-1';
+                var act = event.act || 'Mutazione';
+                if (event.date) act += ' · ' + event.date;
+                var actNode = appendText(eventBlock, 'div', 'fw-semibold', act);
+                if (event.current) appendText(actNode, 'span', 'badge bg-success ms-2', 'Attuale');
+                var owners = event.owners || [];
+                if (owners.length) {
+                    var ownerList = document.createElement('ul');
+                    ownerList.className = 'mb-1 ps-3';
+                    owners.forEach(function (owner) {
+                        var parts = [owner.name || 'Intestatario non indicato', owner.right, owner.quota, owner.period];
+                        appendText(ownerList, 'li', '', parts.filter(Boolean).join(' · '));
+                    });
+                    eventBlock.appendChild(ownerList);
+                } else if (event.start || event.end) {
+                    var period = event.ongoing
+                        ? 'in corso' + (event.start ? ' dal ' + event.start : '')
+                        : [event.start && 'dal ' + event.start, event.end && 'al ' + event.end].filter(Boolean).join(' ');
+                    appendText(eventBlock, 'div', 'text-muted', period);
+                }
+                block.appendChild(eventBlock);
+            });
+            if (item.omitted_events) {
+                appendText(block, 'small', 'text-muted d-block mt-1', 'Mostrati i 25 atti più recenti; apri la visura per la cronologia completa.');
             }
+            return block;
+        }
+        // "VIA X n. 3 · Fg 4 · Part. 51 · Sub. 69": the row of the property table the history belongs to
+        function propertyLabel(table, row) {
+            var heads = Array.from(table.querySelectorAll('thead th')).map(function (th) { return th.textContent.trim(); });
+            function text(name) {
+                var index = heads.indexOf(name);
+                if (index < 0 || !row.cells[index]) return '';
+                var copy = row.cells[index].cloneNode(true);
+                copy.querySelectorAll('a, button, i').forEach(function (node) { node.remove(); });
+                var value = copy.textContent.replace(/\s+/g, ' ').trim();
+                return value === '—' ? '' : value;
+            }
+            return [text('Indirizzo') || text('Comune'), text('Fog.') && 'Fg ' + text('Fog.'),
+                text('Part.') && 'Part. ' + text('Part.'), text('Sub.') && 'Sub. ' + text('Sub.')].filter(Boolean).join(' · ');
+        }
+        function historyDetails(label, entry) {
+            var sources = entry.sources || [];
             var totalActs = sources.reduce(function (sum, item) {
                 return sum + (item.event_count || (item.ownership || []).length);
             }, 0);
             var details = document.createElement('details');
-            details.className = 'land-map-ownership-details';
-            appendText(details, 'summary', 'text-nowrap', totalActs + (totalActs === 1 ? ' atto · ' : ' atti · ') + sources.length + (sources.length === 1 ? ' visura' : ' visure'));
-
-            sources.forEach(function (item) {
-                var sourceBlock = document.createElement('div');
-                sourceBlock.className = 'border rounded p-2 mt-2';
-                var title = item.label || 'Visura per immobile';
-                if (item.reference_date) title += ' · situazione al ' + item.reference_date;
-                appendText(sourceBlock, 'div', 'fw-semibold mb-1', title);
-                var link = document.createElement('a');
-                link.href = '/documents/' + encodeURIComponent(item.document_id);
-                link.className = 'd-inline-block mb-1';
-                link.textContent = 'Apri visura sorgente #' + item.document_id;
-                sourceBlock.appendChild(link);
-
-                var events = item.ownership || [];
-                events.forEach(function (event) {
-                    var eventBlock = document.createElement('div');
-                    eventBlock.className = 'border-top pt-2 mt-1';
-                    var act = event.act || 'Mutazione';
-                    if (event.date) act += ' · ' + event.date;
-                    var actNode = appendText(eventBlock, 'div', 'fw-semibold', act);
-                    if (event.current) appendText(actNode, 'span', 'badge bg-success ms-2', 'Attuale');
-                    var owners = event.owners || [];
-                    if (owners.length) {
-                        var ownerList = document.createElement('ul');
-                        ownerList.className = 'mb-1 ps-3';
-                        owners.forEach(function (owner) {
-                            var parts = [owner.name || 'Intestatario non indicato', owner.right, owner.quota, owner.period];
-                            appendText(ownerList, 'li', '', parts.filter(Boolean).join(' · '));
-                        });
-                        eventBlock.appendChild(ownerList);
-                    } else if (event.start || event.end) {
-                        var period = event.ongoing
-                            ? 'in corso' + (event.start ? ' dal ' + event.start : '')
-                            : [event.start && 'dal ' + event.start, event.end && 'al ' + event.end].filter(Boolean).join(' ');
-                        appendText(eventBlock, 'div', 'text-muted', period);
-                    }
-                    sourceBlock.appendChild(eventBlock);
-                });
-                if (item.omitted_events) {
-                    appendText(sourceBlock, 'small', 'text-muted d-block mt-1', 'Mostrati i 25 atti più recenti; apri la visura per la cronologia completa.');
-                }
-                details.appendChild(sourceBlock);
-            });
-            cell.appendChild(details);
-            return cell;
+            details.className = 'land-map-ownership-details mb-2';
+            details.open = true;  // a stored visura storica backs this property: show its acts, do not hide them behind a click
+            var summary = appendText(details, 'summary', 'fw-semibold', label || 'Immobile');
+            appendText(summary, 'span', 'badge bg-light text-dark border ms-2',
+                totalActs + (totalActs === 1 ? ' atto · ' : ' atti · ') + sources.length + (sources.length === 1 ? ' visura' : ' visure'));
+            sources.forEach(function (item) { details.appendChild(sourceBlock(item)); });
+            return details;
         }
-        function addColumn(table, entries) {
-            if (!table || table.dataset.ownershipHistoryAdded) return;
-            var headerRow = table.querySelector('thead tr');
-            var bodyRows = Array.from(table.querySelectorAll('tbody tr'));
-            if (!headerRow || !bodyRows.length) return;
-            appendText(headerRow, 'th', 'text-nowrap', 'Tracciabilità titolarità').scope = 'col';
-            bodyRows.forEach(function (row, rowIndex) {
-                row.appendChild(ownershipCell((entries || [])[rowIndex]));
-            });
-            table.dataset.ownershipHistoryAdded = 'true';
+        // The group's "Titolarità" card (theme): the history of its properties belongs there, below the timeline.
+        function titolaritaBody(wrapper) {
+            for (var node = wrapper.nextElementSibling; node && node.tagName !== 'H2' && !node.classList.contains('imm-tables'); node = node.nextElementSibling) {
+                if (node.classList.contains('card') && node.querySelector('.ownership-timeline')) return node.querySelector('.card-body');
+            }
+            var card = document.createElement('div');
+            card.className = 'card border-0 shadow-sm mb-4';
+            card.innerHTML = '<div class="card-header bg-transparent border-bottom py-2 px-3"><h3 class="h6 mb-0 text-muted">' +
+                '<i class="fas fa-history me-2" aria-hidden="true"></i>Titolarità</h3></div><div class="card-body py-3 px-3"></div>';
+            wrapper.after(card);
+            return card.querySelector('.card-body');
         }
 
-        var wrappers = document.querySelectorAll('.document-land-map-content .imm-tables');
-        wrappers.forEach(function (wrapper, groupIndex) {
+        document.querySelectorAll('.document-land-map-content .imm-tables').forEach(function (wrapper, groupIndex) {
             var group = groups[groupIndex] || {};
+            var items = [];
+            var withoutHistory = 0;
             Array.from(wrapper.querySelectorAll('table.cat-compact-table')).forEach(function (table) {
-                var kind = table.dataset.landMapKind;
-                if (kind) addColumn(table, group[kind]);
+                var entries = group[table.dataset.landMapKind] || [];
+                Array.from(table.querySelectorAll('tbody tr')).forEach(function (row, rowIndex) {
+                    var entry = entries[rowIndex];
+                    if (entry && (entry.sources || []).length) items.push(historyDetails(propertyLabel(table, row), entry));
+                    else withoutHistory += 1;
+                });
             });
+            if (!items.length) return;
+            var body = titolaritaBody(wrapper);
+            if (body.querySelector('[data-ownership-history]')) return;
+            var section = document.createElement('section');
+            section.className = 'land-map-trace mt-3 pt-3 border-top';
+            section.dataset.ownershipHistory = 'true';
+            var heading = document.createElement('h4');
+            heading.className = 'h6 mb-1';
+            heading.innerHTML = '<i class="fas fa-route me-2 text-info" aria-hidden="true"></i>Tracciabilità titolarità';
+            section.appendChild(heading);
+            appendText(section, 'p', 'small text-muted mb-2', 'Atti ricavati dalle visure storiche per immobile salvate.');
+            items.forEach(function (details) { section.appendChild(details); });
+            if (withoutHistory) {
+                appendText(section, 'p', 'small text-muted mb-0',
+                    withoutHistory + (withoutHistory === 1 ? ' immobile senza' : ' immobili senza') + ' visura per immobile collegata.');
+            }
+            body.appendChild(section);
         });
     }
     // When a stored *Visura storica per immobile* backs a group, its ownership timeline opens in full: the theme only

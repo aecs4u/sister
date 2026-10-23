@@ -1984,9 +1984,8 @@ def _parse_visura_xml(file_path: str) -> dict | None:
 
         # A subject visura identifies its queried party separately from the
         # owners listed for the returned properties.
-        soggetto = soup.find("SoggettoPF")
-        if soggetto is None:
-            soggetto = soup.find("SoggettoPG")
+        # (SoggettoPNF is a legal entity: Denominazione + partita IVA, no first/last name)
+        soggetto = soup.find("SoggettoPF") or soup.find("SoggettoPNF") or soup.find("SoggettoPG")
         if soggetto:
             identifier = (
                 soggetto.get("CodiceFiscale")

@@ -29,20 +29,30 @@ _FAILURE_BACKOFF_SECONDS = 60.0
 _cache: dict[tuple[str, str], tuple[float, list[dict[str, Any]]]] = {}
 _retry_at = 0.0
 
-# Cadastral category -> OMI typology codes in order of preference. Categories that are missing here (A/4-A/6, A/9,
-# B, C/4-C/5, C/7, D, E, F) have no OMI typology that stands for them and are left unvalued rather than guessed.
+# Cadastral category -> OMI typology codes in order of preference.
+#
+# Residential categories follow the Agenzia delle Entrate's own correspondence (Manuale OMI 2025, allegati, Tabella 1):
+# signorili = A/1 and A/8, civili = A/2-A/3, economiche = A/4-A/6, ville e villini = A/7, tipiche dei luoghi = A/11,
+# box e posti auto = C/6 and C/7. Two deliberate additions: A/8 falls back to ville e villini (signorili is quoted in
+# only ~65 comuni) and C/7 (tettoie) is valued as a covered, else uncovered, parking space.
+# Everything else (A/9, B, C/4-C/5, D, E, F) has no OMI typology that stands for it and is left unvalued, not guessed. The
+# Agency's own caps (C/2 up to 30 m2 and C/6-C/7 up to 50 m2 are *pertinenze*, valued as a share of the house) are not applied.
 OMI_TYPOLOGY_BY_CATEGORY: dict[str, tuple[int, ...]] = {
     "A1": (19,),  # Abitazioni signorili
     "A2": (20,),  # Abitazioni civili
-    "A3": (21,),  # Abitazioni di tipo economico
+    "A3": (20,),  # Abitazioni civili (A/2-A/3), not economico
+    "A4": (21,),  # Abitazioni di tipo economico (A/4-A/6)
+    "A5": (21,),
+    "A6": (21,),
     "A7": (1,),  # Ville e Villini
-    "A8": (1,),
+    "A8": (19, 1),  # Abitazioni signorili (A/1, A/8), else Ville e villini
     "A10": (6,),  # Uffici
     "A11": (22,),  # Abitazioni tipiche dei luoghi
     "C1": (5,),  # Negozi
     "C2": (9,),  # Magazzini
     "C3": (10,),  # Laboratori
     "C6": (13, 16),  # Box, else Autorimesse
+    "C7": (14, 15),  # Posti auto coperti, else scoperti
 }
 
 # Names of the OMI typologies used above, for the /valuation page (tests/test_valuation_docs.py keeps them in step).
@@ -53,6 +63,8 @@ OMI_TYPOLOGY_LABELS: dict[int, str] = {
     9: "Magazzini",
     10: "Laboratori",
     13: "Box",
+    14: "Posti auto coperti",
+    15: "Posti auto scoperti",
     16: "Autorimesse",
     19: "Abitazioni signorili",
     20: "Abitazioni civili",

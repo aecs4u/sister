@@ -9,6 +9,7 @@ database) gives the extraction code and the persistence layer one normalised vie
 from __future__ import annotations
 
 import re
+from datetime import date
 from typing import Any
 
 _SPACES = re.compile(r"\s+")
@@ -80,6 +81,73 @@ def birth_code_from_codice_fiscale(codice_fiscale: str | None) -> str | None:
         return None
     code = ident[11:15]
     return code if re.fullmatch(r"[A-Z]\d{3}", code) else None
+
+
+def _parse_date(value: Any) -> date | None:
+    match = re.fullmatch(r"(\d{2})/(\d{2})/(\d{4})", squeeze(value))
+    if not match:
+        return None
+    try:
+        return date(int(match.group(3)), int(match.group(2)), int(match.group(1)))
+    except ValueError:
+        return None
+
+
+_CF_MONTHS = "ABCDEHLMPRST"  # letter -> month 1..12 (characters 9 of a personal codice fiscale)
+_MAX_AGE = 105  # beyond this a two-digit year is read as the later century
+
+
+def birth_date_from_codice_fiscale(
+    codice_fiscale: str | None, as_of: date | None = None, *, partial: str = ""
+) -> str | None:
+    """Full birth date (``DD/MM/YYYY``) written in a personal codice fiscale, or ``None`` when it is not safe to say.
+
+    The fiscal code has a two-digit year, so the century is chosen from ``as_of`` (default today): the 2000s unless the
+    person would then be unborn, the 1900s unless they would then be over ``_MAX_AGE``. Years that satisfy both (for
+    2026: 21-26, a newborn or a centenarian) are ambiguous and return ``None``. ``partial`` is the portal's degraded date
+    (``/0/08/``, see ``parse_xml_nominativo``): when given, its day must agree with the code's, otherwise the code and
+    the document describe different people and nothing is derived.
+    """
+    ident = squeeze(codice_fiscale).upper()
+    if identifier_kind(ident) != "person":
+        return None
+    match = re.match(r"^[A-Z]{6}(\d{2})([A-Z])(\d{2})", ident)
+    if not match or match.group(2) not in _CF_MONTHS:
+        return None
+    year2, month, day = int(match.group(1)), _CF_MONTHS.index(match.group(2)) + 1, int(match.group(3))
+    day = day - 40 if day > 40 else day
+    if partial:
+        parts = re.findall(r"\d+", partial)
+        if len(parts) >= 2 and int(parts[1]) != day:
+            return None
+    reference = as_of or date.today()
+    later, earlier = 2000 + year2, 1900 + year2
+    later_ok = later <= reference.year
+    earlier_ok = reference.year - earlier <= _MAX_AGE
+    if later_ok and earlier_ok:
+        return None  # newborn or centenarian: ambiguous
+    year = later if later_ok else earlier
+    try:
+        return date(year, month, day).strftime("%d/%m/%Y")
+    except ValueError:
+        return None
+
+
+def correct_century(date_text: str, codice_fiscale: str | None, as_of: date | None = None) -> str:
+    """Undo the portal's two-digit-year habit: someone born in 2008 is printed ``01/04/1908`` and so looks 118 years old.
+
+    The date is replaced by the one in the codice fiscale only when the day and month agree, the years differ by exactly
+    a century and the printed one would make the person older than ``_MAX_AGE``. Everything else comes back unchanged.
+    """
+    printed = _parse_date(date_text)
+    derived = _parse_date(birth_date_from_codice_fiscale(codice_fiscale, as_of))
+    if printed is None or derived is None:
+        return date_text
+    reference = as_of or date.today()
+    if (printed.day, printed.month) == (derived.day, derived.month) and printed.year == derived.year - 100 \
+            and reference.year - printed.year > _MAX_AGE:
+        return derived.strftime("%d/%m/%Y")
+    return date_text
 
 
 def parse_titolarita(value: Any) -> dict[str, str]:
@@ -158,8 +226,10 @@ def parse_nominativo(value: Any) -> dict[str, str]:
         flags=re.IGNORECASE,
     )
     if person:
-        out = {"name": person.group("name").strip(), "birth_place": person.group("place").strip(),
-               "birth_date": person.group("date")}
+        name = re.sub(r"\s+nat[oa]$", "", person.group("name").strip(), flags=re.IGNORECASE)
+        out = {"name": name, "birth_place": person.group("place").strip(), "birth_date": person.group("date")}
+        if re.search(r"\snat[oa]\s+a\s", text, flags=re.IGNORECASE):
+            out["sex"] = "F" if re.search(r"\snata\s+a\s", text, flags=re.IGNORECASE) else "M"
         if person.group("prov"):
             out["birth_province"] = person.group("prov").upper()
         return out
@@ -287,6 +357,13 @@ def normalize_owner(raw: dict, as_of: str = "") -> tuple[dict[str, Any], dict[st
     if raw.get("luogo_nascita"):
         birth_place, birth_province = parse_place(raw["luogo_nascita"])
     birth_date = parsed.get("birth_date") or squeeze(raw.get("data_nascita")) or squeeze(raw.get("DataNascita"))
+    if birth_date and kind == "person":
+        birth_date = correct_century(birth_date, identifier, _parse_date(as_of))
+    if not birth_date and kind == "person":
+        # a degraded or absent date: the codice fiscale carries the whole thing (None when ambiguous or inconsistent)
+        birth_date = birth_date_from_codice_fiscale(
+            identifier, _parse_date(as_of), partial=parsed.get("birth_date_partial", "")
+        ) or ""
     if birth_date:
         subject["date_of_birth"] = birth_date
     if birth_place:
@@ -296,7 +373,8 @@ def normalize_owner(raw: dict, as_of: str = "") -> tuple[dict[str, Any], dict[st
     if parsed.get("registered_office") or raw.get("sede"):
         subject["registered_office"] = parsed.get("registered_office") or squeeze(raw.get("sede"))
 
-    gender = squeeze(raw.get("sesso")).upper()[:1] or gender_from_codice_fiscale(identifier)
+    # a personal codice fiscale states the sex; it wins over a name-parsing guess ("nato"/"nata" once gave men an "F")
+    gender = gender_from_codice_fiscale(identifier) or squeeze(raw.get("sesso")).upper()[:1] or parsed.get("sex", "")
     if gender in {"M", "F"} and kind != "legal_entity":
         subject["gender"] = gender
     birth_code = birth_code_from_codice_fiscale(identifier)
@@ -380,7 +458,10 @@ def parse_xml_nominativo(value: Any) -> dict[str, str]:
     """Split the ``Nominativo`` of a visura XML.
 
     * ``ROSSI MARIO 04/07/1974; Comune PALERMO (PA)`` → name, birth_date, birth_place, birth_province;
-    * ``ROSSI MARIA /0/26/ il ; Comune Nata a MILANO (MI)`` → name, partial birth date (``/mese/anno/``), sex F, place;
+    * ``ROSSI MARIA /0/26/ il ; Comune Nata a MILANO (MI)`` → name, partial birth date, sex F, place. The partial date
+      is *not* month/year: the portal prints the tens digit of the month (1 for October-December, else 0) and the
+      **day** of birth (checked against the codice fiscale of 26 owners in one visura: 26 of 26); month and year are
+      lost, ``birth_date_from_codice_fiscale`` recovers them;
     * ``MONTE DI PIETA'; Comune PALERMO (PA)`` (no date) → name, registered_office;
     * ``ROSSI Anna ; Bianchi`` → name, note (the text after the first ``;``).
     """

@@ -60,7 +60,7 @@ def test_subject_context_has_formatted_values_and_newest_first_ownership():
     mutation = next(item for item in group["items"] if item["kind"] == "mutations")["items"][0]
     assert mutation["current"] and mutation["date"] == "14/01/2021"
     assert mutation["owners"][0]["quota"] == "1/2"  # 500/1000 reduced
-    assert mutation["owners"][0]["sub"] == "nato/a il 17/01/1977 · NAPOLI (NA)"
+    assert mutation["owners"][0]["sub"] == "nato il 17/01/1977 · NAPOLI (NA)"
 
 
 def test_unsupported_documents_are_refused():
@@ -80,8 +80,9 @@ def test_typst_syntax_in_the_data_is_text_not_code():
 def test_render_pdf_makes_a_landscape_a4_with_every_section():
     pdf = render_pdf(build_context(subject_doc(), None, None, TODAY))
 
-    from pypdf import PdfReader
     import io
+
+    PdfReader = pytest.importorskip("pypdf").PdfReader
 
     reader = PdfReader(io.BytesIO(pdf))
     box = reader.pages[0].mediabox
@@ -136,3 +137,28 @@ async def test_pdf_route_returns_the_typeset_document(monkeypatch):
 
     assert response.media_type == "application/pdf" and response.body.startswith(b"%PDF")
     assert response.headers["content-disposition"] == 'attachment; filename="vs_att_X.pdf"'
+
+
+def test_a_company_subject_shows_denomination_and_registered_office():
+    doc = subject_doc()
+    doc["xml_parsed"]["VisuraSoggettoAttuale"]["DatiRichiesta"]["SoggettoIndividuato"] = {"SoggettoPNF": {
+        "CodiceFiscale": "00110110822", "Denominazione": "S.I.A.T. S.P.A.", "Sede": "PALERMO (PA)"}}
+
+    context = build_context(doc, None, None, TODAY)
+
+    assert context["title"] == "S.I.A.T. S.P.A."
+    rows = context["sections"][0]["items"][0]["rows"]
+    assert rows[0] == ["Denominazione", "S.I.A.T. S.P.A.", "00110110822"] and rows[1][:2] == ["Sede", "PALERMO (PA)"]
+    assert not any(row[0] in ("Nascita", "Sesso") for row in rows)
+    assert render_pdf(context).startswith(b"%PDF")
+
+
+def test_owners_with_a_degraded_birth_date_get_the_date_from_the_codice_fiscale():
+    doc = subject_doc()
+    mutation = doc["xml_parsed"]["VisuraSoggettoAttuale"]["GruppoUnitaImmobiliari"][0]["IntestazioneGruppo"]["MutazioneSoggettiva"][0]
+    mutation["Intestazione"]["Intestato"][0].update({"Nominativo": "GRISTINA Antonio  /0/08/ il ; Comune  Nato a PALERMO (PA)", "CF": "GRSNTN62D08G273W"})
+
+    context = build_context(doc, None, None, TODAY)
+
+    owner = next(i for i in next(s for s in context["sections"] if s["title"] == "NAPOLI")["items"] if i["kind"] == "mutations")["items"][0]["owners"][0]
+    assert owner["name"] == "GRISTINA Antonio" and owner["sub"] == "nato il 08/04/1962 · PALERMO (PA)"
