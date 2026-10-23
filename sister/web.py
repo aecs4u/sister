@@ -4149,6 +4149,35 @@ async def _land_registry_map_context(lookup: dict[str, Any] | None) -> dict[str,
         first_marker = context["parcel_markers"][0]
         centroid = f"{first_marker['latitude']},{first_marker['longitude']}"
         center_kind = "parcel" if len(context["parcel_markers"]) == 1 else "parcels"
+    if not centroid and context["sheet_features"]:
+        sheet_coordinates: list[tuple[float, float]] = []
+
+        def collect_coordinates(value: Any) -> None:
+            if isinstance(value, dict):
+                if value.get("type") == "GeometryCollection":
+                    value = value.get("geometries") or []
+                else:
+                    value = value.get("coordinates") or []
+            if not isinstance(value, (list, tuple)):
+                return
+            if len(value) >= 2 and all(isinstance(item, (int, float)) for item in value[:2]):
+                longitude, latitude = float(value[0]), float(value[1])
+                if -180 <= longitude <= 180 and -90 <= latitude <= 90:
+                    sheet_coordinates.append((longitude, latitude))
+                return
+            for item in value:
+                collect_coordinates(item)
+
+        for feature in context["sheet_features"]:
+            if isinstance(feature, dict):
+                collect_coordinates(feature.get("geometry"))
+        if sheet_coordinates:
+            west = min(point[0] for point in sheet_coordinates)
+            east = max(point[0] for point in sheet_coordinates)
+            south = min(point[1] for point in sheet_coordinates)
+            north = max(point[1] for point in sheet_coordinates)
+            centroid = f"{(south + north) / 2},{(west + east) / 2}"
+            center_kind = "sheet"
     if not centroid and context["municipality"]:
         try:
             from land_registry.map_layers import get_map_search_source
