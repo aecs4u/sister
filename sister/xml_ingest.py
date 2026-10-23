@@ -1,9 +1,9 @@
 """Visura XML documents → the typed document tables.
 
-``_persist_flattened_xml`` keeps every element in ``document_xml_nodes``; this module reads the same XML into the
-relational tables designed for it (``visura_xml_models``): the header in ``document_metadata``, the queried party in
-``document_subjects``, the properties (``building_*``, ``land_*``, ``property_groups``/``building_units``) and the
-ownership acts with their owners (``ownership_mutations`` / ``property_owners``).
+``_persist_flattened_xml`` keeps every element in the archive (``sister_archive.document_xml_node``); this module reads
+the same XML into the relational tables designed for it (``visura_xml_models``): the header on ``document``, the queried
+party in ``document_subject``, the properties (``building_unit``, ``land_parcel`` + classifications, ``property_group``)
+and the ownership acts with their owners (``ownership_mutation`` / ``mutation_owner``).
 
 Five document shapes come out of SISTER (root child of ``<Visura>``):
 
@@ -21,11 +21,13 @@ Five document shapes come out of SISTER (root child of ``<Visura>``):
 from __future__ import annotations
 
 import logging
+import re
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from lxml import etree
 
+from .database import document_file_path
 from .result_parsers import normalize_owner, squeeze
 
 logger = logging.getLogger("sister")
@@ -39,24 +41,6 @@ KINDS = {
     "VisuraTerrenoStorica": "terreni_storica",
     "VisuraSoggettoAttuale": "soggetto_attuale",
 }
-
-# the typed tables a document fills, in delete order (children first)
-_TYPED_TABLES = (
-    "property_owners",
-    "ownership_mutations",
-    "land_classifications",
-    "land_parcels",
-    "related_parcels",
-    "building_surfaces",
-    "building_classifications",
-    "building_identifiers",
-    "building_units",
-    "property_groups",
-    "building_addresses",
-    "building_current_states",
-    "document_subjects",
-)
-
 
 # ---------------------------------------------------------------------------------------------------------
 # Pure parsing
@@ -233,6 +217,11 @@ def parse_visura_xml(content: str | bytes) -> dict[str, Any] | None:
 # Writing
 # ---------------------------------------------------------------------------------------------------------
 
+_PLANIMETRIA_DATE = re.compile(r"presentazione\s+(\d{2}/\d{2}/\d{4})")
+_PLANIMETRIA_PROTOCOL = re.compile(r"prot\.\s*n\.\s*(\S+)")
+_MUTATION_STATUS = {"attuale", "predecessore"}
+_CONSISTENCY_UNITS = {"VANI", "MQ", "MC"}
+
 
 def _decimal(value: Any) -> Decimal | None:
     text = squeeze(value).replace(",", ".")
@@ -244,16 +233,27 @@ def _decimal(value: Any) -> Decimal | None:
         return None
 
 
-async def _location(session, identifier: dict[str, str], cadastre_type: str) -> int | None:
-    from .database import get_or_create_location
+def _lire(value: Any) -> Decimal | None:
+    """Legacy lire amounts are printed with thousands points: ``1.200`` → 1200."""
+    digits = squeeze(value).replace(".", "")
+    return Decimal(digits) if digits.isdigit() else None
 
-    if not (identifier.get("sheet") or identifier.get("parcel")):
-        return None
-    return await get_or_create_location(
+
+def _int(value: Any) -> int | None:
+    text = squeeze(value)
+    return int(text) if text.isdigit() else None
+
+
+async def _unit(session, identifier: dict[str, str], cadastre_type: str) -> int:
+    """The cadastral unit named by an ``IdentificativoDefinitivo`` (the Belfiore code identifies the comune)."""
+    from .reference import get_or_create_cadastral_unit
+
+    return await get_or_create_cadastral_unit(
         session,
         cadastre_type=cadastre_type,
         province=identifier["province"],
         municipality=identifier["municipality"],
+        municipality_code=identifier["municipality_code"],
         sheet=identifier["sheet"],
         parcel=identifier["parcel"],
         subunit=identifier["subunit"],
@@ -272,146 +272,169 @@ async def _clear(session, document_id: int) -> None:
     from sqlalchemy import text
 
     params = {"d": document_id}
-    scopes = {
-        "property_owners": "mutation_id IN (SELECT id FROM ownership_mutations WHERE document_id = :d"
-        " OR property_group_id IN (SELECT id FROM property_groups WHERE document_id = :d)"
-        " OR land_parcel_id IN (SELECT id FROM land_parcels WHERE document_id = :d))",
-        "ownership_mutations": "document_id = :d OR property_group_id IN (SELECT id FROM property_groups"
-        " WHERE document_id = :d) OR land_parcel_id IN (SELECT id FROM land_parcels WHERE document_id = :d)",
-        "land_classifications": "parcel_id IN (SELECT id FROM land_parcels WHERE document_id = :d)",
-        "land_parcels": "document_id = :d",
-        "related_parcels": "current_state_id = :d OR building_unit_id IN (SELECT u.id FROM building_units u"
-        " JOIN property_groups g ON g.id = u.group_id WHERE g.document_id = :d)",
-        "building_surfaces": "current_state_id = :d OR building_unit_id IN (SELECT u.id FROM building_units u"
-        " JOIN property_groups g ON g.id = u.group_id WHERE g.document_id = :d)",
-        "building_classifications": "current_state_id = :d OR history_document_id = :d OR building_unit_id IN"
-        " (SELECT u.id FROM building_units u JOIN property_groups g ON g.id = u.group_id WHERE g.document_id = :d)",
-        "building_identifiers": "current_state_id = :d OR history_document_id = :d OR building_unit_id IN"
-        " (SELECT u.id FROM building_units u JOIN property_groups g ON g.id = u.group_id WHERE g.document_id = :d)",
-        "building_units": "group_id IN (SELECT id FROM property_groups WHERE document_id = :d)",
-        "property_groups": "document_id = :d",
-        "building_addresses": "document_id = :d",
-        "building_current_states": "id = :d",
-        "document_subjects": "id = :d",
-    }
-    for table in _TYPED_TABLES:
-        await session.execute(text(f"DELETE FROM {table} WHERE {scopes[table]}"), params)  # noqa: S608 (fixed names)
+    for statement in (
+        "DELETE FROM mutation_owner WHERE mutation_id IN (SELECT id FROM ownership_mutation WHERE document_id = :d)",
+        "DELETE FROM ownership_mutation WHERE document_id = :d",
+        "DELETE FROM land_parcel_classification WHERE land_parcel_id IN (SELECT id FROM land_parcel WHERE document_id = :d)",
+        "DELETE FROM land_parcel WHERE document_id = :d",
+        "DELETE FROM building_unit_related_parcel WHERE building_unit_id IN (SELECT id FROM building_unit WHERE document_id = :d)",
+        "DELETE FROM building_unit WHERE document_id = :d",
+        "DELETE FROM property_group WHERE document_id = :d",
+        "DELETE FROM document_address WHERE document_id = :d",
+        "DELETE FROM document_subject WHERE document_id = :d",
+    ):
+        await session.execute(text(statement), params)
 
 
 async def _write_mutations(
-    session, mutations: list[dict], parent: dict[str, int], cadastre_type: str, as_of: str = ""
+    session,
+    document_id: int,
+    mutations: list[dict],
+    parent: dict[str, int],
+    cadastre_type: str,
+    as_of: str = "",
 ) -> int:
-    from .database import get_or_create_right
-    from .visura_xml_models import OwnershipMutation, PropertyOwner
+    """The ownership acts of one place in a document and their owners.
+
+    ``parent`` is ``{"property_group_id": …}`` or ``{"land_parcel_id": …}`` (empty for the document itself); the
+    document is always set. ``IntestazioneAttuale`` (index ``current``) becomes ``is_current`` with no index.
+    """
+    from .reference import get_or_create_right
+    from .result_parsers import parse_it_date
+    from .visura_xml_models import MutationOwner, OwnershipMutation
 
     owners = 0
     for mutation in mutations:
         ref = mutation["reference"]
+        is_current = mutation["index"] == "current"
+        status = (ref["status"] or "").strip().lower()
         row = OwnershipMutation(
+            document_id=document_id,
             **parent,
-            mutation_index=mutation["index"] or None,
-            mutation_date=mutation["date"] or None,
+            mutation_index=None if is_current else _int(mutation["index"]),
+            is_current=is_current,
+            mutation_date=parse_it_date(mutation["date"]),
             source_description=mutation["source"] or None,
-            reference_location_id=await _location(session, ref, cadastre_type),
-            ref_municipality_code=ref["municipality_code"] or None,
-            ref_property_status=ref["status"] or None,
+            status=status if status in _MUTATION_STATUS else None,
+            reference_cadastral_unit_id=await _unit(session, ref, cadastre_type)
+            if (ref.get("sheet") or ref.get("parcel") or ref.get("municipality_code"))
+            else None,
         )
         session.add(row)
         await session.flush()
+        seen: set[tuple] = set()
         for owner in mutation["owners"]:
             subject_fields, right_fields = normalize_owner(owner, as_of)
             if right_fields.get("right_type") and not right_fields.get("right_description"):
                 right_fields["right_description"] = right_fields["right_type"]
-            session.add(
-                PropertyOwner(
-                    mutation_id=row.id,
-                    owner_index=owner.get("IndiceIntestato") or None,
-                    subject_id=await _subject_id(session, subject_fields),
-                    right_id=await get_or_create_right(session, **right_fields) if right_fields else None,
-                )
-            )
+            subject_id = await _subject_id(session, subject_fields)
+            if subject_id is None:  # an Intestato with neither name nor fiscal code identifies nobody
+                continue
+            right_id = await get_or_create_right(session, **right_fields) if right_fields else None
+            if (subject_id, right_id) in seen:
+                continue
+            seen.add((subject_id, right_id))
+            session.add(MutationOwner(mutation_id=row.id, position=_int(owner.get("IndiceIntestato")), subject_id=subject_id, right_id=right_id))
             owners += 1
     return owners
 
 
-async def _write_building(session, unit: dict, parent: dict[str, int], cadastre_type: str) -> None:
-    """Identifier, classification, surface and related parcels of one building; ``parent`` is the polymorphic key
-    (``building_unit_id`` within a subject's group, ``current_state_id`` for a single-property document)."""
-    from .visura_xml_models import BuildingClassification, BuildingIdentifier, BuildingSurface, RelatedParcel
+async def _write_building(
+    session,
+    document_id: int,
+    unit: dict,
+    cadastre_type: str,
+    *,
+    group_id: int | None = None,
+    is_current: bool = False,
+    address: str | None = None,
+) -> int:
+    """One building unit: identifier, classification and surface are columns of the row, related parcels its children.
+
+    ``group_id`` is set for a unit inside a subject's group; ``is_current`` marks the current state of a single-property
+    document.
+    """
+    from .reference import clean, ensure_lookup
+    from .result_parsers import normalize_category, normalize_class, parse_it_date
+    from .visura_xml_models import BuildingUnit, BuildingUnitRelatedParcel
 
     ident = unit["identifier"]
-    session.add(
-        BuildingIdentifier(
-            **parent,
-            location_id=await _location(session, ident, cadastre_type),
-            municipality_code=ident["municipality_code"] or None,
-            sequence_id=ident["sequence_id"] or None,
-        )
+    c = unit["classification"] or {}
+    cons = c.get("Consistenza", {})
+    category, description = normalize_category(c.get("Categoria"))
+    if category:
+        await ensure_lookup(session, "cadastral_category", category, description)
+    surface = unit["surface"] or {}
+    planimetria = surface.get("Planimetria", {}).get("Descrizione") or ""
+    filed = _PLANIMETRIA_DATE.search(planimetria)
+    protocol = _PLANIMETRIA_PROTOCOL.search(planimetria)
+    unit_of_measure = (cons.get("Unita") or "").strip().upper()
+    row = BuildingUnit(
+        document_id=document_id,
+        property_group_id=group_id,
+        unit_index=_int(unit["index"]),
+        is_current=is_current,
+        address_text=address,
+        cadastral_unit_id=await _unit(session, ident, cadastre_type),
+        sequence_id=ident["sequence_id"] or None,
+        census_zone=clean(c.get("ZonaCensuaria")),
+        category=category,
+        cadastral_class=normalize_class(c.get("Classe")),
+        cadastral_income_eur=_decimal(c.get("RenditaEuro")),
+        consistency_value=_decimal(cons.get("Valore")),
+        consistency_unit=unit_of_measure if unit_of_measure in _CONSISTENCY_UNITS else None,
+        total_area_sqm=_decimal(surface.get("Totale")),
+        excluded_area_sqm=_decimal(surface.get("TotaleE")),
+        planimetria_filed_on=parse_it_date(filed.group(1)) if filed else None,
+        planimetria_protocol=protocol.group(1) if protocol else None,
     )
-    if unit["classification"]:
-        c = unit["classification"]
-        cons = c.get("Consistenza", {})
-        session.add(
-            BuildingClassification(
-                **parent,
-                census_zone=c.get("ZonaCensuaria") or None,
-                category=c.get("Categoria") or None,
-                cadastral_class=c.get("Classe") or None,
-                cadastral_income=_decimal(c.get("RenditaEuro")),
-                consistency_value=_decimal(cons.get("Valore")),
-                consistency_unit=cons.get("Unita") or None,
-            )
-        )
-    if unit["surface"]:
-        s = unit["surface"]
-        session.add(
-            BuildingSurface(
-                **parent,
-                total_area=_decimal(s.get("Totale")),
-                excluded_area=_decimal(s.get("TotaleE")),
-                planimetria=s.get("Planimetria", {}).get("Descrizione") or None,
-            )
-        )
+    session.add(row)
+    await session.flush()
+    seen: set[tuple] = set()
     for related in unit["related"]:
         rel_ident = {
-            "province": ident["province"], "municipality": ident["municipality"], "subunit": "",
-            "sheet": related.get("Foglio", ""), "parcel": related.get("ParticellaNum", ""),
+            "province": ident["province"], "municipality": ident["municipality"], "municipality_code": ident["municipality_code"],
+            "subunit": "", "sheet": related.get("Foglio", ""), "parcel": related.get("ParticellaNum", ""),
             "section": related.get("SezCensuaria", ""),
         }
-        session.add(
-            RelatedParcel(
-                **parent,
-                location_id=await _location(session, rel_ident, "T"),
-                sequence_id=related.get("ProgrId") or None,
-            )
-        )
+        parcel_id = await _unit(session, rel_ident, "T")
+        key = (parcel_id, related.get("ProgrId") or None)
+        if key in seen:
+            continue
+        seen.add(key)
+        session.add(BuildingUnitRelatedParcel(building_unit_id=row.id, cadastral_unit_id=parcel_id, sequence_id=key[1]))
+    return row.id
 
 
 async def _write_land(session, document_id: int, unit: dict, cadastre_type: str) -> int:
-    from .visura_xml_models import LandClassification, LandParcel
+    from .reference import clean, ensure_lookup
+    from .result_parsers import normalize_class
+    from .visura_xml_models import LandParcel, LandParcelClassification
 
     ident = unit["identifier"]
     parcel = LandParcel(
         document_id=document_id,
-        location_id=await _location(session, ident, cadastre_type),
-        municipality_code=ident["municipality_code"] or None,
+        cadastral_unit_id=await _unit(session, ident, cadastre_type),
         sequence_id=ident["sequence_id"] or None,
         partita=ident["partita"] or None,
     )
     session.add(parcel)
     await session.flush()
     for c in unit["classifications"]:
+        quality = (clean(c.get("Qualita")) or "").upper() or None
+        if quality:
+            await ensure_lookup(session, "land_quality", quality)
         session.add(
-            LandClassification(
-                parcel_id=parcel.id,
-                quality=c.get("Qualita") or None,
-                cadastral_class=c.get("Classe") or None,
-                area=_decimal(c.get("SuperficieMQ")),
-                deduction_symbol=c.get("SimboloDeduzione") or None,
-                dominical_income=_decimal(c.get("RedditoDominicaleEuro")),
-                agricultural_income=_decimal(c.get("RedditoAgrarioEuro")),
-                dominical_income_lire=c.get("RedditoDominicaleLire") or None,
-                agricultural_income_lire=c.get("RedditoAgrarioLire") or None,
+            LandParcelClassification(
+                land_parcel_id=parcel.id,
+                land_quality=quality,
+                cadastral_class=normalize_class(c.get("Classe")),
+                area_sqm=_decimal(c.get("SuperficieMQ")),
+                deduction_symbol=clean(c.get("SimboloDeduzione")),
+                dominical_income_eur=_decimal(c.get("RedditoDominicaleEuro")),
+                agricultural_income_eur=_decimal(c.get("RedditoAgrarioEuro")),
+                dominical_income_lire=_lire(c.get("RedditoDominicaleLire")),
+                agricultural_income_lire=_lire(c.get("RedditoAgrarioLire")),
             )
         )
     return parcel.id
@@ -448,19 +471,32 @@ def _as_of(parsed: dict[str, Any]) -> str:
     return f"{value[6:8]}/{value[4:6]}/{value[0:4]}" if len(value) == 8 and value.isdigit() else ""
 
 
+def _generated_at(date_text: str, time_text: str):
+    """``Data`` (YYYYMMDD) + ``Ora`` (HHMMSS) of the header in Italian local time; None when the date is absent."""
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    if not (date_text.isdigit() and len(date_text) == 8):
+        return None
+    clock = time_text if time_text.isdigit() and len(time_text) == 6 else "000000"
+    try:
+        return datetime(
+            int(date_text[:4]), int(date_text[4:6]), int(date_text[6:]), int(clock[:2]), int(clock[2:4]), int(clock[4:]),
+            tzinfo=ZoneInfo("Europe/Rome"),
+        )
+    except ValueError:
+        return None
+
+
 async def ingest_visura_xml(session, document_id: int, content: str | bytes | None) -> dict[str, int]:
     """Fill the typed tables from one document's XML; returns row counts (empty when the XML is not a visura).
 
     Runs inside the caller's transaction and replaces whatever an earlier ingestion of the same document wrote.
     """
-    from .db_models import DocumentMetadata
-    from .visura_xml_models import (
-        BuildingAddress,
-        BuildingCurrentState,
-        BuildingUnit,
-        DocumentSubject,
-        PropertyGroup,
-    )
+    from .db_models import Document
+    from .reference import get_or_create_comune, get_or_create_office
+    from .result_parsers import parse_it_date
+    from .visura_xml_models import DocumentAddress, DocumentSubject, PropertyGroup
 
     parsed = parse_visura_xml(content) if content else None
     if parsed is None:
@@ -471,87 +507,73 @@ async def ingest_visura_xml(session, document_id: int, content: str | bytes | No
     cadastre_type = "T" if kind.startswith("terreni") else "F"
 
     # --- header -----------------------------------------------------------------------------------------
-    meta = await session.get(DocumentMetadata, document_id)
-    if meta is not None:
+    document = await session.get(Document, document_id)
+    if document is not None:
         header, request, liquidation = parsed["header"], parsed["request"], parsed["liquidation"]
-        meta.title = header.get("Titolo") or meta.title
-        meta.registry_view_type = header.get("TipoVisura") or meta.registry_view_type
-        meta.service_type = header.get("TipoServizio") or meta.service_type
-        meta.generation_date = header.get("Data") or meta.generation_date
-        meta.generation_time = header.get("Ora") or meta.generation_time
-        meta.source_system = header.get("Provenienza") or meta.source_system
-        meta.municipality_code = request.get("CodiceComune") or meta.municipality_code
-        meta.protocol = request.get("Protocollo") or meta.protocol
-        meta.year = request.get("Anno") or meta.year
-        meta.liquidation_protocol = liquidation.get("Protocollo") or meta.liquidation_protocol
-        meta.liquidation_year = liquidation.get("Anno") or meta.liquidation_year
-        meta.requester = parsed["requester"] or meta.requester
-        if liquidation.get("UnitaImmobiliari", "").isdigit():
-            meta.liquidation_units = int(liquidation["UnitaImmobiliari"])
+        document.title = header.get("Titolo") or document.title
+        document.registry_view_type = header.get("TipoVisura") or document.registry_view_type
+        document.service_type = header.get("TipoServizio") or document.service_type
+        document.generated_at = _generated_at(header.get("Data", ""), header.get("Ora", "")) or document.generated_at
+        document.reference_date = parse_it_date(header.get("SituazioneAl")) or document.reference_date
+        document.land_registry_office_id = await get_or_create_office(session, header.get("Provenienza")) or document.land_registry_office_id
+        document.protocol = request.get("Protocollo") or document.protocol
+        document.protocol_year = _int(request.get("Anno")) or document.protocol_year
+        document.liquidation_protocol = liquidation.get("Protocollo") or document.liquidation_protocol
+        document.liquidation_year = _int(liquidation.get("Anno")) or document.liquidation_year
+        document.liquidation_units = _int(liquidation.get("UnitaImmobiliari")) if liquidation.get("UnitaImmobiliari") else document.liquidation_units
+        document.requester = parsed["requester"] or document.requester
+        session.add(document)
 
     # --- queried party ----------------------------------------------------------------------------------
     if parsed["subject"]:
         subject_id = await _subject_id(session, _subject_fields(parsed["subject"]))
         if subject_id:
-            session.add(DocumentSubject(id=document_id, subject_id=subject_id))
+            session.add(DocumentSubject(document_id=document_id, subject_id=subject_id))
             await session.flush()
 
     # --- properties and owners --------------------------------------------------------------------------
+    as_of = _as_of(parsed)
     if kind == "soggetto_attuale":
         for group in parsed["groups"]:
             a = group["attrs"]
+            comune_id = await get_or_create_comune(session, None, None, a.get("CodiceComune"))
             row = PropertyGroup(
                 document_id=document_id,
-                group_index=a.get("IndiceGruppo") or None,
-                cadastre_type=a.get("TipoCatasto") or None,
-                municipality_code=a.get("CodiceComune") or None,
+                group_index=_int(a.get("IndiceGruppo")),
+                cadastre_type=(a.get("TipoCatasto") or "")[:1].upper() or None,
+                comune_id=comune_id,
                 description=a.get("Descrizione") or None,
             )
             session.add(row)
             await session.flush()
             for unit in group["units"]:
                 if unit["kind"] == "building":
-                    unit_row = BuildingUnit(group_id=row.id, unit_index=unit["index"] or None)
-                    session.add(unit_row)
-                    await session.flush()
-                    await _write_building(session, unit, {"building_unit_id": unit_row.id}, "F")
+                    await _write_building(session, document_id, unit, "F", group_id=row.id)
                     counts["units"] += 1
                 else:
                     await _write_land(session, document_id, unit, "T")
                     counts["parcels"] += 1
             counts["mutations"] += len(group["mutations"])
             counts["owners"] += await _write_mutations(
-                session,
-                group["mutations"],
-                {"property_group_id": row.id},
-                group["attrs"].get("TipoCatasto") or "F",
-                _as_of(parsed),
+                session, document_id, group["mutations"], {"property_group_id": row.id},
+                group["attrs"].get("TipoCatasto") or "F", as_of,
             )
     else:
         for unit in parsed["units"]:
             if unit["kind"] == "building":
-                session.add(BuildingCurrentState(id=document_id, address_text=unit["address"] or None))
-                await session.flush()
-                await _write_building(session, unit, {"current_state_id": document_id}, cadastre_type)
+                await _write_building(session, document_id, unit, cadastre_type, is_current=True, address=unit["address"] or None)
                 counts["units"] += 1
             else:
                 parcel_id = await _write_land(session, document_id, unit, cadastre_type)
                 counts["parcels"] += 1
                 mutations = unit.get("mutations", [])
                 counts["mutations"] += len(mutations)
-                counts["owners"] += await _write_mutations(
-                    session, mutations, {"land_parcel_id": parcel_id}, "T", _as_of(parsed)
-                )
+                counts["owners"] += await _write_mutations(session, document_id, mutations, {"land_parcel_id": parcel_id}, "T", as_of)
         for entry in parsed["history_addresses"]:
-            session.add(
-                BuildingAddress(
-                    document_id=document_id, address_text=entry["address"] or None, situation=entry["situation"] or None
-                )
-            )
+            if entry["address"]:
+                session.add(DocumentAddress(document_id=document_id, address_text=entry["address"], situation=entry["situation"] or None))
         counts["mutations"] += len(parsed["mutations"])
-        counts["owners"] += await _write_mutations(
-            session, parsed["mutations"], {"document_id": document_id}, cadastre_type, _as_of(parsed)
-        )
+        counts["owners"] += await _write_mutations(session, document_id, parsed["mutations"], {}, cadastre_type, as_of)
     await session.flush()
     return counts
 
@@ -586,37 +608,39 @@ def _complete_content(content: str, file_path: str | None) -> str:
 
 
 async def backfill_documents(force: bool = False, limit: int | None = None, batch: int = 50) -> dict[str, int]:
-    """Fill the typed tables for documents saved before the typed reader existed (from the XML kept in the DB).
+    """Fill the typed tables for documents saved before the typed reader existed (from the XML kept in the archive).
 
     Skips documents that already have typed rows unless ``force``. Safe to re-run.
     """
     from sqlalchemy import text
 
-    from .database import _get_session_factory
+    from .database import DATABASE_ARCHIVE_SCHEMA, _get_session_factory
+    from .db_models import Document, DocumentContent
 
     session_factory = _get_session_factory()
     stats = {"documents": 0, "not_visura": 0, "failed": 0, "units": 0, "parcels": 0, "owners": 0}
-    query = "SELECT m.id FROM document_metadata m WHERE m.content IS NOT NULL AND m.content <> ''"
+    archive = f'"{DATABASE_ARCHIVE_SCHEMA}"'
+    query = f"SELECT c.document_id FROM {archive}.document_content c WHERE c.content <> ''"  # noqa: S608 (quoted schema name)
     if not force:
         query += (
-            " AND NOT EXISTS (SELECT 1 FROM building_current_states x WHERE x.id = m.id)"
-            " AND NOT EXISTS (SELECT 1 FROM document_subjects x WHERE x.id = m.id)"
-            " AND NOT EXISTS (SELECT 1 FROM property_groups x WHERE x.document_id = m.id)"
-            " AND NOT EXISTS (SELECT 1 FROM land_parcels x WHERE x.document_id = m.id)"
+            " AND NOT EXISTS (SELECT 1 FROM building_unit x WHERE x.document_id = c.document_id)"
+            " AND NOT EXISTS (SELECT 1 FROM document_subject x WHERE x.document_id = c.document_id)"
+            " AND NOT EXISTS (SELECT 1 FROM property_group x WHERE x.document_id = c.document_id)"
+            " AND NOT EXISTS (SELECT 1 FROM land_parcel x WHERE x.document_id = c.document_id)"
         )
-    query += " ORDER BY m.id" + (f" LIMIT {int(limit)}" if limit else "")
+    query += " ORDER BY c.document_id" + (f" LIMIT {int(limit)}" if limit else "")
     async with session_factory() as session:
         ids = (await session.execute(text(query))).scalars().all()
-    from .db_models import DocumentMetadata, VisuraDocument
 
     for start in range(0, len(ids), batch):
         async with session_factory() as session:
             for document_id in ids[start : start + batch]:
-                meta = await session.get(DocumentMetadata, document_id)
-                document = await session.get(VisuraDocument, document_id)
-                content = _complete_content(meta.content or "", document.file_path if document else None)
-                if content != meta.content:
-                    meta.content = content
+                stored = await session.get(DocumentContent, document_id)
+                document = await session.get(Document, document_id)
+                content = _complete_content(stored.content or "", document_file_path(document.file_name) if document else None)
+                if content != stored.content:
+                    stored.content = content
+                    session.add(stored)
                 try:
                     async with session.begin_nested():
                         counts = await ingest_visura_xml(session, document_id, content)

@@ -1527,10 +1527,10 @@ async def _known_richieste() -> set[tuple[str, str]]:
 
     try:
         async with _get_session_factory()() as session:
-            rows = await session.execute(
-                text("SELECT requested_at, subject FROM visura_documents WHERE requested_at IS NOT NULL")
-            )
-            return {(r[0] or "", r[1] or "") for r in rows}
+            from .database import _format_requested
+
+            rows = await session.execute(text("SELECT requested_at, subject_text FROM document WHERE requested_at IS NOT NULL"))
+            return {(_format_requested(r[0]) or "", r[1] or "") for r in rows}
     except Exception as e:
         log.warning("Documenti gia' scaricati non leggibili (%s): nessun filtro", e)
         return set()
@@ -2469,7 +2469,7 @@ def _parse_ispezione_ipotecaria_pdf(file_path: str) -> dict | None:
 
 
 async def _persist_flattened_xml(session, document_id: int, content: str | None) -> None:
-    """Store XML elements and attributes in the relational document tree, then fill the typed tables from it."""
+    """Store XML elements and attributes in the archive's element tree, then fill the typed tables from it."""
     if not content:
         return
 
@@ -2526,12 +2526,16 @@ async def _persist_flattened_xml(session, document_id: int, content: str | None)
 
 
 async def _save_documents_to_db(documents: list[dict]) -> None:
-    """Persist downloaded documents to the visura_documents + document_metadata tables, skipping duplicates."""
+    """Persist downloaded documents to the ``document`` table (+ archived XML text), skipping duplicates."""
+
+    from pathlib import Path
 
     from sqlalchemy import text
 
-    from .database import _get_session_factory, get_or_create_location, is_db_writable
-    from .db_models import DocumentMetadata, VisuraDocument
+    from .database import _get_session_factory, is_db_writable
+    from .db_models import Document, DocumentContent
+    from .reference import clean, ensure_lookup, get_or_create_cadastral_unit
+    from .result_parsers import parse_it_date, parse_it_datetime
 
     if not is_db_writable():
         return
@@ -2545,13 +2549,15 @@ async def _save_documents_to_db(documents: list[dict]) -> None:
             particella = parsed.get("particella", "")
             subalterno = parsed.get("subalterno", "")
             doc_type = parsed.get("tipo", "")
+            # the database keeps the file name only; the documents directory is configuration
+            file_name = Path(doc.get("path") or doc.get("filename") or "").name or doc.get("filename", "")
+            reference_date = parse_it_date(parsed.get("situazione_al"))
 
             # Ispezione PDFs are separate records and notes for the same parcel must
             # not be deduplicated by cadastral coordinates.
             if doc_type == "ispezione_ipotecaria":
                 existing = await session.execute(
-                    text("SELECT id FROM visura_documents WHERE filename = :name OR file_path = :path LIMIT 1"),
-                    {"name": doc.get("filename", ""), "path": doc.get("path") or ""},
+                    text("SELECT id FROM document WHERE file_name = :name LIMIT 1"), {"name": file_name}
                 )
                 if existing.fetchone():
                     skipped += 1
@@ -2562,24 +2568,22 @@ async def _save_documents_to_db(documents: list[dict]) -> None:
             elif foglio and particella:
                 existing = await session.execute(
                     text(
-                        "SELECT vd.id FROM visura_documents vd"
-                        " JOIN document_metadata m ON vd.id = m.id"
-                        " LEFT JOIN cadastral_locations loc ON m.location_id = loc.id"
-                        " WHERE vd.filename = :name OR (:path <> '' AND vd.file_path = :path)"
-                        " OR (loc.sheet = :f AND loc.parcel = :p AND loc.subunit = :s AND vd.document_type = :t"
-                        "     AND m.view_subtype IS NOT DISTINCT FROM CAST(:v AS VARCHAR)"
-                        "     AND m.reference_date IS NOT DISTINCT FROM CAST(:d AS VARCHAR))"
+                        "SELECT d.id FROM document d LEFT JOIN cadastral_unit u ON u.id = d.cadastral_unit_id"
+                        " WHERE d.file_name = :name"
+                        " OR (u.sheet = :f AND u.parcel = :p AND u.subunit IS NOT DISTINCT FROM :s"
+                        "     AND d.document_type = :t"
+                        "     AND d.view_subtype IS NOT DISTINCT FROM CAST(:v AS VARCHAR)"
+                        "     AND d.reference_date IS NOT DISTINCT FROM CAST(:d AS DATE))"
                         " LIMIT 1"
                     ),
                     {
-                        "name": doc.get("filename", ""),
-                        "path": doc.get("path") or "",
+                        "name": file_name,
                         "f": foglio,
                         "p": particella,
-                        "s": subalterno,
+                        "s": clean(subalterno),
                         "t": doc_type,
                         "v": parsed.get("visura_subtype") or None,
-                        "d": parsed.get("situazione_al") or None,
+                        "d": reference_date,
                     },
                 )
                 if existing.fetchone():
@@ -2589,40 +2593,35 @@ async def _save_documents_to_db(documents: list[dict]) -> None:
                     skipped += 1
                     continue
 
-            row = VisuraDocument(
-                document_type=doc_type,
-                file_format=doc.get("file_format", ""),
-                filename=doc.get("filename", ""),
-                file_path=doc.get("path"),
-                file_size=doc.get("file_size"),
-                subject=doc.get("oggetto"),
-                requested_at=doc.get("richiesta_del"),
-            )
-            session.add(row)
-            await session.flush()  # get row.id before creating child
-
             xml_content = parsed.get("xml_content")
-            location_id = None
+            unit_id = None
             if xml_content or foglio or particella:
-                location_id = await get_or_create_location(
+                unit_id = await get_or_create_cadastral_unit(
                     session,
-                    cadastre_type=parsed.get("tipo_catasto") or "",
-                    province=parsed.get("provincia") or "",
-                    municipality=parsed.get("comune") or "",
+                    cadastre_type=parsed.get("tipo_catasto"),
+                    province=parsed.get("provincia"),
+                    municipality=parsed.get("comune"),
                     sheet=foglio,
                     parcel=particella,
                     subunit=subalterno,
-                    section=parsed.get("sezione_urbana") or "",
+                    section=parsed.get("sezione_urbana"),
                 )
-            meta = DocumentMetadata(
-                id=row.id,
-                location_id=location_id,
-                view_subtype=parsed.get("visura_subtype") or None,
-                reference_date=parsed.get("situazione_al") or None,
-                content=xml_content.replace("\x00", "") if xml_content else None,
+            row = Document(
+                document_type=await ensure_lookup(session, "document_type", doc_type),
+                file_format=clean(str(doc.get("file_format") or "").upper()),
+                file_name=file_name,
+                file_size=doc.get("file_size"),
+                subject_text=clean(doc.get("oggetto")),
+                requested_at=parse_it_datetime(doc.get("richiesta_del")),
+                cadastral_unit_id=unit_id,
+                view_subtype=clean(parsed.get("visura_subtype")),
+                reference_date=reference_date,
             )
-            session.add(meta)
-            await session.flush()
+            session.add(row)
+            await session.flush()  # get row.id before creating children
+            if xml_content:
+                session.add(DocumentContent(document_id=row.id, content=xml_content.replace("\x00", "")))
+                await session.flush()
             await _persist_flattened_xml(session, row.id, xml_content)
 
             saved += 1

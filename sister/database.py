@@ -10,55 +10,80 @@ import hashlib
 import json
 import logging
 import os
+import re
 from dataclasses import dataclass
 from dataclasses import field as dc_field
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal, InvalidOperation
+from zoneinfo import ZoneInfo
 from pathlib import Path
 from typing import Any, Optional
 
 from dotenv import load_dotenv
-from sqlalchemy import column, delete, func, inspect, or_, table, text
+from sqlalchemy import delete, func, inspect, or_, text
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.engine import make_url
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import aliased, sessionmaker
 from sqlmodel import select
 
 from .db_models import (
-    ENUM_CATALOG_TABLES,
     PROPERTY_FIELD_MAP,
     PROPERTY_LOCATION_FIELD_MAP,
     PROPERTY_SUBJECT_FIELD_MAP,
     ActivityLog,
-    CadastralLocation,
-    CadastralSubject,
-    DocumentMetadata,
-    GeographicPlace,
-    OwnershipRight,
-    OwnershipRightCatalog,
+    ActivityLogAttribute,
+    ActivityLogPayload,
+    CadastralUnit,
+    Comune,
+    Document,
+    DocumentContent,
+    DocumentExtraction,
+    MortgageInspection,
+    MortgageInspectionParty,
+    MortgageInspectionProperty,
     PageVisit,
     PageVisitError,
     PageVisitFormElement,
-    MortgageInspection,
-    MortgageInspectionLien,
-    MortgageInspectionParty,
-    MortgageInspectionProperty,
-    MortgageInspectionTitle,
-    MortgageInspectionUnit,
-    StructuredDocumentExtraction,
-    VisuraDocument,
-    VisuraOwner,
-    VisuraProperty,
-    VisuraRequest,
-    VisuraResponse,
-    VisuraResult,
+    Property,
+    OwnershipRight,
+    Request,
+    RequestPayload,
+    RequestResult,
+    ResultOwner,
+    RightKind,
+    Subject,
+)
+from .provinces import province_code, province_name
+from .reference import (
+    LOOKUP_TABLES,
+    cadastre_type_code,
+    clean,
+    ensure_lookup,
+    fiscal_code_key,
+    get_or_create_cadastral_unit,
+    get_or_create_comune,
+    get_or_create_right,
+    get_or_create_subject,
+    place_name,
+)
+from .visura_xml_models import (
+    DocumentSubject,
 )
 
 from .result_parsers import (
     clean_amount,
+    format_amount_it,
+    format_consistency,
+    format_it_date,
+    format_share,
     identifier_kind,
     land_area_m2,
+    normalize_category,
+    normalize_class,
     normalize_owner,
+    parse_amount_it,
     parse_classamento,
+    parse_consistency,
     parse_ubicazione,
     parse_vis_imm_sel,
     split_foglio,
@@ -72,7 +97,9 @@ load_dotenv(PROJECT_ROOT.parent / ".env", override=False)
 DATA_ROOT = Path(os.getenv("SISTER_DATA_ROOT", str(PROJECT_ROOT))).expanduser().resolve()
 DATABASE_DSN = os.getenv("DATABASE_DSN")
 DATABASE_SCHEMA = os.getenv("DATABASE_SCHEMA", "sister")
-DATABASE_REVISION = "20261026_flat_normalised_fixes"
+# raw payloads (response JSON, XML tree, extraction JSON) live in their own schema; tests point it at a throwaway one
+DATABASE_ARCHIVE_SCHEMA = os.getenv("DATABASE_ARCHIVE_SCHEMA", "sister_archive")
+DATABASE_REVISION = "20261027_flat_schema_app_fit"
 
 # ---------------------------------------------------------------------------
 # Engine and session
@@ -112,7 +139,12 @@ def _get_engine():
             "postgresql+psycopg_async",
         }:
             url = url.set(drivername="postgresql+psycopg")
-        _engine = create_async_engine(url, echo=False, pool_pre_ping=True)
+        _engine = create_async_engine(
+            url,
+            echo=False,
+            pool_pre_ping=True,
+            execution_options={"schema_translate_map": {"sister_archive": DATABASE_ARCHIVE_SCHEMA}},
+        )
     return _engine
 
 
@@ -133,38 +165,52 @@ async def init_db() -> None:
             lambda sync_conn: set(inspect(sync_conn).get_table_names(schema=schema))
         )
         required_tables = {
-            "ownership_right_catalog",
-            "cadastral_locations",
-            "cadastral_map_geometry_cache",
-            "visura_requests",
-            "visura_responses",
-            "visura_results",
-            "visura_properties",
-            "visura_owners",
-            "visura_documents",
-            "document_metadata",
-            "document_structured_extractions",
+            "comune",
+            "cadastral_unit",
+            "subject",
+            "right_kind",
+            "ownership_right",
+            "request",
+            "request_result",
+            "property",
+            "result_owner",
+            "document",
+            "document_subject",
+            "property_group",
+            "building_unit",
+            "land_parcel",
+            "ownership_mutation",
+            "mutation_owner",
+            "page_visit",
+            "activity_log",
+            "document_extraction",
+            "mortgage_inspection",
+            "parcel_geometry_cache",
             "sister_request_jobs",
             "sezioni_extraction_jobs",
-            "mortgage_inspections",
-            "mortgage_inspection_titles",
-            "mortgage_inspection_liens",
-            "mortgage_inspection_units",
-            "mortgage_inspection_properties",
-            "mortgage_inspection_parties",
-            *ENUM_CATALOG_TABLES,
+            *LOOKUP_TABLES,
         }
         missing = sorted(required_tables - table_names)
         if missing:
             raise RuntimeError(
                 "PostgreSQL schema is incomplete (missing: " + ", ".join(missing) + "). Run `alembic upgrade head`."
             )
+        archive_tables = await conn.run_sync(
+            lambda sync_conn: set(inspect(sync_conn).get_table_names(schema=DATABASE_ARCHIVE_SCHEMA))
+        )
+        missing_archive = sorted({"request_payload", "document_content"} - archive_tables)
+        if missing_archive:
+            raise RuntimeError(
+                f"PostgreSQL archive schema {DATABASE_ARCHIVE_SCHEMA!r} is incomplete (missing: "
+                + ", ".join(missing_archive)
+                + "). Run `alembic upgrade head`."
+            )
         view_names = await conn.run_sync(
             lambda sync_conn: set(inspect(sync_conn).get_view_names(schema=schema))
         )
-        if "v_sister_visura_cadastral_polygons" not in view_names:
+        if "v_visura_cadastral_polygon" not in view_names:
             raise RuntimeError(
-                "PostgreSQL schema is missing v_sister_visura_cadastral_polygons. Run `alembic upgrade head`."
+                "PostgreSQL schema is missing v_visura_cadastral_polygon. Run `alembic upgrade head`."
             )
         if "alembic_version" not in table_names:
             raise RuntimeError("PostgreSQL migrations are not installed. Run `alembic upgrade head`.")
@@ -342,6 +388,24 @@ def _json_safe(value: Any) -> Any:
     return json.loads(json.dumps(value, default=str))
 
 
+def _flatten_json(value: Any, path: str = "") -> list[tuple[str, Optional[str]]]:
+    """One ``(path, text)`` row per leaf of a JSON value: ``{"a": [1, {"b": 2}]}`` → ``a.0`` = 1, ``a.1.b`` = 2.
+
+    An empty object or list is a leaf (``{}`` / ``[]``); a bare scalar has the path ``$``.
+    """
+    if isinstance(value, dict) and value:
+        return [leaf for key, item in value.items() for leaf in _flatten_json(item, f"{path}.{key}" if path else str(key))]
+    if isinstance(value, list) and value:
+        return [leaf for index, item in enumerate(value) for leaf in _flatten_json(item, f"{path}.{index}" if path else str(index))]
+    if isinstance(value, (dict, list)):
+        return [(path or "$", "{}" if isinstance(value, dict) else "[]")]
+    if value is None:
+        return [(path or "$", None)]
+    if isinstance(value, bool):
+        return [(path or "$", "true" if value else "false")]
+    return [(path or "$", str(value))]
+
+
 async def record_activity(
     action: str,
     *,
@@ -358,14 +422,18 @@ async def record_activity(
     """Append one row to ``activity_log`` and return its id (``None`` when it could not be written).
 
     Never raises: the audit trail must not break the action it describes. Keep ``params`` and ``result`` to small
-    summaries (flags, counts); documents and personal data do not belong here.
+    summaries (flags, counts); documents and personal data do not belong here. Each leaf of them is also stored as a
+    row of ``activity_log_attribute``; the JSON as given goes to the archive.
     """
     if not is_db_writable():
         return None
     finished = datetime.now(timezone.utc)
     started = started_at or finished
+    params = _json_safe(params)
+    result = _json_safe(result)
     try:
         async with _get_session_factory()() as session:
+            await ensure_lookup(session, "activity_action", action)
             row = ActivityLog(
                 started_at=started,
                 finished_at=finished,
@@ -375,12 +443,18 @@ async def record_activity(
                 action=action,
                 status=status,
                 target=target,
-                params=_json_safe(params),
-                result=_json_safe(result),
                 error=(error or None) and str(error)[:2000],
                 client_ip=client_ip,
             )
             session.add(row)
+            await session.flush()
+            for section, value in (("params", params), ("result", result)):
+                if value is None:
+                    continue
+                for leaf_path, leaf_value in _flatten_json(value):
+                    session.add(ActivityLogAttribute(activity_id=row.id, section=section, path=leaf_path, value=leaf_value))
+            if params is not None or result is not None:
+                session.add(ActivityLogPayload(activity_id=row.id, params=params, result=result))
             await session.commit()
             return row.id
     except Exception as exc:  # noqa: BLE001
@@ -389,13 +463,21 @@ async def record_activity(
 
 
 async def get_recent_activity(limit: int = 50, action: Optional[str] = None) -> list[dict]:
-    """The newest ``activity_log`` rows (newest first), optionally filtered by action."""
+    """The newest ``activity_log`` rows (newest first), optionally filtered by action, with their params/result."""
     async with _get_session_factory()() as session:
-        stmt = select(ActivityLog).order_by(ActivityLog.started_at.desc(), ActivityLog.id.desc()).limit(limit)
+        stmt = (
+            select(ActivityLog, ActivityLogPayload)
+            .outerjoin(ActivityLogPayload, ActivityLogPayload.activity_id == ActivityLog.id)
+            .order_by(ActivityLog.started_at.desc(), ActivityLog.id.desc())
+            .limit(limit)
+        )
         if action:
             stmt = stmt.where(ActivityLog.action == action)
-        rows = (await session.execute(stmt)).scalars().all()
-    return [row.model_dump(mode="json") for row in rows]
+        rows = (await session.execute(stmt)).all()
+    return [
+        {**row.model_dump(mode="json"), "params": payload.params if payload else None, "result": payload.result if payload else None}
+        for row, payload in rows
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -411,210 +493,67 @@ def compute_cache_key(request_type: str, **params) -> str:
     return hashlib.sha256(canonical.encode()).hexdigest()
 
 
+def _decode_payload(raw: Any) -> Optional[dict]:
+    """The archived response JSON (stored as text) back to a dict; None when absent or not an object."""
+    if raw is None:
+        return None
+    if isinstance(raw, dict):
+        return raw
+    try:
+        decoded = json.loads(raw)
+    except (TypeError, ValueError):
+        return None
+    return decoded if isinstance(decoded, dict) else None
+
+
 async def find_cached_response(cache_key: str, ttl_seconds: Optional[int]) -> Optional[dict]:
     """Find a successful response matching the cache key, not older than ``ttl_seconds`` (None: any age)."""
     session_factory = _get_session_factory()
     async with session_factory() as session:
-        conditions = [VisuraRequest.cache_key == cache_key, VisuraResponse.success == True]  # noqa: E712
+        conditions = [Request.cache_key == cache_key, Request.success == True]  # noqa: E712
         if ttl_seconds is not None:
-            conditions.append(VisuraResponse.created_at >= datetime.now(timezone.utc) - timedelta(seconds=ttl_seconds))
+            conditions.append(Request.responded_at >= datetime.now(timezone.utc) - timedelta(seconds=ttl_seconds))
         stmt = (
-            select(VisuraResponse)
-            .join(VisuraRequest)
+            select(Request, RequestPayload.data)
+            .outerjoin(RequestPayload, RequestPayload.request_id == Request.id)
             .where(*conditions)
-            .order_by(VisuraResponse.created_at.desc())
+            .order_by(Request.responded_at.desc())
             .limit(1)
         )
-        result = await session.execute(stmt)
-        row = result.scalar_one_or_none()
+        row = (await session.execute(stmt)).first()
         if row is None:
             return None
+        request, data = row
         return {
-            "request_id": row.request_id,
-            "success": row.success,
-            "tipo_catasto": row.cadastre_type,
-            "data": row.data,
-            "error": row.error,
-            "created_at": row.created_at.isoformat() if row.created_at else None,
+            "request_id": request.request_ref,
+            "success": request.success,
+            "tipo_catasto": request.cadastre_type or "",
+            "data": _decode_payload(data),
+            "error": request.error,
+            "created_at": request.responded_at.isoformat() if request.responded_at else None,
         }
-
-
-# ---------------------------------------------------------------------------
-# Location helpers
-# ---------------------------------------------------------------------------
-
-
-async def get_or_create_location(
-    session: AsyncSession,
-    cadastre_type: str = "",
-    province: str = "",
-    municipality: str = "",
-    sheet: str = "",
-    parcel: str = "",
-    subunit: str = "",
-    section: str = "",
-) -> Optional[int]:
-    """Get existing CadastralLocation or create one; return its id. Must run inside an open session."""
-    stmt = select(CadastralLocation).where(
-        CadastralLocation.cadastre_type == cadastre_type,
-        CadastralLocation.province == province,
-        CadastralLocation.municipality == municipality,
-        CadastralLocation.sheet == sheet,
-        CadastralLocation.parcel == parcel,
-        CadastralLocation.subunit == subunit,
-        CadastralLocation.section == section,
-    )
-    result = await session.execute(stmt)
-    existing = result.scalar_one_or_none()
-    if existing is not None:
-        return existing.id
-    loc = CadastralLocation(
-        cadastre_type=cadastre_type,
-        province=province,
-        municipality=municipality,
-        sheet=sheet,
-        parcel=parcel,
-        subunit=subunit,
-        section=section,
-    )
-    session.add(loc)
-    await session.flush()
-    return loc.id
-
-
-async def get_or_create_place(
-    session: AsyncSession,
-    province: str = "",
-    municipality: str = "",
-    municipality_code: str = "",
-) -> Optional[int]:
-    """Get existing GeographicPlace or create one; return its id."""
-    stmt = select(GeographicPlace).where(
-        GeographicPlace.province == province,
-        GeographicPlace.municipality == municipality,
-        GeographicPlace.municipality_code == municipality_code,
-    )
-    result = await session.execute(stmt)
-    existing = result.scalar_one_or_none()
-    if existing is not None:
-        return existing.id
-    place = GeographicPlace(province=province, municipality=municipality, municipality_code=municipality_code)
-    session.add(place)
-    await session.flush()
-    return place.id
-
-
-async def get_or_create_subject(
-    session: AsyncSession,
-    fiscal_code: Optional[str] = None,
-    display_name: Optional[str] = None,
-    last_name: Optional[str] = None,
-    first_name: Optional[str] = None,
-    gender: Optional[str] = None,
-    date_of_birth: Optional[str] = None,
-    birth_place_id: Optional[int] = None,
-    birth_municipality_code: Optional[str] = None,
-    subject_type: Optional[str] = None,
-) -> int:
-    """Get existing CadastralSubject by fiscal_code (when present) or create one; return its id."""
-    if fiscal_code:
-        result = await session.execute(select(CadastralSubject).where(CadastralSubject.fiscal_code == fiscal_code))
-        existing = result.scalar_one_or_none()
-        if existing is not None:
-            # a later, richer source (birth data from the Intestati page or the XML) completes a bare subject
-            known = {
-                "display_name": display_name,
-                "last_name": last_name,
-                "first_name": first_name,
-                "gender": gender,
-                "date_of_birth": date_of_birth,
-                "birth_place_id": birth_place_id,
-                "birth_municipality_code": birth_municipality_code,
-                "subject_type": subject_type,
-            }
-            for name, value in known.items():
-                if value and not getattr(existing, name):
-                    setattr(existing, name, value)
-            await session.flush()
-            return existing.id
-    subj = CadastralSubject(
-        fiscal_code=fiscal_code,
-        display_name=display_name,
-        last_name=last_name,
-        first_name=first_name,
-        gender=gender,
-        date_of_birth=date_of_birth,
-        birth_place_id=birth_place_id,
-        birth_municipality_code=birth_municipality_code,
-        subject_type=subject_type,
-    )
-    session.add(subj)
-    await session.flush()
-    return subj.id
-
-
-async def get_or_create_right(
-    session: AsyncSession,
-    right_type: Optional[str] = None,
-    right_code: Optional[str] = None,
-    right_description: Optional[str] = None,
-    ownership_share: Optional[str] = None,
-    start_date: Optional[str] = None,
-    end_date: Optional[str] = None,
-) -> int:
-    """Get or create a shared right catalog entry and its per-owner terms.
-
-    Missing values normalize to empty strings, matching the stored natural-key
-    representation used by the catalogs.
-    """
-    right_type = right_type or ""
-    right_code = right_code or ""
-    right_description = right_description or ""
-    ownership_share = ownership_share or ""
-    start_date = start_date or ""
-    end_date = end_date or ""
-    result = await session.execute(
-        select(OwnershipRightCatalog).where(
-            OwnershipRightCatalog.right_type == right_type,
-            OwnershipRightCatalog.right_code == right_code,
-            OwnershipRightCatalog.right_description == right_description,
-        )
-    )
-    catalog = result.scalar_one_or_none()
-    if catalog is None:
-        catalog = OwnershipRightCatalog(
-            right_type=right_type,
-            right_code=right_code,
-            right_description=right_description,
-        )
-        session.add(catalog)
-        await session.flush()
-
-    result = await session.execute(
-        select(OwnershipRight).where(
-            OwnershipRight.right_catalog_id == catalog.id,
-            OwnershipRight.ownership_share == ownership_share,
-            OwnershipRight.start_date == start_date,
-            OwnershipRight.end_date == end_date,
-        )
-    )
-    existing = result.scalar_one_or_none()
-    if existing is not None:
-        return existing.id
-    right = OwnershipRight(
-        right_catalog_id=catalog.id,
-        ownership_share=ownership_share,
-        start_date=start_date,
-        end_date=end_date,
-    )
-    session.add(right)
-    await session.flush()
-    return right.id
 
 
 # ---------------------------------------------------------------------------
 # Request operations (same signatures as before)
 # ---------------------------------------------------------------------------
+
+
+async def _upsert_request(session: AsyncSession, request_id: str, request_type: str, unit_id: Optional[int], cache_key: Optional[str]) -> int:
+    """Insert the request row (or update its type, unit and cache key); returns its numeric id."""
+    request_type = await ensure_lookup(session, "request_type", request_type)
+    row = (
+        await session.execute(
+            text(
+                "INSERT INTO request (request_ref, request_type, cadastral_unit_id, cache_key, created_at) "
+                "VALUES (:ref, :type, :unit, :key, :now) ON CONFLICT (request_ref) DO UPDATE SET "
+                "request_type = EXCLUDED.request_type, cadastral_unit_id = EXCLUDED.cadastral_unit_id, "
+                "cache_key = EXCLUDED.cache_key RETURNING id"
+            ),
+            {"ref": request_id, "type": request_type, "unit": unit_id, "key": cache_key, "now": datetime.now(timezone.utc)},
+        )
+    ).first()
+    return row.id
 
 
 async def save_request(
@@ -632,23 +571,17 @@ async def save_request(
     """Persist a new request."""
     session_factory = _get_session_factory()
     async with session_factory() as session:
-        location_id = await get_or_create_location(
+        unit_id = await get_or_create_cadastral_unit(
             session,
             cadastre_type=tipo_catasto,
             province=provincia,
             municipality=comune,
             sheet=foglio,
             parcel=particella,
-            subunit=subalterno or "",
-            section=sezione or "",
+            subunit=subalterno,
+            section=sezione,
         )
-        row = await session.get(VisuraRequest, request_id)
-        if row is None:
-            row = VisuraRequest(request_id=request_id, request_type=request_type)
-            session.add(row)
-        row.request_type = request_type
-        row.location_id = location_id
-        row.cache_key = cache_key
+        await _upsert_request(session, request_id, request_type, unit_id, cache_key)
         await session.commit()
 
 
@@ -659,23 +592,17 @@ async def save_requests_batch(requests: list[dict]) -> None:
     session_factory = _get_session_factory()
     async with session_factory() as session:
         for req in requests:
-            location_id = await get_or_create_location(
+            unit_id = await get_or_create_cadastral_unit(
                 session,
                 cadastre_type=req["tipo_catasto"],
                 province=req["provincia"],
                 municipality=req["comune"],
                 sheet=req["foglio"],
                 parcel=req["particella"],
-                subunit=req.get("subalterno") or "",
-                section=req.get("sezione") or "",
+                subunit=req.get("subalterno"),
+                section=req.get("sezione"),
             )
-            row = await session.get(VisuraRequest, req["request_id"])
-            if row is None:
-                row = VisuraRequest(request_id=req["request_id"], request_type=req["request_type"])
-                session.add(row)
-            row.request_type = req["request_type"]
-            row.location_id = location_id
-            row.cache_key = req.get("cache_key")
+            await _upsert_request(session, req["request_id"], req["request_type"], unit_id, req.get("cache_key"))
         await session.commit()
 
 
@@ -723,6 +650,13 @@ def _property_row(
     if "Foglio" in item:
         section, loc_fields["sheet"] = split_foglio(item["Foglio"])
         loc_fields["section"] = loc_fields["section"] or section
+    income_cell = str(prop_fields.get("income") or "")
+    if "R.D." in income_cell:  # land results pack dominical and agricultural income in one cell
+        for column_name, marker in (("dominical_income", r"R\.D\.\s*Euro:\s*([0-9.,]+)"), ("agricultural_income", r"R\.A\.\s*Euro:\s*([0-9.,]+)")):
+            found = re.search(marker, income_cell)
+            if found and not prop_fields.get(column_name):
+                prop_fields[column_name] = found.group(1)
+        prop_fields["income"] = None
     for column_name in ("income", "dominical_income", "agricultural_income"):
         if column_name in prop_fields:
             prop_fields[column_name] = clean_amount(prop_fields[column_name])
@@ -864,8 +798,9 @@ def _project_response(
     return properties, unlinked, results
 
 
-def _parse_page_visits(response_id: str, data: Optional[dict]) -> list[PageVisit]:
-    """Parse page_visits from response JSON into structured rows."""
+def _parse_page_visits(response_id: str, data: Optional[dict]) -> list[dict[str, Any]]:
+    """Parse page_visits from response JSON into plain dicts (``step``, ``url``, ``screenshot_url``, ``timestamp``,
+    ``form_elements``, ``errors``); the writer turns them into ``page_visit`` rows and their children."""
     if not data or not isinstance(data, dict):
         return []
     visits = data.get("page_visits", [])
@@ -880,22 +815,19 @@ def _parse_page_visits(response_id: str, data: Optional[dict]) -> list[PageVisit
             try:
                 ts = datetime.fromisoformat(item["timestamp"])
                 if ts.tzinfo is None:
-                    # SQLModel datetime columns store aware values only; page timestamps are naive local time
+                    # timestamptz columns store aware values only; page timestamps are naive local time
                     ts = ts.astimezone()
             except (ValueError, TypeError):
                 pass
         rows.append(
-            PageVisit(
-                response_id=response_id,
-                step=item.get("step", ""),
-                url=item.get("url"),
-                screenshot_url=item.get("screenshot_url"),
-                form_elements_json=(
-                    json.dumps(item.get("form_elements", []), default=str) if item.get("form_elements") else None
-                ),
-                errors_json=json.dumps(item.get("errors", []), default=str) if item.get("errors") else None,
-                timestamp=ts,
-            )
+            {
+                "step": item.get("step", ""),
+                "url": item.get("url"),
+                "screenshot_url": item.get("screenshot_url"),
+                "timestamp": ts,
+                "form_elements": [e for e in item.get("form_elements") or [] if isinstance(e, dict)],
+                "errors": list(item.get("errors") or []),
+            }
         )
     return rows
 
@@ -931,43 +863,89 @@ def _parse_response_results(data: Optional[dict]) -> list[dict[str, Any]]:
     return rows
 
 
-async def _link_documents(session: AsyncSession, request_id: str, data: Optional[dict]) -> int:
+async def _link_documents(session: AsyncSession, request_pk: int, data: Optional[dict]) -> int:
     """Tie the documents a response downloaded (``downloaded_pdfs``) to it; they are saved before the response."""
     documents = data.get("downloaded_pdfs") if isinstance(data, dict) else None
     linked = 0
     for item in documents if isinstance(documents, list) else []:
         if not isinstance(item, dict):
             continue
-        names = [n for n in (item.get("filename"), item.get("original_filename")) if n]
-        paths = [p for p in (item.get("path"), item.get("extracted_path")) if p]
-        if not names and not paths:
+        names = {Path(str(v)).name for v in (item.get("filename"), item.get("original_filename"), item.get("path"), item.get("extracted_path")) if v}
+        if not names:
             continue
         result = await session.execute(
-            text(
-                "UPDATE visura_documents SET response_id = :rid WHERE response_id IS NULL"
-                " AND (filename = ANY(:names) OR file_path = ANY(:paths))"
-            ),
-            {"rid": request_id, "names": names, "paths": paths},
+            text("UPDATE document SET request_id = :rid WHERE request_id IS NULL AND file_name = ANY(:names)"),
+            {"rid": request_pk, "names": sorted(names)},
         )
         linked += result.rowcount or 0
     return linked
 
 
-async def _replace_projection(session: AsyncSession, request_id: str, tipo_catasto: str, data: Optional[dict]) -> None:
+_OFFICE = re.compile(r"^\s*(.*?)\s*\(([A-Za-z]{2})\)\s*$")
+
+
+def _amount(value: Any) -> Optional[Decimal]:
+    return parse_amount_it(value)
+
+
+async def _property_columns(session: AsyncSession, prop: dict[str, Any]) -> dict[str, Any]:
+    """The parsed strings of one listed immobile → the typed columns of ``property`` (lookups are created on the way)."""
+    category, description = normalize_category(prop.get("category"))
+    if category:
+        await ensure_lookup(session, "cadastral_category", category, description)
+    quality = (clean(prop.get("quality")) or "").upper() or None
+    if quality:
+        await ensure_lookup(session, "land_quality", quality)
+    consistency_value, consistency_unit = parse_consistency(prop.get("consistency"))
+    area = None
+    if clean(prop.get("area")):
+        try:
+            area = Decimal(str(prop["area"]).replace(",", ".").strip())
+        except InvalidOperation:
+            area = None
+    office = _OFFICE.match(str(prop.get("registered_office") or ""))
+    if office:
+        office_comune = await get_or_create_comune(session, office.group(1), office.group(2))
+    else:  # entity results may carry the seat as separate province / municipality cells
+        office_comune = await get_or_create_comune(session, prop.get("municipality"), prop.get("province"))
+    return {
+        "property_type": prop.get("property_type"),
+        "address": clean(prop.get("address")),
+        "partita": clean(prop.get("partita")),
+        "category": category,
+        "cadastral_class": normalize_class(prop.get("cadastral_class")),
+        "consistency_value": consistency_value,
+        "consistency_unit": consistency_unit,
+        "census_zone": clean(prop.get("census_zone")),
+        "land_quality": quality,
+        "area_sqm": area,
+        "income_eur": _amount(prop.get("income")),
+        "dominical_income_eur": _amount(prop.get("dominical_income")),
+        "agricultural_income_eur": _amount(prop.get("agricultural_income")),
+        "registered_office_comune_id": office_comune,
+    }
+
+
+async def _replace_projection(session: AsyncSession, request_pk: int, tipo_catasto: str, data: Optional[dict]) -> None:
     """Rebuild the structured rows of one response from its JSON (results, properties, owners, document links)."""
-    for table_name in ("visura_owners", "visura_properties", "visura_results"):
-        await session.execute(text(f"DELETE FROM {table_name} WHERE response_id = :rid"), {"rid": request_id})  # noqa: S608
-    # the request location supplies the province/municipality a row of the list does not carry
-    req_row = await session.get(VisuraRequest, request_id)
-    req_loc: Optional[CadastralLocation] = None
-    if req_row and req_row.location_id:
-        req_loc = await session.get(CadastralLocation, req_row.location_id)
-    await _persist_projection(session, request_id, tipo_catasto, data, req_loc)
-    await _link_documents(session, request_id, data)
+    for table_name in ("result_owner", "property", "request_result"):
+        await session.execute(text(f"DELETE FROM {table_name} WHERE request_id = :rid"), {"rid": request_pk})  # noqa: S608
+    # the request's own unit supplies the province/municipality a row of the list does not carry
+    unit = (
+        await session.execute(
+            text(
+                "SELECT c.province_code, c.name AS municipality FROM request r "
+                "JOIN cadastral_unit u ON u.id = r.cadastral_unit_id LEFT JOIN comune c ON c.id = u.comune_id WHERE r.id = :rid"
+            ),
+            {"rid": request_pk},
+        )
+    ).first()
+    await _persist_projection(session, request_pk, tipo_catasto, data, unit)
+    await _link_documents(session, request_pk, data)
 
 
 async def backfill_projections(limit: Optional[int] = None, batch: int = 50) -> dict[str, int]:
-    """Re-project every stored response with the current parsers (idempotent; the JSON in ``data`` is the source).
+    """Re-project every stored response with the current parsers (idempotent; the archived JSON is the source).
 
     Fills ``result_id`` / ``owner_index`` on existing properties and owners, splits the composite portal cells and
     ties downloaded documents to their response.
@@ -975,87 +953,97 @@ async def backfill_projections(limit: Optional[int] = None, batch: int = 50) -> 
     session_factory = _get_session_factory()
     stats = {"responses": 0, "properties": 0, "owners": 0}
     async with session_factory() as session:
-        stmt = select(VisuraResponse.request_id, VisuraResponse.cadastre_type).where(VisuraResponse.data.is_not(None))
+        stmt = (
+            select(Request.id, Request.cadastre_type)
+            .join(RequestPayload, RequestPayload.request_id == Request.id)
+            .order_by(Request.responded_at)
+        )
         if limit:
             stmt = stmt.limit(limit)
-        todo = (await session.execute(stmt.order_by(VisuraResponse.created_at))).all()
+        todo = (await session.execute(stmt)).all()
     for start in range(0, len(todo), batch):
         async with session_factory() as session:
-            for request_id, cadastre_type in todo[start : start + batch]:
-                resp = await session.get(VisuraResponse, request_id)
-                if resp is None or not isinstance(resp.data, dict):
+            for request_pk, cadastre_type in todo[start : start + batch]:
+                payload = await session.get(RequestPayload, request_pk)
+                data = _decode_payload(payload.data) if payload else None
+                if data is None:
                     continue
-                await _replace_projection(session, request_id, cadastre_type, resp.data)
+                await _replace_projection(session, request_pk, cadastre_type or "", data)
                 stats["responses"] += 1
             await session.commit()
     async with session_factory() as session:
-        for key, table_name in (("properties", "visura_properties"), ("owners", "visura_owners")):
+        for key, table_name in (("properties", "property"), ("owners", "result_owner")):
             stats[key] = (await session.execute(text(f"SELECT count(*) FROM {table_name}"))).scalar_one()  # noqa: S608
     return stats
 
 
 async def _resolve_subject(session: AsyncSession, fields: dict[str, Any]) -> Optional[int]:
-    """Create/enrich the subject for normalised owner fields (birth place → ``geographic_places``)."""
+    """Create/enrich the subject for normalised owner fields (the birth place becomes a ``comune``)."""
     fields = dict(fields)
-    province = fields.pop("birth_province", "") or ""
-    municipality = fields.pop("birth_municipality", "") or ""
     fields.pop("registered_office", None)
+    fields.pop("birth_place_id", None)
     if not fields:
         return None
-    if municipality:
-        fields["birth_place_id"] = await get_or_create_place(session, province=province, municipality=municipality)
     return await get_or_create_subject(session, **fields)
 
 
 async def _persist_projection(
     session: AsyncSession,
-    request_id: str,
+    request_pk: int,
     tipo_catasto: str,
     data: Optional[dict],
-    req_loc: Optional[CadastralLocation],
+    request_unit: Any,
 ) -> None:
     """Write the properties, owners and result rows of a response, keeping each owner tied to its property.
 
-    One ``visura_results`` row per property that has a result (or owners); the property and its owners both carry
+    One ``request_result`` row per property that has a result (or owners); the property and its owners both carry
     that ``result_id`` (the owner↔property views join on it), and ``owner_index`` keeps the portal's row order.
     """
-    properties, unlinked, result_rows = _project_response(request_id, tipo_catasto, data)
+    properties, unlinked, result_rows = _project_response("", tipo_catasto, data)
     result_ids: dict[int, int] = {}
     for result_fields in result_rows:
-        row = VisuraResult(response_id=request_id, **result_fields)
+        row = RequestResult(request_id=request_pk, **result_fields)
         session.add(row)
         await session.flush()
         result_ids[result_fields["result_index"]] = row.id
 
+    seen_owners: set[tuple] = set()
+
+    async def add_owner(result_id: Optional[int], owner_index: int, subject_fields: dict, right_fields: dict) -> None:
+        subject_id = await _resolve_subject(session, subject_fields) if subject_fields else None
+        right_id = await get_or_create_right(session, **right_fields) if right_fields else None
+        key = (result_id, subject_id, right_id)
+        if key in seen_owners:  # (request, result, subject, right) is unique
+            return
+        seen_owners.add(key)
+        session.add(ResultOwner(request_id=request_pk, result_id=result_id, owner_index=owner_index, subject_id=subject_id, right_id=right_id))
+
     for projected in properties:
-        loc_fields = projected.location
-        if req_loc:
-            loc_fields["province"] = loc_fields["province"] or req_loc.province
-            loc_fields["municipality"] = loc_fields["municipality"] or req_loc.municipality
-        location_id = await get_or_create_location(session, **loc_fields)
+        loc_fields = dict(projected.location)
+        if request_unit is not None:
+            loc_fields["province"] = loc_fields["province"] or (request_unit.province_code or "")
+            loc_fields["municipality"] = loc_fields["municipality"] or (request_unit.municipality or "")
+        unit_id = await get_or_create_cadastral_unit(session, **loc_fields)
         subject_id = await _resolve_subject(session, projected.subject) if projected.subject else None
         result_id = result_ids.get(projected.result_index) if projected.result_index is not None else None
-        session.add(VisuraProperty(**projected.prop, location_id=location_id, subject_id=subject_id, result_id=result_id))
-        for owner_index, (subject_fields, right_fields) in enumerate(projected.owners, start=1):
-            session.add(
-                VisuraOwner(
-                    response_id=request_id,
-                    result_id=result_id,
-                    owner_index=owner_index,
-                    subject_id=await _resolve_subject(session, subject_fields) if subject_fields else None,
-                    right_id=await get_or_create_right(session, **right_fields) if right_fields else None,
-                )
-            )
-    for owner_index, (subject_fields, right_fields) in enumerate(unlinked, start=1):
         session.add(
-            VisuraOwner(
-                response_id=request_id,
-                owner_index=owner_index,
-                subject_id=await _resolve_subject(session, subject_fields) if subject_fields else None,
-                right_id=await get_or_create_right(session, **right_fields) if right_fields else None,
+            Property(
+                request_id=request_pk,
+                result_id=result_id,
+                cadastral_unit_id=unit_id,
+                subject_id=subject_id,
+                **await _property_columns(session, projected.prop),
             )
         )
+        for owner_index, (subject_fields, right_fields) in enumerate(projected.owners, start=1):
+            await add_owner(result_id, owner_index, subject_fields, right_fields)
+    for owner_index, (subject_fields, right_fields) in enumerate(unlinked, start=1):
+        await add_owner(None, owner_index, subject_fields, right_fields)
     await session.flush()
+
+
+async def _request_pk(session: AsyncSession, request_id: str) -> Optional[int]:
+    return (await session.execute(text("SELECT id FROM request WHERE request_ref = :r"), {"r": request_id})).scalar_one_or_none()
 
 
 async def save_response(
@@ -1069,67 +1057,69 @@ async def save_response(
     """Persist a response and populate structured tables."""
     session_factory = _get_session_factory()
     async with session_factory() as session:
-        # Delete existing response + related rows if any (upsert)
-        await session.execute(
-            text(
-                "DELETE FROM page_visit_form_elements WHERE page_visit_id IN "
-                "(SELECT id FROM page_visits WHERE response_id = :rid)"
-            ),
-            {"rid": request_id},
-        )
-        await session.execute(
-            text(
-                "DELETE FROM page_visit_errors WHERE page_visit_id IN "
-                "(SELECT id FROM page_visits WHERE response_id = :rid)"
-            ),
-            {"rid": request_id},
-        )
-        await session.execute(text("DELETE FROM page_visits WHERE response_id = :rid"), {"rid": request_id})
-        resp = await session.get(VisuraResponse, request_id)
-        if resp is None:
-            resp = VisuraResponse(request_id=request_id, success=success, cadastre_type=tipo_catasto)
-            session.add(resp)
-        resp.success = success
-        resp.cadastre_type = tipo_catasto
-        resp.data = data
-        resp.error = error
+        request_pk = await _request_pk(session, request_id)
+        if request_pk is None:  # a response saved without its request row: keep it, the request type stays unknown
+            request_pk = await _upsert_request(session, request_id, "", None, None)
+        # Delete the previous page visits of this request (upsert)
+        for child in ("page_visit_form_element", "page_visit_error"):
+            await session.execute(
+                text(f"DELETE FROM {child} WHERE page_visit_id IN (SELECT id FROM page_visit WHERE request_id = :rid)"),  # noqa: S608
+                {"rid": request_pk},
+            )
+        await session.execute(text("DELETE FROM page_visit WHERE request_id = :rid"), {"rid": request_pk})
+
         summary = _response_summary(data)
-        resp.total_results = summary.get("total_results")
-        resp.total_intestati = summary.get("total_intestati")
-        resp.skipped_soppresso = summary.get("skipped_soppresso")
-        resp.subject_query = summary.get("subject_query")
-        resp.created_at = datetime.now(timezone.utc)
+        await session.execute(
+            text(
+                "UPDATE request SET success = :success, cadastre_type = :ct, error = :error, total_results = :tr, "
+                "total_intestati = :ti, skipped_soppresso = :ss, subject_query = :sq, responded_at = :now WHERE id = :id"
+            ),
+            {
+                "success": success,
+                "ct": cadastre_type_code(tipo_catasto),
+                "error": error,
+                "tr": summary.get("total_results"),
+                "ti": summary.get("total_intestati"),
+                "ss": summary.get("skipped_soppresso"),
+                "sq": summary.get("subject_query"),
+                "now": datetime.now(timezone.utc),
+                "id": request_pk,
+            },
+        )
+        # the raw response is kept, as sent, in the archive (nothing is read back from it except by the cache / detail page)
+        await session.execute(delete(RequestPayload).where(RequestPayload.request_id == request_pk))
+        if data is not None:
+            session.add(RequestPayload(request_id=request_pk, data=json.dumps(data, ensure_ascii=False, default=str)))
         await session.flush()
 
-        await _replace_projection(session, request_id, tipo_catasto, data)
+        await _replace_projection(session, request_pk, tipo_catasto, data)
         await session.flush()
-        raw_visits = (data or {}).get("page_visits", []) if isinstance(data, dict) else []
-        for source_visit in raw_visits if isinstance(raw_visits, list) else []:
-            if not isinstance(source_visit, dict):
-                continue
-            parsed_visits = _parse_page_visits(request_id, {"page_visits": [source_visit]})
-            if not parsed_visits:
-                continue
-            pv = parsed_visits[0]
-            session.add(pv)
+        for visit in _parse_page_visits(request_id, data):
+            page_visit = PageVisit(
+                request_id=request_pk,
+                step=visit["step"],
+                url=visit["url"],
+                screenshot_url=visit["screenshot_url"],
+                visited_at=visit["timestamp"],
+            )
+            session.add(page_visit)
             await session.flush()
-            for element_index, element in enumerate(source_visit.get("form_elements", []) or []):
-                if isinstance(element, dict):
-                    session.add(
-                        PageVisitFormElement(
-                            page_visit_id=pv.id,
-                            element_index=element_index,
-                            tag=str(element.get("tag") or ""),
-                            element_type=str(element.get("type") or ""),
-                            name=str(element.get("name") or ""),
-                            label=str(element.get("label") or ""),
-                            value=str(element.get("value") or ""),
-                        )
+            for element_index, element in enumerate(visit["form_elements"]):
+                session.add(
+                    PageVisitFormElement(
+                        page_visit_id=page_visit.id,
+                        element_index=element_index,
+                        tag=str(element.get("tag") or ""),
+                        element_type=clean(element.get("type")),
+                        name=str(element.get("name") or ""),
+                        label=str(element.get("label") or ""),
+                        value=str(element.get("value") or ""),
                     )
-            for error_index, message in enumerate(source_visit.get("errors", []) or []):
+                )
+            for error_index, message in enumerate(visit["errors"]):
                 if isinstance(message, dict):
                     message = message.get("message") or message.get("text") or ""
-                session.add(PageVisitError(page_visit_id=pv.id, error_index=error_index, message=str(message or "")))
+                session.add(PageVisitError(page_visit_id=page_visit.id, error_index=error_index, message=str(message or "")))
 
         await session.commit()
 
@@ -1168,21 +1158,35 @@ def _export_response_file(
         logger.warning("Failed to export response file: %s", e)
 
 
+def document_file_path(file_name: Optional[str]) -> Optional[str]:
+    """Full path of a stored document: the documents directory (``SISTER_FILES_BASE``) plus its file name."""
+    if not file_name:
+        return None
+    return str(Path(os.getenv("SISTER_FILES_BASE", str(DATA_ROOT / "documents"))).expanduser() / file_name)
+
+
 async def get_response(request_id: str) -> Optional[dict]:
-    """Fetch a stored response by request_id. Returns None if not found."""
+    """Fetch a stored response by request_id. Returns None if the request has no response yet."""
     session_factory = _get_session_factory()
     async with session_factory() as session:
-        row = await session.get(VisuraResponse, request_id)
-        if row is None:
-            return None
-        return {
-            "request_id": row.request_id,
-            "success": row.success,
-            "tipo_catasto": row.cadastre_type,
-            "data": row.data,
-            "error": row.error,
-            "created_at": row.created_at.isoformat() if row.created_at else None,
-        }
+        row = (
+            await session.execute(
+                select(Request, RequestPayload.data)
+                .outerjoin(RequestPayload, RequestPayload.request_id == Request.id)
+                .where(Request.request_ref == request_id)
+            )
+        ).first()
+    if row is None or row[0].responded_at is None:
+        return None
+    request, data = row
+    return {
+        "request_id": request.request_ref,
+        "success": request.success,
+        "tipo_catasto": request.cadastre_type or "",
+        "data": _decode_payload(data),
+        "error": request.error,
+        "created_at": request.responded_at.isoformat() if request.responded_at else None,
+    }
 
 
 async def get_result_record(request_id: str) -> Optional[dict]:
@@ -1195,60 +1199,72 @@ async def get_result_record(request_id: str) -> Optional[dict]:
     session_factory = _get_session_factory()
     async with session_factory() as session:
         stmt = (
-            select(VisuraRequest, VisuraResponse, CadastralLocation)
-            .outerjoin(VisuraResponse, VisuraRequest.request_id == VisuraResponse.request_id)
-            .outerjoin(CadastralLocation, VisuraRequest.location_id == CadastralLocation.id)
-            .where(VisuraRequest.request_id == request_id)
+            select(Request, RequestPayload.data, CadastralUnit, Comune)
+            .outerjoin(RequestPayload, RequestPayload.request_id == Request.id)
+            .outerjoin(CadastralUnit, Request.cadastral_unit_id == CadastralUnit.id)
+            .outerjoin(Comune, CadastralUnit.comune_id == Comune.id)
+            .where(Request.request_ref == request_id)
         )
-        result = await session.execute(stmt)
-        row = result.one_or_none()
-        if row is None:
-            return None
+        row = (await session.execute(stmt)).first()
+    if row is None:
+        return None
 
-        req, resp, loc = row
-        status = "pending"
-        if resp is not None:
-            status = "completed" if resp.success else "failed"
+    req, raw_data, unit, comune = row
+    responded = req.responded_at is not None
+    status = "pending"
+    if responded:
+        status = "completed" if req.success else "failed"
+    data = _decode_payload(raw_data)
+    return {
+        "request_id": req.request_ref,
+        "request_type": req.request_type,
+        "tipo_catasto": unit.cadastre_type if unit and unit.cadastre_type else "",
+        "provincia": _province_label(comune.province_code if comune else None),
+        "comune": comune.name if comune else "",
+        "foglio": unit.sheet if unit and unit.sheet else "",
+        "particella": unit.parcel if unit and unit.parcel else "",
+        "sezione": unit.section if unit else None,
+        "subalterno": unit.subunit if unit else None,
+        "cost_text": None,
+        "cost_value": None,
+        "requested_at": req.created_at.isoformat() if req.created_at else None,
+        "responded_at": req.responded_at.isoformat() if req.responded_at else None,
+        "success": req.success if responded else None,
+        "status": status,
+        "data": data,
+        "error": req.error,
+        "page_visits": data.get("page_visits", []) if data and isinstance(data.get("page_visits"), list) else [],
+    }
 
-        return {
-            "request_id": req.request_id,
-            "request_type": req.request_type,
-            "tipo_catasto": loc.cadastre_type if loc else "",
-            "provincia": loc.province if loc else "",
-            "comune": loc.municipality if loc else "",
-            "foglio": loc.sheet if loc else "",
-            "particella": loc.parcel if loc else "",
-            "sezione": loc.section if loc else None,
-            "subalterno": loc.subunit if loc else None,
-            "cost_text": req.cost_text,
-            "cost_value": req.cost_value,
-            "requested_at": req.created_at.isoformat() if req.created_at else None,
-            "responded_at": resp.created_at.isoformat() if resp and resp.created_at else None,
-            "success": resp.success if resp else None,
-            "status": status,
-            "data": resp.data if resp else None,
-            "error": resp.error if resp else None,
-            "page_visits": (
-                resp.data.get("page_visits", [])
-                if resp and isinstance(resp.data, dict) and isinstance(resp.data.get("page_visits"), list)
-                else []
-            ),
-        }
+
+def _province_label(code: Optional[str]) -> str:
+    """The province as the pages and forms show it: its name (``Trieste``), the sigla where ISTAT has no name for it."""
+    return province_name(code) or code or ""
+
+
+def _area_text(value: Optional[Decimal]) -> Optional[str]:
+    """500.00 → ``500`` (the portal lists whole square metres)."""
+    if value is None:
+        return None
+    return str(int(value)) if value == value.to_integral_value() else f"{value:f}"
 
 
 async def get_db_properties_for_response(request_id: str) -> list[dict]:
-    """Return visura_properties rows with location and subject joins for a response."""
+    """Return the ``property`` rows of a request with unit and subject joins (display text, as before the typed schema)."""
     session_factory = _get_session_factory()
+    office = aliased(Comune)
     async with session_factory() as session:
         stmt = (
-            select(VisuraProperty, CadastralLocation, CadastralSubject)
-            .outerjoin(CadastralLocation, VisuraProperty.location_id == CadastralLocation.id)
-            .outerjoin(CadastralSubject, VisuraProperty.subject_id == CadastralSubject.id)
-            .where(VisuraProperty.response_id == request_id)
-            .order_by(VisuraProperty.id)
+            select(Property, CadastralUnit, Comune, Subject, office)
+            .join(Request, Request.id == Property.request_id)
+            .outerjoin(CadastralUnit, Property.cadastral_unit_id == CadastralUnit.id)
+            .outerjoin(Comune, CadastralUnit.comune_id == Comune.id)
+            .outerjoin(Subject, Property.subject_id == Subject.id)
+            .outerjoin(office, Property.registered_office_comune_id == office.id)
+            .where(Request.request_ref == request_id)
+            .order_by(Property.id)
         )
-        result = await session.execute(stmt)
-        rows = result.all()
+        rows = (await session.execute(stmt)).all()
     return [
         {
             "result_id": prop.result_id,
@@ -1257,143 +1273,151 @@ async def get_db_properties_for_response(request_id: str) -> list[dict]:
             "partita": prop.partita,
             "category": prop.category,
             "cadastral_class": prop.cadastral_class,
-            "consistency": prop.consistency,
-            "income": prop.income,
+            "consistency": format_consistency(prop.consistency_value, prop.consistency_unit),
+            "income": format_amount_it(prop.income_eur),
             "census_zone": prop.census_zone,
-            "quality": prop.quality,
-            "area": prop.area,
-            "dominical_income": prop.dominical_income,
-            "agricultural_income": prop.agricultural_income,
-            "registered_office": prop.registered_office,
-            "subject_province": prop.province,
-            "subject_municipality": prop.municipality,
-            "province": loc.province if loc else None,
-            "municipality": loc.municipality if loc else None,
-            "sheet": loc.sheet if loc else None,
-            "parcel": loc.parcel if loc else None,
-            "subunit": loc.subunit if loc else None,
-            "section": loc.section if loc else None,
-            "cadastre_type": loc.cadastre_type if loc else None,
-            "subject_name": subj.display_name if subj else None,
+            "quality": prop.land_quality,
+            "area": _area_text(prop.area_sqm),
+            "dominical_income": format_amount_it(prop.dominical_income_eur),
+            "agricultural_income": format_amount_it(prop.agricultural_income_eur),
+            "registered_office": f"{seat.name} ({seat.province_code})" if seat and seat.province_code else (seat.name if seat else None),
+            "subject_province": seat.province_code if seat else None,
+            "subject_municipality": seat.name if seat else None,
+            "province": (_province_label(comune.province_code) or None) if comune else None,
+            "municipality": comune.name if comune else None,
+            "sheet": unit.sheet if unit else None,
+            "parcel": unit.parcel if unit else None,
+            "subunit": unit.subunit if unit else None,
+            "section": unit.section if unit else None,
+            "cadastre_type": unit.cadastre_type if unit else None,
+            "subject_name": subj.name if subj else None,
             "subject_fiscal_code": subj.fiscal_code if subj else None,
         }
-        for prop, loc, subj in rows
+        for prop, unit, comune, subj, seat in rows
     ]
 
 
 async def get_db_owners_for_response(request_id: str) -> list[dict]:
-    """Return visura_owners rows with subject and right joins for a response."""
+    """Return the ``result_owner`` rows of a request with subject and right joins (display text, as before)."""
     session_factory = _get_session_factory()
     async with session_factory() as session:
         stmt = (
-            select(VisuraOwner, CadastralSubject, OwnershipRight, OwnershipRightCatalog)
-            .outerjoin(CadastralSubject, VisuraOwner.subject_id == CadastralSubject.id)
-            .outerjoin(OwnershipRight, VisuraOwner.right_id == OwnershipRight.id)
-            .outerjoin(OwnershipRightCatalog, OwnershipRight.right_catalog_id == OwnershipRightCatalog.id)
-            .where(VisuraOwner.response_id == request_id)
-            .order_by(VisuraOwner.id)
+            select(ResultOwner, Subject, OwnershipRight, RightKind)
+            .join(Request, Request.id == ResultOwner.request_id)
+            .outerjoin(Subject, ResultOwner.subject_id == Subject.id)
+            .outerjoin(OwnershipRight, ResultOwner.right_id == OwnershipRight.id)
+            .outerjoin(RightKind, OwnershipRight.right_kind_id == RightKind.id)
+            .where(Request.request_ref == request_id)
+            .order_by(ResultOwner.id)
         )
-        result = await session.execute(stmt)
-        rows = result.all()
+        rows = (await session.execute(stmt)).all()
     return [
         {
-            "nominativo": subj.display_name or (
-                f"{subj.last_name or ''} {subj.first_name or ''}".strip() if subj else None
-            ),
+            "nominativo": subj.name if subj else None,
             "fiscal_code": subj.fiscal_code if subj else None,
             "gender": subj.gender if subj else None,
-            "date_of_birth": subj.date_of_birth if subj else None,
+            "date_of_birth": format_it_date(subj.birth_date) if subj and subj.birth_date else None,
             "subject_type": subj.subject_type if subj else None,
             "result_id": owner.result_id,
             "owner_index": owner.owner_index,
-            "right_type": catalog.right_type if catalog else None,
-            "ownership_share": right.ownership_share if right else None,
-            "right_code": catalog.right_code if catalog else None,
-            "right_description": catalog.right_description if catalog else None,
-            "start_date": right.start_date if right else None,
-            "end_date": right.end_date if right else None,
+            "right_type": kind.right_type if kind else None,
+            "ownership_share": (format_share(right.share_numerator, right.share_denominator) or None) if right else None,
+            "right_code": kind.right_code if kind else None,
+            "right_description": kind.description if kind else None,
+            "start_date": (format_it_date(right.start_date) or None) if right else None,
+            "end_date": (format_it_date(right.end_date) or None) if right else None,
         }
-        for owner, subj, right, catalog in rows
+        for owner, subj, right, kind in rows
     ]
 
 
-async def get_documents_for_response(request_id: str, foglio: str = None, particella: str = None) -> list[dict]:
-    """Fetch visura_documents linked to a response_id OR matching foglio/particella."""
-    from sqlalchemy import or_
+_ROME = ZoneInfo("Europe/Rome")
 
-    session_factory = _get_session_factory()
-    async with session_factory() as session:
-        stmt = (
-            select(VisuraDocument, DocumentMetadata, CadastralLocation)
-            .outerjoin(DocumentMetadata, VisuraDocument.id == DocumentMetadata.id)
-            .outerjoin(CadastralLocation, DocumentMetadata.location_id == CadastralLocation.id)
-            .order_by(VisuraDocument.created_at.desc())
+
+def _format_requested(value: Optional[datetime]) -> Optional[str]:
+    """The portal's request timestamp as the Richieste table prints it: ``dd/mm/yyyy HH:MM:SS`` in Italian time."""
+    return value.astimezone(_ROME).strftime("%d/%m/%Y %H:%M:%S") if value else None
+
+
+def _document_record(doc: Document, unit: Optional[CadastralUnit], comune: Optional[Comune], *, request_ref: Optional[str] = None,
+                     content: Optional[str] = None) -> dict[str, Any]:
+    """One document + its cadastral unit as the dict the document pages and the browse list use."""
+    return {
+        "id": doc.id,
+        "response_id": request_ref,
+        "document_type": "ispezione_ipotecaria" if (doc.file_name or "").casefold().startswith("isp_") else doc.document_type,
+        "file_format": doc.file_format,
+        "filename": doc.file_name,
+        "file_path": document_file_path(doc.file_name),
+        "file_size": doc.file_size,
+        "oggetto": doc.subject_text,
+        "richiesta_del": _format_requested(doc.requested_at),
+        "provincia": (_province_label(comune.province_code) or None) if comune else None,
+        "comune": comune.name if comune else None,
+        "foglio": unit.sheet if unit else None,
+        "particella": unit.parcel if unit else None,
+        "subalterno": unit.subunit if unit else None,
+        "sezione_urbana": unit.section if unit else None,
+        "tipo_catasto": unit.cadastre_type if unit else None,
+        "visura_subtype": doc.view_subtype,
+        "situazione_al": format_it_date(doc.reference_date) or None,
+        "xml_content": content or "",
+        "created_at": doc.created_at.isoformat() if doc.created_at else None,
+    }
+
+
+_DOCUMENT_COLUMNS = (Document, CadastralUnit, Comune, DocumentContent.content, Request.request_ref)
+
+
+def _document_select():
+    """``select`` of a document with its unit, comune, archived text and request reference (all outer joins)."""
+    return (
+        select(*_DOCUMENT_COLUMNS)
+        .select_from(Document)
+        .outerjoin(CadastralUnit, Document.cadastral_unit_id == CadastralUnit.id)
+        .outerjoin(Comune, CadastralUnit.comune_id == Comune.id)
+        .outerjoin(DocumentContent, DocumentContent.document_id == Document.id)
+        .outerjoin(Request, Document.request_id == Request.id)
+    )
+
+
+async def get_documents_for_response(request_id: str, foglio: str = None, particella: str = None) -> list[dict]:
+    """Fetch documents linked to a request OR matching foglio/particella."""
+    stmt = _document_select().order_by(Document.created_at.desc())
+    if foglio and particella:
+        stmt = stmt.where(
+            or_(Request.request_ref == request_id, (CadastralUnit.sheet == foglio) & (CadastralUnit.parcel == particella))
         )
-        if foglio and particella:
-            stmt = stmt.where(
-                or_(
-                    VisuraDocument.response_id == request_id,
-                    (CadastralLocation.sheet == foglio) & (CadastralLocation.parcel == particella),
-                )
-            )
-        else:
-            stmt = stmt.where(VisuraDocument.response_id == request_id)
-        result = await session.execute(stmt)
-        rows = result.all()
-    docs = []
-    for doc_row, meta, loc in rows:
-        docs.append({
-            "id": doc_row.id,
-            "response_id": doc_row.response_id,
-            "document_type": (
-                "ispezione_ipotecaria"
-                if (doc_row.filename or "").casefold().startswith("isp_")
-                else doc_row.document_type
-            ),
-            "file_format": doc_row.file_format,
-            "filename": doc_row.filename,
-            "file_path": doc_row.file_path,
-            "file_size": doc_row.file_size,
-            "oggetto": doc_row.subject,
-            "richiesta_del": doc_row.requested_at,
-            "provincia": loc.province if loc else None,
-            "comune": loc.municipality if loc else None,
-            "foglio": loc.sheet if loc else None,
-            "particella": loc.parcel if loc else None,
-            "subalterno": loc.subunit if loc else None,
-            "sezione_urbana": loc.section if loc else None,
-            "tipo_catasto": loc.cadastre_type if loc else None,
-            "visura_subtype": meta.view_subtype if meta else None,
-            "situazione_al": meta.reference_date if meta else None,
-            "xml_content": (meta.content or "") if meta else "",
-            "created_at": doc_row.created_at.isoformat() if doc_row.created_at else None,
-        })
-    return docs
+    else:
+        stmt = stmt.where(Request.request_ref == request_id)
+    async with _get_session_factory()() as session:
+        rows = (await session.execute(stmt)).all()
+    return [_document_record(doc, unit, comune, request_ref=ref, content=content) for doc, unit, comune, content, ref in rows]
+
+
+def _reference_values(value: str) -> set[str]:
+    """A sheet / parcel / sub number in the spellings the portal uses: ``12``, ``012``, ``0012`` …"""
+    raw = str(value or "").strip().upper()
+    values = {raw}
+    if raw.isdigit():
+        normalized = str(int(raw))
+        values.add(normalized)
+        values.update(normalized.zfill(width) for width in (2, 3, 4, 5))
+    return values
 
 
 async def get_cadastral_visura_history_documents(properties: list[dict], *, per_location: int = 5) -> list[dict]:
     """Fetch recent XML visure for the exact cadastral units in a subject visura."""
-    from sqlalchemy import or_
-
     if not properties:
         return []
-
-    def reference_values(value: str) -> set[str]:
-        raw = str(value or "").strip().upper()
-        values = {raw}
-        if raw.isdigit():
-            normalized = str(int(raw))
-            values.add(normalized)
-            values.update(normalized.zfill(width) for width in (2, 3, 4, 5))
-        return values
 
     clauses = []
     seen = set()
     for item in properties:
         if not isinstance(item, dict):
             continue
-        province = str(item.get("province") or "").strip()
-        municipality = str(item.get("municipality") or "").strip()
+        province = province_code(item.get("province"))
+        municipality = place_name(item.get("municipality"))
         sheet = str(item.get("sheet") or "").strip()
         parcel = str(item.get("parcel") or "").strip()
         cadastre_type = str(item.get("cadastre_type") or "").strip().upper()
@@ -1401,55 +1425,51 @@ async def get_cadastral_visura_history_documents(properties: list[dict], *, per_
         section = str(item.get("section") or "").strip().upper()
         if not all((province, municipality, sheet, parcel)) or cadastre_type not in {"F", "T"}:
             continue
-        key = (province.casefold(), municipality.casefold(), cadastre_type, section,
-               tuple(sorted(reference_values(sheet))), tuple(sorted(reference_values(parcel))),
-               tuple(sorted(reference_values(subunit))))
+        key = (province, municipality, cadastre_type, section, tuple(sorted(_reference_values(sheet))),
+               tuple(sorted(_reference_values(parcel))), tuple(sorted(_reference_values(subunit))))
         if key in seen:
             continue
         seen.add(key)
         clauses.append(
-            (func.lower(func.trim(CadastralLocation.province)) == province.casefold())
-            & (func.lower(func.trim(CadastralLocation.municipality)) == municipality.casefold())
-            & (func.upper(func.trim(CadastralLocation.cadastre_type)) == cadastre_type)
-            & (func.upper(func.trim(CadastralLocation.section)) == section)
-            & func.upper(func.trim(CadastralLocation.sheet)).in_(reference_values(sheet))
-            & func.upper(func.trim(CadastralLocation.parcel)).in_(reference_values(parcel))
-            & func.upper(func.trim(CadastralLocation.subunit)).in_(reference_values(subunit))
+            (Comune.province_code == province)
+            & (Comune.name == municipality)
+            & (CadastralUnit.cadastre_type == cadastre_type)
+            & (func.coalesce(CadastralUnit.section, "") == section)
+            & func.upper(func.coalesce(CadastralUnit.sheet, "")).in_(_reference_values(sheet))
+            & func.upper(func.coalesce(CadastralUnit.parcel, "")).in_(_reference_values(parcel))
+            & func.upper(func.coalesce(CadastralUnit.subunit, "")).in_(_reference_values(subunit))
         )
     if not clauses:
         return []
 
-    session_factory = _get_session_factory()
-    async with session_factory() as session:
+    async with _get_session_factory()() as session:
         ranked = (
             select(
-                VisuraDocument.id.label("document_id"),
-                VisuraDocument.document_type.label("document_type"),
-                VisuraDocument.filename.label("filename"),
-                VisuraDocument.created_at.label("created_at"),
-                DocumentMetadata.view_subtype.label("view_subtype"),
-                DocumentMetadata.reference_date.label("reference_date"),
-                DocumentMetadata.content.label("xml_content"),
-                CadastralLocation.cadastre_type.label("cadastre_type"),
-                CadastralLocation.province.label("province"),
-                CadastralLocation.municipality.label("municipality"),
-                CadastralLocation.sheet.label("sheet"),
-                CadastralLocation.parcel.label("parcel"),
-                CadastralLocation.subunit.label("subunit"),
-                CadastralLocation.section.label("section"),
+                Document.id.label("document_id"),
+                Document.document_type.label("document_type"),
+                Document.file_name.label("filename"),
+                Document.created_at.label("created_at"),
+                Document.view_subtype.label("view_subtype"),
+                Document.reference_date.label("reference_date"),
+                DocumentContent.content.label("xml_content"),
+                CadastralUnit.cadastre_type.label("cadastre_type"),
+                Comune.province_code.label("province"),
+                Comune.name.label("municipality"),
+                CadastralUnit.sheet.label("sheet"),
+                CadastralUnit.parcel.label("parcel"),
+                CadastralUnit.subunit.label("subunit"),
+                CadastralUnit.section.label("section"),
                 func.row_number().over(
-                    partition_by=CadastralLocation.id,
-                    order_by=(VisuraDocument.created_at.desc(), VisuraDocument.id.desc()),
+                    partition_by=CadastralUnit.id,
+                    order_by=(Document.created_at.desc(), Document.id.desc()),
                 ).label("location_rank"),
             )
-            .join(DocumentMetadata, VisuraDocument.id == DocumentMetadata.id)
-            .join(CadastralLocation, DocumentMetadata.location_id == CadastralLocation.id)
+            .join(DocumentContent, DocumentContent.document_id == Document.id)
+            .join(CadastralUnit, Document.cadastral_unit_id == CadastralUnit.id)
+            .join(Comune, CadastralUnit.comune_id == Comune.id)
             .where(
                 or_(*clauses),
-                DocumentMetadata.content.is_not(None),
-                VisuraDocument.document_type.in_(
-                    ("visura_fabbricati", "visura_terreni", "visura_storica", "visura")
-                ),
+                Document.document_type.in_(("visura_fabbricati", "visura_terreni", "visura_storica", "visura")),
             )
             .subquery()
         )
@@ -1463,76 +1483,43 @@ async def get_cadastral_visura_history_documents(properties: list[dict], *, per_
         {
             **dict(row),
             "created_at": row["created_at"].isoformat() if row["created_at"] else None,
+            "reference_date": format_it_date(row["reference_date"]) or None,
+            "province": _province_label(row["province"]) or None,
         }
         for row in rows
     ]
 
 
 async def get_document_by_id(doc_id: int) -> dict | None:
-    """Fetch a single visura_document by primary key."""
-    session_factory = _get_session_factory()
-    async with session_factory() as session:
-        result = await session.execute(
-            select(VisuraDocument, DocumentMetadata, CadastralLocation)
-            .outerjoin(DocumentMetadata, VisuraDocument.id == DocumentMetadata.id)
-            .outerjoin(CadastralLocation, DocumentMetadata.location_id == CadastralLocation.id)
-            .where(VisuraDocument.id == doc_id)
-        )
-        row = result.one_or_none()
+    """Fetch a single document by primary key."""
+    async with _get_session_factory()() as session:
+        row = (await session.execute(_document_select().where(Document.id == doc_id))).first()
     if row is None:
         return None
-    doc_row, meta, loc = row
-    return {
-        "id": doc_row.id,
-        "document_type": (
-            "ispezione_ipotecaria"
-            if (doc_row.filename or "").casefold().startswith("isp_")
-            else doc_row.document_type
-        ),
-        "file_format": doc_row.file_format,
-        "filename": doc_row.filename,
-        "file_path": doc_row.file_path,
-        "file_size": doc_row.file_size,
-        "oggetto": doc_row.subject,
-        "richiesta_del": doc_row.requested_at,
-        "provincia": loc.province if loc else None,
-        "comune": loc.municipality if loc else None,
-        "foglio": loc.sheet if loc else None,
-        "particella": loc.parcel if loc else None,
-        "subalterno": loc.subunit if loc else None,
-        "sezione_urbana": loc.section if loc else None,
-        "tipo_catasto": loc.cadastre_type if loc else None,
-        "xml_content": (meta.content or "") if meta else "",
-        "created_at": doc_row.created_at.isoformat() if doc_row.created_at else None,
-    }
+    doc, unit, comune, content, ref = row
+    return _document_record(doc, unit, comune, request_ref=ref, content=content)
 
 
 async def get_subject_document_ids(fiscal_code: str) -> set[int]:
     """Return document IDs linked to a queried subject's canonical fiscal code."""
-    from .visura_xml_models import DocumentSubject
-
-    session_factory = _get_session_factory()
-    async with session_factory() as session:
+    async with _get_session_factory()() as session:
         result = await session.execute(
-            select(DocumentSubject.id)
-            .join(CadastralSubject, DocumentSubject.subject_id == CadastralSubject.id)
-            .where(CadastralSubject.fiscal_code == fiscal_code.upper())
+            select(DocumentSubject.document_id)
+            .join(Subject, DocumentSubject.subject_id == Subject.id)
+            .where(Subject.fiscal_code == fiscal_code_key(fiscal_code))
         )
         return {int(document_id) for document_id in result.scalars().all() if document_id is not None}
 
 
 async def get_subject_fiscal_code_for_document(doc_id: int) -> str | None:
     """Return the canonical queried-subject fiscal code for one document, if indexed."""
-    from .visura_xml_models import DocumentSubject
-
-    session_factory = _get_session_factory()
-    async with session_factory() as session:
+    async with _get_session_factory()() as session:
         result = await session.execute(
-            select(CadastralSubject.fiscal_code)
-            .join(DocumentSubject, DocumentSubject.subject_id == CadastralSubject.id)
-            .where(DocumentSubject.id == doc_id)
+            select(Subject.fiscal_code)
+            .join(DocumentSubject, DocumentSubject.subject_id == Subject.id)
+            .where(DocumentSubject.document_id == doc_id)
         )
-        fiscal_code = result.scalar_one_or_none()
+        fiscal_code = result.scalars().first()
     return str(fiscal_code).strip().upper() if fiscal_code else None
 
 
@@ -1546,44 +1533,28 @@ async def get_cadastral_sibling_visuras(
     section: str = "",
 ) -> list[dict]:
     """Return the latest indexed fabbricati visura for each other subunit."""
-    if not all((province, municipality, sheet, parcel)):
+    prov, place = province_code(province), place_name(municipality)
+    if not all((prov, place, sheet, parcel)):
         return []
+    current_subunits = _reference_values(subunit)
 
-    def reference_values(value: str) -> set[str]:
-        raw = value.strip().upper()
-        values = {raw}
-        if raw.isdigit():
-            normalized = str(int(raw))
-            values.add(normalized)
-            values.update(normalized.zfill(width) for width in (2, 3, 4, 5))
-        return values
-
-    current_subunits = reference_values(subunit)
-
-    session_factory = _get_session_factory()
-    async with session_factory() as session:
+    async with _get_session_factory()() as session:
         result = await session.execute(
-            select(
-                VisuraDocument.id,
-                VisuraDocument.created_at,
-                CadastralLocation.subunit,
-            )
-            .join(DocumentMetadata, VisuraDocument.id == DocumentMetadata.id)
-            .join(CadastralLocation, DocumentMetadata.location_id == CadastralLocation.id)
+            select(Document.id, Document.created_at, CadastralUnit.subunit)
+            .join(CadastralUnit, Document.cadastral_unit_id == CadastralUnit.id)
+            .join(Comune, CadastralUnit.comune_id == Comune.id)
             .where(
-                CadastralLocation.cadastre_type == "F",
-                func.lower(func.trim(CadastralLocation.province)) == province.strip().lower(),
-                func.lower(func.trim(CadastralLocation.municipality)) == municipality.strip().lower(),
-                func.upper(func.trim(CadastralLocation.sheet)).in_(reference_values(sheet)),
-                func.upper(func.trim(CadastralLocation.parcel)).in_(reference_values(parcel)),
-                func.upper(func.trim(CadastralLocation.section)) == section.strip().upper(),
-                func.trim(CadastralLocation.subunit) != "",
-                func.upper(func.trim(CadastralLocation.subunit)).notin_(current_subunits),
-                VisuraDocument.document_type.in_(
-                    ("visura_fabbricati", "visura_storica", "visura")
-                ),
+                CadastralUnit.cadastre_type == "F",
+                Comune.province_code == prov,
+                Comune.name == place,
+                func.upper(func.coalesce(CadastralUnit.sheet, "")).in_(_reference_values(sheet)),
+                func.upper(func.coalesce(CadastralUnit.parcel, "")).in_(_reference_values(parcel)),
+                func.coalesce(CadastralUnit.section, "") == section.strip().upper(),
+                CadastralUnit.subunit.is_not(None),
+                func.upper(CadastralUnit.subunit).notin_(current_subunits),
+                Document.document_type.in_(("visura_fabbricati", "visura_storica", "visura")),
             )
-            .order_by(VisuraDocument.created_at.desc(), VisuraDocument.id.desc())
+            .order_by(Document.created_at.desc(), Document.id.desc())
             .limit(200)
         )
 
@@ -1596,140 +1567,216 @@ async def get_cadastral_sibling_visuras(
     return list(siblings.values())[:25]
 
 
+def _iso(value: Any) -> Optional[str]:
+    """Dates and timestamps as ISO text, the form the inspection page formats."""
+    return value.isoformat() if value is not None else None
+
+
 async def get_document_structured_extraction(doc_id: int) -> dict | None:
-    """Fetch the latest archived structured payload and its normalized rows."""
-    session_factory = _get_session_factory()
-    async with session_factory() as session:
-        result = await session.execute(
-            select(StructuredDocumentExtraction)
-            .where(StructuredDocumentExtraction.document_id == doc_id)
-            .order_by(StructuredDocumentExtraction.created_at.desc(), StructuredDocumentExtraction.id.desc())
-            .limit(1)
-        )
-        extraction = result.scalar_one_or_none()
+    """Fetch the latest structured extraction of a document with its inspection, title, lien, units and parties.
+
+    The shape is the one the inspection page was written for; fields the normalised layout derives (the original
+    texts of shares, rights and qualities, the unit count, the interest rate text) are rebuilt from the typed columns.
+    """
+    async with _get_session_factory()() as session:
+        extraction = (
+            await session.execute(
+                select(DocumentExtraction)
+                .where(DocumentExtraction.document_id == doc_id)
+                .order_by(DocumentExtraction.created_at.desc(), DocumentExtraction.id.desc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
         if extraction is None:
             return None
+        inspection = (
+            await session.execute(select(MortgageInspection).where(MortgageInspection.extraction_id == extraction.id))
+        ).scalar_one_or_none()
+        party_comune = aliased(Comune)
+        parties = (
+            await session.execute(
+                select(MortgageInspectionParty, Subject, party_comune)
+                .join(Subject, MortgageInspectionParty.subject_id == Subject.id)
+                .outerjoin(party_comune, Subject.birth_comune_id == party_comune.id)
+                .where(MortgageInspectionParty.inspection_id == extraction.id)
+                .order_by(MortgageInspectionParty.role, MortgageInspectionParty.ordinal)
+            )
+        ).all()
+        properties = (
+            await session.execute(
+                select(MortgageInspectionProperty, CadastralUnit, Comune)
+                .outerjoin(CadastralUnit, MortgageInspectionProperty.cadastral_unit_id == CadastralUnit.id)
+                .outerjoin(Comune, CadastralUnit.comune_id == Comune.id)
+                .where(MortgageInspectionProperty.inspection_id == extraction.id)
+                .order_by(MortgageInspectionProperty.unit_number, MortgageInspectionProperty.property_number)
+            )
+        ).all()
 
-        extraction_id = extraction.id
-        inspection = (await session.execute(
-            select(MortgageInspection).where(MortgageInspection.extraction_id == extraction_id)
-        )).scalar_one_or_none()
-        title = (await session.execute(
-            select(MortgageInspectionTitle).where(MortgageInspectionTitle.extraction_id == extraction_id)
-        )).scalar_one_or_none()
-        lien = (await session.execute(
-            select(MortgageInspectionLien).where(MortgageInspectionLien.extraction_id == extraction_id)
-        )).scalar_one_or_none()
-        units = (await session.execute(
-            select(MortgageInspectionUnit)
-            .where(MortgageInspectionUnit.extraction_id == extraction_id)
-            .order_by(MortgageInspectionUnit.unit_number, MortgageInspectionUnit.id)
-        )).scalars().all()
-        parties = (await session.execute(
-            select(MortgageInspectionParty)
-            .where(MortgageInspectionParty.extraction_id == extraction_id)
-            .order_by(MortgageInspectionParty.role, MortgageInspectionParty.ordinal)
-        )).scalars().all()
-        unit_ids = [unit.id for unit in units]
-        properties = []
-        if unit_ids:
-            properties = (await session.execute(
-                select(MortgageInspectionProperty)
-                .where(MortgageInspectionProperty.unit_id.in_(unit_ids))
-                .order_by(MortgageInspectionProperty.unit_id, MortgageInspectionProperty.property_number)
-            )).scalars().all()
+    def number(text_value: Any) -> Optional[int]:
+        return int(text_value) if str(text_value or "").isdigit() else None
 
-        def record(row):
-            return {column.name: getattr(row, column.name) for column in row.__table__.columns}
-
-        properties_by_unit: dict[int, list[dict]] = {}
-        for property_row in properties:
-            properties_by_unit.setdefault(property_row.unit_id, []).append(record(property_row))
-
-        return {
-            "extraction": record(extraction),
-            "inspection": record(inspection) if inspection else None,
-            "title": record(title) if title else None,
-            "lien": record(lien) if lien else None,
-            "units": [
-                {**record(unit), "properties": properties_by_unit.get(unit.id, [])}
-                for unit in units
-            ],
-            "parties": [record(party) for party in parties],
+    units: dict[Optional[int], dict[str, Any]] = {}
+    for prop, unit, comune in properties:
+        entry = units.setdefault(prop.unit_number, {"extraction_id": extraction.id, "unit_number": prop.unit_number, "properties": []})
+        entry["properties"].append(
+            {
+                "property_number": prop.property_number,
+                "municipality_code": comune.cadastral_code if comune else None,
+                "municipality": comune.name if comune else None,
+                "cadastre_type": {"F": "fabbricati", "T": "terreni"}.get(unit.cadastre_type) if unit and unit.cadastre_type else None,
+                "urban_section": unit.section if unit else None,
+                "sheet": number(unit.sheet) if unit else None,
+                "parcel": number(unit.parcel) if unit else None,
+                "subunit": number(unit.subunit) if unit else None,
+                "nature": prop.nature,
+                "nature_description": prop.nature_description,
+                "room_count": prop.room_count,
+                "area_sqm": float(prop.area_sqm) if prop.area_sqm is not None else None,
+                "floor": prop.floor,
+                "address": prop.address,
+                "civic_number": prop.civic_number,
+            }
+        )
+    inspection_record = title_record = lien_record = None
+    if inspection is not None:
+        inspection_record = {
+            "extraction_id": extraction.id,
+            "inspection_date": _iso(inspection.inspection_date),
+            "inspection_time": _iso(inspection.inspection_time),
+            "inspection_number": inspection.inspection_number,
+            "inspection_date_number": _iso(inspection.inspection_number_date),
+            "inspection_start": _iso(inspection.inspection_started_at),
+            "requester": inspection.requester,
+            "tax_paid_euro": inspection.tax_paid_eur,
+            "page_count": inspection.page_count,
+            "office": inspection.office,
+            "service": inspection.service,
+            "note_type": inspection.note_type,
+            "note_timestamp": _iso(inspection.note_at),
+            "registro_generale": inspection.registro_generale,
+            "registro_particolare": inspection.registro_particolare,
+            "presentazione_numero": inspection.presentazione_numero,
+            "presentazione_data": _iso(inspection.presentazione_data),
+            "section_a_other_data": inspection.section_a_other_data,
+            "section_d_text": inspection.section_d_text,
+            "unit_count": len(units),
+            "party_favore_count": sum(1 for p, _s, _c in parties if p.role == "a_favore"),
+            "party_contro_count": sum(1 for p, _s, _c in parties if p.role == "contro"),
         }
+        if inspection.title_type or inspection.title_description or inspection.title_date:
+            title_record = {
+                "extraction_id": extraction.id,
+                "title_type": inspection.title_type,
+                "description": inspection.title_description,
+                "title_date": _iso(inspection.title_date),
+                "repertory_number": inspection.title_repertory_number,
+                "notary_name": inspection.title_notary_name,
+                "notary_fiscal_code": inspection.title_notary_fiscal_code,
+                "notary_location": inspection.title_notary_location,
+            }
+        if inspection.lien_type or inspection.lien_principal_eur is not None or inspection.lien_total_eur is not None:
+            rate = inspection.lien_annual_interest_rate_pct
+            lien_record = {
+                "extraction_id": extraction.id,
+                "lien_type": inspection.lien_type,
+                "lien_type_original": inspection.lien_type,
+                "derived_from": inspection.lien_derived_from,
+                "derived_from_code": inspection.lien_derived_from_code,
+                "derived_from_description": inspection.lien_derived_from_description,
+                "principal_euro": inspection.lien_principal_eur,
+                "annual_interest_rate": f"{str(rate.normalize()).replace('.', ',')}%" if rate is not None else None,
+                "annual_interest_rate_pct": float(rate) if rate is not None else None,
+                "semiannual_interest_rate": inspection.lien_semiannual_interest_rate,
+                "interest_euro": inspection.lien_interest_eur,
+                "expenses_euro": inspection.lien_expenses_eur,
+                "total_euro": inspection.lien_total_eur,
+                "variable_amounts": inspection.lien_variable_amounts,
+                "foreign_currency": inspection.lien_foreign_currency,
+                "automatic_increase": inspection.lien_automatic_increase,
+                "resolutive_condition": inspection.lien_resolutive_condition,
+                "duration_years": inspection.lien_duration_years,
+                "duration_description": inspection.lien_duration_description,
+                "mortgage_rank": inspection.lien_mortgage_rank,
+            }
+    party_records = []
+    for party, subject, birthplace in parties:
+        is_entity = subject.subject_type == "legal_entity"
+        share = format_share(party.share_numerator, party.share_denominator) or None
+        party_records.append(
+            {
+                "id": party.id,
+                "extraction_id": extraction.id,
+                "role": party.role,
+                "ordinal": party.ordinal,
+                "subject_number": party.subject_number,
+                "quality": party.quality,
+                "surname": subject.last_name,
+                "given_name": subject.first_name,
+                "birth_date": _iso(subject.birth_date),
+                "birth_place": f"{birthplace.name} ({birthplace.province_code})" if birthplace and birthplace.province_code else (birthplace.name if birthplace else None),
+                "gender": subject.gender,
+                "fiscal_code": subject.fiscal_code,
+                "entity_name": subject.name if is_entity else None,
+                "registered_office": party.registered_office,
+                "mortgage_domicile": party.mortgage_domicile,
+                "negotiation_unit_reference": party.negotiation_unit_reference,
+                "right_type": party.right_type,
+                "share_numerator": party.share_numerator,
+                "share_denominator": party.share_denominator,
+                "raw_quality": party.quality,
+                "raw_share": share,
+                "raw_right_type": party.right_type,
+            }
+        )
+    return {
+        "extraction": {
+            "id": extraction.id,
+            "document_id": extraction.document_id,
+            "provider": extraction.provider,
+            "model": extraction.model,
+            "schema_name": extraction.schema_name,
+            "schema_version": extraction.schema_version,
+            "run_id": extraction.run_id,
+            "workflow_id": extraction.workflow_id,
+            "output_path": extraction.output_path,
+            "extracted_at": extraction.extracted_at,
+            "created_at": extraction.created_at,
+        },
+        "inspection": inspection_record,
+        "title": title_record,
+        "lien": lien_record,
+        "units": [units[key] for key in sorted(units, key=lambda k: (k is None, k or 0))],
+        "parties": party_records,
+    }
 
 
 async def get_indexed_file_paths() -> dict[str, int]:
-    """Return a mapping of file_path → document id for all indexed documents."""
-    session_factory = _get_session_factory()
-    async with session_factory() as session:
-        result = await session.execute(
-            select(VisuraDocument.file_path, VisuraDocument.id).where(VisuraDocument.file_path.isnot(None))
-        )
-        return {row.file_path: row.id for row in result}
+    """Return a mapping of full file path → document id for all indexed documents."""
+    async with _get_session_factory()() as session:
+        result = await session.execute(select(Document.file_name, Document.id))
+        return {document_file_path(row.file_name): row.id for row in result}
 
 
 async def get_indexed_filenames() -> set[str]:
     """Return the set of filenames already indexed (basename only)."""
-    session_factory = _get_session_factory()
-    async with session_factory() as session:
-        result = await session.execute(select(VisuraDocument.filename).where(VisuraDocument.filename.isnot(None)))
-        return {row.filename for row in result}
+    async with _get_session_factory()() as session:
+        result = await session.execute(select(Document.file_name))
+        return {row.file_name for row in result}
 
 
 async def get_indexed_file_metadata() -> dict[str, dict]:
     """Return {file_path: {"id": doc_id, "oggetto": new_name}} for all indexed documents."""
-    session_factory = _get_session_factory()
-    async with session_factory() as session:
-        result = await session.execute(
-            select(VisuraDocument.file_path, VisuraDocument.id, VisuraDocument.subject).where(
-                VisuraDocument.file_path.isnot(None)
-            )
-        )
-        return {row.file_path: {"id": row.id, "oggetto": row.subject or ""} for row in result}
+    async with _get_session_factory()() as session:
+        result = await session.execute(select(Document.file_name, Document.id, Document.subject_text))
+        return {document_file_path(row.file_name): {"id": row.id, "oggetto": row.subject_text or ""} for row in result}
 
 
 async def get_all_documents(limit: int = 100, offset: int = 0) -> list[dict]:
-    """Fetch all visura_documents (for browse page)."""
-    session_factory = _get_session_factory()
-    async with session_factory() as session:
-        stmt = (
-            select(VisuraDocument, DocumentMetadata, CadastralLocation)
-            .outerjoin(DocumentMetadata, VisuraDocument.id == DocumentMetadata.id)
-            .outerjoin(CadastralLocation, DocumentMetadata.location_id == CadastralLocation.id)
-            .order_by(VisuraDocument.created_at.desc())
-            .limit(limit)
-            .offset(offset)
-        )
-        result = await session.execute(stmt)
-        rows = result.all()
-    docs = []
-    for doc_row, meta, loc in rows:
-        docs.append({
-            "id": doc_row.id,
-            "response_id": doc_row.response_id,
-            "document_type": (
-                "ispezione_ipotecaria"
-                if (doc_row.filename or "").casefold().startswith("isp_")
-                else doc_row.document_type
-            ),
-            "file_format": doc_row.file_format,
-            "filename": doc_row.filename,
-            "file_size": doc_row.file_size,
-            "oggetto": doc_row.subject,
-            "richiesta_del": doc_row.requested_at,
-            "sezione_urbana": loc.section if loc else None,
-            "provincia": loc.province if loc else None,
-            "comune": loc.municipality if loc else None,
-            "foglio": loc.sheet if loc else None,
-            "particella": loc.parcel if loc else None,
-            "subalterno": loc.subunit if loc else None,
-            "tipo_catasto": loc.cadastre_type if loc else None,
-            "visura_subtype": meta.view_subtype if meta else None,
-            "situazione_al": meta.reference_date if meta else None,
-            "created_at": doc_row.created_at.isoformat() if doc_row.created_at else None,
-        })
-    return docs
+    """Fetch all documents (for the browse page)."""
+    stmt = _document_select().order_by(Document.created_at.desc()).limit(limit).offset(offset)
+    async with _get_session_factory()() as session:
+        rows = (await session.execute(stmt)).all()
+    return [_document_record(doc, unit, comune, request_ref=ref) for doc, unit, comune, _content, ref in rows]
 
 
 # ---------------------------------------------------------------------------
@@ -1750,45 +1797,36 @@ async def find_responses(
     session_factory = _get_session_factory()
     async with session_factory() as session:
         stmt = (
-            select(VisuraRequest, VisuraResponse, CadastralLocation)
-            .outerjoin(VisuraResponse, VisuraRequest.request_id == VisuraResponse.request_id)
-            .outerjoin(CadastralLocation, VisuraRequest.location_id == CadastralLocation.id)
+            select(Request, RequestPayload.data, CadastralUnit, Comune)
+            .outerjoin(RequestPayload, RequestPayload.request_id == Request.id)
+            .outerjoin(CadastralUnit, Request.cadastral_unit_id == CadastralUnit.id)
+            .outerjoin(Comune, CadastralUnit.comune_id == Comune.id)
+            .where(*_build_single_where(provincia, comune, foglio, particella, tipo_catasto))
+            .order_by(Request.created_at.desc())
+            .limit(limit)
+            .offset(offset)
         )
-        if provincia:
-            stmt = stmt.where(CadastralLocation.province == provincia)
-        if comune:
-            stmt = stmt.where(CadastralLocation.municipality == comune)
-        if foglio:
-            stmt = stmt.where(CadastralLocation.sheet == foglio)
-        if particella:
-            stmt = stmt.where(CadastralLocation.parcel == particella)
-        if tipo_catasto:
-            stmt = stmt.where(CadastralLocation.cadastre_type == tipo_catasto)
+        rows = (await session.execute(stmt)).all()
 
-        stmt = stmt.order_by(VisuraRequest.created_at.desc()).limit(limit).offset(offset)
-
-        result = await session.execute(stmt)
-        rows = result.all()
-
-        return [
-            {
-                "request_id": req.request_id,
-                "request_type": req.request_type,
-                "tipo_catasto": loc.cadastre_type if loc else "",
-                "provincia": loc.province if loc else "",
-                "comune": loc.municipality if loc else "",
-                "foglio": loc.sheet if loc else "",
-                "particella": loc.parcel if loc else "",
-                "sezione": loc.section if loc else None,
-                "subalterno": loc.subunit if loc else None,
-                "requested_at": req.created_at.isoformat() if req.created_at else None,
-                "success": resp.success if resp else None,
-                "data": resp.data if resp else None,
-                "error": resp.error if resp else None,
-                "responded_at": resp.created_at.isoformat() if resp and resp.created_at else None,
-            }
-            for req, resp, loc in rows
-        ]
+    return [
+        {
+            "request_id": req.request_ref,
+            "request_type": req.request_type,
+            "tipo_catasto": unit.cadastre_type if unit and unit.cadastre_type else "",
+            "provincia": _province_label(town.province_code if town else None),
+            "comune": town.name if town else "",
+            "foglio": unit.sheet if unit and unit.sheet else "",
+            "particella": unit.parcel if unit and unit.parcel else "",
+            "sezione": unit.section if unit else None,
+            "subalterno": unit.subunit if unit else None,
+            "requested_at": req.created_at.isoformat() if req.created_at else None,
+            "success": req.success if req.responded_at else None,
+            "data": _decode_payload(data),
+            "error": req.error,
+            "responded_at": req.responded_at.isoformat() if req.responded_at else None,
+        }
+        for req, data, unit, town in rows
+    ]
 
 
 _NO_MATCH_ERROR = "nessuna corrispondenza trovata"
@@ -1800,7 +1838,7 @@ def _is_no_match_error(error: Optional[str]) -> bool:
 
 
 def _no_match_sql_condition():
-    normalized_error = func.lower(func.coalesce(VisuraResponse.error, ""))
+    normalized_error = func.lower(func.coalesce(Request.error, ""))
     return or_(normalized_error.like(f"%{_NO_MATCH_ERROR}%"), normalized_error == "no_match")
 
 
@@ -1834,59 +1872,51 @@ async def find_result_rows(
     single_rows: list[dict] = []
     if source in (None, "single"):
         property_count = (
-            select(func.count(VisuraProperty.id))
-            .where(VisuraProperty.response_id == VisuraRequest.request_id)
-            .correlate(VisuraRequest)
-            .scalar_subquery()
+            select(func.count(Property.id)).where(Property.request_id == Request.id).correlate(Request).scalar_subquery()
         )
         owner_count = (
-            select(func.count(VisuraOwner.id))
-            .where(VisuraOwner.response_id == VisuraRequest.request_id)
-            .correlate(VisuraRequest)
-            .scalar_subquery()
+            select(func.count(ResultOwner.id)).where(ResultOwner.request_id == Request.id).correlate(Request).scalar_subquery()
         )
         stmt = (
             select(
-                VisuraRequest.request_id.label("request_id"),
-                VisuraRequest.request_type.label("request_type"),
-                CadastralLocation.cadastre_type.label("cadastre_type"),
-                CadastralLocation.province.label("province"),
-                CadastralLocation.municipality.label("municipality"),
-                CadastralLocation.sheet.label("sheet"),
-                CadastralLocation.parcel.label("parcel"),
-                CadastralLocation.section.label("section"),
-                CadastralLocation.subunit.label("subunit"),
-                VisuraRequest.created_at.label("requested_at"),
-                VisuraResponse.success.label("success"),
-                VisuraResponse.error.label("error"),
-                VisuraResponse.created_at.label("responded_at"),
-                VisuraResponse.total_results.label("total_results"),
-                VisuraResponse.total_intestati.label("total_intestati"),
+                Request.request_ref.label("request_id"),
+                Request.request_type.label("request_type"),
+                CadastralUnit.cadastre_type.label("cadastre_type"),
+                Comune.province_code.label("province"),
+                Comune.name.label("municipality"),
+                CadastralUnit.sheet.label("sheet"),
+                CadastralUnit.parcel.label("parcel"),
+                CadastralUnit.section.label("section"),
+                CadastralUnit.subunit.label("subunit"),
+                Request.created_at.label("requested_at"),
+                Request.success.label("success"),
+                Request.error.label("error"),
+                Request.responded_at.label("responded_at"),
+                Request.total_results.label("total_results"),
+                Request.total_intestati.label("total_intestati"),
                 property_count.label("property_count"),
                 owner_count.label("owner_count"),
             )
-            .select_from(VisuraRequest)
-            .outerjoin(VisuraResponse, VisuraRequest.request_id == VisuraResponse.request_id)
-            .outerjoin(CadastralLocation, VisuraRequest.location_id == CadastralLocation.id)
-            .where(
-                *_build_single_where(provincia, comune, foglio, particella, tipo_catasto, status)
-            )
-            .order_by(VisuraRequest.created_at.desc())
+            .select_from(Request)
+            .outerjoin(CadastralUnit, Request.cadastral_unit_id == CadastralUnit.id)
+            .outerjoin(Comune, CadastralUnit.comune_id == Comune.id)
+            .where(*_build_single_where(provincia, comune, foglio, particella, tipo_catasto, status))
+            .order_by(Request.created_at.desc())
         )
         async with _get_session_factory()() as session:
             rows = (await session.execute(stmt)).mappings().all()
         for row in rows:
-            success = bool(row["success"]) if row["success"] is not None else None
+            success = bool(row["success"]) if row["success"] is not None and row["responded_at"] is not None else None
             single_rows.append(
                 {
                     "request_id": row["request_id"],
                     "request_type": row["request_type"],
                     "source": "single",
-                    "tipo_catasto": row["cadastre_type"],
-                    "provincia": row["province"],
-                    "comune": row["municipality"],
-                    "foglio": row["sheet"],
-                    "particella": row["parcel"],
+                    "tipo_catasto": row["cadastre_type"] or "",
+                    "provincia": _province_label(row["province"]),
+                    "comune": row["municipality"] or "",
+                    "foglio": row["sheet"] or "",
+                    "particella": row["parcel"] or "",
                     "sezione": row["section"],
                     "subalterno": row["subunit"],
                     "requested_at": row["requested_at"],
@@ -1906,6 +1936,38 @@ async def find_result_rows(
     return single_rows[offset : offset + limit]
 
 
+async def _delete_documents(session: AsyncSession, document_ids: list[int]) -> None:
+    """Delete documents with everything that hangs off them (typed visura rows, extractions, archived text/XML).
+
+    Files on disk are not touched. Children first, because every relation has a foreign key.
+    """
+    if not document_ids:
+        return
+    archive = f'"{DATABASE_ARCHIVE_SCHEMA}"'
+    statements = (
+        "DELETE FROM mutation_owner WHERE mutation_id IN (SELECT id FROM ownership_mutation WHERE document_id = ANY(:ids))",
+        "DELETE FROM ownership_mutation WHERE document_id = ANY(:ids)",
+        "DELETE FROM land_parcel_classification WHERE land_parcel_id IN (SELECT id FROM land_parcel WHERE document_id = ANY(:ids))",
+        "DELETE FROM land_parcel WHERE document_id = ANY(:ids)",
+        "DELETE FROM building_unit_related_parcel WHERE building_unit_id IN (SELECT id FROM building_unit WHERE document_id = ANY(:ids))",
+        "DELETE FROM building_unit WHERE document_id = ANY(:ids)",
+        "DELETE FROM property_group WHERE document_id = ANY(:ids)",
+        "DELETE FROM document_address WHERE document_id = ANY(:ids)",
+        "DELETE FROM document_subject WHERE document_id = ANY(:ids)",
+        "DELETE FROM mortgage_inspection_property WHERE inspection_id IN (SELECT id FROM document_extraction WHERE document_id = ANY(:ids))",
+        "DELETE FROM mortgage_inspection_party WHERE inspection_id IN (SELECT id FROM document_extraction WHERE document_id = ANY(:ids))",
+        "DELETE FROM mortgage_inspection WHERE extraction_id IN (SELECT id FROM document_extraction WHERE document_id = ANY(:ids))",
+        f"DELETE FROM {archive}.document_extraction_payload WHERE extraction_id IN (SELECT id FROM document_extraction WHERE document_id = ANY(:ids))",
+        "DELETE FROM document_extraction WHERE document_id = ANY(:ids)",
+        f"DELETE FROM {archive}.document_xml_attribute WHERE node_id IN (SELECT id FROM {archive}.document_xml_node WHERE document_id = ANY(:ids))",
+        f"DELETE FROM {archive}.document_xml_node WHERE document_id = ANY(:ids)",
+        f"DELETE FROM {archive}.document_content WHERE document_id = ANY(:ids)",
+        "DELETE FROM document WHERE id = ANY(:ids)",
+    )
+    for statement in statements:
+        await session.execute(text(statement), {"ids": list(document_ids)})  # noqa: S608 (fixed statements, quoted schema)
+
+
 async def cleanup_old_responses(ttl_seconds: int) -> int:
     """Delete responses older than ttl_seconds. Returns count of deleted rows."""
     if not is_db_writable():
@@ -1914,53 +1976,24 @@ async def cleanup_old_responses(ttl_seconds: int) -> int:
     async with session_factory() as session:
         cutoff = datetime.now(timezone.utc) - timedelta(seconds=ttl_seconds)
 
-        expired_ids = (
-            await session.execute(
-                select(VisuraResponse.request_id).where(VisuraResponse.created_at < cutoff)
-            )
-        ).scalars().all()
+        expired_ids = (await session.execute(select(Request.id).where(Request.responded_at < cutoff))).scalars().all()
         deleted = len(expired_ids)
 
         if expired_ids:
-            # Ordered bulk deletes avoid ORM autoflush trying to delete a
-            # response before its unmapped result rows have been removed.
-            page_visit_ids = select(PageVisit.id).where(PageVisit.response_id.in_(expired_ids))
-            document_ids = select(VisuraDocument.id).where(VisuraDocument.response_id.in_(expired_ids))
-            xml_nodes = table("document_xml_nodes", column("id"), column("document_id"))
-            xml_attributes = table("document_xml_attributes", column("node_id"))
-            await session.execute(
-                delete(PageVisitFormElement).where(PageVisitFormElement.page_visit_id.in_(page_visit_ids))
-            )
-            await session.execute(
-                delete(PageVisitError).where(PageVisitError.page_visit_id.in_(page_visit_ids))
-            )
-            await session.execute(delete(PageVisit).where(PageVisit.response_id.in_(expired_ids)))
-            await session.execute(
-                delete(xml_attributes).where(
-                    xml_attributes.c.node_id.in_(
-                        select(xml_nodes.c.id).where(xml_nodes.c.document_id.in_(document_ids))
-                    )
-                )
-            )
-            await session.execute(delete(xml_nodes).where(xml_nodes.c.document_id.in_(document_ids)))
-            await session.execute(delete(DocumentMetadata).where(DocumentMetadata.id.in_(document_ids)))
-            await session.execute(delete(VisuraDocument).where(VisuraDocument.response_id.in_(expired_ids)))
-            await session.execute(delete(VisuraProperty).where(VisuraProperty.response_id.in_(expired_ids)))
-            await session.execute(delete(VisuraOwner).where(VisuraOwner.response_id.in_(expired_ids)))
-            await session.execute(delete(VisuraResult).where(VisuraResult.response_id.in_(expired_ids)))
-            await session.execute(delete(VisuraResponse).where(VisuraResponse.request_id.in_(expired_ids)))
+            visit_ids = select(PageVisit.id).where(PageVisit.request_id.in_(expired_ids))
+            await session.execute(delete(PageVisitFormElement).where(PageVisitFormElement.page_visit_id.in_(visit_ids)))
+            await session.execute(delete(PageVisitError).where(PageVisitError.page_visit_id.in_(visit_ids)))
+            await session.execute(delete(PageVisit).where(PageVisit.request_id.in_(expired_ids)))
+            document_ids = (await session.execute(select(Document.id).where(Document.request_id.in_(expired_ids)))).scalars().all()
+            await _delete_documents(session, list(document_ids))
+            await session.execute(delete(ResultOwner).where(ResultOwner.request_id.in_(expired_ids)))
+            await session.execute(delete(Property).where(Property.request_id.in_(expired_ids)))
+            await session.execute(delete(RequestResult).where(RequestResult.request_id.in_(expired_ids)))
+            await session.execute(delete(RequestPayload).where(RequestPayload.request_id.in_(expired_ids)))
+            await session.execute(delete(Request).where(Request.id.in_(expired_ids)))
 
-            orphan_ids = (
-                await session.execute(
-                    select(VisuraRequest.request_id).where(
-                        VisuraRequest.created_at < cutoff,
-                        ~VisuraRequest.request_id.in_(select(VisuraResponse.request_id)),
-                    )
-                )
-            ).scalars().all()
-            if orphan_ids:
-                await session.execute(delete(VisuraRequest).where(VisuraRequest.request_id.in_(orphan_ids)))
-
+        # requests that never got a response
+        await session.execute(delete(Request).where(Request.created_at < cutoff, Request.responded_at.is_(None)))
         await session.commit()
         return deleted
 
@@ -1969,33 +2002,24 @@ async def count_responses() -> dict:
     """Return basic stats about stored data."""
     session_factory = _get_session_factory()
     async with session_factory() as session:
-        total_requests = (await session.execute(select(text("count(*)")).select_from(VisuraRequest))).scalar() or 0
-
-        total_responses = (await session.execute(select(text("count(*)")).select_from(VisuraResponse))).scalar() or 0
-
-        successful = (
+        counts = (
             await session.execute(
-                select(text("count(*)"))
-                .select_from(VisuraResponse)
-                .where(VisuraResponse.success == True)  # noqa: E712
+                select(
+                    func.count().label("requests"),
+                    func.count().filter(Request.responded_at.is_not(None)).label("responses"),
+                    func.count().filter(Request.success.is_(True)).label("successful"),
+                    func.count().filter(Request.success.is_(False)).label("failed"),
+                ).select_from(Request)
             )
-        ).scalar() or 0
-
-        failed = (
-            await session.execute(
-                select(text("count(*)"))
-                .select_from(VisuraResponse)
-                .where(VisuraResponse.success == False)  # noqa: E712
-            )
-        ).scalar() or 0
-
-        return {
-            "total_requests": total_requests,
-            "total_responses": total_responses,
-            "successful": successful,
-            "failed": failed,
-            "pending": max(total_requests - total_responses, 0),
-        }
+        ).one()
+    total_requests, total_responses, successful, failed = counts
+    return {
+        "total_requests": total_requests,
+        "total_responses": total_responses,
+        "successful": successful,
+        "failed": failed,
+        "pending": max(total_requests - total_responses, 0),
+    }
 
 
 def _build_single_where(
@@ -2006,26 +2030,26 @@ def _build_single_where(
     tipo_catasto: Optional[str] = None,
     status: Optional[str] = None,
 ) -> list:
-    """Build portable ORM filters for single-result queries."""
+    """Build portable ORM filters for single-result queries (province by sigla or name, comune by name)."""
     conditions = []
     if provincia:
-        conditions.append(CadastralLocation.province == provincia)
+        conditions.append(Comune.province_code == (province_code(provincia) or str(provincia).strip().upper()))
     if comune:
-        conditions.append(CadastralLocation.municipality == comune)
+        conditions.append(Comune.name == (place_name(comune) or str(comune).strip().upper()))
     if foglio:
-        conditions.append(CadastralLocation.sheet == str(foglio))
+        conditions.append(CadastralUnit.sheet == str(foglio))
     if particella:
-        conditions.append(CadastralLocation.parcel == str(particella))
+        conditions.append(CadastralUnit.parcel == str(particella))
     if tipo_catasto:
-        conditions.append(CadastralLocation.cadastre_type == tipo_catasto)
+        conditions.append(CadastralUnit.cadastre_type == tipo_catasto)
     if status == "completed":
-        conditions.append(VisuraResponse.success.is_(True))
+        conditions.append(Request.success.is_(True))
     elif status == "no_match":
-        conditions.extend((VisuraResponse.success.is_(False), _no_match_sql_condition()))
+        conditions.extend((Request.success.is_(False), _no_match_sql_condition()))
     elif status in ("failed", "error"):
-        conditions.extend((VisuraResponse.success.is_(False), ~_no_match_sql_condition()))
+        conditions.extend((Request.success.is_(False), ~_no_match_sql_condition()))
     elif status == "pending":
-        conditions.append(VisuraResponse.request_id.is_(None))
+        conditions.append(Request.responded_at.is_(None))
     return conditions
 
 
@@ -2048,9 +2072,9 @@ async def count_total_result_rows(
         return 0
     stmt = (
         select(func.count())
-        .select_from(VisuraRequest)
-        .outerjoin(VisuraResponse, VisuraRequest.request_id == VisuraResponse.request_id)
-        .outerjoin(CadastralLocation, VisuraRequest.location_id == CadastralLocation.id)
+        .select_from(Request)
+        .outerjoin(CadastralUnit, Request.cadastral_unit_id == CadastralUnit.id)
+        .outerjoin(Comune, CadastralUnit.comune_id == Comune.id)
         .where(*_build_single_where(provincia, comune, foglio, particella, tipo_catasto, status))
     )
     async with _get_session_factory()() as session:
@@ -2075,19 +2099,19 @@ async def count_result_rows(
     s_total = s_ok = s_fail = s_no_match = s_pending = 0
     if source in (None, "single"):
         filters = _build_single_where(provincia, comune, foglio, particella, tipo_catasto)
-        stmt = select(
-            func.count().label("total"),
-            func.count().filter(VisuraResponse.success.is_(True)).label("successful"),
-            func.count().filter(
-                VisuraResponse.success.is_(False), ~_no_match_sql_condition()
-            ).label("failed"),
-            func.count().filter(
-                VisuraResponse.success.is_(False), _no_match_sql_condition()
-            ).label("no_match"),
-            func.count().filter(VisuraResponse.request_id.is_(None)).label("pending"),
-        ).select_from(VisuraRequest).outerjoin(
-            VisuraResponse, VisuraRequest.request_id == VisuraResponse.request_id
-        ).outerjoin(CadastralLocation, VisuraRequest.location_id == CadastralLocation.id).where(*filters)
+        stmt = (
+            select(
+                func.count().label("total"),
+                func.count().filter(Request.success.is_(True)).label("successful"),
+                func.count().filter(Request.success.is_(False), ~_no_match_sql_condition()).label("failed"),
+                func.count().filter(Request.success.is_(False), _no_match_sql_condition()).label("no_match"),
+                func.count().filter(Request.responded_at.is_(None)).label("pending"),
+            )
+            .select_from(Request)
+            .outerjoin(CadastralUnit, Request.cadastral_unit_id == CadastralUnit.id)
+            .outerjoin(Comune, CadastralUnit.comune_id == Comune.id)
+            .where(*filters)
+        )
         async with _get_session_factory()() as session:
             counts = (await session.execute(stmt)).one()
         s_total, s_ok, s_fail, s_no_match, s_pending = counts

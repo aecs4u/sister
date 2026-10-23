@@ -1,5 +1,6 @@
 """Visura XML → typed document tables (shapes taken from real SISTER documents, with invented data)."""
 
+from datetime import date
 from decimal import Decimal
 from pathlib import Path
 
@@ -7,7 +8,8 @@ import pytest
 from sqlalchemy import text
 
 from sister import database, xml_ingest
-from sister.db_models import DocumentMetadata, VisuraDocument
+from sister.db_models import Document, DocumentContent
+from sister.reference import ensure_lookup
 
 XML = Path(__file__).parent / "fixtures" / "visura_xml"
 
@@ -65,10 +67,11 @@ def test_parse_rejects_what_is_not_a_visura(content):
 
 
 async def _document(session, xml: str) -> int:
-    row = VisuraDocument(document_type="visura", file_format="XML", filename="x.xml")
+    await ensure_lookup(session, "document_type", "visura")
+    row = Document(document_type="visura", file_format="P7M", file_name="x.p7m")
     session.add(row)
     await session.flush()
-    session.add(DocumentMetadata(id=row.id, content=xml))
+    session.add(DocumentContent(document_id=row.id, content=xml))
     await session.flush()
     return row.id
 
@@ -88,38 +91,45 @@ async def test_ingest_fabbricati_storica_fills_unit_owners_and_header():
         classification = (
             await session.execute(
                 text(
-                    "SELECT category, cadastral_class, cadastral_income, consistency_value, consistency_unit, census_zone "
-                    "FROM building_classifications WHERE current_state_id = :d"
+                    "SELECT category, cadastral_class, cadastral_income_eur, consistency_value, consistency_unit, census_zone "
+                    "FROM building_unit WHERE document_id = :d AND is_current"
                 ),
                 {"d": doc},
             )
         ).one()
         assert tuple(classification) == ("A/4", "04", Decimal("557.77"), Decimal("6.0"), "vani", "1")
-        assert await _scalar(session, "SELECT total_area FROM building_surfaces WHERE current_state_id = :d", d=doc) == 120
-        assert await _scalar(session, "SELECT address_text FROM building_current_states WHERE id = :d", d=doc) == (
+        assert await _scalar(session, "SELECT total_area_sqm FROM building_unit WHERE document_id = :d AND is_current", d=doc) == 120
+        assert await _scalar(session, "SELECT address_text FROM building_unit WHERE document_id = :d AND is_current", d=doc) == (
             "VIA EL ALAMEIN n. 2 Piano T-1"
         )
-        assert await _scalar(session, "SELECT count(*) FROM building_addresses WHERE document_id = :d", d=doc) == 1
-        assert await _scalar(session, "SELECT count(*) FROM related_parcels WHERE current_state_id = :d", d=doc) == 1
+        assert await _scalar(session, "SELECT count(*) FROM document_address WHERE document_id = :d", d=doc) == 1
+        assert await _scalar(
+            session,
+            "SELECT count(*) FROM building_unit_related_parcel r JOIN building_unit u ON u.id = r.building_unit_id "
+            "WHERE u.document_id = :d",
+            d=doc,
+        ) == 1
         # the one-half owner with an end date keeps start/end of the right
         right = (
             await session.execute(
                 text(
-                    "SELECT r.ownership_share, r.start_date, r.end_date, s.fiscal_code, s.gender "
-                    "FROM property_owners o JOIN ownership_rights r ON r.id = o.right_id "
-                    "JOIN cadastral_subjects s ON s.id = o.subject_id "
-                    "JOIN ownership_mutations m ON m.id = o.mutation_id "
-                    "WHERE m.document_id = :d AND m.mutation_index = 'current' AND o.owner_index = '1'"
+                    "SELECT r.share_numerator, r.share_denominator, r.start_date, r.end_date, s.fiscal_code, s.gender "
+                    "FROM mutation_owner o JOIN ownership_right r ON r.id = o.right_id "
+                    "JOIN subject s ON s.id = o.subject_id "
+                    "JOIN ownership_mutation m ON m.id = o.mutation_id "
+                    "WHERE m.document_id = :d AND m.is_current AND o.position = 1"
                 ),
                 {"d": doc},
             )
         ).one()
-        assert tuple(right) == ("1/2", "", "31/12/2023", "RSSMRA70A01H501Z", "M")
+        assert tuple(right) == (1, 2, None, date(2023, 12, 31), "RSSMRA70A01H501Z", "M")
         meta = (
             await session.execute(
                 text(
-                    "SELECT title, registry_view_type, municipality_code, requester, liquidation_units "
-                    "FROM document_metadata WHERE id = :d"
+                    "SELECT d.title, d.registry_view_type, c.cadastral_code, d.requester, d.liquidation_units "
+                    "FROM document d JOIN building_unit b ON b.document_id = d.id "
+                    "JOIN cadastral_unit u ON u.id = b.cadastral_unit_id "
+                    "JOIN comune c ON c.id = u.comune_id WHERE d.id = :d"
                 ),
                 {"d": doc},
             )
@@ -138,27 +148,27 @@ async def test_ingest_soggetto_fills_subject_groups_units_and_land():
         subject = (
             await session.execute(
                 text(
-                    "SELECT s.fiscal_code, s.last_name, s.first_name, s.date_of_birth, g.municipality, "
-                    "s.birth_municipality_code FROM document_subjects d JOIN cadastral_subjects s ON s.id = d.subject_id "
-                    "LEFT JOIN geographic_places g ON g.id = s.birth_place_id WHERE d.id = :d"
+                    "SELECT s.fiscal_code, s.last_name, s.first_name, s.birth_date, g.name, "
+                    "g.cadastral_code FROM document_subject d JOIN subject s ON s.id = d.subject_id "
+                    "LEFT JOIN comune g ON g.id = s.birth_comune_id WHERE d.document_id = :d"
                 ),
                 {"d": doc},
             )
         ).one()
-        assert tuple(subject) == ("RSSMRA70A01H501Z", "ROSSI", "MARIO", "01/01/1970", "ROMA", "H501")
-        assert await _scalar(session, "SELECT count(*) FROM property_groups WHERE document_id = :d", d=doc) == 2
+        assert tuple(subject) == ("RSSMRA70A01H501Z", "ROSSI", "MARIO", date(1970, 1, 1), "ROMA", "H501")
+        assert await _scalar(session, "SELECT count(*) FROM property_group WHERE document_id = :d", d=doc) == 2
         categories = (
             await session.execute(
                 text(
-                    "SELECT c.category FROM building_classifications c JOIN building_units u ON u.id = c.building_unit_id "
-                    "JOIN property_groups g ON g.id = u.group_id WHERE g.document_id = :d ORDER BY u.unit_index"
+                    "SELECT u.category FROM building_unit u "
+                    "JOIN property_group g ON g.id = u.property_group_id WHERE g.document_id = :d ORDER BY u.unit_index"
                 ),
                 {"d": doc},
             )
         ).scalars().all()
         assert categories == ["A/4", "C/6"]
-        assert await _scalar(session, "SELECT quality FROM land_classifications") == "ULIVETO"
-        assert await _scalar(session, "SELECT planimetria FROM building_surfaces WHERE total_area = 120") == "PRESENTE"
+        assert await _scalar(session, "SELECT land_quality FROM land_parcel_classification") == "ULIVETO"
+        assert await _scalar(session, "SELECT total_area_sqm FROM building_unit WHERE total_area_sqm = 120") == 120
 
 
 @pytest.mark.usefixtures("fresh_db")
@@ -168,12 +178,12 @@ async def test_ingest_terreni_attuale_and_company_owner():
         await xml_ingest.ingest_visura_xml(session, doc, _read("terreni_attuale"))
         await session.commit()
 
-        assert await _scalar(session, "SELECT partita FROM land_parcels WHERE document_id = :d", d=doc) == "1234"
-        assert await _scalar(session, "SELECT count(*) FROM land_classifications") == 2
+        assert await _scalar(session, "SELECT partita FROM land_parcel WHERE document_id = :d", d=doc) == "1234"
+        assert await _scalar(session, "SELECT count(*) FROM land_parcel_classification") == 2
         owner = (
             await session.execute(
                 text(
-                    "SELECT s.subject_type, s.gender FROM property_owners o JOIN cadastral_subjects s ON s.id = o.subject_id"
+                    "SELECT s.subject_type, s.gender FROM mutation_owner o JOIN subject s ON s.id = o.subject_id"
                 )
             )
         ).one()
@@ -189,9 +199,9 @@ async def test_reingesting_a_document_replaces_its_rows():
         await session.commit()
 
         assert first == second
-        assert await _scalar(session, "SELECT count(*) FROM building_units") == 2
-        assert await _scalar(session, "SELECT count(*) FROM property_owners") == 1
-        assert await _scalar(session, "SELECT count(*) FROM cadastral_subjects WHERE fiscal_code = 'RSSMRA70A01H501Z'") == 1
+        assert await _scalar(session, "SELECT count(*) FROM building_unit") == 2
+        assert await _scalar(session, "SELECT count(*) FROM mutation_owner") == 1
+        assert await _scalar(session, "SELECT count(*) FROM subject WHERE fiscal_code = 'RSSMRA70A01H501Z'") == 1
 
 
 @pytest.mark.usefixtures("fresh_db")
@@ -204,8 +214,8 @@ async def test_ingest_company_subject_document():
         row = (
             await session.execute(
                 text(
-                    "SELECT s.fiscal_code, s.display_name, s.subject_type FROM document_subjects d "
-                    "JOIN cadastral_subjects s ON s.id = d.subject_id"
+                    "SELECT s.fiscal_code, s.name, s.subject_type FROM document_subject d "
+                    "JOIN subject s ON s.id = d.subject_id"
                 )
             )
         ).one()
@@ -234,7 +244,7 @@ async def test_backfill_fills_documents_without_typed_rows_and_skips_the_done_on
     forced = await xml_ingest.backfill_documents(force=True)
     assert forced["documents"] == 1
     async with database._get_session_factory()() as session:
-        assert await _scalar(session, "SELECT count(*) FROM land_parcels WHERE document_id = :d", d=todo) == 1
+        assert await _scalar(session, "SELECT count(*) FROM land_parcel WHERE document_id = :d", d=todo) == 1
 
 
 def test_complete_content_rereads_a_legacy_cut_copy(tmp_path):
@@ -280,5 +290,5 @@ async def test_a_new_visura_is_not_dropped_as_duplicate_of_another_document_of_t
     await _save_documents_to_db([_downloaded("vi_sto_PA_FG9_PT1452_SUB5_bis.p7m", "storica", "10/10/2026")])  # same kind+date
 
     async with database._get_session_factory()() as session:
-        names = (await session.execute(text("SELECT filename FROM visura_documents ORDER BY id"))).scalars().all()
+        names = (await session.execute(text("SELECT file_name FROM document ORDER BY id"))).scalars().all()
     assert names == ["plan_PA_FG9_PT1452_SUB5.pdf", "vi_sto_PA_FG9_PT1452_SUB5.p7m"]

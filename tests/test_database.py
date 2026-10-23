@@ -34,11 +34,11 @@ async def _rows(sql: str, **params) -> list[dict]:
 async def test_init_db_creates_tables():
     tables = [r["tablename"] for r in await _rows("SELECT tablename FROM pg_tables WHERE schemaname = current_schema()")]
 
-    assert "cadastral_locations" in tables
-    assert "visura_requests" in tables
-    assert "visura_responses" in tables
-    assert "visura_properties" in tables
-    assert "visura_owners" in tables
+    for table in ("comune", "cadastral_unit", "subject", "request", "request_result", "property", "result_owner", "document"):
+        assert table in tables
+    # the old layout's request/response split and per-purpose location/place tables are gone
+    for table in ("cadastral_locations", "visura_requests", "visura_responses", "geographic_places"):
+        assert table not in tables
 
 
 # ---------------------------------------------------------------------------
@@ -59,15 +59,16 @@ async def test_save_request_persists_row():
     )
 
     rows = await _rows(
-        "SELECT req.request_id, loc.province AS provincia, loc.cadastre_type AS tipo_catasto"
-        " FROM visura_requests req LEFT JOIN cadastral_locations loc ON req.location_id = loc.id"
-        " WHERE req.request_id = :rid",
+        "SELECT req.request_ref AS request_id, c.province_code AS provincia, u.cadastre_type AS tipo_catasto, c.name AS comune"
+        " FROM request req LEFT JOIN cadastral_unit u ON req.cadastral_unit_id = u.id"
+        " LEFT JOIN comune c ON c.id = u.comune_id WHERE req.request_ref = :rid",
         rid="req_T_abc",
     )
     row = rows[0] if rows else None
 
     assert row is not None
-    assert row["provincia"] == "Trieste"
+    assert row["provincia"] == "TS"  # the portal form takes the province name, the database stores the sigla
+    assert row["comune"] == "TRIESTE"
     assert row["tipo_catasto"] == "T"
 
 
@@ -86,9 +87,9 @@ async def test_save_request_with_optional_fields():
     )
 
     rows = await _rows(
-        "SELECT loc.section AS sezione, loc.subunit AS subalterno"
-        " FROM visura_requests req LEFT JOIN cadastral_locations loc ON req.location_id = loc.id"
-        " WHERE req.request_id = :rid",
+        "SELECT u.section AS sezione, u.subunit AS subalterno"
+        " FROM request req LEFT JOIN cadastral_unit u ON req.cadastral_unit_id = u.id"
+        " WHERE req.request_ref = :rid",
         rid="req_F_opt",
     )
     row = rows[0]
@@ -113,7 +114,7 @@ async def test_save_requests_batch_persists_all():
     ]
     await database.save_requests_batch(rows)
 
-    count = (await _rows("SELECT COUNT(*) AS n FROM visura_requests"))[0]["n"]
+    count = (await _rows("SELECT COUNT(*) AS n FROM request"))[0]["n"]
 
     assert count == 5
 
@@ -122,7 +123,7 @@ async def test_save_requests_batch_persists_all():
 async def test_save_requests_batch_empty_is_noop():
     await database.save_requests_batch([])
 
-    count = (await _rows("SELECT COUNT(*) AS n FROM visura_requests"))[0]["n"]
+    count = (await _rows("SELECT COUNT(*) AS n FROM request"))[0]["n"]
 
     assert count == 0
 

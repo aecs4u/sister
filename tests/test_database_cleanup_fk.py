@@ -24,23 +24,15 @@ class _Result:
 
 
 class _Session:
-    """Minimal session that enforces the response/result foreign key order."""
+    """Minimal session that records normalized request cleanup order."""
 
     def __init__(self, expired):
         self.expired_ids = expired
         self.select_count = 0
         self.events = []
-        self.result_dependants = {"properties", "owners"}
-        self.page_visit_dependants = {"form_elements", "errors"}
-        self.document_dependants = {"xml_attributes", "xml_nodes", "metadata"}
-        self.remaining = {
-            "page_visits",
-            "visura_documents",
-            "visura_properties",
-            "visura_owners",
-            "visura_results",
-            "visura_responses",
-        }
+        self.page_visit_dependants = {"page_visit_form_element", "page_visit_error"}
+        self.result_dependants = {"result_owner", "property", "request_result"}
+        self.remaining = {"request_payload", "request"}
 
     async def __aenter__(self):
         return self
@@ -52,36 +44,19 @@ class _Session:
         if isinstance(statement, Delete):
             table = statement.table.name
             self.events.append(table)
-            if table == "page_visit_form_elements":
-                self.page_visit_dependants.discard("form_elements")
-            elif table == "page_visit_errors":
-                self.page_visit_dependants.discard("errors")
-            elif table == "page_visits":
+            if table in self.page_visit_dependants:
+                self.page_visit_dependants.discard(table)
+            elif table == "page_visit":
                 assert not self.page_visit_dependants
+            elif table in {"result_owner", "property", "request_result"}:
+                self.result_dependants.discard(table)
+            elif table == "request_payload":
                 self.remaining.discard(table)
-            elif table == "document_metadata":
-                assert "xml_nodes" not in self.document_dependants
-                self.document_dependants.discard("metadata")
-            elif table == "document_xml_attributes":
-                self.document_dependants.discard("xml_attributes")
-            elif table == "document_xml_nodes":
-                assert "xml_attributes" not in self.document_dependants
-                self.document_dependants.discard("xml_nodes")
-            elif table == "visura_documents":
-                assert not self.document_dependants
-                self.remaining.discard(table)
-            elif table == "visura_properties":
-                self.result_dependants.discard("properties")
-                self.remaining.discard(table)
-            elif table == "visura_owners":
-                self.result_dependants.discard("owners")
-                self.remaining.discard(table)
-            elif table == "visura_results":
-                assert not self.result_dependants, "results must be deleted after their properties and owners"
-                self.remaining.discard(table)
-            elif table == "visura_responses":
-                assert self.remaining == {table}, "all response children must be deleted before the response"
-                self.remaining.discard(table)
+            elif table == "request":
+                if self.expired_ids and self.select_count > 1:
+                    assert not self.page_visit_dependants
+                    assert not self.result_dependants
+                    assert "request_payload" not in self.remaining
             return _Result([])
 
         self.select_count += 1
@@ -100,21 +75,19 @@ def test_cleanup_deletes_result_dependants_before_expired_response(monkeypatch):
 
     assert deleted == 1
     assert session.events == [
-        "page_visit_form_elements",
-        "page_visit_errors",
-        "page_visits",
-        "document_xml_attributes",
-        "document_xml_nodes",
-        "document_metadata",
-        "visura_documents",
-        "visura_properties",
-        "visura_owners",
-        "visura_results",
-        "visura_responses",
+        "page_visit_form_element",
+        "page_visit_error",
+        "page_visit",
+        "result_owner",
+        "property",
+        "request_result",
+        "request_payload",
+        "request",
+        "request",
     ]
 
 
-def test_cleanup_does_not_delete_when_no_response_is_expired(monkeypatch):
+def test_cleanup_still_prunes_stale_pending_requests_without_expired_responses(monkeypatch):
     session = _Session([])
     monkeypatch.setattr(database, "is_db_writable", lambda: True)
     monkeypatch.setattr(database, "_get_session_factory", lambda: lambda: session)
@@ -122,4 +95,4 @@ def test_cleanup_does_not_delete_when_no_response_is_expired(monkeypatch):
     deleted = asyncio.run(database.cleanup_old_responses(ttl_seconds=60))
 
     assert deleted == 0
-    assert session.events == []
+    assert session.events == ["request"]

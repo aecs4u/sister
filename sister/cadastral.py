@@ -6,7 +6,7 @@ from sqlalchemy import JSON, Column
 from sqlalchemy.orm import Session, joinedload
 from sqlmodel import Field, Relationship, SQLModel, select
 
-from .db_models import CadastralLocation, CadastralSubject, OwnershipRight
+from .db_models import CadastralUnit, OwnershipRight, Subject
 
 # ─── Queries (legal-entity search + single property/prospect records) ─────────
 #
@@ -94,7 +94,7 @@ class CadastralLocationParameters(SQLModel, table=True):
     id: int | None = Field(default=None, primary_key=True)
     query_id: str | None = Field(default=None, foreign_key="cadastral_queries.id", index=True)
     inspection_id: str | None = Field(default=None, foreign_key="cadastral_inspections.id", index=True)
-    location_id: int | None = Field(default=None, foreign_key="cadastral_locations.id", index=True)
+    location_id: int | None = Field(default=None, foreign_key="cadastral_unit.id", index=True)
     property_id: str | None = None  # inspection only
 
     __table_args__ = (
@@ -110,7 +110,7 @@ class CadastralLocationParameters(SQLModel, table=True):
 
     query: Optional["CadastralQuery"] = Relationship(back_populates="location_parameters")
     inspection: Optional["CadastralInspection"] = Relationship(back_populates="location_parameters")
-    location: Optional["CadastralLocation"] = Relationship()
+    location: Optional["CadastralUnit"] = Relationship()
 
     names: ClassVar[dict] = {
         "idImmobile": "property_id",
@@ -179,11 +179,11 @@ class CadastralLegalEntitySearchEntity(SQLModel, table=True):
 
     id: str | None = Field(default=None, primary_key=True)
     query_id: str = Field(foreign_key="cadastral_queries.id")
-    subject_id: int | None = Field(default=None, foreign_key="cadastral_subjects.id", index=True)
+    subject_id: int | None = Field(default=None, foreign_key="subject.id", index=True)
     birth_place_text: str | None = None
 
     query: Optional["CadastralQuery"] = Relationship(back_populates="entities")
-    subject: Optional["CadastralSubject"] = Relationship()
+    subject: Optional["Subject"] = Relationship()
     geographic_summaries: list["CadastralLegalEntitySearchGeoSummary"] = Relationship(back_populates="entity")
     properties: list["CadastralLegalEntitySearchProperty"] = Relationship(back_populates="entity")
 
@@ -242,9 +242,9 @@ class CadastralLegalEntitySearchProperty(SQLModel, table=True):
     id: int | None = Field(default=None, primary_key=True)
     land_registry: str
     ownership_text: str | None = None
-    right_id: int | None = Field(default=None, foreign_key="ownership_rights.id", index=True)
+    right_id: int | None = Field(default=None, foreign_key="ownership_right.id", index=True)
     location: str
-    location_id: int | None = Field(default=None, foreign_key="cadastral_locations.id", index=True)
+    location_id: int | None = Field(default=None, foreign_key="cadastral_unit.id", index=True)
     cadastral_code: str
     classification: str
     cadastral_class: str
@@ -254,7 +254,7 @@ class CadastralLegalEntitySearchProperty(SQLModel, table=True):
     entity_id: str = Field(foreign_key="legal_entity_search_entities.id")
 
     entity: Optional["CadastralLegalEntitySearchEntity"] = Relationship(back_populates="properties")
-    cadastral_location: Optional["CadastralLocation"] = Relationship()
+    cadastral_location: Optional["CadastralUnit"] = Relationship()
     right: Optional["OwnershipRight"] = Relationship()
 
     names: ClassVar[dict] = {

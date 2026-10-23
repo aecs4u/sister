@@ -20,7 +20,7 @@ import uuid
 
 import pytest
 
-_SCHEMA_RE = re.compile(r"^sister_test_[0-9a-f]{8}$")
+_SCHEMA_RE = re.compile(r"^sister_test_[0-9a-f]{8}(?:_archive)?$")
 _LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1"}
 
 
@@ -91,117 +91,46 @@ def _apply_table_migrations(engine) -> None:
                 "ON sister_request_jobs (status, lease_until)"
             )
         )
-        conn.execute(
-            text(
-                """CREATE TABLE cadastral_map_geometry_cache (
-                    feature_type TEXT NOT NULL,
-                    lookup_key TEXT NOT NULL,
-                    municipality TEXT NOT NULL DEFAULT '',
-                    province TEXT NOT NULL DEFAULT '',
-                    municipality_code TEXT NOT NULL DEFAULT '',
-                    section TEXT NOT NULL DEFAULT '',
-                    sheet TEXT NOT NULL DEFAULT '',
-                    parcel TEXT NOT NULL DEFAULT '',
-                    source_reference TEXT,
-                    geom TEXT,
-                    checked_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                    PRIMARY KEY (feature_type, lookup_key)
-                )"""
-            )
-        )
-        # DB-layer tests do not need PostGIS; provide the map view's schema
-        # sentinel so init_db can validate the rest of the isolated schema.
-        conn.execute(
-            text(
-                """CREATE VIEW v_sister_visura_cadastral_polygons AS
-                   SELECT NULL::BIGINT AS document_id,
-                          NULL::TEXT AS feature_type,
-                          NULL::TEXT AS lookup_key,
-                          NULL::BIGINT AS location_id,
-                          NULL::TEXT AS municipality_code,
-                          NULL::TEXT AS municipality,
-                          NULL::TEXT AS province,
-                          NULL::TEXT AS section,
-                          NULL::TEXT AS sheet,
-                          NULL::TEXT AS parcel,
-                          NULL::TEXT AS source_reference,
-                          NULL::TIMESTAMPTZ AS checked_at,
-                          NULL::TEXT AS geom
-                   WHERE FALSE"""
-            )
-        )
 
 
-def _apply_enum_catalog_triggers(engine) -> None:
-    """Mirror the catalog triggers added by Alembic in this ORM-created test schema.
+def _apply_flat_schema(engine, schema: str, archive_schema: str) -> None:
+    """Build the flat/normalised tables and views from the migration's own SQL, in the throwaway schemas.
 
-    The isolated test schema is built with ``SQLModel.metadata.create_all`` rather
-    than by replaying the full production migration chain. The model includes the
-    catalog foreign keys, so these triggers are needed to keep newly observed
-    categorical values valid just as they are in a migrated production schema.
+    ``02_schema.sql`` and ``05_views.sql`` are the single definition of the layout (the ORM models only describe columns
+    for queries), so a test schema cannot drift from what ``alembic upgrade`` creates. PostGIS lives in the application
+    schema; where it is not installed the geometry column falls back to text so DB-layer tests still run.
     """
+    import re as _re
+    from pathlib import Path
+
     from sqlalchemy import text
 
-    from sister.db_models import ENUM_CATALOG_TABLES
-    from sqlmodel import SQLModel
+    sql_dir = Path(__file__).resolve().parent.parent / "alembic" / "sql" / "20261024_flat_normalised"
 
-    groups = {}
-    for table in SQLModel.metadata.tables.values():
-        fields = []
-        for column in table.columns:
-            for foreign_key in column.foreign_keys:
-                target = foreign_key.target_fullname
-                catalog_name = target.split(".", 1)[0]
-                if catalog_name in ENUM_CATALOG_TABLES:
-                    fields.append((column.name, catalog_name))
-        if fields:
-            groups[table.name] = fields
+    def render(name: str) -> str:
+        sql = (sql_dir / name).read_text(encoding="utf-8")
+        sql = _re.sub(r"^CREATE SCHEMA[^;]*;\n", "", sql, flags=_re.MULTILINE)  # the schemas exist already
+        sql = _re.sub(r"^SET LOCAL search_path[^;]*;\n", "", sql, flags=_re.MULTILINE)
+        return sql.replace("sister_next", f'"{schema}"').replace("sister_archive", f'"{archive_schema}"')
 
     with engine.begin() as conn:
-        conn.execute(
-            text(
-                """CREATE FUNCTION ensure_enum_reference_value()
-                   RETURNS trigger
-                   LANGUAGE plpgsql
-                   AS $$
-                   DECLARE
-                       pair_index INTEGER;
-                       source_column TEXT;
-                       enum_table TEXT;
-                       source_value TEXT;
-                   BEGIN
-                       FOR pair_index IN 0..(TG_NARGS / 2 - 1) LOOP
-                           source_column := TG_ARGV[pair_index * 2];
-                           enum_table := TG_ARGV[pair_index * 2 + 1];
-                           source_value := to_jsonb(NEW) ->> source_column;
-                           IF source_value IS NOT NULL THEN
-                               EXECUTE format(
-                                   'INSERT INTO %I (value) VALUES ($1) ON CONFLICT (value) DO NOTHING',
-                                   enum_table
-                               ) USING source_value;
-                           END IF;
-                       END LOOP;
-                       RETURN NEW;
-                   END;
-                   $$"""
-            )
-        )
-        for table_name, fields in groups.items():
-            trigger_name = f"trg_enum_catalog_{table_name}"
-            args = ", ".join(f"'{column}', '{catalog}'" for column, catalog in fields)
-            conn.execute(
-                text(
-                    f"CREATE TRIGGER {trigger_name} BEFORE INSERT OR UPDATE ON {table_name} "
-                    f"FOR EACH ROW EXECUTE FUNCTION ensure_enum_reference_value({args})"
-                )
-            )
+        postgis_schema = conn.execute(
+            text("SELECT n.nspname FROM pg_extension e JOIN pg_namespace n ON n.oid = e.extnamespace WHERE e.extname = 'postgis'")
+        ).scalar()
+        schema_sql = render("02_schema.sql")
+        if postgis_schema:
+            conn.execute(text(f'SET LOCAL search_path = "{schema}", "{postgis_schema}"'))
+        else:
+            schema_sql = schema_sql.replace("geom geometry,", "geom text,")
+            schema_sql = _re.sub(r"^CREATE INDEX ix_parcel_geometry_cache_geom[^;]*;\n", "", schema_sql, flags=_re.MULTILINE)
+        conn.execute(text(schema_sql))
+        conn.execute(text(render("05_views.sql")))
 
 
 @pytest.fixture(scope="session")
 def pg_test_schema():
     """Create the throwaway schema once; yields ``(schema_name, async_dsn_with_search_path)``."""
     from sqlalchemy import create_engine, text
-    from sqlmodel import SQLModel
 
     import sister.cadastral  # noqa: F401  (registers the ORM models on SQLModel.metadata)
     import sister.database as database
@@ -226,17 +155,18 @@ def pg_test_schema():
             _drop(admin, orphan)
 
     schema = "sister_test_" + uuid.uuid4().hex[:8]
-    assert _SCHEMA_RE.fullmatch(schema)
+    archive_schema = schema + "_archive"
+    assert _SCHEMA_RE.fullmatch(schema) and _SCHEMA_RE.fullmatch(archive_schema)
     with admin.connect() as conn:
         conn.execute(text(f'CREATE SCHEMA "{schema}"'))
+        conn.execute(text(f'CREATE SCHEMA "{archive_schema}"'))
     try:
         query = dict(url.query)
         query["options"] = f"-csearch_path={schema}"
         schema_sync_url = sync_url.set(query=query)
         engine = create_engine(schema_sync_url)
-        SQLModel.metadata.create_all(engine)
+        _apply_flat_schema(engine, schema, archive_schema)
         _apply_table_migrations(engine)
-        _apply_enum_catalog_triggers(engine)
         with engine.begin() as conn:
             conn.execute(text("CREATE TABLE alembic_version (version_num varchar(64) NOT NULL PRIMARY KEY)"))
             conn.execute(text("INSERT INTO alembic_version VALUES (:v)"), {"v": database.DATABASE_REVISION})
@@ -244,6 +174,7 @@ def pg_test_schema():
         yield schema, url.set(query=query).render_as_string(hide_password=False), schema_sync_url
     finally:
         _drop(admin, schema)
+        _drop(admin, archive_schema)
         admin.dispose()
 
 
@@ -255,21 +186,26 @@ async def fresh_db(pg_test_schema, monkeypatch):
     import sister.database as database
 
     schema, async_dsn, sync_url = pg_test_schema
-    assert _SCHEMA_RE.fullmatch(schema)
+    archive_schema = schema + "_archive"
+    assert _SCHEMA_RE.fullmatch(schema) and _SCHEMA_RE.fullmatch(archive_schema)
     engine = create_engine(sync_url)
     try:
         with engine.begin() as conn:
             tables = conn.execute(
-                text("SELECT tablename FROM pg_tables WHERE schemaname = :s AND tablename <> 'alembic_version'"),
-                {"s": schema},
-            ).scalars().all()
+                text(
+                    "SELECT schemaname, tablename FROM pg_tables WHERE schemaname IN (:s, :a) "
+                    "AND tablename <> 'alembic_version'"
+                ),
+                {"s": schema, "a": archive_schema},
+            ).all()
             if tables:
-                conn.execute(text("TRUNCATE " + ", ".join(f'"{schema}"."{t}"' for t in tables) + " RESTART IDENTITY CASCADE"))
+                conn.execute(text("TRUNCATE " + ", ".join(f'"{sch}"."{t}"' for sch, t in tables) + " RESTART IDENTITY CASCADE"))
     finally:
         engine.dispose()
 
     monkeypatch.setattr(database, "DATABASE_DSN", async_dsn)
     monkeypatch.setattr(database, "DATABASE_SCHEMA", schema)
+    monkeypatch.setattr(database, "DATABASE_ARCHIVE_SCHEMA", archive_schema)
     monkeypatch.setattr(database, "_engine", None)
     monkeypatch.setattr(database, "_db_writable", None)
     yield

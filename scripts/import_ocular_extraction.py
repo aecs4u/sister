@@ -1,4 +1,9 @@
-"""Import an Ocular structured JSON result into Sister's flat and normalized tables."""
+"""Import an Ocular structured JSON result into Sister's flat and normalized tables.
+
+The inspection, its title and lien are one ``mortgage_inspection`` row; every party becomes a ``subject`` (found by fiscal
+code, else by name and birth date) linked by ``mortgage_inspection_party``; every property is a ``cadastral_unit`` linked
+by ``mortgage_inspection_property``. The JSON as extracted is kept in ``sister_archive.document_extraction_payload``.
+"""
 
 from __future__ import annotations
 
@@ -6,6 +11,7 @@ import argparse
 import asyncio
 import hashlib
 import json
+import re
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -17,17 +23,19 @@ sys.path.insert(0, str(PROJECT_ROOT))
 from sqlalchemy import delete
 from sqlmodel import select
 
-from sister.database import _get_session_factory
+from sister.database import _get_session_factory, document_file_path, _resolve_subject
 from sister.db_models import (
+    Document,
+    DocumentExtraction,
+    DocumentExtractionPayload,
     MortgageInspection,
-    MortgageInspectionLien,
     MortgageInspectionParty,
     MortgageInspectionProperty,
-    MortgageInspectionTitle,
-    MortgageInspectionUnit,
-    StructuredDocumentExtraction,
-    VisuraDocument,
 )
+from sister.reference import clean, ensure_lookup, get_or_create_cadastral_unit
+from sister.result_parsers import parse_it_date
+
+_PLACE = re.compile(r"^\s*(.*?)\s*\(([A-Za-z]{2})\)\s*$")
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -60,9 +68,44 @@ def _string(value: Any) -> str | None:
     return None if value is None else str(value)
 
 
+def _decimal(value: Any):
+    from decimal import Decimal, InvalidOperation
+
+    if value is None or value == "":
+        return None
+    try:
+        return Decimal(str(value).replace(",", "."))
+    except InvalidOperation:
+        return None
+
+
+def _date(value: Any):
+    return parse_it_date(value)
+
+
+def _time(value: Any):
+    from datetime import time
+
+    try:
+        return time.fromisoformat(str(value)) if value else None
+    except ValueError:
+        return None
+
+
+def _datetime(value: Any):
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00")) if value else None
+    except ValueError:
+        return None
+
+
 def _completed_at(run: dict[str, Any]) -> datetime | None:
     value = run.get("completed_at") or run.get("updated_at")
     if not value:
+        return None
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
         return None
 
 
@@ -72,10 +115,6 @@ def _file_hash_prefix(path: Path, length: int = 8) -> str:
         for chunk in iter(lambda: stream.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()[:length]
-    try:
-        return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
-    except ValueError:
-        return None
 
 
 async def import_extraction(document_id: int, structured_path: Path) -> int:
@@ -104,67 +143,47 @@ async def import_extraction(document_id: int, structured_path: Path) -> int:
     title_data = section_a.get("dati_titolo") or {}
     notary = title_data.get("notaio") or {}
     lien_data = section_a.get("ipoteca") or {}
-    summary = section_a.get("dati_riepilogativi") or {}
     office = inspection_data.get("ufficio") or {}
     section_b = note.get("sezione_b") or {}
     section_c = note.get("sezione_c") or {}
-    section_c_raw = note.get("sezione_c_raw") or {}
     section_d = note.get("sezione_d") or {}
 
     session_factory = _get_session_factory()
     async with session_factory() as session:
         document = (await session.execute(
-            select(VisuraDocument).where(VisuraDocument.id == document_id)
+            select(Document).where(Document.id == document_id)
         )).scalar_one_or_none()
         if document is None:
             raise ValueError(f"Sister document {document_id} does not exist")
-        if source_file and Path(document.filename or "").name != source_file:
+        if source_file and Path(document.file_name or "").name != source_file:
             output_root_hash = structured_path.parents[1].name
+            stored_path = document_file_path(document.file_name)
             content_hash_matches = (
-                document.file_path
-                and Path(document.file_path).is_file()
-                and output_root_hash == _file_hash_prefix(Path(document.file_path))
+                stored_path
+                and Path(stored_path).is_file()
+                and output_root_hash == _file_hash_prefix(Path(stored_path))
             )
             if not content_hash_matches:
                 raise ValueError(
                     f"Ocular source file {source_file!r} does not match Sister document filename "
-                    f"{document.filename!r} or its content hash"
+                    f"{document.file_name!r} or its content hash"
                 )
 
         extraction = (await session.execute(
-            select(StructuredDocumentExtraction).where(
-                StructuredDocumentExtraction.document_id == document_id,
-                StructuredDocumentExtraction.schema_name == schema_name,
-                StructuredDocumentExtraction.run_id == run_id,
+            select(DocumentExtraction).where(
+                DocumentExtraction.document_id == document_id,
+                DocumentExtraction.schema_name == schema_name,
+                DocumentExtraction.run_id == run_id,
             )
         )).scalar_one_or_none()
         if extraction is None:
-            extraction = StructuredDocumentExtraction(
-                document_id=document_id,
-                schema_name=schema_name,
-                run_id=run_id,
-                structured_data=data,
-            )
+            extraction = DocumentExtraction(document_id=document_id, schema_name=schema_name, run_id=run_id)
             session.add(extraction)
             await session.flush()
         else:
-            extraction.provider = provenance.get("provider")
-            extraction.model = provenance.get("model") or run.get("structure_models")
-            extraction.schema_version = _string(schema_version)
-            extraction.workflow_id = _string(workflow_id)
-            extraction.output_path = str(structured_path)
-            extraction.extracted_at = _completed_at(run)
-            extraction.structured_data = data
+            await session.execute(delete(MortgageInspectionProperty).where(MortgageInspectionProperty.inspection_id == extraction.id))
+            await session.execute(delete(MortgageInspectionParty).where(MortgageInspectionParty.inspection_id == extraction.id))
             await session.execute(delete(MortgageInspection).where(MortgageInspection.extraction_id == extraction.id))
-            await session.execute(delete(MortgageInspectionTitle).where(MortgageInspectionTitle.extraction_id == extraction.id))
-            await session.execute(delete(MortgageInspectionLien).where(MortgageInspectionLien.extraction_id == extraction.id))
-            await session.execute(delete(MortgageInspectionParty).where(MortgageInspectionParty.extraction_id == extraction.id))
-            old_units = (await session.execute(
-                select(MortgageInspectionUnit.id).where(MortgageInspectionUnit.extraction_id == extraction.id)
-            )).scalars().all()
-            if old_units:
-                await session.execute(delete(MortgageInspectionProperty).where(MortgageInspectionProperty.unit_id.in_(old_units)))
-                await session.execute(delete(MortgageInspectionUnit).where(MortgageInspectionUnit.id.in_(old_units)))
 
         extraction.provider = provenance.get("provider")
         extraction.model = _string(provenance.get("model") or run.get("structure_models"))
@@ -172,133 +191,131 @@ async def import_extraction(document_id: int, structured_path: Path) -> int:
         extraction.workflow_id = _string(workflow_id)
         extraction.output_path = str(structured_path)
         extraction.extracted_at = _completed_at(run)
-        extraction.structured_data = data
+        session.add(extraction)
         await session.flush()
         extraction_id = extraction.id
+        await session.execute(delete(DocumentExtractionPayload).where(DocumentExtractionPayload.extraction_id == extraction_id))
+        session.add(DocumentExtractionPayload(extraction_id=extraction_id, structured_data=data))
 
         if is_mortgage_inspection:
+            for table, value in (
+                ("mortgage_note_type", note.get("tipo_nota")),
+                ("mortgage_title_type", title_data.get("tipo_titolo")),
+                ("mortgage_lien_type", lien_data.get("specie")),
+            ):
+                await ensure_lookup(session, table, value)
+            rate = _decimal(lien_data.get("tasso_interesse_annuo_pct"))
             session.add(MortgageInspection(
                 extraction_id=extraction_id,
-                inspection_date=_string(inspection_data.get("data")),
-                inspection_time=_string(inspection_data.get("ora")),
+                inspection_date=_date(inspection_data.get("data")),
+                inspection_time=_time(inspection_data.get("ora")),
                 inspection_number=_string(inspection_data.get("numero")),
-                inspection_date_number=_string(inspection_data.get("data_numero")),
-                inspection_start=_string(inspection_data.get("inizio_ispezione")),
+                inspection_number_date=_date(inspection_data.get("data_numero")),
+                inspection_started_at=_datetime(inspection_data.get("inizio_ispezione")),
                 requester=_string(inspection_data.get("richiedente")),
-                tax_paid_euro=_integer(inspection_data.get("tassa_versata_euro")),
+                tax_paid_eur=_integer(inspection_data.get("tassa_versata_euro")),
                 page_count=_integer(inspection_data.get("pagine")),
                 office=_string(office.get("ufficio_provinciale")),
                 service=_string(office.get("servizio")),
-                note_type=_string(note.get("tipo_nota")),
-                note_timestamp=_string(note.get("utc_timestamp")),
+                note_type=clean(note.get("tipo_nota")),
+                note_at=_datetime(note.get("utc_timestamp")),
                 registro_generale=_integer(note.get("registro_generale")),
                 registro_particolare=_integer(note.get("registro_particolare")),
                 presentazione_numero=_integer(note.get("presentazione_numero")),
-                presentazione_data=_string(note.get("presentazione_data")),
+                presentazione_data=_date(note.get("presentazione_data")),
                 section_a_other_data=_string(section_a.get("altri_dati")),
                 section_d_text=_string(section_d.get("testo")),
-                unit_count=_integer(summary.get("unita_negoziali")),
-                party_favore_count=_integer(summary.get("soggetti_a_favore")),
-                party_contro_count=_integer(summary.get("soggetti_contro")),
+                lien_type=clean(lien_data.get("specie")),
+                lien_derived_from=_string(lien_data.get("derivante_da")),
+                lien_derived_from_code=_string(lien_data.get("derivante_da_codice_ufficiale")),
+                lien_derived_from_description=_string(lien_data.get("derivante_da_descrizione")),
+                lien_principal_eur=_integer(lien_data.get("capitale_euro")),
+                lien_annual_interest_rate_pct=rate,
+                lien_semiannual_interest_rate=_string(lien_data.get("tasso_interesse_semestrale")),
+                lien_interest_eur=_integer(lien_data.get("interessi_euro")),
+                lien_expenses_eur=_integer(lien_data.get("spese_euro")),
+                lien_total_eur=_integer(lien_data.get("totale_euro")),
+                lien_variable_amounts=lien_data.get("importi_variabili"),
+                lien_foreign_currency=_string(lien_data.get("valuta_estera")),
+                lien_automatic_increase=lien_data.get("somma_aumento_automatico"),
+                lien_resolutive_condition=lien_data.get("condizione_risolutiva"),
+                lien_duration_years=_integer(lien_data.get("durata_anni")),
+                lien_duration_description=_string(lien_data.get("durata_descrizione")),
+                lien_mortgage_rank=_integer(lien_data.get("grado_ipoteca")),
+                title_type=clean(title_data.get("tipo_titolo")),
+                title_description=_string(title_data.get("descrizione")),
+                title_date=_date(title_data.get("data")),
+                title_repertory_number=_string(title_data.get("numero_repertorio")),
+                title_notary_name=_string(notary.get("nome")),
+                title_notary_fiscal_code=_string(notary.get("codice_fiscale")),
+                title_notary_location=_string(notary.get("sede")),
             ))
-
-        if title_data:
-            session.add(MortgageInspectionTitle(
-                extraction_id=extraction_id,
-                title_type=_string(title_data.get("tipo_titolo")),
-                description=_string(title_data.get("descrizione")),
-                title_date=_string(title_data.get("data")),
-                repertory_number=_string(title_data.get("numero_repertorio")),
-                notary_name=_string(notary.get("nome")),
-                notary_fiscal_code=_string(notary.get("codice_fiscale")),
-                notary_location=_string(notary.get("sede")),
-            ))
-        if lien_data:
-            session.add(MortgageInspectionLien(
-                extraction_id=extraction_id,
-                lien_type=_string(lien_data.get("specie")),
-                lien_type_original=_string(lien_data.get("specie_descrizione_originale")),
-                derived_from=_string(lien_data.get("derivante_da")),
-                derived_from_code=_string(lien_data.get("derivante_da_codice_ufficiale")),
-                derived_from_description=_string(lien_data.get("derivante_da_descrizione")),
-                principal_euro=_integer(lien_data.get("capitale_euro")),
-                annual_interest_rate=_string(lien_data.get("tasso_interesse_annuo")),
-                annual_interest_rate_pct=_float(lien_data.get("tasso_interesse_annuo_pct")),
-                semiannual_interest_rate=_string(lien_data.get("tasso_interesse_semestrale")),
-                interest_euro=_integer(lien_data.get("interessi_euro")),
-                expenses_euro=_integer(lien_data.get("spese_euro")),
-                total_euro=_integer(lien_data.get("totale_euro")),
-                variable_amounts=lien_data.get("importi_variabili"),
-                foreign_currency=_string(lien_data.get("valuta_estera")),
-                automatic_increase=lien_data.get("somma_aumento_automatico"),
-                resolutive_condition=lien_data.get("condizione_risolutiva"),
-                duration_years=_integer(lien_data.get("durata_anni")),
-                duration_description=_string(lien_data.get("durata_descrizione")),
-                mortgage_rank=_integer(lien_data.get("grado_ipoteca")),
-            ))
+            await session.flush()
 
         for unit_data in section_b.get("unita_negoziali") or []:
-            unit = MortgageInspectionUnit(
-                extraction_id=extraction_id,
-                unit_number=_integer(unit_data.get("numero")),
-            )
-            session.add(unit)
-            await session.flush()
+            unit_number = _integer(unit_data.get("numero"))
             for property_data in unit_data.get("immobili") or []:
-                session.add(MortgageInspectionProperty(
-                    unit_id=unit.id,
-                    property_number=_integer(property_data.get("numero_immobile")),
+                municipality = _string(property_data.get("comune_denominazione"))
+                province = None
+                match = _PLACE.match(municipality or "")
+                if match:  # 'RAVENNA (RA)' → name + sigla
+                    municipality, province = match.group(1), match.group(2)
+                catasto = (_string(property_data.get("tipo_catasto")) or "").strip().lower()
+                unit_id = await get_or_create_cadastral_unit(
+                    session,
+                    cadastre_type={"fabbricati": "F", "terreni": "T"}.get(catasto),
+                    province=province,
+                    municipality=municipality,
                     municipality_code=_string(property_data.get("comune_codice")),
-                    municipality=_string(property_data.get("comune_denominazione")),
-                    cadastre_type=_string(property_data.get("tipo_catasto")),
-                    urban_section=_string(property_data.get("sezione_urbana")),
-                    sheet=_integer(property_data.get("foglio")),
-                    parcel=_integer(property_data.get("particella")),
-                    subunit=_integer(property_data.get("subalterno")),
+                    section=_string(property_data.get("sezione_urbana")),
+                    sheet=_string(property_data.get("foglio")),
+                    parcel=_string(property_data.get("particella")),
+                    subunit=_string(property_data.get("subalterno")),
+                )
+                session.add(MortgageInspectionProperty(
+                    inspection_id=extraction_id,
+                    unit_number=unit_number,
+                    property_number=_integer(property_data.get("numero_immobile")),
+                    cadastral_unit_id=unit_id,
                     nature=_string(property_data.get("natura")),
                     nature_description=_string(property_data.get("natura_descrizione")),
                     room_count=_integer(property_data.get("consistenza_vani")),
-                    area_sqm=_float(property_data.get("consistenza_mq")),
+                    area_sqm=_decimal(property_data.get("consistenza_mq")),
                     floor=_string(property_data.get("piano")),
                     address=_string(property_data.get("indirizzo")),
                     civic_number=_string(property_data.get("numero_civico")),
                 ))
 
         for role in ("a_favore", "contro"):
-            normalized_rows = section_c.get(role) or []
-            raw_rows = section_c_raw.get(role) or []
-            raw_by_number = {
-                _integer(row.get("numero_soggetto")): row
-                for row in raw_rows
-                if _integer(row.get("numero_soggetto")) is not None
-            }
-            for ordinal, party_data in enumerate(normalized_rows):
-                raw_data = raw_by_number.get(_integer(party_data.get("numero_soggetto")))
-                if raw_data is None and ordinal < len(raw_rows):
-                    raw_data = raw_rows[ordinal]
-                raw_data = raw_data or {}
+            for ordinal, party_data in enumerate(section_c.get(role) or []):
+                place = _PLACE.match(_string(party_data.get("luogo_nascita")) or "")
+                entity = clean(party_data.get("denominazione"))
+                surname, given = clean(party_data.get("cognome")), clean(party_data.get("nome"))
+                subject_id = await _resolve_subject(session, {
+                    "fiscal_code": _string(party_data.get("codice_fiscale")),
+                    "display_name": entity or " ".join(part for part in (surname, given) if part) or None,
+                    "last_name": None if entity else surname,
+                    "first_name": None if entity else given,
+                    "gender": _string(party_data.get("sesso")),
+                    "date_of_birth": _date(party_data.get("data_nascita")),
+                    "birth_municipality": place.group(1) if place else _string(party_data.get("luogo_nascita")),
+                    "birth_province": place.group(2) if place else None,
+                    "subject_type": "legal_entity" if entity else "person",
+                })
+                quality = await ensure_lookup(session, "mortgage_party_quality", party_data.get("qualita"))
                 session.add(MortgageInspectionParty(
-                    extraction_id=extraction_id,
+                    inspection_id=extraction_id,
                     role=role,
                     ordinal=ordinal,
+                    subject_id=subject_id,
                     subject_number=_integer(party_data.get("numero_soggetto")),
-                    quality=_string(party_data.get("qualita")),
-                    surname=_string(party_data.get("cognome")),
-                    given_name=_string(party_data.get("nome")),
-                    birth_date=_string(party_data.get("data_nascita")),
-                    birth_place=_string(party_data.get("luogo_nascita")),
-                    gender=_string(party_data.get("sesso")),
-                    fiscal_code=_string(party_data.get("codice_fiscale")),
-                    entity_name=_string(party_data.get("denominazione")),
+                    quality=quality,
                     registered_office=_string(party_data.get("sede")),
                     mortgage_domicile=_string(party_data.get("domicilio_ipotecario")),
                     negotiation_unit_reference=_integer(party_data.get("unita_negoziale_riferimento")),
                     right_type=_string(party_data.get("tipo_diritto")),
                     share_numerator=_integer(party_data.get("quota_numeratore")),
                     share_denominator=_integer(party_data.get("quota_denominatore")),
-                    raw_quality=_string(raw_data.get("qualita_testuale")),
-                    raw_share=_string(raw_data.get("quota_testuale")),
-                    raw_right_type=_string(raw_data.get("tipo_diritto_testuale")),
                 ))
 
         await session.commit()

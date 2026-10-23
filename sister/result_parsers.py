@@ -10,7 +10,8 @@ from __future__ import annotations
 
 import math
 import re
-from datetime import date
+from datetime import date, datetime
+from zoneinfo import ZoneInfo
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
@@ -566,6 +567,24 @@ def parse_it_date(value: Any) -> date | None:
             except ValueError:
                 return None
     return None
+
+
+_IT_TIMESTAMP = re.compile(r"^\s*(\d{2})/(\d{2})/(\d{4})[ T]+(\d{2}):(\d{2}):(\d{2})\s*$")
+_ROME = ZoneInfo("Europe/Rome")
+
+
+def parse_it_datetime(value: Any) -> datetime | None:
+    """``dd/mm/yyyy hh:mm:ss`` (Italian local time) → aware datetime; a bare date means midnight; None otherwise."""
+    text = str(value if value is not None else "").replace("\xa0", " ")
+    found = _IT_TIMESTAMP.match(text)
+    try:
+        if found:
+            day, month, year, hour, minute, second = (int(part) for part in found.groups())
+            return datetime(year, month, day, hour, minute, second, tzinfo=_ROME)
+    except ValueError:
+        return None
+    day_only = parse_it_date(text)
+    return datetime(day_only.year, day_only.month, day_only.day, tzinfo=_ROME) if day_only else None
 
 
 def format_it_date(value: date | None) -> str:

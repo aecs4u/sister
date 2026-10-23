@@ -455,7 +455,8 @@ SELECT i.extraction_id, pg_temp.it_date(i.inspection_date), nullif(i.inspection_
        l.annual_interest_rate_pct::numeric(7, 4), l.total_euro, l.variable_amounts, l.automatic_increase, l.resolutive_condition,
        l.duration_years, l.duration_description, l.mortgage_rank,
        nullif(t.title_type, ''), t.description, pg_temp.it_date(t.title_date), t.repertory_number, t.notary_name, t.notary_fiscal_code,
-       t.notary_location
+       t.notary_location,
+       l.semiannual_interest_rate, l.interest_euro, l.expenses_euro, l.foreign_currency
 FROM mortgage_inspections i
 LEFT JOIN mortgage_inspection_liens l ON l.extraction_id = i.extraction_id
 LEFT JOIN mortgage_inspection_titles t ON t.extraction_id = i.extraction_id;
@@ -467,7 +468,7 @@ BEGIN
     FOR r IN
         SELECT format('%I.%I', n.nspname, c.relname) AS tbl, a.attname AS col
         FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid JOIN pg_namespace n ON n.oid = c.relnamespace
-        WHERE n.nspname = 'sister_next' AND a.attidentity <> '' AND NOT a.attisdropped
+        WHERE n.nspname IN ('sister_next', 'sister_archive') AND a.attidentity <> '' AND NOT a.attisdropped
     LOOP
         EXECUTE format('SELECT setval(pg_get_serial_sequence(%L, %L), greatest(coalesce((SELECT max(%I) FROM %s), 0), 1), (SELECT max(%I) FROM %s) IS NOT NULL)',
                        r.tbl, r.col, r.col, r.tbl, r.col, r.tbl);
@@ -515,9 +516,9 @@ INSERT INTO sister_next.cadastral_unit (cadastre_type, comune_id, section, sheet
 SELECT DISTINCT ct, cid, sec, sh, pa, su FROM _mp
 ON CONFLICT ON CONSTRAINT uq_cadastral_unit DO NOTHING;
 INSERT INTO sister_next.mortgage_inspection_property (id, inspection_id, unit_number, property_number, cadastral_unit_id, nature,
-                                                      nature_description, room_count, floor, address, civic_number)
+                                                      nature_description, room_count, floor, address, civic_number, area_sqm)
 SELECT m.id, m.extraction_id, m.unit_number, m.property_number, cu.id, nullif(m.nature, ''), nullif(m.nature_description, ''),
-       m.room_count, nullif(m.floor, ''), nullif(m.address, ''), nullif(m.civic_number, '')
+       m.room_count, nullif(m.floor, ''), nullif(m.address, ''), nullif(m.civic_number, ''), m.area_sqm
 FROM _mp m
 LEFT JOIN sister_next.cadastral_unit cu ON cu.cadastre_type IS NOT DISTINCT FROM m.ct AND cu.comune_id IS NOT DISTINCT FROM m.cid
      AND cu.section IS NOT DISTINCT FROM m.sec AND cu.sheet IS NOT DISTINCT FROM m.sh AND cu.parcel IS NOT DISTINCT FROM m.pa
@@ -580,7 +581,7 @@ BEGIN
     FOR r IN
         SELECT format('%I.%I', n.nspname, c.relname) AS tbl, a.attname AS col
         FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid JOIN pg_namespace n ON n.oid = c.relnamespace
-        WHERE n.nspname = 'sister_next' AND a.attidentity <> '' AND NOT a.attisdropped
+        WHERE n.nspname IN ('sister_next', 'sister_archive') AND a.attidentity <> '' AND NOT a.attisdropped
     LOOP
         EXECUTE format('SELECT setval(pg_get_serial_sequence(%L, %L), greatest(coalesce((SELECT max(%I) FROM %s), 0), 1), (SELECT max(%I) FROM %s) IS NOT NULL)',
                        r.tbl, r.col, r.col, r.tbl, r.col, r.tbl);

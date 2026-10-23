@@ -2,10 +2,11 @@
 """Index the files in the SISTER documents directory in PostgreSQL.
 
 The source files remain in place. PDF, P7M, XML, ZIP and fiducial DAT files are
-indexed; generated ``*.plan.json`` sidecars are deliberately excluded. XML
-content is kept in document_metadata and decomposed into document_xml_nodes and
-document_xml_attributes so the import is searchable without losing the raw
-document content.
+indexed; generated ``*.plan.json`` sidecars are deliberately excluded. A document
+is stored by file name (the documents directory is configuration); XML content
+is kept in the archive (``document_content``) and decomposed into the archived
+element tree (``document_xml_node`` / ``document_xml_attribute``) so the import is
+searchable without losing the raw document content.
 """
 
 from __future__ import annotations
@@ -25,7 +26,9 @@ from lxml import etree
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from sister.db_models import CadastralLocation, DocumentMetadata, VisuraDocument
+from sister.db_models import Document, DocumentContent
+from sister.reference import clean, ensure_lookup, get_or_create_cadastral_unit
+from sister.result_parsers import parse_it_date
 from sister.utils import _document_key, _parse_visura_pdf, _parse_visura_xml
 from sister.visura_xml_models import DocumentXmlAttribute, DocumentXmlNode
 
@@ -156,26 +159,17 @@ async def flatten_xml(session: AsyncSession, document_id: int, content: str | No
 
 async def location_for(session: AsyncSession, parsed: dict[str, Any]) -> int | None:
     fields = {
-        "cadastre_type": parsed.get("tipo_catasto") or "",
-        "province": parsed.get("provincia") or "",
-        "municipality": parsed.get("comune") or "",
-        "sheet": parsed.get("foglio") or "",
-        "parcel": parsed.get("particella") or "",
-        "subunit": parsed.get("subalterno") or "",
-        "section": parsed.get("sezione_urbana") or "",
+        "cadastre_type": parsed.get("tipo_catasto"),
+        "province": parsed.get("provincia"),
+        "municipality": parsed.get("comune"),
+        "sheet": parsed.get("foglio"),
+        "parcel": parsed.get("particella"),
+        "subunit": parsed.get("subalterno"),
+        "section": parsed.get("sezione_urbana"),
     }
-    if not any(fields.values()):
+    if not any(clean(value) for value in fields.values()):
         return None
-    row = await session.scalar(
-        select(CadastralLocation).where(
-            *(getattr(CadastralLocation, key) == value for key, value in fields.items())
-        )
-    )
-    if row is None:
-        row = CadastralLocation(**fields)
-        session.add(row)
-        await session.flush()
-    return row.id
+    return await get_or_create_cadastral_unit(session, **fields)
 
 
 async def import_documents(files: list[Path], paired_xml: dict[str, Path]) -> dict[str, int]:
@@ -184,9 +178,9 @@ async def import_documents(files: list[Path], paired_xml: dict[str, Path]) -> di
     await init_db()
     engine = _get_engine()
     session_factory = _get_session_factory()
-    stats = {"indexed": 0, "path_repaired": 0, "metadata": 0, "xml_flattened": 0, "skipped": 0}
+    stats = {"indexed": 0, "metadata": 0, "xml_flattened": 0, "skipped": 0}
     async with session_factory() as session:
-        by_filename = {row.filename: row for row in (await session.scalars(select(VisuraDocument))).all()}
+        by_filename = {row.file_name: row for row in (await session.scalars(select(Document))).all()}
         for path in files:
             kind = file_kind(path)
             parsed: dict[str, Any] | None = None
@@ -211,11 +205,10 @@ async def import_documents(files: list[Path], paired_xml: dict[str, Path]) -> di
             row = by_filename.get(path.name)
 
             if row is None:
-                row = VisuraDocument(
-                    document_type=document_type,
+                row = Document(
+                    document_type=await ensure_lookup(session, "document_type", document_type),
                     file_format=kind,
-                    filename=path.name,
-                    file_path=str(path),
+                    file_name=path.name,
                     file_size=path.stat().st_size,
                 )
                 session.add(row)
@@ -223,27 +216,20 @@ async def import_documents(files: list[Path], paired_xml: dict[str, Path]) -> di
                 by_filename[path.name] = row
                 stats["indexed"] += 1
             else:
-                if row.file_path != str(path):
-                    row.file_path = str(path)
-                    stats["path_repaired"] += 1
                 row.file_size = path.stat().st_size
                 if not row.file_format:
                     row.file_format = kind
                 if not row.document_type:
-                    row.document_type = document_type
+                    row.document_type = await ensure_lookup(session, "document_type", document_type)
 
             if parsed and (xml_content or any(parsed.get(key) for key in ("foglio", "particella"))):
-                metadata = await session.get(DocumentMetadata, row.id)
-                location_id = await location_for(session, parsed)
-                if metadata is None:
-                    metadata = DocumentMetadata(id=row.id)
-                    session.add(metadata)
+                if row.cadastral_unit_id is None or not row.view_subtype:
                     stats["metadata"] += 1
-                metadata.location_id = location_id
-                metadata.view_subtype = parsed.get("visura_subtype") or metadata.view_subtype
-                metadata.reference_date = parsed.get("situazione_al") or metadata.reference_date
+                row.cadastral_unit_id = await location_for(session, parsed)
+                row.view_subtype = clean(parsed.get("visura_subtype")) or row.view_subtype
+                row.reference_date = parse_it_date(parsed.get("situazione_al")) or row.reference_date
                 if xml_content:
-                    metadata.content = xml_content
+                    await session.merge(DocumentContent(document_id=row.id, content=xml_content))
                 await session.flush()
                 if xml_content and await flatten_xml(session, row.id, xml_content):
                     stats["xml_flattened"] += 1

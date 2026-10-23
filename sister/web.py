@@ -2963,11 +2963,14 @@ async def _render_doc_from_db(
 
 
 def _cadastral_map_lookup_key(item: dict, *, feature_type: str) -> str:
-    """Build the same normalized location key used by the Sister PostGIS view."""
+    """Build the same normalized location key the polygon query derives from the comune and unit columns."""
+    from .provinces import province_code
+    from .reference import belfiore_code, place_name
+
     fields = [
-        item.get("municipality"),
-        item.get("province"),
-        item.get("municipality_code"),
+        place_name(item.get("municipality")),
+        province_code(item.get("province")),
+        belfiore_code(item.get("municipality_code")),
         item.get("section"),
         item.get("sheet"),
     ]
@@ -2992,14 +2995,19 @@ async def _read_visura_cadastral_map_cache(document_id: int) -> list[tuple]:
             options="-c search_path=sister -c default_transaction_read_only=on -c statement_timeout=1500",
         ) as connection:
             cursor = await connection.execute(
-                """SELECT feature_type, lookup_key, municipality, province,
-                          municipality_code, section, sheet, parcel, source_reference,
+                """SELECT feature_type,
+                          concat_ws(chr(31), upper(btrim(coalesce(comune, ''))), upper(btrim(coalesce(province_code, ''))),
+                                    upper(btrim(coalesce(comune_code, ''))), upper(btrim(coalesce(section, ''))),
+                                    upper(btrim(coalesce(sheet, ''))),
+                                    CASE WHEN feature_type = 'parcel' THEN upper(btrim(coalesce(parcel, ''))) END) AS lookup_key,
+                          comune AS municipality, province_code AS province,
+                          comune_code AS municipality_code, section, sheet, parcel, source_reference,
                           checked_at >= now() - interval '30 days' AS is_fresh,
                           checked_at IS NOT NULL AS is_checked,
                           ST_AsGeoJSON(geom, 6) AS geometry,
                           ST_X(ST_Centroid(geom)) AS longitude,
                           ST_Y(ST_Centroid(geom)) AS latitude
-                   FROM sister.v_sister_visura_cadastral_polygons
+                   FROM sister.v_visura_cadastral_polygon
                    WHERE document_id = %s""",
                 (document_id,),
             )
@@ -3031,25 +3039,44 @@ async def _write_visura_cadastral_map_cache(records: list[tuple]) -> None:
             options="-c search_path=sister -c statement_timeout=2500",
         ) as connection:
             async with connection.cursor() as cursor:
+                from .provinces import province_code
+                from .reference import belfiore_code, place_name
+
+                rows = [
+                    {
+                        "feature_type": feature_type,
+                        "section": (section or "").strip().upper(),
+                        "sheet": (sheet or "").strip(),
+                        "parcel": (parcel or "").strip(),
+                        "source_reference": source_reference,
+                        "geom": geojson,
+                        "name": place_name(municipality),
+                        "prov": province_code(province),
+                        "code": belfiore_code(municipality_code),
+                    }
+                    for (feature_type, _key, municipality, province, municipality_code, section, sheet, parcel,
+                         source_reference, geojson) in records
+                ]
                 await cursor.executemany(
-                    """INSERT INTO sister.cadastral_map_geometry_cache (
-                           feature_type, lookup_key, municipality, province, municipality_code,
-                           section, sheet, parcel, source_reference, geom, checked_at
-                       ) VALUES (
-                           %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                           ST_SetSRID(ST_GeomFromGeoJSON((%s)::text), 4326), now()
+                    """WITH target AS (
+                           SELECT id FROM sister.comune
+                           WHERE (%(code)s::text IS NOT NULL AND cadastral_code = %(code)s::text)
+                              OR (%(name)s::text IS NOT NULL AND name = %(name)s::text
+                                  AND (%(prov)s::text IS NULL OR province_code = %(prov)s::text))
+                           ORDER BY (cadastral_code = %(code)s::text) DESC NULLS LAST, id
+                           LIMIT 1
                        )
-                       ON CONFLICT (feature_type, lookup_key) DO UPDATE SET
-                           municipality = EXCLUDED.municipality,
-                           province = EXCLUDED.province,
-                           municipality_code = EXCLUDED.municipality_code,
-                           section = EXCLUDED.section,
-                           sheet = EXCLUDED.sheet,
-                           parcel = EXCLUDED.parcel,
+                       INSERT INTO sister.parcel_geometry_cache (
+                           feature_type, comune_id, section, sheet, parcel, source_reference, geom, checked_at
+                       )
+                       SELECT %(feature_type)s, target.id, %(section)s, %(sheet)s, %(parcel)s, %(source_reference)s,
+                              ST_SetSRID(ST_GeomFromGeoJSON((%(geom)s)::text), 4326), now()
+                       FROM target
+                       ON CONFLICT (feature_type, comune_id, section, sheet, parcel) DO UPDATE SET
                            source_reference = EXCLUDED.source_reference,
-                           geom = COALESCE(EXCLUDED.geom, sister.cadastral_map_geometry_cache.geom),
+                           geom = COALESCE(EXCLUDED.geom, sister.parcel_geometry_cache.geom),
                            checked_at = now()""",
-                    records,
+                    rows,
                 )
             await connection.commit()
     except Exception as exc:  # A cache write must never make the document page fail.
@@ -4935,18 +4962,19 @@ async def web_document_parcel_map_data(doc_id: int, user=Depends(_require_auth))
 
 
 async def _backfill_document_metadata(base: Path, parsed_by_stem: dict) -> None:
-    """Backfill document_metadata for existing visura_documents that lack it.
+    """Fill the unit, view subtype, reference date and archived XML text of documents that have none yet.
 
-    Also repairs stale file_path values: pre-migration rows stored paths with an
-    'outputs/documents/' prefix that no longer exists; the canonical location is
-    under SISTER_FILES_BASE (= base).
+    A document counts as lacking metadata when it has neither a cadastral unit nor archived content; its file is found
+    by name under SISTER_FILES_BASE (= base).
     """
     import asyncio
 
     from sqlalchemy import text
 
-    from .database import _get_session_factory, get_or_create_location, is_db_writable
-    from .db_models import DocumentMetadata, VisuraDocument
+    from .database import DATABASE_ARCHIVE_SCHEMA, _get_session_factory, is_db_writable
+    from .db_models import Document, DocumentContent
+    from .reference import clean, ensure_lookup, get_or_create_cadastral_unit
+    from .result_parsers import parse_it_date
     from .utils import _document_key, _parse_ispezione_ipotecaria_pdf, _parse_visura_xml, _persist_flattened_xml
 
     if not is_db_writable():
@@ -4955,26 +4983,27 @@ async def _backfill_document_metadata(base: Path, parsed_by_stem: dict) -> None:
     session_factory = _get_session_factory()
 
     # Older scans guessed these filenames as generic visure. Correct their type
-    # even when their metadata rows already exist.
+    # even when their metadata already exists.
     async with session_factory() as session:
+        await ensure_lookup(session, "document_type", "ispezione_ipotecaria")
         await session.execute(
             text(
-                "UPDATE visura_documents SET document_type = 'ispezione_ipotecaria' "
-                "WHERE substr(lower(filename), 1, 4) = 'isp_' "
-                "AND document_type <> 'ispezione_ipotecaria'"
+                "UPDATE document SET document_type = 'ispezione_ipotecaria' "
+                "WHERE substr(lower(file_name), 1, 4) = 'isp_' "
+                "AND document_type IS DISTINCT FROM 'ispezione_ipotecaria'"
             )
         )
         await session.commit()
 
-    # Step 1: collect all docs with a file_path but missing document_metadata.
+    # Step 1: collect the documents that have no metadata yet.
+    archive = f'"{DATABASE_ARCHIVE_SCHEMA}"'
     async with session_factory() as session:
         rows = (
             await session.execute(
                 text(
-                    "SELECT vd.id, vd.file_path, vd.filename, vd.document_type"
-                    " FROM visura_documents vd"
-                    " LEFT JOIN document_metadata dm ON vd.id = dm.id"
-                    " WHERE vd.file_path IS NOT NULL AND dm.id IS NULL"
+                    "SELECT d.id, d.file_name FROM document d"  # noqa: S608 (quoted schema name)
+                    f" LEFT JOIN {archive}.document_content c ON c.document_id = d.id"
+                    " WHERE d.cadastral_unit_id IS NULL AND c.document_id IS NULL"
                 )
             )
         ).fetchall()
@@ -4982,38 +5011,19 @@ async def _backfill_document_metadata(base: Path, parsed_by_stem: dict) -> None:
     if not rows:
         return
 
-    # Step 2: build a filename → absolute path map from disk to fix stale paths.
+    # Step 2: build a filename → absolute path map from disk.
     name_to_path: dict[str, Path] = {}
     for fpath in base.rglob("*"):
         if fpath.is_file():
             name_to_path[fpath.name] = fpath
 
-    fixed = 0
     backfilled = 0
 
-    for doc_id, stored_path, filename, doc_type in rows:
-        actual: Path | None = None
-
-        # First try the stored path as-is.
-        if stored_path and Path(stored_path).is_file():
-            actual = Path(stored_path)
-        elif filename and filename in name_to_path:
-            actual = name_to_path[filename]
-
+    for doc_id, filename in rows:
+        actual = name_to_path.get(filename)
         if actual is None:
             logger.debug("Backfill: file not found for doc %d (%s)", doc_id, filename)
             continue
-
-        # Fix stale path if necessary.
-        correct_path = str(actual)
-        if stored_path != correct_path:
-            async with session_factory() as session:
-                await session.execute(
-                    text("UPDATE visura_documents SET file_path = :p WHERE id = :id"),
-                    {"p": correct_path, "id": doc_id},
-                )
-                await session.commit()
-            fixed += 1
 
         # Parse the file to extract metadata.
         stem = actual.stem
@@ -5038,31 +5048,30 @@ async def _backfill_document_metadata(base: Path, parsed_by_stem: dict) -> None:
             continue
 
         async with session_factory() as session:
-            location_id = await get_or_create_location(
+            unit_id = await get_or_create_cadastral_unit(
                 session,
-                cadastre_type=parsed.get("tipo_catasto") or "",
-                province=parsed.get("provincia") or "",
-                municipality=parsed.get("comune") or "",
+                cadastre_type=parsed.get("tipo_catasto"),
+                province=parsed.get("provincia"),
+                municipality=parsed.get("comune"),
                 sheet=foglio,
                 parcel=particella,
-                subunit=parsed.get("subalterno") or "",
-                section=parsed.get("sezione_urbana") or "",
+                subunit=parsed.get("subalterno"),
+                section=parsed.get("sezione_urbana"),
             )
-            meta = DocumentMetadata(
-                id=doc_id,
-                location_id=location_id,
-                view_subtype=parsed.get("visura_subtype") or None,
-                reference_date=parsed.get("situazione_al") or None,
-                content=xml_content,
-            )
-            session.add(meta)
+            document = await session.get(Document, doc_id)
+            document.cadastral_unit_id = unit_id
+            document.view_subtype = clean(parsed.get("visura_subtype"))
+            document.reference_date = parse_it_date(parsed.get("situazione_al"))
+            session.add(document)
+            if xml_content:
+                session.add(DocumentContent(document_id=doc_id, content=xml_content.replace("\x00", "")))
             await session.flush()
             await _persist_flattened_xml(session, doc_id, xml_content)
             await session.commit()
         backfilled += 1
 
-    if fixed or backfilled:
-        logger.info("Rescan backfill: %d path(s) fixed, %d metadata row(s) created", fixed, backfilled)
+    if backfilled:
+        logger.info("Rescan backfill: %d document(s) got their metadata", backfilled)
 
 
 @router.post("/documents/rescan", response_class=HTMLResponse)
@@ -5204,9 +5213,7 @@ async def _rescan_documents_dir() -> int | None:
         await _save_documents_to_db(new_docs)
         logger.info("Rescan: %d nuovi documenti indicizzati", len(new_docs))
 
-    # Backfill document_metadata for existing docs that are missing it.
-    # Also fix stale file_path values (old path had 'outputs/documents/' prefix
-    # which no longer exists; actual files are under SISTER_FILES_BASE).
+    # Fill the metadata of existing docs that are missing it.
     await _backfill_document_metadata(base, parsed_by_stem)
 
     return len(new_docs)

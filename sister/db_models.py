@@ -347,6 +347,10 @@ class MortgageInspection(SQLModel, table=True):
     title_notary_name: Optional[str] = Field(default=None)
     title_notary_fiscal_code: Optional[str] = Field(default=None)
     title_notary_location: Optional[str] = Field(default=None)
+    lien_semiannual_interest_rate: Optional[str] = Field(default=None)
+    lien_interest_eur: Optional[int] = Field(default=None)
+    lien_expenses_eur: Optional[int] = Field(default=None)
+    lien_foreign_currency: Optional[str] = Field(default=None)
 
 
 class MortgageInspectionParty(SQLModel, table=True):
@@ -381,6 +385,7 @@ class MortgageInspectionProperty(SQLModel, table=True):
     floor: Optional[str] = Field(default=None)
     address: Optional[str] = Field(default=None)
     civic_number: Optional[str] = Field(default=None)
+    area_sqm: Optional[Decimal] = Field(default=None)
 
 
 # ---------------------------------------------------------------------------

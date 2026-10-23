@@ -13,7 +13,7 @@ import pytest
 from sqlalchemy import update
 
 from sister import database
-from sister.db_models import VisuraResponse as VisuraResponseRow
+from sister.db_models import Request
 from tests.fixtures import (
     SISTER_INTESTATI_RESPONSE,
     SISTER_SEARCH_RESPONSE_FABBRICATI,
@@ -40,9 +40,9 @@ async def _age_response(request_id: str, seconds: int) -> None:
     """Backdate a stored response."""
     async with database._get_session_factory()() as session:
         await session.execute(
-            update(VisuraResponseRow)
-            .where(VisuraResponseRow.request_id == request_id)
-            .values(created_at=datetime.now(timezone.utc) - timedelta(seconds=seconds))
+            update(Request)
+            .where(Request.request_ref == request_id)
+            .values(responded_at=datetime.now(timezone.utc) - timedelta(seconds=seconds))
         )
         await session.commit()
 
@@ -173,7 +173,7 @@ def test_parse_owners_blank_values_are_dropped():
     assert right == {"ownership_share": "1/2"}
 
 
-def test_parse_page_visits_handles_bad_timestamps_and_serialises_extras():
+def test_parse_page_visits_handles_bad_timestamps_and_returns_plain_rows():
     visits = database._parse_page_visits(
         "r1",
         {
@@ -185,11 +185,11 @@ def test_parse_page_visits_handles_bad_timestamps_and_serialises_extras():
         },
     )
 
-    assert [v.step for v in visits] == ["login", "search"]
-    assert visits[0].timestamp == datetime(2026, 9, 1, 10, 0).astimezone()
-    assert visits[0].errors_json == '["x"]'
-    assert visits[1].timestamp is None
-    assert "foglio" in visits[1].form_elements_json
+    assert [visit["step"] for visit in visits] == ["login", "search"]
+    assert visits[0]["timestamp"] == datetime(2026, 9, 1, 10, 0).astimezone()
+    assert visits[0]["errors"] == ["x"]
+    assert visits[1]["timestamp"] is None
+    assert visits[1]["form_elements"] == [{"name": "foglio"}]
 
 
 def test_parse_page_visits_ignores_non_list():
