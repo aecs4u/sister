@@ -289,71 +289,226 @@ async def _comune_selector(page) -> str:
     return "select[name='denomComune']"
 
 
-async def find_best_option_match(page, selector, search_text):
-    """Trova l'opzione che meglio corrisponde al testo cercato"""
+_AMBIGUOUS_OPTION_DECISIONS: contextvars.ContextVar[list[dict] | None] = contextvars.ContextVar(
+    "sister_ambiguous_option_decisions", default=None
+)
+
+
+@contextlib.contextmanager
+def record_ambiguous_options():
+    """Collect tie-break decisions made by the current extraction workflow."""
+    decisions: list[dict] = []
+    token = _AMBIGUOUS_OPTION_DECISIONS.set(decisions)
+    try:
+        yield decisions
+    finally:
+        _AMBIGUOUS_OPTION_DECISIONS.reset(token)
+
+
+def _option_control_name(selector: str) -> str:
+    match = re.search(r"\[\s*name\s*=\s*(['\"])(.*?)\1\s*\]", selector)
+    return match.group(2) if match else selector
+
+
+def _record_ambiguous_option(selector, requested, candidates, selected, resolution, confidence=None):
+    """Record only visible labels and the resolution, never option values."""
+    decisions = _AMBIGUOUS_OPTION_DECISIONS.get()
+    if decisions is None:
+        return
+
+    labels = []
+    selected_label = None
+    for candidate in candidates:
+        if isinstance(candidate, dict):
+            value, label = candidate.get("value"), candidate.get("label", "")
+        elif len(candidate) >= 3:
+            _, value, label = candidate[:3]
+        elif len(candidate) == 2:
+            value, label = candidate
+        else:
+            continue
+        label = str(label).strip()
+        labels.append(label)
+        if str(value) == str(selected):
+            selected_label = label
+
+    decision = {
+        "control": _option_control_name(str(selector)),
+        "requested": str(requested),
+        "candidates": labels,
+        "selected": selected_label if selected_label is not None else str(selected),
+        "resolution": resolution,
+    }
+    if confidence is not None:
+        decision["confidence"] = confidence
+    decisions.append(decision)
+
+
+async def _rank_option_matches(page, selector, search_text):
+    """Return a single best option or the equally ranked top candidates."""
     options = await page.locator(f"{selector} option").all()
-    best_match = None
-    best_score = 0
+    requested = str(search_text or "").strip()
+    requested_upper = requested.upper()
+    if not requested_upper:
+        return None, []
 
-    log.debug("Cerco '%s' tra %d opzioni", search_text, len(options))
-
+    ranked = []
+    province_code_match = None
     for option in options:
         value = await option.get_attribute("value")
-        text = await option.inner_text()
-
+        text = (await option.inner_text()).strip()
         if not value or not text:
             continue
+        value, text = str(value).strip(), str(text).strip()
+        # A suppressed cadastral record must never be selected, even when its label is an exact match.
+        if "soppress" in f"{value} {text}".lower():
+            continue
 
-        # Calcola similarity score
-        search_upper = search_text.upper()
-        text_upper = text.upper()
-        value_upper = value.upper()
+        text_upper, value_upper = text.upper(), value.upper()
+        if requested_upper == value_upper or requested_upper == text_upper:
+            log.debug("Exact option match: '%s' -> '%s'", text, value)
+            return value, []
 
-        # PRIORITÀ 1: Exact match del valore (per sezioni come P, Q, etc.)
-        if search_upper == value_upper:
-            log.debug("Exact value match: '%s' -> '%s'", text, value)
-            return value
+        # Province options sometimes carry the two-letter code only in their value.
+        if len(requested_upper) == 2 and value_upper.endswith(f" TERRITORIO-{requested_upper}"):
+            province_code_match = province_code_match or (value, text)
+            continue
 
-        # PRIORITÀ 2: Exact match del testo
-        if search_upper == text_upper:
-            log.debug("Exact text match: '%s' -> '%s'", text, value)
-            return value
+        score = 0.0
+        if text_upper.startswith(requested_upper):
+            score = len(requested_upper) / max(1, len(text_upper))
+        elif value_upper.startswith(requested_upper):
+            score = len(requested_upper) / max(1, len(value_upper)) * 0.9
+        elif requested_upper in text_upper:
+            score = len(requested_upper) / max(1, len(text_upper)) * 0.6
+        if score > 0:
+            ranked.append((score, value, text))
 
-        # PRIORITÀ 2b: sigla provincia: il value e' "PALERMO Territorio-PA" (il testo solo "PALERMO Territorio");
-        # senza questa "PA" sceglierebbe "PARMA Territorio" (testo piu' corto che inizia con "PA")
-        if len(search_upper) == 2 and value_upper.endswith(f" TERRITORIO-{search_upper}"):
-            log.debug("Sigla provincia match: '%s' -> '%s'", text, value)
-            return value
+    if province_code_match:
+        value, text = province_code_match
+        log.debug("Province code match: '%s' -> '%s'", text, value)
+        return value, []
+    if not ranked:
+        log.warning("Nessun match trovato per '%s'", requested)
+        return None, []
 
-        # PRIORITÀ 3: Match che inizia con il testo cercato
-        if text_upper.startswith(search_upper):
-            score = len(search_text) / len(text)
-            if score > best_score:
-                best_score = score
-                best_match = value
-                log.debug("Candidato starts_with: '%s' -> '%s' (%.2f)", text, value, score)
+    best_score = max(item[0] for item in ranked)
+    best = [item for item in ranked if abs(item[0] - best_score) < 1e-12]
+    # Duplicate option values do not represent distinct choices.
+    unique = []
+    seen_values = set()
+    for candidate in best:
+        if candidate[1] not in seen_values:
+            seen_values.add(candidate[1])
+            unique.append(candidate)
+    if len(unique) == 1:
+        log.debug("Migliore match: '%s' (score: %.2f)", unique[0][1], best_score)
+        return unique[0][1], []
+    return None, unique
 
-        # PRIORITÀ 4: Value che inizia con il testo cercato
-        elif value_upper.startswith(search_upper):
-            score = len(search_text) / len(value) * 0.9  # Leggera penalità
-            if score > best_score:
-                best_score = score
-                best_match = value
-                log.debug("Candidato value_starts_with: '%s' -> '%s' (%.2f)", text, value, score)
 
-        # PRIORITÀ 5: Match che contiene il testo cercato
-        elif search_upper in text_upper:
-            score = len(search_text) / len(text) * 0.6  # Maggiore penalità per evitare falsi positivi
-            if score > best_score:
-                best_score = score
-                best_match = value
-                log.debug("Candidato contains: '%s' -> '%s' (%.2f)", text, value, score)
+async def _resolve_option_ties(page, ties):
+    """Resolve tied option groups through Jev when enabled, with a local fallback."""
+    if not ties:
+        return {}
+    from . import jev
 
-    if best_match:
-        log.debug("Migliore match: '%s' (score: %.2f)", best_match, best_score)
-    else:
-        log.warning("Nessun match trovato per '%s'", search_text)
-    return best_match
+    choices = {}
+    eligible = [tie for tie in ties if tie["selector"] in jev._SAFE_SELECTORS]
+    if eligible and jev.jev_enabled():
+        try:
+            if len(eligible) == 1:
+                tie = eligible[0]
+                choice = await jev.choose_cadastral_option(
+                    selector=tie["selector"],
+                    requested=tie["requested"],
+                    page_url=getattr(page, "url", ""),
+                    candidates=[(item[1], item[2]) for item in tie["candidates"]],
+                    page=page,
+                )
+                choices[tie["id"]] = choice
+            else:
+                batch = await jev.choose_cadastral_options(
+                    page_url=getattr(page, "url", ""),
+                    page=page,
+                    decisions=[
+                        {
+                            "id": tie["id"],
+                            "selector": tie["selector"],
+                            "requested": tie["requested"],
+                            "candidates": [(item[1], item[2]) for item in tie["candidates"]],
+                        }
+                        for tie in eligible
+                    ],
+                )
+                if isinstance(batch, dict):
+                    choices.update(batch)
+        except Exception as exc:
+            log.warning("Jev cadastral choice unavailable (%s); retaining local decision", type(exc).__name__)
+
+    resolved = {}
+    pending_records = []
+    policy = jev.ambiguous_option_policy()
+    for tie in ties:
+        choice = choices.get(tie["id"])
+        selected = getattr(choice, "option_value", None)
+        confidence = getattr(choice, "confidence", None)
+        if getattr(choice, "abstained", False):
+            raise jev.JevAbstentionError(
+                f"Jev could not confidently resolve {tie['requested']!r}; operator selection is required"
+            )
+        valid_values = {item[1] for item in tie["candidates"]}
+        if selected in valid_values:
+            pending_records.append((tie, selected, "jev", confidence))
+            resolved[tie["id"]] = selected
+        elif policy == "operator":
+            raise jev.AmbiguousOptionError(
+                f"Ambiguous cadastral option for {tie['requested']!r}; operator selection is required"
+            )
+        else:
+            local_value = tie["candidates"][0][1]
+            pending_records.append((tie, local_value, "local_tie_break", None))
+            resolved[tie["id"]] = local_value
+    for tie, selected, resolution, confidence in pending_records:
+        _record_ambiguous_option(
+            tie["selector"], tie["requested"], tie["candidates"], selected, resolution, confidence
+        )
+    return resolved
+
+
+async def find_best_option_match(page, selector, search_text):
+    """Find the best dropdown option and resolve a genuine ranking tie safely."""
+    value, candidates = await _rank_option_matches(page, selector, search_text)
+    if not candidates:
+        return value
+    tie = {"id": "option", "selector": selector, "requested": str(search_text), "candidates": candidates}
+    return (await _resolve_option_ties(page, [tie]))["option"]
+
+
+async def find_best_option_matches(page, decisions):
+    """Match several controls on one page, batching only their ambiguous choices."""
+    results = {}
+    ties = []
+    for decision in decisions:
+        decision_id = decision["id"]
+        selector = decision["selector"]
+        requested = decision["requested"]
+        value, candidates = await _rank_option_matches(page, selector, requested)
+        if candidates:
+            ties.append(
+                {
+                    "id": decision_id,
+                    "selector": selector,
+                    "requested": str(requested),
+                    "candidates": candidates,
+                }
+            )
+        else:
+            results[decision_id] = value
+
+    # Resolve all ties before returning so operator policy never exposes partial results.
+    results.update(await _resolve_option_ties(page, ties))
+    return results
 
 
 _MAX_CAPTCHA_ATTEMPTS = 5

@@ -24,6 +24,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlmodel import select
 
 from .db_models import (
+    ENUM_CATALOG_TABLES,
     PROPERTY_FIELD_MAP,
     PROPERTY_LOCATION_FIELD_MAP,
     PROPERTY_SUBJECT_FIELD_MAP,
@@ -33,6 +34,7 @@ from .db_models import (
     DocumentMetadata,
     GeographicPlace,
     OwnershipRight,
+    OwnershipRightCatalog,
     PageVisit,
     PageVisitError,
     PageVisitFormElement,
@@ -69,7 +71,7 @@ load_dotenv(PROJECT_ROOT / ".env")
 load_dotenv(PROJECT_ROOT.parent / ".env", override=False)
 DATA_ROOT = Path(os.getenv("SISTER_DATA_ROOT", str(PROJECT_ROOT))).expanduser().resolve()
 DATABASE_DSN = os.getenv("DATABASE_DSN")
-DATABASE_REVISION = "20261022_visura_polygons"
+DATABASE_REVISION = "20261023_normalize_catalogs"
 
 # ---------------------------------------------------------------------------
 # Engine and session
@@ -129,6 +131,7 @@ async def init_db() -> None:
             lambda sync_conn: set(inspect(sync_conn).get_table_names(schema="sister"))
         )
         required_tables = {
+            "ownership_right_catalog",
             "cadastral_locations",
             "cadastral_map_geometry_cache",
             "visura_requests",
@@ -145,6 +148,7 @@ async def init_db() -> None:
             "mortgage_inspection_units",
             "mortgage_inspection_properties",
             "mortgage_inspection_parties",
+            *ENUM_CATALOG_TABLES,
         }
         missing = sorted(required_tables - table_names)
         if missing:
@@ -402,9 +406,10 @@ async def get_or_create_right(
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
 ) -> int:
-    """Get existing OwnershipRight or create one; return its id.
+    """Get or create a shared right catalog entry and its per-owner terms.
 
-    Normalizes missing fields to empty strings so equality matches the unique-key representation.
+    Missing values normalize to empty strings, matching the stored natural-key
+    representation used by the catalogs.
     """
     right_type = right_type or ""
     right_code = right_code or ""
@@ -412,24 +417,36 @@ async def get_or_create_right(
     ownership_share = ownership_share or ""
     start_date = start_date or ""
     end_date = end_date or ""
-    conditions = []
-    for col, val in [
-        (OwnershipRight.right_type, right_type),
-        (OwnershipRight.right_code, right_code),
-        (OwnershipRight.right_description, right_description),
-        (OwnershipRight.ownership_share, ownership_share),
-        (OwnershipRight.start_date, start_date),
-        (OwnershipRight.end_date, end_date),
-    ]:
-        conditions.append(col == val)
-    result = await session.execute(select(OwnershipRight).where(*conditions))
+    result = await session.execute(
+        select(OwnershipRightCatalog).where(
+            OwnershipRightCatalog.right_type == right_type,
+            OwnershipRightCatalog.right_code == right_code,
+            OwnershipRightCatalog.right_description == right_description,
+        )
+    )
+    catalog = result.scalar_one_or_none()
+    if catalog is None:
+        catalog = OwnershipRightCatalog(
+            right_type=right_type,
+            right_code=right_code,
+            right_description=right_description,
+        )
+        session.add(catalog)
+        await session.flush()
+
+    result = await session.execute(
+        select(OwnershipRight).where(
+            OwnershipRight.right_catalog_id == catalog.id,
+            OwnershipRight.ownership_share == ownership_share,
+            OwnershipRight.start_date == start_date,
+            OwnershipRight.end_date == end_date,
+        )
+    )
     existing = result.scalar_one_or_none()
     if existing is not None:
         return existing.id
     right = OwnershipRight(
-        right_type=right_type,
-        right_code=right_code,
-        right_description=right_description,
+        right_catalog_id=catalog.id,
         ownership_share=ownership_share,
         start_date=start_date,
         end_date=end_date,
@@ -1113,9 +1130,10 @@ async def get_db_owners_for_response(request_id: str) -> list[dict]:
     session_factory = _get_session_factory()
     async with session_factory() as session:
         stmt = (
-            select(VisuraOwner, CadastralSubject, OwnershipRight)
+            select(VisuraOwner, CadastralSubject, OwnershipRight, OwnershipRightCatalog)
             .outerjoin(CadastralSubject, VisuraOwner.subject_id == CadastralSubject.id)
             .outerjoin(OwnershipRight, VisuraOwner.right_id == OwnershipRight.id)
+            .outerjoin(OwnershipRightCatalog, OwnershipRight.right_catalog_id == OwnershipRightCatalog.id)
             .where(VisuraOwner.response_id == request_id)
             .order_by(VisuraOwner.id)
         )
@@ -1132,14 +1150,14 @@ async def get_db_owners_for_response(request_id: str) -> list[dict]:
             "subject_type": subj.subject_type if subj else None,
             "result_id": owner.result_id,
             "owner_index": owner.owner_index,
-            "right_type": right.right_type if right else None,
+            "right_type": catalog.right_type if catalog else None,
             "ownership_share": right.ownership_share if right else None,
-            "right_code": right.right_code if right else None,
-            "right_description": right.right_description if right else None,
+            "right_code": catalog.right_code if catalog else None,
+            "right_description": catalog.right_description if catalog else None,
             "start_date": right.start_date if right else None,
             "end_date": right.end_date if right else None,
         }
-        for owner, subj, right in rows
+        for owner, subj, right, catalog in rows
     ]
 
 

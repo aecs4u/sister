@@ -20,6 +20,48 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlmodel import Field, Relationship, SQLModel
 
 
+# Table-backed vocabularies for stable categorical fields. These are natural
+# key tables: the source columns keep their readable codes while foreign keys
+# prevent untracked values. A database trigger adds newly observed source
+# codes to the appropriate catalog, so ingestion remains forward-compatible.
+ENUM_CATALOG_TABLES = (
+    "enum_gender",
+    "enum_cadastral_subject_type",
+    "enum_cadastre_type",
+    "enum_visura_request_type",
+    "enum_visura_property_type",
+    "enum_visura_property_category",
+    "enum_visura_property_class",
+    "enum_visura_property_quality",
+    "enum_page_visit_element_type",
+    "enum_visura_document_type",
+    "enum_visura_file_format",
+    "enum_building_category",
+    "enum_building_class",
+    "enum_building_consistency_unit",
+    "enum_land_class",
+    "enum_land_quality",
+    "enum_mortgage_lien_type",
+    "enum_mortgage_party_quality",
+    "enum_mortgage_party_raw_quality",
+    "enum_mortgage_party_role",
+    "enum_mortgage_note_type",
+    "enum_mortgage_title_type",
+    "enum_ownership_property_status",
+    "enum_activity_source",
+    "enum_activity_action",
+    "enum_activity_status",
+)
+
+for _enum_catalog_name in dict.fromkeys(ENUM_CATALOG_TABLES):
+    if _enum_catalog_name not in SQLModel.metadata.tables:
+        sa.Table(
+            _enum_catalog_name,
+            SQLModel.metadata,
+            Column("value", Text, primary_key=True),
+        )
+
+
 class CadastralLocation(SQLModel, table=True):
     """Normalised cadastral location shared across visura_requests, visura_properties, and document_metadata.
 
@@ -30,7 +72,7 @@ class CadastralLocation(SQLModel, table=True):
     __tablename__ = "cadastral_locations"
 
     id: Optional[int] = Field(default=None, primary_key=True)
-    cadastre_type: str = Field(default="")  # F | T | E | ""
+    cadastre_type: str = Field(default="", foreign_key="enum_cadastre_type.value")  # F | T | E | ""
     province: str = Field(default="")
     municipality: str = Field(default="")
     sheet: str = Field(default="")
@@ -76,11 +118,11 @@ class CadastralSubject(SQLModel, table=True):
     display_name: Optional[str] = None
     last_name: Optional[str] = None
     first_name: Optional[str] = None
-    gender: Optional[str] = Field(default=None, max_length=1)
+    gender: Optional[str] = Field(default=None, max_length=1, foreign_key="enum_gender.value")
     date_of_birth: Optional[str] = None
     birth_place_id: Optional[int] = Field(default=None, foreign_key="geographic_places.id", index=True)
     birth_municipality_code: Optional[str] = None
-    subject_type: Optional[str] = None  # person | legal_entity | unknown
+    subject_type: Optional[str] = Field(default=None, foreign_key="enum_cadastral_subject_type.value")
 
     birth_place: Optional["GeographicPlace"] = Relationship()
 
@@ -96,28 +138,50 @@ class CadastralSubject(SQLModel, table=True):
     )
 
 
+class OwnershipRightCatalog(SQLModel, table=True):
+    """Shared right vocabulary; ownership shares and dates belong to each right record."""
+
+    __tablename__ = "ownership_right_catalog"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    right_type: Optional[str] = None
+    right_code: Optional[str] = None
+    right_description: Optional[str] = None
+
+    rights: list["OwnershipRight"] = Relationship(back_populates="catalog")
+
+    __table_args__ = (
+        Index(
+            "uq_ownership_right_catalog",
+            "right_type",
+            "right_code",
+            "right_description",
+            unique=True,
+            postgresql_nulls_not_distinct=True,
+        ),
+    )
+
+
 class OwnershipRight(SQLModel, table=True):
-    """Normalised ownership/right payload shared across response owners and XML owners."""
+    """Per-owner right terms linked to a shared right vocabulary entry."""
 
     __tablename__ = "ownership_rights"
 
     id: Optional[int] = Field(default=None, primary_key=True)
-    right_type: str = Field(default="")
-    right_code: str = Field(default="")
-    right_description: str = Field(default="")
+    right_catalog_id: int = Field(foreign_key="ownership_right_catalog.id", index=True)
     ownership_share: str = Field(default="")
     start_date: str = Field(default="")
     end_date: str = Field(default="")
 
+    catalog: Optional[OwnershipRightCatalog] = Relationship(back_populates="rights")
+
     __table_args__ = (
         UniqueConstraint(
-            "right_type",
-            "right_code",
-            "right_description",
+            "right_catalog_id",
             "ownership_share",
             "start_date",
             "end_date",
-            name="uq_ownership_right",
+            name="uq_ownership_right_terms",
         ),
     )
 
@@ -126,7 +190,7 @@ class VisuraRequest(SQLModel, table=True):
     __tablename__ = "visura_requests"
 
     request_id: str = Field(primary_key=True)
-    request_type: str
+    request_type: str = Field(foreign_key="enum_visura_request_type.value")
     location_id: Optional[int] = Field(default=None, foreign_key="cadastral_locations.id", index=True)
     cache_key: Optional[str] = Field(default=None, index=True)
     cost_text: Optional[str] = None
@@ -142,7 +206,7 @@ class VisuraResponse(SQLModel, table=True):
 
     request_id: str = Field(foreign_key="visura_requests.request_id", primary_key=True)
     success: bool
-    cadastre_type: str
+    cadastre_type: str = Field(foreign_key="enum_cadastre_type.value")
     data: Optional[dict[str, Any]] = Field(default=None, sa_column=Column(SA_JSON))
     error: Optional[str] = None
     total_results: Optional[int] = None
@@ -187,21 +251,21 @@ class VisuraProperty(SQLModel, table=True):
     result_id: Optional[int] = Field(default=None, foreign_key="visura_results.id", index=True)
     location_id: Optional[int] = Field(default=None, foreign_key="cadastral_locations.id", index=True)
     subject_id: Optional[int] = Field(default=None, foreign_key="cadastral_subjects.id", index=True)
-    property_type: Optional[str] = None  # "building" | "land" | "entity"
+    property_type: Optional[str] = Field(default=None, foreign_key="enum_visura_property_type.value")
 
     # Common fields (Fabbricati + Terreni)
     address: Optional[str] = None
     partita: Optional[str] = None
 
     # Fabbricati-specific
-    category: Optional[str] = None
-    cadastral_class: Optional[str] = None
+    category: Optional[str] = Field(default=None, foreign_key="enum_visura_property_category.value")
+    cadastral_class: Optional[str] = Field(default=None, foreign_key="enum_visura_property_class.value")
     consistency: Optional[str] = None
     income: Optional[str] = None
     census_zone: Optional[str] = None
 
     # Terreni-specific
-    quality: Optional[str] = None
+    quality: Optional[str] = Field(default=None, foreign_key="enum_visura_property_quality.value")
     area: Optional[str] = None
     dominical_income: Optional[str] = None
     agricultural_income: Optional[str] = None
@@ -304,7 +368,7 @@ class PageVisitFormElement(SQLModel, table=True):
     page_visit_id: int = Field(foreign_key="page_visits.id", index=True)
     element_index: int = Field(default=0)
     tag: str = Field(default="")
-    element_type: str = Field(default="")
+    element_type: str = Field(default="", foreign_key="enum_page_visit_element_type.value")
     name: str = Field(default="")
     label: str = Field(default="")
     value: str = Field(default="")
@@ -328,8 +392,8 @@ class VisuraDocument(SQLModel, table=True):
 
     id: Optional[int] = Field(default=None, primary_key=True)
     response_id: Optional[str] = Field(default=None, foreign_key="visura_responses.request_id", index=True)
-    document_type: str = Field(default="")  # visure, ispezione_ipotecaria, planimetrie, etc.
-    file_format: str = Field(default="")  # PDF, XML, P7M
+    document_type: str = Field(default="", foreign_key="enum_visura_document_type.value")
+    file_format: str = Field(default="", foreign_key="enum_visura_file_format.value")
     filename: str = Field(default="")
     file_path: Optional[str] = None
     file_size: Optional[int] = None
@@ -460,7 +524,7 @@ class MortgageInspection(SQLModel, table=True):
     page_count: Optional[int] = None
     office: Optional[str] = None
     service: Optional[str] = None
-    note_type: Optional[str] = None
+    note_type: Optional[str] = Field(default=None, foreign_key="enum_mortgage_note_type.value")
     note_timestamp: Optional[str] = None
     registro_generale: Optional[int] = None
     registro_particolare: Optional[int] = None
@@ -479,7 +543,7 @@ class MortgageInspectionTitle(SQLModel, table=True):
     __tablename__ = "mortgage_inspection_titles"
 
     extraction_id: int = Field(foreign_key="document_structured_extractions.id", primary_key=True)
-    title_type: Optional[str] = None
+    title_type: Optional[str] = Field(default=None, foreign_key="enum_mortgage_title_type.value")
     description: Optional[str] = Field(default=None, sa_column=Column(Text))
     title_date: Optional[str] = None
     repertory_number: Optional[str] = None
@@ -494,7 +558,7 @@ class MortgageInspectionLien(SQLModel, table=True):
     __tablename__ = "mortgage_inspection_liens"
 
     extraction_id: int = Field(foreign_key="document_structured_extractions.id", primary_key=True)
-    lien_type: Optional[str] = None
+    lien_type: Optional[str] = Field(default=None, foreign_key="enum_mortgage_lien_type.value")
     lien_type_original: Optional[str] = None
     derived_from: Optional[str] = Field(default=None, sa_column=Column(Text))
     derived_from_code: Optional[str] = None
@@ -557,15 +621,15 @@ class MortgageInspectionParty(SQLModel, table=True):
 
     id: Optional[int] = Field(default=None, primary_key=True)
     extraction_id: int = Field(foreign_key="document_structured_extractions.id", index=True)
-    role: str = Field(default="")  # a_favore | contro
+    role: str = Field(default="", foreign_key="enum_mortgage_party_role.value")
     ordinal: int = Field(default=0)
     subject_number: Optional[int] = None
-    quality: Optional[str] = None
+    quality: Optional[str] = Field(default=None, foreign_key="enum_mortgage_party_quality.value")
     surname: Optional[str] = None
     given_name: Optional[str] = None
     birth_date: Optional[str] = None
     birth_place: Optional[str] = None
-    gender: Optional[str] = None
+    gender: Optional[str] = Field(default=None, foreign_key="enum_gender.value")
     fiscal_code: Optional[str] = None
     entity_name: Optional[str] = None
     registered_office: Optional[str] = None
@@ -574,7 +638,7 @@ class MortgageInspectionParty(SQLModel, table=True):
     right_type: Optional[str] = None
     share_numerator: Optional[int] = None
     share_denominator: Optional[int] = None
-    raw_quality: Optional[str] = None
+    raw_quality: Optional[str] = Field(default=None, foreign_key="enum_mortgage_party_raw_quality.value")
     raw_share: Optional[str] = None
     raw_right_type: Optional[str] = None
     __table_args__ = (
@@ -599,9 +663,9 @@ class ActivityLog(SQLModel, table=True):
     finished_at: Optional[datetime] = Field(default=None, sa_column=Column(sa.DateTime(timezone=True)))
     duration_ms: Optional[int] = None
     actor: str = Field(default="system", index=True)
-    source: str = Field(default="web")  # web | cli | api | worker
-    action: str = Field(index=True)  # e.g. documents.import, documents.rescan, results.import, browser.restart
-    status: str = Field(default="success", index=True)  # success | error | rejected
+    source: str = Field(default="web", foreign_key="enum_activity_source.value")
+    action: str = Field(index=True, foreign_key="enum_activity_action.value")
+    status: str = Field(default="success", index=True, foreign_key="enum_activity_status.value")
     target: Optional[str] = None
     params: Optional[dict[str, Any]] = Field(default=None, sa_column=Column(JSONB))
     result: Optional[dict[str, Any]] = Field(default=None, sa_column=Column(JSONB))

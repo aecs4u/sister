@@ -5608,6 +5608,54 @@ async def _web_subject_profile(
     )
 
 
+@router.get("/persons/", response_class=HTMLResponse, name="persons_index")
+async def web_persons_index(
+    request: Request,
+    code: str | None = None,
+    user=Depends(_require_auth),
+):
+    """Lookup entry point for a person's stored subject visura."""
+    normalized_code = (code or "").strip().upper()
+    if normalized_code:
+        if not re.fullmatch(r"[A-Z0-9]{16}", normalized_code):
+            response = _get_theme(request).render(
+                "persons_index.html",
+                request,
+                user=user,
+                code=normalized_code,
+                error_message="Inserisci un codice fiscale composto da 16 lettere o cifre.",
+            )
+            response.status_code = 422
+            return response
+        return RedirectResponse(url=f"/persons/{normalized_code}", status_code=303)
+
+    return _get_theme(request).render("persons_index.html", request, user=user, code="", error_message=None)
+
+
+@router.get("/companies/", response_class=HTMLResponse, name="companies_index")
+async def web_companies_index(
+    request: Request,
+    code: str | None = None,
+    user=Depends(_require_auth),
+):
+    """Lookup entry point for a company's stored subject visura."""
+    normalized_code = (code or "").strip()
+    if normalized_code:
+        if not re.fullmatch(r"\d{11}", normalized_code):
+            response = _get_theme(request).render(
+                "companies_index.html",
+                request,
+                user=user,
+                code=normalized_code,
+                error_message="Inserisci una partita IVA composta da 11 cifre.",
+            )
+            response.status_code = 422
+            return response
+        return RedirectResponse(url=f"/companies/{normalized_code}", status_code=303)
+
+    return _get_theme(request).render("companies_index.html", request, user=user, code="", error_message=None)
+
+
 @router.get("/persons/{fiscal_code}", response_class=HTMLResponse)
 async def web_person(
     request: Request,

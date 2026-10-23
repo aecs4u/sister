@@ -39,6 +39,7 @@ from sister.db_models import (  # noqa: F401, E402
     FeedbackUnsubscribe,
     GeographicPlace,
     OwnershipRight,
+    OwnershipRightCatalog,
     PageVisit,
     PageVisitError,
     PageVisitFormElement,

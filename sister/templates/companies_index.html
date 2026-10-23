@@ -1,0 +1,53 @@
+{% extends "_base.html" %}
+{% block page_title %}Cerca una società{% endblock %}
+
+{% block content %}
+<div class="container-fluid py-4">
+    <div class="row justify-content-center">
+        <div class="col-12 col-xl-8">
+            <nav aria-label="breadcrumb" class="mb-3">
+                <ol class="breadcrumb mb-0">
+                    <li class="breadcrumb-item"><a href="/">Dashboard</a></li>
+                    <li class="breadcrumb-item active" aria-current="page">Società</li>
+                </ol>
+            </nav>
+
+            <section class="card border-0 shadow-sm">
+                <div class="card-body p-4 p-lg-5">
+                    <div class="d-flex align-items-start gap-3 mb-4">
+                        <span class="text-primary fs-3" aria-hidden="true"><i class="fas fa-building"></i></span>
+                        <div>
+                            <h1 class="h2 mb-1">Cerca una società</h1>
+                            <p class="text-muted mb-0">Apri una visura soggetto salvata usando la partita IVA.</p>
+                        </div>
+                    </div>
+
+                    {% if error_message %}
+                    <div class="alert alert-danger" role="alert">{{ error_message }}</div>
+                    {% endif %}
+
+                    <form method="get" action="/companies/">
+                        <label class="form-label fw-semibold" for="company-code">Partita IVA</label>
+                        <div class="input-group input-group-lg">
+                            <input class="form-control font-monospace" id="company-code" name="code" type="text"
+                                   value="{{ code }}" inputmode="numeric" minlength="11" maxlength="11" pattern="[0-9]{11}"
+                                   autocomplete="off" spellcheck="false" required
+                                   aria-describedby="company-code-help">
+                            <button class="btn btn-primary" type="submit">
+                                <i class="fas fa-magnifying-glass me-2" aria-hidden="true"></i>Apri profilo
+                            </button>
+                        </div>
+                        <div class="form-text" id="company-code-help">Inserisci la partita IVA di 11 cifre.</div>
+                    </form>
+
+                    <hr class="my-4">
+                    <p class="small text-muted mb-0">
+                        Il profilo mostra le visure soggetto disponibili per la partita IVA inserita.
+                        Per consultare tutti i documenti archiviati, <a href="/documents">apri Documenti</a>.
+                    </p>
+                </div>
+            </section>
+        </div>
+    </div>
+</div>
+{% endblock %}

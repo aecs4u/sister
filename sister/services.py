@@ -46,6 +46,44 @@ reuse_previous_var: contextvars.ContextVar[bool] = contextvars.ContextVar("siste
 logger = logging.getLogger("sister")
 
 
+def _no_match_message(response: VisuraResponse) -> str | None:
+    """Return the portal's explicit no-match message, if the payload contains one."""
+    data = response.data if isinstance(response.data, dict) else {}
+    candidates = (response.error, data.get("error"), data.get("message"), data.get("page_state"))
+    for candidate in candidates:
+        if not isinstance(candidate, str):
+            continue
+        normalized = candidate.strip().lower()
+        if "nessuna corrispondenza trovata" in normalized or normalized == "no_match":
+            return candidate.strip() if normalized != "no_match" else "NESSUNA CORRISPONDENZA TROVATA"
+    return None
+
+
+def _request_job_outcome(response: VisuraResponse) -> tuple[str, str | None]:
+    """Map a response to a stable persisted request status and error category."""
+    if _no_match_message(response):
+        return "no_match", "no_match"
+    if response.success:
+        return "completed", None
+
+    error = str(response.error or "")
+    lowered = error.lower()
+    categories = (
+        (("captcha",), "needs_human", "captcha_required"),
+        (("sessionlockederror", "session locked", "utente gia' in sessione", "utente già in sessione"),
+         "failed", "session_locked"),
+        (("browsernavigationerror", "session expired", "sessione scaduta", "login.jsp"),
+         "failed", "session_expired"),
+        (("selectordrift", "selector drift"), "failed", "selector_drift"),
+        (("connecttimeout", "portal unavailable", "portal_unavailable"), "failed", "portal_unavailable"),
+        (("invalidinput", "invalid input"), "failed", "invalid_input"),
+    )
+    for markers, status, kind in categories:
+        if any(marker in lowered for marker in markers):
+            return status, kind
+    return "failed", "unknown_error"
+
+
 class VisuraService:
     """Queue-based request dispatcher with response caching and persistence."""
 
@@ -397,6 +435,10 @@ class VisuraService:
     async def _store_response(self, response: VisuraResponse):
         from .database import is_db_writable
 
+        no_match = _no_match_message(response)
+        if no_match:
+            response.success = False
+            response.error = no_match
         self.response_store[response.request_id] = response
         self.expired_request_ids.pop(response.request_id, None)
         self._cleanup_response_store()

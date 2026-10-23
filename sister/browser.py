@@ -25,6 +25,7 @@ from .models import (
     VisuraResponse,
     VisuraSoggettoRequest,
 )
+from .network_json import SISTERJsonCapture, extract_property_rows
 from .utils import (
     extract_all_sezioni,
     form_context,
@@ -80,6 +81,55 @@ _NOARGS_DISPATCHERS = {
 
 
 _PARAM_ALIASES = {"sheet": "foglio", "parcel": "particella", "section": "sezione", "subunit": "subalterno"}
+
+
+async def _run_with_network_json(page, extraction):
+    """Capture local SISTER JSON during an extraction and supplement its result rows."""
+    from .utils import record_ambiguous_options
+
+    capture = SISTERJsonCapture(page)
+    await capture.start()
+    try:
+        with record_ambiguous_options() as ambiguous_options:
+            result = await extraction()
+    finally:
+        responses = await capture.stop()
+
+    if not isinstance(result, dict):
+        return result
+
+    enriched = dict(result)
+    extracted_rows = []
+    for response in responses:
+        extracted_rows.extend(extract_property_rows(response.get("data")))
+
+    if extracted_rows:
+        existing = enriched.get("immobili")
+        merged = list(existing) if isinstance(existing, list) else []
+
+        def signature(row):
+            if not isinstance(row, dict):
+                return ("raw", repr(row))
+            return tuple(str(row.get(key, "")).strip().upper() for key in ("Catasto", "Foglio", "Particella", "Sub"))
+
+        seen = {signature(row) for row in merged}
+        for row in extracted_rows:
+            key = signature(row)
+            if key not in seen:
+                seen.add(key)
+                merged.append(row)
+        enriched["immobili"] = merged
+        try:
+            existing_count = int(enriched.get("total_results") or 0)
+        except (TypeError, ValueError):
+            existing_count = 0
+        enriched["total_results"] = max(existing_count, len(merged))
+
+    if responses:
+        enriched["network_json_responses"] = responses
+    if ambiguous_options:
+        enriched["ambiguous_options"] = ambiguous_options
+    return enriched
 
 
 def _dispatcher_kwargs(dispatcher, request: GenericSisterRequest) -> dict:

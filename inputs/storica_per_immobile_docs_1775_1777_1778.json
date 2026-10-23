@@ -28,9 +28,11 @@
         "tipo_catasto": "F",
         "subalterno": "18"
       },
+      "enabled": false,
       "metadata": {
         "source_files": "documents/1775 (CMMLNZ77A17F839A)",
-        "scope_note": "Storica Analitica per immobile, to trace ownership back beyond the current holders."
+        "scope_note": "Storica Analitica per immobile, to trace ownership back beyond the current holders.",
+        "skip_reason": "already stored: vi_sto_NA_FG4_PT522_SUB18_2026-10-23.p7m"
       }
     },
     {

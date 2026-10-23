@@ -77,7 +77,7 @@ class PropertyGroup(SQLModel, table=True):
     id: int | None = Field(default=None, primary_key=True)
     document_id: int = Field(foreign_key="visura_documents.id")
     group_index: str | None = None
-    cadastre_type: str | None = None
+    cadastre_type: str | None = Field(default=None, foreign_key="enum_cadastre_type.value")
     municipality_code: str | None = None
     description: str | None = None
 
@@ -210,11 +210,11 @@ class BuildingClassification(SQLModel, table=True):
     current_state_id: int | None = Field(default=None, foreign_key="building_current_states.id")
     history_document_id: int | None = Field(default=None, foreign_key="visura_documents.id")
     census_zone: str | None = None
-    category: str | None = None  # CategoriaFabbricatiType A1–F7
-    cadastral_class: str | None = None
+    category: str | None = Field(default=None, foreign_key="enum_building_category.value")
+    cadastral_class: str | None = Field(default=None, foreign_key="enum_building_class.value")
     cadastral_income: Decimal | None = None  # RenditaEuro in EUR
     consistency_value: Decimal | None = None  # Consistenza.Valore
-    consistency_unit: str | None = None  # Consistenza.Unita: vani | mq | mc
+    consistency_unit: str | None = Field(default=None, foreign_key="enum_building_consistency_unit.value")
 
     building_unit: Optional["BuildingUnit"] = Relationship(back_populates="classification")
     current_state: Optional["BuildingCurrentState"] = Relationship(back_populates="classification")
@@ -396,8 +396,8 @@ class LandClassification(SQLModel, table=True):
 
     id: int | None = Field(default=None, primary_key=True)
     parcel_id: int = Field(foreign_key="land_parcels.id")
-    quality: str | None = None  # QualitaTerreniType
-    cadastral_class: str | None = None
+    quality: str | None = Field(default=None, foreign_key="enum_land_quality.value")
+    cadastral_class: str | None = Field(default=None, foreign_key="enum_land_class.value")
     area: Decimal | None = None  # SuperficieMQ in m²
     deduction_symbol: str | None = None  # SimboloDeduzione
     dominical_income: Decimal | None = None  # RedditoDominicaleEuro
@@ -442,7 +442,7 @@ class OwnershipMutation(SQLModel, table=True):
     source_description: str | None = None  # DatiDerivantiDaMutazSogg element content
     reference_location_id: int | None = Field(default=None, foreign_key="cadastral_locations.id", index=True)
     ref_municipality_code: str | None = None
-    ref_property_status: str | None = None  # StatoImmobile: A=active | S=suppressed
+    ref_property_status: str | None = Field(default=None, foreign_key="enum_ownership_property_status.value")
 
     property_group: Optional["PropertyGroup"] = Relationship(back_populates="ownership_mutations")
     land_parcel: Optional["LandParcel"] = Relationship(back_populates="ownership_mutations")
