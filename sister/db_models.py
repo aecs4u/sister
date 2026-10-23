@@ -1,300 +1,424 @@
-"""SQLModel table definitions for the sister database.
+"""SQLModel table definitions for the sister database (flat, normalised layout).
 
-Defines ORM models for visura requests, responses, and structured result
-tables (visura_properties, visura_owners). The raw JSON blob is kept in VisuraResponse.data
-for audit/compliance; the structured tables enable indexed lookups and joins.
+The tables are the ones created by ``alembic/sql/20261024_flat_normalised/02_schema.sql`` (design and mapping from the old
+layout in ``docs/database_design.md``). Columns, primary keys and foreign keys are declared here for queries; the DDL
+(checks, unique keys, indexes) is the SQL file, which the test schema is built from, so the two cannot drift.
 
-Note: Do NOT use `from __future__ import annotations` here — it breaks
-SQLAlchemy's relationship resolution with SQLModel.
+* ``Request`` holds the request and its response in one row (the old ``visura_requests`` + ``visura_responses``).
+* Dates are ``date``, amounts ``Decimal``, shares are numerator/denominator, places are ``Comune`` + ``CadastralUnit``.
+* Raw payloads (response JSON, extraction JSON, document text) are in the ``sister_archive`` schema.
+
+Note: do NOT use ``from __future__ import annotations`` here, it breaks SQLAlchemy's annotation handling with SQLModel.
 """
 
-from datetime import datetime, timezone
+from datetime import date, datetime, time, timezone
 from decimal import Decimal
-from typing import Any, ClassVar, Optional
+from typing import Any, Optional
 
 import sqlalchemy as sa
-from aecs4u_domain.feedback import FeedbackConfig, FeedbackConfigItem, FeedbackUnsubscribe
-from sqlalchemy import JSON as SA_JSON
-from sqlalchemy import Column, Index, Text, UniqueConstraint
+from aecs4u_domain.feedback import FeedbackConfig, FeedbackConfigItem, FeedbackUnsubscribe  # noqa: F401
+from sqlalchemy import Column
 from sqlalchemy.dialects.postgresql import JSONB
-from sqlmodel import Field, Relationship, SQLModel
+from sqlmodel import Field, SQLModel
 
-
-# Table-backed vocabularies for stable categorical fields. These are natural
-# key tables: the source columns keep their readable codes while foreign keys
-# prevent untracked values. A database trigger adds newly observed source
-# codes to the appropriate catalog, so ingestion remains forward-compatible.
-ENUM_CATALOG_TABLES = (
-    "enum_gender",
-    "enum_cadastral_subject_type",
-    "enum_cadastre_type",
-    "enum_visura_request_type",
-    "enum_visura_property_type",
-    "enum_visura_property_category",
-    "enum_visura_property_class",
-    "enum_visura_property_quality",
-    "enum_page_visit_element_type",
-    "enum_visura_document_type",
-    "enum_visura_file_format",
-    "enum_building_category",
-    "enum_building_class",
-    "enum_building_consistency_unit",
-    "enum_land_class",
-    "enum_land_quality",
-    "enum_mortgage_lien_type",
-    "enum_mortgage_party_quality",
-    "enum_mortgage_party_raw_quality",
-    "enum_mortgage_party_role",
-    "enum_mortgage_note_type",
-    "enum_mortgage_title_type",
-    "enum_ownership_property_status",
-    "enum_activity_source",
-    "enum_activity_action",
-    "enum_activity_status",
-)
-
-for _enum_catalog_name in dict.fromkeys(ENUM_CATALOG_TABLES):
-    if _enum_catalog_name not in SQLModel.metadata.tables:
-        sa.Table(
-            _enum_catalog_name,
-            SQLModel.metadata,
-            Column("value", Text, primary_key=True),
-        )
-
-
-class CadastralLocation(SQLModel, table=True):
-    """Normalised cadastral location shared across visura_requests, visura_properties, and document_metadata.
-
-    All seven fields default to empty string so the unique constraint can identify duplicates without
-    NULL ambiguity.
-    """
-
-    __tablename__ = "cadastral_locations"
+class Comune(SQLModel, table=True):
+    __tablename__ = "comune"
 
     id: Optional[int] = Field(default=None, primary_key=True)
-    cadastre_type: str = Field(default="", foreign_key="enum_cadastre_type.value")  # F | T | E | ""
-    province: str = Field(default="")
-    municipality: str = Field(default="")
-    sheet: str = Field(default="")
-    parcel: str = Field(default="")
-    subunit: str = Field(default="")
-    section: str = Field(default="")  # SezUrbana (F) / SezCensuaria (T) / generic
-
-    requests: list["VisuraRequest"] = Relationship(back_populates="location")
-    properties: list["VisuraProperty"] = Relationship(back_populates="location")
-    document_metadata: list["DocumentMetadata"] = Relationship(back_populates="location")
-
-    __table_args__ = (
-        Index("idx_location_lookup", "province", "municipality", "sheet", "parcel"),
-        UniqueConstraint(
-            "cadastre_type", "province", "municipality", "sheet", "parcel", "subunit", "section",
-            name="uq_location",
-        ),
-    )
+    name: str
+    province_code: Optional[str] = Field(default=None)
+    cadastral_code: Optional[str] = Field(default=None)
 
 
-class GeographicPlace(SQLModel, table=True):
-    """Normalised geographic place for non-cadastral locations such as birth places."""
-
-    __tablename__ = "geographic_places"
+class CadastralUnit(SQLModel, table=True):
+    __tablename__ = "cadastral_unit"
 
     id: Optional[int] = Field(default=None, primary_key=True)
-    province: str = Field(default="")
-    municipality: str = Field(default="")
-    municipality_code: str = Field(default="")
+    cadastre_type: Optional[str] = Field(default=None)
+    comune_id: Optional[int] = Field(default=None, foreign_key="comune.id")
+    section: Optional[str] = Field(default=None)
+    sheet: Optional[str] = Field(default=None)
+    parcel: Optional[str] = Field(default=None)
+    subunit: Optional[str] = Field(default=None)
 
-    __table_args__ = (
-        UniqueConstraint("province", "municipality", "municipality_code", name="uq_geographic_place"),
-    )
 
-
-class CadastralSubject(SQLModel, table=True):
-    """Normalised person/legal-entity identity shared by owners, XML subjects, and legal-entity searches."""
-
-    __tablename__ = "cadastral_subjects"
+class Subject(SQLModel, table=True):
+    __tablename__ = "subject"
 
     id: Optional[int] = Field(default=None, primary_key=True)
+    subject_type: Optional[str] = Field(default=None)
     fiscal_code: Optional[str] = Field(default=None)
-    display_name: Optional[str] = None
-    last_name: Optional[str] = None
-    first_name: Optional[str] = None
-    gender: Optional[str] = Field(default=None, max_length=1, foreign_key="enum_gender.value")
-    date_of_birth: Optional[str] = None
-    birth_place_id: Optional[int] = Field(default=None, foreign_key="geographic_places.id", index=True)
-    birth_municipality_code: Optional[str] = None
-    subject_type: Optional[str] = Field(default=None, foreign_key="enum_cadastral_subject_type.value")
-
-    birth_place: Optional["GeographicPlace"] = Relationship()
-
-    __table_args__ = (
-        # Partial unique index: deduplicate subjects by fiscal code when present.
-        # NULL fiscal codes are excluded so anonymous subjects don't collide.
-        Index(
-            "uq_subject_fiscal_code",
-            "fiscal_code",
-            unique=True,
-            postgresql_where=sa.text("fiscal_code IS NOT NULL"),
-        ),
-    )
+    name: str
+    last_name: Optional[str] = Field(default=None)
+    first_name: Optional[str] = Field(default=None)
+    gender: Optional[str] = Field(default=None)
+    birth_date: Optional[date] = Field(default=None)
+    birth_comune_id: Optional[int] = Field(default=None, foreign_key="comune.id")
 
 
-class OwnershipRightCatalog(SQLModel, table=True):
-    """Shared right vocabulary; ownership shares and dates belong to each right record."""
-
-    __tablename__ = "ownership_right_catalog"
+class RightKind(SQLModel, table=True):
+    __tablename__ = "right_kind"
 
     id: Optional[int] = Field(default=None, primary_key=True)
-    right_type: Optional[str] = None
-    right_code: Optional[str] = None
-    right_description: Optional[str] = None
-
-    rights: list["OwnershipRight"] = Relationship(back_populates="catalog")
-
-    __table_args__ = (
-        Index(
-            "uq_ownership_right_catalog",
-            "right_type",
-            "right_code",
-            "right_description",
-            unique=True,
-            postgresql_nulls_not_distinct=True,
-        ),
-    )
+    right_type: Optional[str] = Field(default=None)
+    right_code: Optional[str] = Field(default=None)
+    description: Optional[str] = Field(default=None)
 
 
 class OwnershipRight(SQLModel, table=True):
-    """Per-owner right terms linked to a shared right vocabulary entry."""
-
-    __tablename__ = "ownership_rights"
+    __tablename__ = "ownership_right"
 
     id: Optional[int] = Field(default=None, primary_key=True)
-    right_catalog_id: int = Field(foreign_key="ownership_right_catalog.id", index=True)
-    ownership_share: str = Field(default="")
-    start_date: str = Field(default="")
-    end_date: str = Field(default="")
-
-    catalog: Optional[OwnershipRightCatalog] = Relationship(back_populates="rights")
-
-    __table_args__ = (
-        UniqueConstraint(
-            "right_catalog_id",
-            "ownership_share",
-            "start_date",
-            "end_date",
-            name="uq_ownership_right_terms",
-        ),
-    )
+    right_kind_id: int = Field(foreign_key="right_kind.id")
+    share_numerator: Optional[int] = Field(default=None)
+    share_denominator: Optional[int] = Field(default=None)
+    start_date: Optional[date] = Field(default=None)
+    end_date: Optional[date] = Field(default=None)
 
 
-class VisuraRequest(SQLModel, table=True):
-    __tablename__ = "visura_requests"
+class RequestType(SQLModel, table=True):
+    __tablename__ = "request_type"
 
-    request_id: str = Field(primary_key=True)
-    request_type: str = Field(foreign_key="enum_visura_request_type.value")
-    location_id: Optional[int] = Field(default=None, foreign_key="cadastral_locations.id", index=True)
-    cache_key: Optional[str] = Field(default=None, index=True)
-    cost_text: Optional[str] = None
-    cost_value: Optional[float] = None
-    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-
-    location: Optional["CadastralLocation"] = Relationship(back_populates="requests")
-    response: Optional["VisuraResponse"] = Relationship(back_populates="request")
+    code: str = Field(primary_key=True)
 
 
-class VisuraResponse(SQLModel, table=True):
-    __tablename__ = "visura_responses"
+class DocumentType(SQLModel, table=True):
+    __tablename__ = "document_type"
 
-    request_id: str = Field(foreign_key="visura_requests.request_id", primary_key=True)
-    success: bool
-    cadastre_type: str = Field(foreign_key="enum_cadastre_type.value")
-    data: Optional[dict[str, Any]] = Field(default=None, sa_column=Column(SA_JSON))
-    error: Optional[str] = None
-    total_results: Optional[int] = None
-    total_intestati: Optional[int] = None
-    skipped_soppresso: Optional[int] = None
-    subject_query: Optional[str] = None
-    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-
-    request: Optional["VisuraRequest"] = Relationship(back_populates="response")
-    properties: list["VisuraProperty"] = Relationship(
-        back_populates="response", sa_relationship_kwargs={"cascade": "all, delete-orphan"}
-    )
-    owners: list["VisuraOwner"] = Relationship(
-        back_populates="response", sa_relationship_kwargs={"cascade": "all, delete-orphan"}
-    )
-    page_visits: list["PageVisit"] = Relationship(
-        back_populates="response", sa_relationship_kwargs={"cascade": "all, delete-orphan"}
-    )
-    documents: list["VisuraDocument"] = Relationship(
-        back_populates="response", sa_relationship_kwargs={"cascade": "all, delete-orphan"}
-    )
+    code: str = Field(primary_key=True)
 
 
-class VisuraResult(SQLModel, table=True):
-    """One explicitly indexed result row from a response's results collection."""
+class CadastralCategory(SQLModel, table=True):
+    __tablename__ = "cadastral_category"
 
-    __tablename__ = "visura_results"
+    code: str = Field(primary_key=True)
+    description: Optional[str] = Field(default=None)
+
+
+class LandQuality(SQLModel, table=True):
+    __tablename__ = "land_quality"
+
+    code: str = Field(primary_key=True)
+
+
+class LandRegistryOffice(SQLModel, table=True):
+    __tablename__ = "land_registry_office"
 
     id: Optional[int] = Field(default=None, primary_key=True)
-    response_id: str = Field(foreign_key="visura_responses.request_id", index=True)
-    result_index: int = Field(default=0)
-    visura_present: bool = Field(default=False)
+    name: str
 
 
-class VisuraProperty(SQLModel, table=True):
-    """Structured property data extracted from response JSON."""
-
-    __tablename__ = "visura_properties"
+class Request(SQLModel, table=True):
+    __tablename__ = "request"
 
     id: Optional[int] = Field(default=None, primary_key=True)
-    response_id: str = Field(foreign_key="visura_responses.request_id", index=True)
-    result_id: Optional[int] = Field(default=None, foreign_key="visura_results.id", index=True)
-    location_id: Optional[int] = Field(default=None, foreign_key="cadastral_locations.id", index=True)
-    subject_id: Optional[int] = Field(default=None, foreign_key="cadastral_subjects.id", index=True)
-    property_type: Optional[str] = Field(default=None, foreign_key="enum_visura_property_type.value")
-
-    # Common fields (Fabbricati + Terreni)
-    address: Optional[str] = None
-    partita: Optional[str] = None
-
-    # Fabbricati-specific
-    category: Optional[str] = Field(default=None, foreign_key="enum_visura_property_category.value")
-    cadastral_class: Optional[str] = Field(default=None, foreign_key="enum_visura_property_class.value")
-    consistency: Optional[str] = None
-    income: Optional[str] = None
-    census_zone: Optional[str] = None
-
-    # Terreni-specific
-    quality: Optional[str] = Field(default=None, foreign_key="enum_visura_property_quality.value")
-    area: Optional[str] = None
-    dominical_income: Optional[str] = None
-    agricultural_income: Optional[str] = None
-
-    # Soggetto/PNF search results (entity data — NOT cadastral location)
-    registered_office: Optional[str] = None
-    province: Optional[str] = None  # entity's province
-    municipality: Optional[str] = None  # entity's municipality
-
-    location: Optional["CadastralLocation"] = Relationship(back_populates="properties")
-    subject: Optional["CadastralSubject"] = Relationship()
-    response: Optional["VisuraResponse"] = Relationship(back_populates="properties")
+    request_ref: str
+    request_type: Optional[str] = Field(default=None, foreign_key="request_type.code")
+    cadastral_unit_id: Optional[int] = Field(default=None, foreign_key="cadastral_unit.id")
+    cache_key: Optional[str] = Field(default=None)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc), sa_column=Column(sa.DateTime(timezone=True), nullable=False))
+    responded_at: Optional[datetime] = Field(default=None, sa_column=Column(sa.DateTime(timezone=True), nullable=True))
+    success: Optional[bool] = Field(default=None)
+    error: Optional[str] = Field(default=None)
+    cadastre_type: Optional[str] = Field(default=None)
+    total_results: Optional[int] = Field(default=None)
+    total_intestati: Optional[int] = Field(default=None)
+    skipped_soppresso: Optional[int] = Field(default=None)
+    subject_query: Optional[str] = Field(default=None)
 
 
-class VisuraOwner(SQLModel, table=True):
-    """Structured owner data extracted from response JSON."""
-
-    __tablename__ = "visura_owners"
+class RequestResult(SQLModel, table=True):
+    __tablename__ = "request_result"
 
     id: Optional[int] = Field(default=None, primary_key=True)
-    response_id: str = Field(foreign_key="visura_responses.request_id", index=True)
-    result_id: Optional[int] = Field(default=None, foreign_key="visura_results.id", index=True)
-    owner_index: Optional[int] = None
-    subject_id: Optional[int] = Field(default=None, foreign_key="cadastral_subjects.id", index=True)
-    right_id: Optional[int] = Field(default=None, foreign_key="ownership_rights.id", index=True)
+    request_id: int = Field(foreign_key="request.id")
+    result_index: int
+    visura_present: Optional[bool] = Field(default=None)
 
-    response: Optional["VisuraResponse"] = Relationship(back_populates="owners")
-    subject: Optional["CadastralSubject"] = Relationship()
-    right: Optional["OwnershipRight"] = Relationship()
+
+class Property(SQLModel, table=True):
+    __tablename__ = "property"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    request_id: int = Field(foreign_key="request.id")
+    result_id: Optional[int] = Field(default=None, foreign_key="request_result.id")
+    property_type: Optional[str] = Field(default=None)
+    cadastral_unit_id: Optional[int] = Field(default=None, foreign_key="cadastral_unit.id")
+    subject_id: Optional[int] = Field(default=None, foreign_key="subject.id")
+    address: Optional[str] = Field(default=None)
+    partita: Optional[str] = Field(default=None)
+    category: Optional[str] = Field(default=None, foreign_key="cadastral_category.code")
+    cadastral_class: Optional[str] = Field(default=None)
+    consistency_value: Optional[Decimal] = Field(default=None)
+    consistency_unit: Optional[str] = Field(default=None)
+    census_zone: Optional[str] = Field(default=None)
+    land_quality: Optional[str] = Field(default=None, foreign_key="land_quality.code")
+    area_sqm: Optional[Decimal] = Field(default=None)
+    income_eur: Optional[Decimal] = Field(default=None)
+    dominical_income_eur: Optional[Decimal] = Field(default=None)
+    agricultural_income_eur: Optional[Decimal] = Field(default=None)
+    registered_office_comune_id: Optional[int] = Field(default=None, foreign_key="comune.id")
+
+
+class ResultOwner(SQLModel, table=True):
+    __tablename__ = "result_owner"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    request_id: int = Field(foreign_key="request.id")
+    result_id: Optional[int] = Field(default=None, foreign_key="request_result.id")
+    owner_index: Optional[int] = Field(default=None)
+    subject_id: Optional[int] = Field(default=None, foreign_key="subject.id")
+    right_id: Optional[int] = Field(default=None, foreign_key="ownership_right.id")
+
+
+class Document(SQLModel, table=True):
+    __tablename__ = "document"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    request_id: Optional[int] = Field(default=None, foreign_key="request.id")
+    document_type: Optional[str] = Field(default=None, foreign_key="document_type.code")
+    file_format: Optional[str] = Field(default=None)
+    file_name: str
+    file_size: Optional[int] = Field(default=None)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc), sa_column=Column(sa.DateTime(timezone=True), nullable=False))
+    subject_text: Optional[str] = Field(default=None)
+    requested_at: Optional[datetime] = Field(default=None, sa_column=Column(sa.DateTime(timezone=True), nullable=True))
+    cadastral_unit_id: Optional[int] = Field(default=None, foreign_key="cadastral_unit.id")
+    land_registry_office_id: Optional[int] = Field(default=None, foreign_key="land_registry_office.id")
+    view_subtype: Optional[str] = Field(default=None)
+    protocol: Optional[str] = Field(default=None)
+    protocol_year: Optional[int] = Field(default=None)
+    title: Optional[str] = Field(default=None)
+    reference_date: Optional[date] = Field(default=None)
+    generated_at: Optional[datetime] = Field(default=None, sa_column=Column(sa.DateTime(timezone=True), nullable=True))
+    liquidation_protocol: Optional[str] = Field(default=None)
+    liquidation_year: Optional[int] = Field(default=None)
+    registry_view_type: Optional[str] = Field(default=None)
+    service_type: Optional[str] = Field(default=None)
+    requester: Optional[str] = Field(default=None)
+    liquidation_units: Optional[int] = Field(default=None)
+    historical_total_area_sqm: Optional[Decimal] = Field(default=None)
+    historical_excluded_area_sqm: Optional[Decimal] = Field(default=None)
+
+
+class PageVisit(SQLModel, table=True):
+    __tablename__ = "page_visit"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    request_id: int = Field(foreign_key="request.id")
+    step: Optional[str] = Field(default=None)
+    url: Optional[str] = Field(default=None)
+    screenshot_url: Optional[str] = Field(default=None)
+    visited_at: Optional[datetime] = Field(default=None, sa_column=Column(sa.DateTime(timezone=True), nullable=True))
+
+
+class PageVisitFormElement(SQLModel, table=True):
+    __tablename__ = "page_visit_form_element"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    page_visit_id: int = Field(foreign_key="page_visit.id")
+    element_index: Optional[int] = Field(default=None)
+    tag: Optional[str] = Field(default=None)
+    element_type: Optional[str] = Field(default=None)
+    name: Optional[str] = Field(default=None)
+    label: Optional[str] = Field(default=None)
+    value: Optional[str] = Field(default=None)
+
+
+class PageVisitError(SQLModel, table=True):
+    __tablename__ = "page_visit_error"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    page_visit_id: int = Field(foreign_key="page_visit.id")
+    error_index: Optional[int] = Field(default=None)
+    message: Optional[str] = Field(default=None)
+
+
+class ActivityAction(SQLModel, table=True):
+    __tablename__ = "activity_action"
+
+    code: str = Field(primary_key=True)
+
+
+class ActivityLog(SQLModel, table=True):
+    __tablename__ = "activity_log"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    started_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc), sa_column=Column(sa.DateTime(timezone=True), nullable=False))
+    finished_at: Optional[datetime] = Field(default=None, sa_column=Column(sa.DateTime(timezone=True), nullable=True))
+    duration_ms: Optional[int] = Field(default=None)
+    actor: str = Field(default="system")
+    source: str = Field(default="web")
+    action: str = Field(foreign_key="activity_action.code")
+    status: str = Field(default="success")
+    target: Optional[str] = Field(default=None)
+    error: Optional[str] = Field(default=None)
+    client_ip: Optional[str] = Field(default=None)
+
+
+class ActivityLogAttribute(SQLModel, table=True):
+    __tablename__ = "activity_log_attribute"
+
+    activity_id: int = Field(primary_key=True, foreign_key="activity_log.id")
+    section: str = Field(primary_key=True)
+    path: str = Field(primary_key=True)
+    value: Optional[str] = Field(default=None)
+
+
+class DocumentExtraction(SQLModel, table=True):
+    __tablename__ = "document_extraction"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    document_id: int = Field(foreign_key="document.id")
+    provider: Optional[str] = Field(default=None)
+    model: Optional[str] = Field(default=None)
+    schema_name: str
+    schema_version: Optional[str] = Field(default=None)
+    run_id: str
+    workflow_id: Optional[str] = Field(default=None)
+    output_path: Optional[str] = Field(default=None)
+    extracted_at: Optional[datetime] = Field(default=None, sa_column=Column(sa.DateTime(timezone=True), nullable=True))
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc), sa_column=Column(sa.DateTime(timezone=True), nullable=False))
+
+
+class MortgageLienType(SQLModel, table=True):
+    __tablename__ = "mortgage_lien_type"
+
+    code: str = Field(primary_key=True)
+
+
+class MortgageTitleType(SQLModel, table=True):
+    __tablename__ = "mortgage_title_type"
+
+    code: str = Field(primary_key=True)
+
+
+class MortgageNoteType(SQLModel, table=True):
+    __tablename__ = "mortgage_note_type"
+
+    code: str = Field(primary_key=True)
+
+
+class MortgagePartyQuality(SQLModel, table=True):
+    __tablename__ = "mortgage_party_quality"
+
+    code: str = Field(primary_key=True)
+
+
+class MortgageInspection(SQLModel, table=True):
+    __tablename__ = "mortgage_inspection"
+
+    extraction_id: int = Field(primary_key=True, foreign_key="document_extraction.id")
+    inspection_date: Optional[date] = Field(default=None)
+    inspection_time: Optional[time] = Field(default=None)
+    inspection_number: Optional[str] = Field(default=None)
+    inspection_number_date: Optional[date] = Field(default=None)
+    inspection_started_at: Optional[datetime] = Field(default=None)
+    requester: Optional[str] = Field(default=None)
+    tax_paid_eur: Optional[int] = Field(default=None)
+    page_count: Optional[int] = Field(default=None)
+    office: Optional[str] = Field(default=None)
+    service: Optional[str] = Field(default=None)
+    note_type: Optional[str] = Field(default=None, foreign_key="mortgage_note_type.code")
+    note_at: Optional[datetime] = Field(default=None, sa_column=Column(sa.DateTime(timezone=True), nullable=True))
+    registro_generale: Optional[int] = Field(default=None)
+    registro_particolare: Optional[int] = Field(default=None)
+    presentazione_numero: Optional[int] = Field(default=None)
+    presentazione_data: Optional[date] = Field(default=None)
+    section_a_other_data: Optional[str] = Field(default=None)
+    section_d_text: Optional[str] = Field(default=None)
+    lien_type: Optional[str] = Field(default=None, foreign_key="mortgage_lien_type.code")
+    lien_derived_from: Optional[str] = Field(default=None)
+    lien_derived_from_code: Optional[str] = Field(default=None)
+    lien_derived_from_description: Optional[str] = Field(default=None)
+    lien_principal_eur: Optional[int] = Field(default=None)
+    lien_annual_interest_rate_pct: Optional[Decimal] = Field(default=None)
+    lien_total_eur: Optional[int] = Field(default=None)
+    lien_variable_amounts: Optional[bool] = Field(default=None)
+    lien_automatic_increase: Optional[bool] = Field(default=None)
+    lien_resolutive_condition: Optional[bool] = Field(default=None)
+    lien_duration_years: Optional[int] = Field(default=None)
+    lien_duration_description: Optional[str] = Field(default=None)
+    lien_mortgage_rank: Optional[int] = Field(default=None)
+    title_type: Optional[str] = Field(default=None, foreign_key="mortgage_title_type.code")
+    title_description: Optional[str] = Field(default=None)
+    title_date: Optional[date] = Field(default=None)
+    title_repertory_number: Optional[str] = Field(default=None)
+    title_notary_name: Optional[str] = Field(default=None)
+    title_notary_fiscal_code: Optional[str] = Field(default=None)
+    title_notary_location: Optional[str] = Field(default=None)
+
+
+class MortgageInspectionParty(SQLModel, table=True):
+    __tablename__ = "mortgage_inspection_party"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    inspection_id: int = Field(foreign_key="mortgage_inspection.extraction_id")
+    role: str
+    ordinal: int
+    subject_id: int = Field(foreign_key="subject.id")
+    subject_number: Optional[int] = Field(default=None)
+    quality: Optional[str] = Field(default=None, foreign_key="mortgage_party_quality.code")
+    registered_office: Optional[str] = Field(default=None)
+    mortgage_domicile: Optional[str] = Field(default=None)
+    negotiation_unit_reference: Optional[int] = Field(default=None)
+    right_type: Optional[str] = Field(default=None)
+    share_numerator: Optional[int] = Field(default=None)
+    share_denominator: Optional[int] = Field(default=None)
+
+
+class MortgageInspectionProperty(SQLModel, table=True):
+    __tablename__ = "mortgage_inspection_property"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    inspection_id: int = Field(foreign_key="mortgage_inspection.extraction_id")
+    unit_number: Optional[int] = Field(default=None)
+    property_number: Optional[int] = Field(default=None)
+    cadastral_unit_id: Optional[int] = Field(default=None, foreign_key="cadastral_unit.id")
+    nature: Optional[str] = Field(default=None)
+    nature_description: Optional[str] = Field(default=None)
+    room_count: Optional[int] = Field(default=None)
+    floor: Optional[str] = Field(default=None)
+    address: Optional[str] = Field(default=None)
+    civic_number: Optional[str] = Field(default=None)
+
+
+# ---------------------------------------------------------------------------
+# Archive (schema sister_archive): raw payloads kept out of the working tables
+# ---------------------------------------------------------------------------
+
+
+class RequestPayload(SQLModel, table=True):
+    __tablename__ = "request_payload"
+    __table_args__ = {"schema": "sister_archive"}
+
+    request_id: int = Field(primary_key=True, foreign_key="request.id")
+    data: str
+
+
+class DocumentContent(SQLModel, table=True):
+    __tablename__ = "document_content"
+    __table_args__ = {"schema": "sister_archive"}
+
+    document_id: int = Field(primary_key=True, foreign_key="document.id")
+    content: str
+
+
+class DocumentExtractionPayload(SQLModel, table=True):
+    __tablename__ = "document_extraction_payload"
+    __table_args__ = {"schema": "sister_archive"}
+
+    extraction_id: int = Field(primary_key=True, foreign_key="document_extraction.id")
+    structured_data: dict[str, Any] = Field(sa_column=Column(JSONB, nullable=False))
+
+
+class ActivityLogPayload(SQLModel, table=True):
+    __tablename__ = "activity_log_payload"
+    __table_args__ = {"schema": "sister_archive"}
+
+    activity_id: int = Field(primary_key=True, foreign_key="activity_log.id")
+    params: Optional[dict[str, Any]] = Field(default=None, sa_column=Column(JSONB))
+    result: Optional[dict[str, Any]] = Field(default=None, sa_column=Column(JSONB))
 
 
 # ---------------------------------------------------------------------------
@@ -333,345 +457,13 @@ PROPERTY_SUBJECT_FIELD_MAP = {
     "Codice fiscale": "fiscal_code",
 }
 
-# HTML table headers that map to CadastralLocation fields (not VisuraProperty)
+# HTML table headers that map to a cadastral unit (not to the property row)
 PROPERTY_LOCATION_FIELD_MAP = {
     "Foglio": "sheet",
     "Particella": "parcel",
     "Sub": "subunit",
     "Subalterno": "subunit",
 }
-
-
-class PageVisit(SQLModel, table=True):
-    """Browser page visit metadata captured during automation."""
-
-    __tablename__ = "page_visits"
-
-    id: Optional[int] = Field(default=None, primary_key=True)
-    response_id: str = Field(foreign_key="visura_responses.request_id", index=True)
-    step: str = Field(default="")
-    url: Optional[str] = None
-    screenshot_url: Optional[str] = None
-    form_elements_json: Optional[str] = Field(default=None, sa_column=Column(Text))
-    errors_json: Optional[str] = Field(default=None, sa_column=Column(Text))
-    timestamp: Optional[datetime] = None
-
-    response: Optional["VisuraResponse"] = Relationship(back_populates="page_visits")
-
-
-class PageVisitFormElement(SQLModel, table=True):
-    """One form control captured during a page visit."""
-
-    __tablename__ = "page_visit_form_elements"
-
-    id: Optional[int] = Field(default=None, primary_key=True)
-    page_visit_id: int = Field(foreign_key="page_visits.id", index=True)
-    element_index: int = Field(default=0)
-    tag: str = Field(default="")
-    element_type: str = Field(default="", foreign_key="enum_page_visit_element_type.value")
-    name: str = Field(default="")
-    label: str = Field(default="")
-    value: str = Field(default="")
-
-
-class PageVisitError(SQLModel, table=True):
-    """One error message captured during a page visit."""
-
-    __tablename__ = "page_visit_errors"
-
-    id: Optional[int] = Field(default=None, primary_key=True)
-    page_visit_id: int = Field(foreign_key="page_visits.id", index=True)
-    error_index: int = Field(default=0)
-    message: str = Field(default="")
-
-
-class VisuraDocument(SQLModel, table=True):
-    """Downloaded visura document (PDF/XML/P7M) from SISTER Richieste — file metadata only."""
-
-    __tablename__ = "visura_documents"
-
-    id: Optional[int] = Field(default=None, primary_key=True)
-    response_id: Optional[str] = Field(default=None, foreign_key="visura_responses.request_id", index=True)
-    document_type: str = Field(default="", foreign_key="enum_visura_document_type.value")
-    file_format: str = Field(default="", foreign_key="enum_visura_file_format.value")
-    filename: str = Field(default="")
-    file_path: Optional[str] = None
-    file_size: Optional[int] = None
-    subject: Optional[str] = None  # description from Richieste table
-    requested_at: Optional[str] = None  # request timestamp from Richieste table
-    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-
-    response: Optional["VisuraResponse"] = Relationship(back_populates="documents")
-    document_metadata: Optional["DocumentMetadata"] = Relationship(back_populates="document")
-
-
-class DocumentMetadata(SQLModel, table=True):
-    """Parsed metadata and optional cadastral location (1:1 with visura_documents).
-
-    Cadastral location is normalised via location_id → cadastral_locations; content
-    stores the original XML for structured visura documents when available.
-    """
-
-    __tablename__ = "document_metadata"
-
-    id: int = Field(foreign_key="visura_documents.id", primary_key=True)
-    location_id: Optional[int] = Field(default=None, foreign_key="cadastral_locations.id", index=True)
-
-    # DatiRichiesta — non-location fields kept here
-    municipality_code: Optional[str] = None  # 4-char ISTAT municipality code (different from municipality name)
-    view_subtype: Optional[str] = None  # attuale | storica | storica_analitica | storica_sintetica | storica_completa
-    protocol: Optional[str] = None
-    year: Optional[str] = None
-
-    # TitoloVisura
-    title: Optional[str] = None
-    reference_date: Optional[str] = None  # reference date DD/MM/YYYY
-    registry_view_type: Optional[str] = None  # STORICA | ATTUALE | SINTETICA
-    service_type: Optional[str] = None
-    generation_date: Optional[str] = None
-    generation_time: Optional[str] = None
-    source_system: Optional[str] = None
-
-    # DatiLiquidazione
-    liquidation_protocol: Optional[str] = None
-    liquidation_year: Optional[str] = None
-    liquidation_units: Optional[int] = None
-    requester: Optional[str] = None  # Richiedente.Descrizione
-
-    # StoriaImmobileFabbricati.SuperficieF — inlined (0..1 per document)
-    historical_total_area: Optional[Decimal] = None
-    historical_excluded_area: Optional[Decimal] = None
-    content: Optional[str] = Field(default=None, sa_column=Column(Text))
-
-    document: Optional["VisuraDocument"] = Relationship(back_populates="document_metadata")
-    location: Optional["CadastralLocation"] = Relationship(back_populates="document_metadata")
-
-    __table_args__ = (Index("idx_document_metadata_location", "location_id"),)
-
-    # Maps XML attribute/element names → DocumentMetadata Python field names.
-    source_names: ClassVar[dict] = {
-        # TitoloVisura attributes
-        "Titolo": "title",
-        "SituazioneAl": "reference_date",
-        "TipoVisura": "registry_view_type",
-        "TipoServizio": "service_type",
-        "Data": "generation_date",
-        "Ora": "generation_time",
-        "Provenienza": "source_system",
-        # DatiLiquidazione attributes
-        "Protocollo": "liquidation_protocol",
-        "Anno": "liquidation_year",
-        "UnitaImmobiliari": "liquidation_units",
-        # Richiedente attribute
-        "Descrizione": "requester",
-        # DatiRichiesta non-location attribute
-        "CodiceComune": "municipality_code",
-        # StoriaImmobileFabbricati.SuperficieF attributes
-        "Totale": "historical_total_area",
-        "TotaleE": "historical_excluded_area",
-    }
-
-    # Maps XML attribute names that belong in CadastralLocation (for parse reference).
-    location_source_names: ClassVar[dict] = {
-        "Provincia": "province",
-        "Comune": "municipality",
-        "Foglio": "sheet",
-        "ParticellaNum": "parcel",
-        "Subalterno": "subunit",
-        "SezUrbana": "section",    # Fabbricati
-        "SezCensuaria": "section",  # Terreni
-        "TipoCatasto": "cadastre_type",
-    }
-
-
-class StructuredDocumentExtraction(SQLModel, table=True):
-    """Immutable source payload and provenance for a structured document extraction."""
-
-    __tablename__ = "document_structured_extractions"
-
-    id: Optional[int] = Field(default=None, primary_key=True)
-    document_id: int = Field(foreign_key="visura_documents.id", index=True)
-    provider: Optional[str] = None
-    model: Optional[str] = None
-    schema_name: str = Field(default="")
-    schema_version: Optional[str] = None
-    run_id: str = Field(default="")
-    workflow_id: Optional[str] = None
-    output_path: Optional[str] = None
-    extracted_at: Optional[datetime] = None
-    structured_data: dict[str, Any] = Field(sa_column=Column(JSONB, nullable=False))
-    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-
-    __table_args__ = (
-        UniqueConstraint("document_id", "schema_name", "run_id", name="uq_structured_extraction_run"),
-        Index("idx_structured_extraction_latest", "document_id", "created_at"),
-    )
-
-
-class MortgageInspection(SQLModel, table=True):
-    """Flattened inspection and note header fields extracted by Ocular."""
-
-    __tablename__ = "mortgage_inspections"
-
-    extraction_id: int = Field(foreign_key="document_structured_extractions.id", primary_key=True)
-    inspection_date: Optional[str] = None
-    inspection_time: Optional[str] = None
-    inspection_number: Optional[str] = None
-    inspection_date_number: Optional[str] = None
-    inspection_start: Optional[str] = None
-    requester: Optional[str] = None
-    tax_paid_euro: Optional[int] = None
-    page_count: Optional[int] = None
-    office: Optional[str] = None
-    service: Optional[str] = None
-    note_type: Optional[str] = Field(default=None, foreign_key="enum_mortgage_note_type.value")
-    note_timestamp: Optional[str] = None
-    registro_generale: Optional[int] = None
-    registro_particolare: Optional[int] = None
-    presentazione_numero: Optional[int] = None
-    presentazione_data: Optional[str] = None
-    section_a_other_data: Optional[str] = Field(default=None, sa_column=Column(Text))
-    section_d_text: Optional[str] = Field(default=None, sa_column=Column(Text))
-    unit_count: Optional[int] = None
-    party_favore_count: Optional[int] = None
-    party_contro_count: Optional[int] = None
-
-
-class MortgageInspectionTitle(SQLModel, table=True):
-    """Title and notary details from note section A."""
-
-    __tablename__ = "mortgage_inspection_titles"
-
-    extraction_id: int = Field(foreign_key="document_structured_extractions.id", primary_key=True)
-    title_type: Optional[str] = Field(default=None, foreign_key="enum_mortgage_title_type.value")
-    description: Optional[str] = Field(default=None, sa_column=Column(Text))
-    title_date: Optional[str] = None
-    repertory_number: Optional[str] = None
-    notary_name: Optional[str] = None
-    notary_fiscal_code: Optional[str] = None
-    notary_location: Optional[str] = None
-
-
-class MortgageInspectionLien(SQLModel, table=True):
-    """Mortgage amounts and terms from note section A."""
-
-    __tablename__ = "mortgage_inspection_liens"
-
-    extraction_id: int = Field(foreign_key="document_structured_extractions.id", primary_key=True)
-    lien_type: Optional[str] = Field(default=None, foreign_key="enum_mortgage_lien_type.value")
-    lien_type_original: Optional[str] = None
-    derived_from: Optional[str] = Field(default=None, sa_column=Column(Text))
-    derived_from_code: Optional[str] = None
-    derived_from_description: Optional[str] = Field(default=None, sa_column=Column(Text))
-    principal_euro: Optional[int] = None
-    annual_interest_rate: Optional[str] = None
-    annual_interest_rate_pct: Optional[float] = None
-    semiannual_interest_rate: Optional[str] = None
-    interest_euro: Optional[int] = None
-    expenses_euro: Optional[int] = None
-    total_euro: Optional[int] = None
-    variable_amounts: Optional[bool] = None
-    foreign_currency: Optional[str] = None
-    automatic_increase: Optional[bool] = None
-    resolutive_condition: Optional[bool] = None
-    duration_years: Optional[int] = None
-    duration_description: Optional[str] = None
-    mortgage_rank: Optional[int] = None
-
-
-class MortgageInspectionUnit(SQLModel, table=True):
-    """Negotiation unit from note section B."""
-
-    __tablename__ = "mortgage_inspection_units"
-
-    id: Optional[int] = Field(default=None, primary_key=True)
-    extraction_id: int = Field(foreign_key="document_structured_extractions.id", index=True)
-    unit_number: Optional[int] = None
-    __table_args__ = (UniqueConstraint("extraction_id", "unit_number", name="uq_mortgage_inspection_unit"),)
-
-
-class MortgageInspectionProperty(SQLModel, table=True):
-    """A cadastral property linked to an inspection negotiation unit."""
-
-    __tablename__ = "mortgage_inspection_properties"
-
-    id: Optional[int] = Field(default=None, primary_key=True)
-    unit_id: int = Field(foreign_key="mortgage_inspection_units.id", index=True)
-    property_number: Optional[int] = None
-    municipality_code: Optional[str] = None
-    municipality: Optional[str] = None
-    cadastre_type: Optional[str] = None
-    urban_section: Optional[str] = None
-    sheet: Optional[int] = None
-    parcel: Optional[int] = None
-    subunit: Optional[int] = None
-    nature: Optional[str] = None
-    nature_description: Optional[str] = None
-    room_count: Optional[int] = None
-    area_sqm: Optional[float] = None
-    floor: Optional[str] = None
-    address: Optional[str] = None
-    civic_number: Optional[str] = None
-
-
-class MortgageInspectionParty(SQLModel, table=True):
-    """One party in section C, retaining both parsed fields and original text fields."""
-
-    __tablename__ = "mortgage_inspection_parties"
-
-    id: Optional[int] = Field(default=None, primary_key=True)
-    extraction_id: int = Field(foreign_key="document_structured_extractions.id", index=True)
-    role: str = Field(default="", foreign_key="enum_mortgage_party_role.value")
-    ordinal: int = Field(default=0)
-    subject_number: Optional[int] = None
-    quality: Optional[str] = Field(default=None, foreign_key="enum_mortgage_party_quality.value")
-    surname: Optional[str] = None
-    given_name: Optional[str] = None
-    birth_date: Optional[str] = None
-    birth_place: Optional[str] = None
-    gender: Optional[str] = Field(default=None, foreign_key="enum_gender.value")
-    fiscal_code: Optional[str] = None
-    entity_name: Optional[str] = None
-    registered_office: Optional[str] = None
-    mortgage_domicile: Optional[str] = None
-    negotiation_unit_reference: Optional[int] = None
-    right_type: Optional[str] = None
-    share_numerator: Optional[int] = None
-    share_denominator: Optional[int] = None
-    raw_quality: Optional[str] = Field(default=None, foreign_key="enum_mortgage_party_raw_quality.value")
-    raw_share: Optional[str] = None
-    raw_right_type: Optional[str] = None
-    __table_args__ = (
-        UniqueConstraint("extraction_id", "role", "ordinal", name="uq_mortgage_inspection_party"),
-    )
-
-
-class ActivityLog(SQLModel, table=True):
-    """Traceability record of an operational action: who ran what, from where, with which parameters and outcome.
-
-    Written by ``database.record_activity``. Rows are only ever appended; ``params``/``result`` hold small JSON
-    summaries (counts, flags), never document contents or personal data.
-    """
-
-    __tablename__ = "activity_log"
-
-    id: Optional[int] = Field(default=None, primary_key=True)
-    started_at: datetime = Field(
-        default_factory=lambda: datetime.now(timezone.utc),
-        sa_column=Column(sa.DateTime(timezone=True), nullable=False, index=True),
-    )
-    finished_at: Optional[datetime] = Field(default=None, sa_column=Column(sa.DateTime(timezone=True)))
-    duration_ms: Optional[int] = None
-    actor: str = Field(default="system", index=True)
-    source: str = Field(default="web", foreign_key="enum_activity_source.value")
-    action: str = Field(index=True, foreign_key="enum_activity_action.value")
-    status: str = Field(default="success", index=True, foreign_key="enum_activity_status.value")
-    target: Optional[str] = None
-    params: Optional[dict[str, Any]] = Field(default=None, sa_column=Column(JSONB))
-    result: Optional[dict[str, Any]] = Field(default=None, sa_column=Column(JSONB))
-    error: Optional[str] = Field(default=None, sa_column=Column(Text))
-    client_ip: Optional[str] = None
-
 
 OWNER_SUBJECT_FIELD_MAP = {
     "Nominativo o denominazione": "display_name",
