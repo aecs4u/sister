@@ -21,10 +21,10 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install dependencies
+      - name: Install lint tools
         run: |
           python -m pip install --upgrade pip
-          pip install ruff black
+          pip install ruff black==24.10.0
 
       - name: Check formatting with Black
         run: black --check --diff .
@@ -36,6 +36,10 @@ jobs:
     name: Tests
     runs-on: ubuntu-latest
     needs: lint
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    permissions:
+      contents: read
+      id-token: write
     steps:
       - uses: actions/checkout@v4
 
@@ -44,17 +48,34 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install dependencies
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Configure private package access
         run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          pip install pytest pytest-cov pytest-asyncio
+          GH_PAT=$(gcloud secrets versions access latest --secret=GITHUB_TOKEN --project=apps-aecs4u)
+          echo "::add-mask::${GH_PAT}"
+          git config --global url."https://${GH_PAT}@github.com/".insteadOf "https://github.com/"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install locked project and test dependencies
+        run: uv sync --frozen --group dev --extra dev
 
       - name: Install Playwright browsers
-        run: playwright install chromium --with-deps
+        run: .venv/bin/playwright install chromium --with-deps
 
       - name: Run tests
-        run: python -m pytest -v --tb=short || [ $? -eq 5 ]
+        run: .venv/bin/python -m pytest -v --tb=short || [ $? -eq 5 ]
         env:
           ADE_USERNAME: test
           ADE_PASSWORD: test
@@ -62,6 +83,10 @@ jobs:
   security:
     name: Dependency Audit
     runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    permissions:
+      contents: read
+      id-token: write
     steps:
       - uses: actions/checkout@v4
 
@@ -70,10 +95,30 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install pip-audit
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
 
-      - name: Audit dependencies
-        run: pip-audit -r requirements.txt
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Configure private package access
+        run: |
+          GH_PAT=$(gcloud secrets versions access latest --secret=GITHUB_TOKEN --project=apps-aecs4u)
+          echo "::add-mask::${GH_PAT}"
+          git config --global url."https://${GH_PAT}@github.com/".insteadOf "https://github.com/"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install locked runtime dependencies and audit tool
+        run: |
+          uv sync --frozen --no-dev
+          uv pip install --python .venv/bin/python pip-audit
+
+      - name: Audit installed locked dependencies
+        run: .venv/bin/pip-audit --local
