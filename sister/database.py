@@ -69,7 +69,7 @@ load_dotenv(PROJECT_ROOT / ".env")
 load_dotenv(PROJECT_ROOT.parent / ".env", override=False)
 DATA_ROOT = Path(os.getenv("SISTER_DATA_ROOT", str(PROJECT_ROOT))).expanduser().resolve()
 DATABASE_DSN = os.getenv("DATABASE_DSN")
-DATABASE_REVISION = "20261010_activity_log"
+DATABASE_REVISION = "20261022_visura_polygons"
 
 # ---------------------------------------------------------------------------
 # Engine and session
@@ -122,9 +122,15 @@ async def init_db() -> None:
     engine = _get_engine()
     async with engine.connect() as conn:
         await conn.execute(text("SELECT 1"))
-        table_names = await conn.run_sync(lambda sync_conn: set(inspect(sync_conn).get_table_names()))
+        # Sister owns a dedicated schema. Qualifying the schema here avoids a
+        # false "incomplete schema" error when the connection's search_path is
+        # changed by deployment configuration or a pooled connection.
+        table_names = await conn.run_sync(
+            lambda sync_conn: set(inspect(sync_conn).get_table_names(schema="sister"))
+        )
         required_tables = {
             "cadastral_locations",
+            "cadastral_map_geometry_cache",
             "visura_requests",
             "visura_responses",
             "visura_results",
@@ -145,9 +151,18 @@ async def init_db() -> None:
             raise RuntimeError(
                 "PostgreSQL schema is incomplete (missing: " + ", ".join(missing) + "). Run `alembic upgrade head`."
             )
+        view_names = await conn.run_sync(
+            lambda sync_conn: set(inspect(sync_conn).get_view_names(schema="sister"))
+        )
+        if "v_sister_visura_cadastral_polygons" not in view_names:
+            raise RuntimeError(
+                "PostgreSQL schema is missing v_sister_visura_cadastral_polygons. Run `alembic upgrade head`."
+            )
         if "alembic_version" not in table_names:
             raise RuntimeError("PostgreSQL migrations are not installed. Run `alembic upgrade head`.")
-        version = (await conn.execute(text("SELECT version_num FROM alembic_version"))).scalar_one_or_none()
+        version = (
+            await conn.execute(text("SELECT version_num FROM sister.alembic_version"))
+        ).scalar_one_or_none()
         if version != DATABASE_REVISION:
             raise RuntimeError(
                 f"PostgreSQL schema is at {version!r}; expected {DATABASE_REVISION!r}. Run `alembic upgrade head`."

@@ -32,12 +32,12 @@ _GOOGLE_3D_SOURCES = {
     "worker-src": "blob:",
 }
 
-# The cadastral document map uses the pinned Leaflet distribution and public
-# basemap tile services. Map APIs and all SISTER assets remain same-origin.
+# Cadastral pages use self-hosted Leaflet plus public tile services. Proj4JS
+# remains on cdnjs for the planimetria viewer; all map APIs are same-origin.
 _CADASTRAL_MAP_SOURCES = {
-    "script-src": "https://unpkg.com",
-    "style-src": "'self' 'unsafe-inline' https://unpkg.com",
-    "img-src": "'self' data: blob: https://unpkg.com https://*.tile.openstreetmap.org https://server.arcgisonline.com https://*.tile.opentopomap.org",
+    "script-src": "https://cdnjs.cloudflare.com",
+    "style-src": "'self' 'unsafe-inline'",
+    "img-src": "'self' data: blob: https://img.clerk.com https://*.tile.openstreetmap.org https://server.arcgisonline.com https://*.tile.opentopomap.org",
 }
 
 
@@ -102,9 +102,12 @@ class CspNonceMiddleware:
 
         nonce = secrets.token_urlsafe(16)
         query = scope.get("query_string", b"").decode("latin-1")
+        document_path = scope["path"].rstrip("/")
         if scope["path"] in _GOOGLE_3D_PATHS:
             extra = _GOOGLE_3D_SOURCES
         elif scope["path"] == "/documents" and "view=cadastral-map" in query.split("&"):
+            extra = _CADASTRAL_MAP_SOURCES
+        elif document_path.startswith("/documents/") and document_path[len("/documents/"):].isdigit():
             extra = _CADASTRAL_MAP_SOURCES
         else:
             extra = None

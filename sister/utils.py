@@ -1379,6 +1379,20 @@ async def _known_richieste() -> set[tuple[str, str]]:
         return set()
 
 
+# Richieste categories that hold a document with a Salva link. The page opens on "espletate" of the first day in the
+# list only; SISTER moves a request to "prelevate" as soon as its document has been picked up, so a request placed
+# in a run that did not save the file is only visible there.
+_RICHIESTE_VIEWS = ("espletate", "prelevate")
+
+
+async def _open_richieste_view(page, view: str) -> None:
+    """Show one Richieste category over the whole period ("Intero periodo", combo value ``-``)."""
+    await page.check(f"input[name='radioCount'][value='{view}']")
+    await page.select_option("select[name='comboGiorni']", value="-")
+    await page.click("input[name='metodo'][value='Aggiorna']")
+    await page.wait_for_load_state("networkidle", timeout=30000)
+
+
 async def _download_richieste_documents(
     page, page_logger, *, since: str = "", skip_known: bool = False
 ) -> list[dict]:
@@ -1415,9 +1429,23 @@ async def _download_richieste_documents(
     await page.wait_for_load_state("networkidle", timeout=30000)
     await page_logger.log(page, "richieste")
 
-    # --- Step 1: Extract table metadata using BS4 ---
-    html_content = await page.content()
-    richieste_meta = _parse_richieste_table(html_content)
+    # --- Step 1: Extract table metadata using BS4, for every category and the whole period ---
+    # Unfiltered calls (the in-flow download after run_visura, the web button) keep reading the page as it opens: the
+    # whole history of both categories would be downloaded again. ``since``/``skip_known`` make the wider scan safe.
+    views = _RICHIESTE_VIEWS if (since or skip_known) else ("",)
+    richieste_meta: list[dict] = []
+    seen_ids: set[str] = set()
+    current_view = ""
+    for view in views:
+        if view:
+            await _open_richieste_view(page, view)
+            current_view = view
+            await page_logger.log(page, f"richieste_{view}")
+        for meta in _parse_richieste_table(await page.content()):
+            if meta["id_richiesta"] in seen_ids:
+                continue
+            seen_ids.add(meta["id_richiesta"])
+            richieste_meta.append({**meta, "vista": view})
     log.info("Richieste trovate: %d", len(richieste_meta))
     if since or skip_known:
         known = await _known_richieste() if skip_known else set()
@@ -1449,6 +1477,9 @@ async def _download_richieste_documents(
         orig_filename = ""
         temp_path = ""
         try:
+            if meta["vista"] != current_view:
+                await _open_richieste_view(page, meta["vista"])
+                current_view = meta["vista"]
             # Find and click the salva link for this idRichiesta
             link = page.locator(f"a[href*='idRichiesta={id_richiesta}'][href*='salva']")
             if await link.count() == 0:

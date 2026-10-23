@@ -6,12 +6,14 @@
                                 section_icon, section_border, income_boxes,
                                 doc_accordion, render_workflow_steps %}
 {% from "components/related_links.html" import related_pages %}
+{% from "components/document_parcel_map.html" import document_parcel_map_assets, document_parcel_map_scripts, document_parcel_map %}
 {% block page_title %}Result {{ request_id[:20] }}{% endblock %}
 
 {% block extra_css %}
 {{ super() }}
 {{ data_table_assets() }}
 <link rel="stylesheet" href="/static/css/pages/result_detail.css?v=20261009a">
+{{ document_parcel_map_assets(result.land_registry_map if result else none) }}
 {% endblock %}
 
 {# ── Local macro: request parameters card body ─────────────────────────────── #}
@@ -94,6 +96,8 @@
       {{ request_params_card(result) }}
     </div>
   </div>
+
+  {{ document_parcel_map(result.land_registry_map) }}
 
   {% if result.status == 'pending' %}
   <div class="alert alert-info border-0 shadow-sm">
@@ -360,6 +364,7 @@
 
 {% block extra_js %}
 {{ super() }}
+{{ document_parcel_map_scripts(result.land_registry_map if result else none, nonce=csp_nonce) }}
 <script nonce="{{ csp_nonce }}">
 (function() {
     'use strict';

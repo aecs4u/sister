@@ -55,6 +55,35 @@ def test_parse_richieste_table_extracts_save_link_and_request_id():
     assert utils._parse_richieste_table("<html><table><tr><td>other</td></tr></table></html>") == []
 
 
+def test_open_richieste_view_selects_category_and_whole_period():
+    import asyncio
+
+    calls = []
+
+    class FakePage:
+        async def check(self, selector):
+            calls.append(("check", selector))
+
+        async def select_option(self, selector, value):
+            calls.append(("select", selector, value))
+
+        async def click(self, selector):
+            calls.append(("click", selector))
+
+        async def wait_for_load_state(self, state, timeout):
+            calls.append(("wait", state))
+
+    asyncio.run(utils._open_richieste_view(FakePage(), "prelevate"))
+
+    assert calls == [
+        ("check", "input[name='radioCount'][value='prelevate']"),
+        ("select", "select[name='comboGiorni']", "-"),
+        ("click", "input[name='metodo'][value='Aggiorna']"),
+        ("wait", "networkidle"),
+    ]
+    assert utils._RICHIESTE_VIEWS == ("espletate", "prelevate")
+
+
 def test_extract_intestati_rows_from_matching_table_and_pad_cells():
     html = """
     <table>

@@ -1,0 +1,44 @@
+{#
+  Visura/inspection page with the cadastral parcel map added. One template for every document kind: the view passes
+  `land_map_parent` (the theme template to extend) and `land_map_slot` (where that layout puts the map), see
+  `web._LAND_MAP_LAYOUTS`. Parents without a given block simply ignore the override.
+#}
+{% extends land_map_parent %}
+{% from "components/document_parcel_map.html" import document_parcel_map_assets, document_parcel_map_scripts, document_parcel_map %}
+
+{% block extra_css %}
+{{ super() }}
+{{ document_parcel_map_assets(land_registry_map) }}
+{% endblock %}
+
+{# Layouts that end in a single `content` block get the map after it ... #}
+{% block content %}
+{% if land_map_slot == 'sidecar' and land_registry_map %}
+<div class="document-land-map-layout">
+    <div class="document-land-map-content">{{ super() }}</div>
+    <aside class="document-land-map-aside" aria-label="Mappa delle particelle del soggetto">
+        {{ document_parcel_map(land_registry_map) }}
+    </aside>
+</div>
+{% else %}
+{{ super() }}
+{% if land_map_slot == 'content' %}
+<div class="container-fluid py-3">
+    {{ document_parcel_map(land_registry_map) }}
+</div>
+{% endif %}
+{% endif %}
+{% endblock %}
+
+{# ... layouts built on visura_base put it in their own `after_query` slot. #}
+{% block after_query %}
+{{ super() }}
+{% if land_map_slot == 'after_query' %}
+{{ document_parcel_map(land_registry_map) }}
+{% endif %}
+{% endblock %}
+
+{% block extra_js %}
+{{ super() }}
+{{ document_parcel_map_scripts(land_registry_map, nonce=csp_nonce) }}
+{% endblock %}

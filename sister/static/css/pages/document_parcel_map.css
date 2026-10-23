@@ -1,0 +1,75 @@
+.document-land-map-layout {
+    display: grid;
+    grid-template-columns: minmax(0, 1.65fr) minmax(20rem, .85fr);
+    grid-template-areas: "content map";
+    align-items: start;
+    gap: 1rem;
+}
+
+.document-land-map-content {
+    grid-area: content;
+    min-width: 0;
+}
+
+.document-land-map-aside {
+    grid-area: map;
+    min-width: 0;
+    position: sticky;
+    top: 1rem;
+    align-self: start;
+    margin-top: 10rem;
+}
+
+.document-land-map-aside .document-parcel-map-card {
+    margin-bottom: 0;
+}
+
+.document-parcel-map-card .card-header {
+    padding: 1rem 1.25rem;
+}
+
+.document-parcel-map-shell {
+    min-height: 24rem;
+    height: min(58vh, 42rem);
+    border-radius: .6rem;
+}
+
+.document-parcel-map-card .leaflet-map-layer-control {
+    border: 0;
+    padding: 0 .15rem .65rem;
+}
+
+.document-map-row-highlight > td {
+    background: #fff3cd !important;
+    transition: background-color .2s ease;
+}
+
+.document-map-row-action {
+    white-space: nowrap;
+    margin-inline-start: .4rem;
+    padding: .1rem .35rem;
+    font-size: .7rem;
+}
+
+@media (max-width: 991.98px) {
+    .document-land-map-layout {
+        grid-template-columns: minmax(0, 1fr);
+        grid-template-areas: "content" "map";
+    }
+
+    .document-land-map-aside {
+        position: static;
+        margin-top: 0;
+    }
+
+    .document-land-map-shell {
+        height: min(52vh, 30rem);
+    }
+}
+
+@media (max-width: 575.98px) {
+    .document-parcel-map-shell {
+        min-height: 22rem;
+        height: 58vh;
+    }
+}

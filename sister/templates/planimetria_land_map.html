@@ -1,0 +1,19 @@
+{% extends "planimetria.html" %}
+{% from "components/document_parcel_map.html" import document_parcel_map_assets, document_parcel_map_scripts, document_parcel_map %}
+
+{% block extra_css %}
+{{ super() }}
+{{ document_parcel_map_assets(land_registry_map) }}
+{% endblock %}
+
+{% block content %}
+{{ super() }}
+<div class="container-fluid py-3">
+    {{ document_parcel_map(land_registry_map) }}
+</div>
+{% endblock %}
+
+{% block extra_js %}
+{{ super() }}
+{{ document_parcel_map_scripts(land_registry_map, leaflet_already_loaded=has_geojson, nonce=csp_nonce) }}
+{% endblock %}

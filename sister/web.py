@@ -2782,6 +2782,9 @@ async def _render_doc_from_db(doc: dict, request, theme, user, force_template: s
     ]
     xml_p = doc.get("xml_parsed") or {}
 
+    map_lookup = await _google_maps_context(doc)
+    doc["land_registry_map"] = await _land_registry_map_context(map_lookup)
+
     # Explicit override → generic exhaustive view via result_detail.html
     if force_template and force_template.replace(".html", "") == "result_detail":
         result = _doc_as_result(doc)
@@ -2797,12 +2800,12 @@ async def _render_doc_from_db(doc: dict, request, theme, user, force_template: s
         key in xml_p
         for key in ("VisuraFabbricatiStorica", "VisuraFabbricatiAttuale", "VisuraFabbricatiSintetica", "VisuraFabbricati")
     ):
-        template = "catasto/visura_fabbricati.html"
+        land_map_kind = "fabbricati"
     elif any(
         key in xml_p
         for key in ("VisuraSoggettoAttuale", "VisuraSoggettoStorica", "VisuraSoggettoSintetica", "VisuraSoggetto")
     ):
-        template = "catasto/visura_soggetto.html"
+        land_map_kind = "soggetto"
     elif any(
         key in xml_p
         for key in (
@@ -2815,10 +2818,10 @@ async def _render_doc_from_db(doc: dict, request, theme, user, force_template: s
             "VisuraTerreno",
         )
     ):
-        template = "catasto/visura_terreni.html"
+        land_map_kind = "terreni"
     else:
-        template = "result_detail.html"
-    if template == "result_detail.html":
+        land_map_kind = None
+    if land_map_kind is None:
         result = _doc_as_result(doc)
         return theme.render(
             "result_detail.html",
@@ -2828,36 +2831,305 @@ async def _render_doc_from_db(doc: dict, request, theme, user, force_template: s
             request_id=str(doc.get("id") or doc.get("filename") or ""),
         )
     return theme.render(
-        template,
+        "catasto/land_map.html",
         request,
         user=user,
         doc=doc,
-        google_maps=await _google_maps_context(doc) if template == "catasto/visura_fabbricati.html" else None,
+        google_maps=map_lookup if land_map_kind == "fabbricati" else None,
+        land_registry_map=doc.get("land_registry_map"),
+        **_land_map_layout(land_map_kind),
     )
 
 
+def _cadastral_map_lookup_key(item: dict, *, feature_type: str) -> str:
+    """Build the same normalized location key used by the Sister PostGIS view."""
+    fields = [
+        item.get("municipality"),
+        item.get("province"),
+        item.get("municipality_code"),
+        item.get("section"),
+        item.get("sheet"),
+    ]
+    if feature_type == "parcel":
+        fields.append(item.get("parcel"))
+    return "\x1f".join(str(value or "").strip().upper() for value in fields)
+
+
+async def _read_visura_cadastral_map_cache(document_id: int) -> list[tuple]:
+    """Read cached polygons for one document from Sister's PostGIS view."""
+    dsn = os.getenv("DATABASE_DSN", "").strip()
+    if not dsn:
+        return []
+    try:
+        import psycopg
+
+        dsn = dsn.replace("postgresql+asyncpg://", "postgresql://", 1)
+        dsn = dsn.replace("postgresql+psycopg://", "postgresql://", 1)
+        async with await psycopg.AsyncConnection.connect(
+            dsn,
+            connect_timeout=1,
+            options="-c search_path=sister -c default_transaction_read_only=on -c statement_timeout=1500",
+        ) as connection:
+            cursor = await connection.execute(
+                """SELECT feature_type, lookup_key, municipality, province,
+                          municipality_code, section, sheet, parcel, source_reference,
+                          checked_at >= now() - interval '30 days' AS is_fresh,
+                          checked_at IS NOT NULL AS is_checked,
+                          ST_AsGeoJSON(geom, 6) AS geometry,
+                          ST_X(ST_Centroid(geom)) AS longitude,
+                          ST_Y(ST_Centroid(geom)) AS latitude
+                   FROM sister.v_sister_visura_cadastral_polygons
+                   WHERE document_id = %s""",
+                (document_id,),
+            )
+            return await cursor.fetchall()
+    except Exception as exc:  # Cache is an optimization; the cadastral source remains the fallback.
+        logger.debug("Sister cadastral polygon cache unavailable: %s", type(exc).__name__)
+        return []
+
+
+async def _write_visura_cadastral_map_cache(records: list[tuple]) -> None:
+    """Persist matched and missing map lookups so later visits use Sister's indexed view."""
+    if not records:
+        return
+    try:
+        from .database import is_db_writable
+
+        if not is_db_writable():
+            return
+        import psycopg
+
+        dsn = os.getenv("DATABASE_DSN", "").strip()
+        if not dsn:
+            return
+        dsn = dsn.replace("postgresql+asyncpg://", "postgresql://", 1)
+        dsn = dsn.replace("postgresql+psycopg://", "postgresql://", 1)
+        async with await psycopg.AsyncConnection.connect(
+            dsn,
+            connect_timeout=1,
+            options="-c search_path=sister -c statement_timeout=2500",
+        ) as connection:
+            async with connection.cursor() as cursor:
+                await cursor.executemany(
+                    """INSERT INTO sister.cadastral_map_geometry_cache (
+                           feature_type, lookup_key, municipality, province, municipality_code,
+                           section, sheet, parcel, source_reference, geom, checked_at
+                       ) VALUES (
+                           %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                           ST_SetSRID(ST_GeomFromGeoJSON((%s)::text), 4326), now()
+                       )
+                       ON CONFLICT (feature_type, lookup_key) DO UPDATE SET
+                           municipality = EXCLUDED.municipality,
+                           province = EXCLUDED.province,
+                           municipality_code = EXCLUDED.municipality_code,
+                           section = EXCLUDED.section,
+                           sheet = EXCLUDED.sheet,
+                           parcel = EXCLUDED.parcel,
+                           source_reference = EXCLUDED.source_reference,
+                           geom = EXCLUDED.geom,
+                           checked_at = now()""",
+                    records,
+                )
+            await connection.commit()
+    except Exception as exc:  # A cache write must never make the document page fail.
+        logger.debug("Sister cadastral polygon cache write failed: %s: %s", type(exc).__name__, exc)
+
+
 async def _google_maps_context(doc: dict) -> dict[str, Any] | None:
-    """Build Google Maps and Street View links from a verified parcel or address."""
+    """Build verified parcel coordinates plus Google Maps and Street View links."""
     view = doc.get("view") or {}
     units = view.get("units") or []
     unit = units[0] if units and isinstance(units[0], dict) else {}
     identifier = unit.get("identifier") or {}
+    xml_parsed = doc.get("xml_parsed") or {}
+    xml_body = next(
+        (
+            value for key, value in xml_parsed.items()
+            if str(key).startswith("Visura") and isinstance(value, dict)
+        ),
+        {},
+    ) if isinstance(xml_parsed, dict) else {}
+    request = view.get("request") or xml_body.get("DatiRichiesta") or {}
+    request_identifier = request.get("identifier") or {}
+
+    subject_keys = (
+        "VisuraSoggettoAttuale", "VisuraSoggettoStorica", "VisuraSoggettoSintetica", "VisuraSoggetto",
+    )
+    subject_body = next(
+        (xml_parsed.get(key) for key in subject_keys if isinstance(xml_parsed.get(key), dict)),
+        {},
+    ) if isinstance(xml_parsed, dict) else {}
+    is_subject_visura = bool(subject_body)
+
+    def as_items(value):
+        if isinstance(value, list):
+            return value
+        return [value] if isinstance(value, dict) else []
+
+    # Keep this source in sync with the two tables rendered by the subject
+    # visura template: only current Fabbricati/Terreni rows are shown there.
+    subject_table_identifiers = []
+    for group in as_items(subject_body.get("GruppoUnitaImmobiliari")):
+        for row_key in ("ImmobileFabbricatiS", "ImmobileTerreniS"):
+            for property_row in as_items(group.get(row_key)):
+                dati = property_row.get("DatiIdentificativi") or {}
+                identifiers = as_items(dati.get("IdentificativoDefinitivo")) if isinstance(dati, dict) else []
+                for table_identifier in identifiers:
+                    item = dict(table_identifier)
+                    if not item.get("CodiceComune") and group.get("CodiceComune"):
+                        item["CodiceComune"] = group["CodiceComune"]
+                    if not item.get("Comune") and group.get("Descrizione"):
+                        item["Comune"] = re.sub(r"\s*\([^)]*\)\s*$", "", str(group["Descrizione"])).strip()
+                    if not item.get("Provincia") and request.get("Provincia"):
+                        item["Provincia"] = request["Provincia"]
+                    subject_table_identifiers.append(item)
+    if is_subject_visura and not subject_table_identifiers:
+        return None
+
+    def all_xml_parcels(value):
+        found = []
+        if isinstance(value, list):
+            for item in value:
+                found.extend(all_xml_parcels(item))
+        elif isinstance(value, dict):
+            for key in ("IdentificativoDefinitivo", "IdentificativoDefinitivoRiferimento"):
+                candidate = value.get(key)
+                if isinstance(candidate, dict) and candidate.get("Foglio") and (
+                    candidate.get("ParticellaNum") or candidate.get("Particella")
+                ):
+                    found.append(candidate)
+            for item in value.values():
+                found.extend(all_xml_parcels(item))
+        return found
+
+    xml_identifiers = all_xml_parcels(xml_body)
+    xml_identifier = xml_identifiers[0] if xml_identifiers else {}
+    primary_xml_identifier = (
+        subject_table_identifiers[0] if is_subject_visura and subject_table_identifiers
+        else xml_identifier
+    )
     address = str(unit.get("address") or doc.get("indirizzo") or "").strip()
     address = re.sub(r"\s+n\.?\s*SNC\b", "", address, flags=re.IGNORECASE)
     address = re.sub(r"\s+Piano\s+[A-Z0-9]+\s*$", "", address, flags=re.IGNORECASE)
     address = re.sub(r"\s+", " ", address).strip(" ,")
-    municipality = str(identifier.get("municipality") or doc.get("comune") or "").strip()
-    province = str(identifier.get("province") or doc.get("provincia") or "").strip()
-    sheet = str(identifier.get("sheet") or doc.get("foglio") or "").strip()
-    parcel = str(identifier.get("parcel") or doc.get("particella") or "").strip()
+    municipality = str(
+        identifier.get("municipality") or primary_xml_identifier.get("Comune")
+        or doc.get("comune") or request.get("Comune") or ""
+    ).strip()
+    province = str(
+        identifier.get("province") or primary_xml_identifier.get("Provincia")
+        or doc.get("provincia") or request.get("Provincia") or ""
+    ).strip()
+    sheet = str(
+        identifier.get("sheet")
+        or (primary_xml_identifier.get("Foglio") if is_subject_visura else "")
+        or doc.get("foglio") or request_identifier.get("sheet") or request.get("Foglio")
+        or primary_xml_identifier.get("Foglio") or ""
+    ).strip()
+    parcel = str(
+        identifier.get("parcel")
+        or (
+            (primary_xml_identifier.get("ParticellaNum") or primary_xml_identifier.get("Particella"))
+            if is_subject_visura else ""
+        )
+        or doc.get("particella")
+        or request_identifier.get("parcel")
+        or request.get("ParticellaNum")
+        or request.get("Particella")
+        or primary_xml_identifier.get("ParticellaNum")
+        or primary_xml_identifier.get("Particella")
+        or ""
+    ).strip()
     subunit = str(identifier.get("subunit") or doc.get("subalterno") or "").strip()
     section = str(
         identifier.get("urban_section")
         or identifier.get("census_section")
+        or primary_xml_identifier.get("SezUrbana")
+        or primary_xml_identifier.get("SezCensuaria")
         or doc.get("sezione_urbana")
         or ""
     ).strip()
-    municipality_code = str(identifier.get("municipality_code") or "").strip().upper()
+    municipality_code = str(
+        identifier.get("municipality_code")
+        or primary_xml_identifier.get("CodiceComune")
+        or request_identifier.get("municipality_code")
+        or doc.get("codice_comune")
+        or request.get("CodiceComune")
+        or ""
+    ).strip().upper()
+
+    def parcel_field(identifier: dict, *names: str) -> str:
+        return str(next((identifier.get(name) for name in names if identifier.get(name)), "")).strip()
+
+    unit_identifiers = []
+    for current_unit in units:
+        if not isinstance(current_unit, dict):
+            continue
+        if isinstance(current_unit.get("identifier"), dict):
+            unit_identifiers.append(current_unit["identifier"])
+        unit_identifiers.extend(
+            related for related in current_unit.get("related", []) if isinstance(related, dict)
+        )
+    if is_subject_visura:
+        candidates = subject_table_identifiers
+    else:
+        candidates = [*unit_identifiers, request_identifier]
+        if not unit_identifiers:
+            candidates.extend(xml_identifiers)
+    parcel_identifiers = []
+    for candidate in candidates:
+        if not isinstance(candidate, dict):
+            continue
+        candidate_municipality = parcel_field(candidate, "municipality", "Comune") or municipality
+        candidate_province = parcel_field(candidate, "province", "Provincia") or province
+        candidate_code = parcel_field(candidate, "municipality_code", "CodiceComune") or municipality_code
+        candidate_section = parcel_field(
+            candidate, "urban_section", "SezUrbana", "census_section", "SezCensuaria"
+        ) or section
+        candidate_sheet = parcel_field(candidate, "sheet", "Foglio")
+        candidate_parcel = parcel_field(candidate, "parcel", "ParticellaNum", "Particella")
+        if not (candidate_municipality and candidate_province and candidate_sheet and candidate_parcel):
+            continue
+        key = (
+            candidate_municipality.casefold(), candidate_province.upper(), candidate_code.upper(),
+            candidate_section.upper(), candidate_sheet.upper(), candidate_parcel.upper(),
+        )
+        if any(item["key"] == key for item in parcel_identifiers):
+            continue
+        parcel_identifiers.append({
+            "key": key,
+            "municipality": candidate_municipality,
+            "province": candidate_province,
+            "municipality_code": candidate_code.upper(),
+            "section": candidate_section.upper(),
+            "sheet": candidate_sheet,
+            "parcel": candidate_parcel,
+            "reference": parcel_field(candidate, "reference") or " · ".join(
+                part for part in (
+                    f"{candidate_municipality} ({candidate_code.upper()})" if candidate_code else candidate_municipality,
+                    f"FG {candidate_sheet}", f"PT {candidate_parcel}",
+                ) if part
+            ),
+        })
+
+    selected_key = (
+        municipality.casefold(), province.upper(), municipality_code.upper(), section.upper(), sheet.upper(), parcel.upper(),
+    )
+    if not is_subject_visura and not parcel_identifiers and municipality and province and sheet and parcel:
+        parcel_identifiers.append({
+            "key": selected_key,
+            "municipality": municipality,
+            "province": province,
+            "municipality_code": municipality_code,
+            "section": section.upper(),
+            "sheet": sheet,
+            "parcel": parcel,
+            "reference": f"FG {sheet} · PT {parcel}",
+        })
+    selected_parcel_reference = next(
+        (item["reference"] for item in parcel_identifiers if item["key"] == selected_key),
+        f"FG {sheet} · PT {parcel}",
+    )
     location_parts = [part for part in (address, municipality, province) if part]
     if not location_parts:
         return None
@@ -2882,7 +3154,12 @@ async def _google_maps_context(doc: dict) -> dict[str, Any] | None:
         )
 
     context: dict[str, Any] = {
+        "document_id": doc.get("id"),
         "location": location,
+        "municipality": municipality,
+        "province": province,
+        "sheet": sheet,
+        "parcel": parcel,
         "map_url": search_url(location),
         "map_embed_url": map_embed_url(location),
         # Without a verified coordinate Google can only search the address; the
@@ -2894,7 +3171,142 @@ async def _google_maps_context(doc: dict) -> dict[str, Any] | None:
         "lookup_message": "",
         "related_subunits": [],
         "adjacent_parcels": [],
+        "parcel_markers": [],
+        "parcel_features": [],
+        "sheet_features": [],
+        "listed_only": is_subject_visura,
+        "sheet_count": 0,
+        "mapped_sheet_count": 0,
+        "unmapped_parcels": [],
+        "selected_parcel_reference": selected_parcel_reference,
+        "parcel_count": len(parcel_identifiers),
     }
+    context["unmapped_parcels"] = [item["reference"] for item in parcel_identifiers]
+
+    sheet_identifiers = []
+    if is_subject_visura:
+        seen_sheet_keys = set()
+        for item in parcel_identifiers:
+            key = (
+                item["municipality"].casefold(), item["province"].upper(),
+                item["municipality_code"].upper(), item["section"].upper(), item["sheet"].upper(),
+            )
+            if key not in seen_sheet_keys:
+                seen_sheet_keys.add(key)
+                sheet_identifiers.append(item)
+
+    def use_cached_map_features(cached_rows: list[tuple], *, require_fresh: bool) -> bool:
+        """Apply complete recent cache data, or any checked data as a DB outage fallback."""
+        if not is_subject_visura:
+            return False
+        cached_by_key = {(row[0], row[1]): row for row in cached_rows}
+        expected = {
+            ("parcel", _cadastral_map_lookup_key(item, feature_type="parcel"))
+            for item in parcel_identifiers
+        }
+        expected.update(
+            ("sheet", _cadastral_map_lookup_key(item, feature_type="sheet"))
+            for item in sheet_identifiers
+        )
+        if require_fresh:
+            if not expected or not all(
+                pair in cached_by_key and bool(cached_by_key[pair][9]) for pair in expected
+            ):
+                return False
+        elif not any(
+            pair in cached_by_key and bool(cached_by_key[pair][10]) for pair in expected
+        ):
+            return False
+
+        import json
+
+        matched_indices = set()
+        for index, item in enumerate(parcel_identifiers):
+            key = ("parcel", _cadastral_map_lookup_key(item, feature_type="parcel"))
+            row = cached_by_key.get(key)
+            if not row or not row[10] or not row[11]:
+                continue
+            try:
+                geometry = json.loads(row[11]) if isinstance(row[11], str) else row[11]
+                if not isinstance(geometry, dict):
+                    continue
+            except (TypeError, ValueError, json.JSONDecodeError):
+                continue
+            matched_indices.add(index)
+            context["parcel_features"].append({
+                "type": "Feature",
+                "properties": {
+                    "reference": item["reference"],
+                    "sheet": item["sheet"],
+                    "parcel": item["parcel"],
+                    "municipality": item["municipality"],
+                    "municipality_code": item["municipality_code"],
+                    "province": item["province"],
+                },
+                "geometry": geometry,
+            })
+            try:
+                longitude, latitude = float(row[12]), float(row[13])
+            except (TypeError, ValueError):
+                continue
+            if not (-180 <= longitude <= 180 and -90 <= latitude <= 90):
+                continue
+            context["parcel_markers"].append({
+                "latitude": latitude,
+                "longitude": longitude,
+                "reference": item["reference"],
+                "municipality": item["municipality"],
+                "municipality_code": item["municipality_code"],
+                "province": item["province"],
+                "sheet": item["sheet"],
+                "parcel": item["parcel"],
+                "selected": item["key"] == selected_key,
+            })
+
+        context["sheet_count"] = len(sheet_identifiers)
+        for item in sheet_identifiers:
+            row = cached_by_key.get(("sheet", _cadastral_map_lookup_key(item, feature_type="sheet")))
+            if not row or not row[10] or not row[11]:
+                continue
+            try:
+                geometry = json.loads(row[11]) if isinstance(row[11], str) else row[11]
+                if not isinstance(geometry, dict):
+                    continue
+            except (TypeError, ValueError, json.JSONDecodeError):
+                continue
+            context["sheet_features"].append({
+                "type": "Feature",
+                "properties": {
+                    "reference": f"{item['municipality']} ({item['municipality_code']}) · Foglio {item['sheet']}",
+                    "sheet": item["sheet"],
+                    "municipality": item["municipality"],
+                    "municipality_code": item["municipality_code"],
+                },
+                "geometry": geometry,
+            })
+
+        context["mapped_sheet_count"] = len(context["sheet_features"])
+        context["unmapped_parcels"] = [
+            item["reference"] for index, item in enumerate(parcel_identifiers) if index not in matched_indices
+        ]
+        context["mapped_parcel_count"] = len(context["parcel_markers"])
+        if context["parcel_markers"] and not any(marker["selected"] for marker in context["parcel_markers"]):
+            context["parcel_markers"][0]["selected"] = True
+        context["lookup_status"] = "matched" if context["parcel_markers"] else "not_found"
+        if context["parcel_markers"]:
+            context["lookup_message"] = (
+                f"Trovate {context['mapped_parcel_count']} particelle tra quelle elencate nelle tabelle della visura."
+            )
+        else:
+            context["lookup_message"] = (
+                "Nessuna geometria particellare trovata per i riferimenti elencati nelle tabelle della visura."
+            )
+        if not require_fresh:
+            context["lookup_message"] = (
+                "Cartografia catastale non raggiungibile; sono mostrate le geometrie memorizzate in Sister. "
+                + context["lookup_message"]
+            )
+        return True
 
     if municipality and province and sheet and parcel:
         try:
@@ -2916,8 +3328,20 @@ async def _google_maps_context(doc: dict) -> dict[str, Any] | None:
         except Exception as exc:
             logger.warning("Sibling subaltern lookup unavailable: %s", type(exc).__name__)
 
+    document_id = doc.get("id")
+    cached_map_rows = []
+    if is_subject_visura and document_id is not None:
+        try:
+            cached_map_rows = await _read_visura_cadastral_map_cache(int(document_id))
+        except (TypeError, ValueError):
+            cached_map_rows = []
+        if use_cached_map_features(cached_map_rows, require_fresh=True):
+            return context
+
     dsn = os.getenv("CADASTRAL_POSTGRES_DSN", "").strip()
     if not dsn or not (municipality and province and sheet and parcel):
+        if use_cached_map_features(cached_map_rows, require_fresh=False):
+            return context
         return context
 
     sheet_values = {sheet.upper()}
@@ -2983,7 +3407,115 @@ async def _google_maps_context(doc: dict) -> dict[str, Any] | None:
         ORDER BY min(n.municipality_name), min(n.sheet), min(n.parcel)
         LIMIT 25
     """
+    marker_sql = """
+        WITH wanted AS (
+            SELECT * FROM unnest(%s::int[], %s::text[], %s::text[], %s::text[], %s::text[], %s::text[], %s::text[])
+                AS w(parcel_index, municipality, province, municipality_code, section, sheet, parcel)
+        ), matched AS (
+            SELECT w.parcel_index,
+                   w.section,
+                   p.national_cadastral_reference,
+                   p.canonical_reference,
+                   p.geom,
+                   CASE
+                       WHEN w.section = '' THEN 0
+                       WHEN left(
+                           upper(replace(COALESCE(p.national_cadastral_reference, p.canonical_reference), '_', '')),
+                           char_length(w.municipality_code || w.section)
+                       ) = upper(w.municipality_code || w.section) THEN 2
+                       WHEN char_length(w.section) > 1
+                           AND left(
+                               upper(replace(COALESCE(p.national_cadastral_reference, p.canonical_reference), '_', '')),
+                               char_length(w.municipality_code || left(w.section, 1))
+                           ) = upper(w.municipality_code || left(w.section, 1)) THEN 1
+                       ELSE 0
+                   END AS section_rank
+            FROM wanted AS w
+            JOIN spatial.cadastral_parcel AS p
+              ON lower(btrim(p.municipality_name)) = lower(btrim(w.municipality))
+             AND upper(btrim(p.province)) = upper(btrim(w.province))
+             AND upper(btrim(p.sheet)) = w.sheet
+             AND upper(btrim(p.parcel)) = w.parcel
+        ), ranked AS (
+            SELECT *, max(section_rank) OVER (PARTITION BY parcel_index) AS best_section_rank
+            FROM matched
+        )
+        SELECT r.parcel_index,
+               count(DISTINCT COALESCE(r.national_cadastral_reference, r.canonical_reference)) AS reference_count,
+               min(ST_SRID(r.geom)) AS srid,
+               max(ST_SRID(r.geom)) AS max_srid,
+               ST_X(ST_Centroid(ST_Collect(r.geom))) AS longitude,
+               ST_Y(ST_Centroid(ST_Collect(r.geom))) AS latitude,
+               ST_AsGeoJSON(ST_UnaryUnion(ST_Collect(r.geom)), 6) AS geometry
+        FROM ranked AS r
+        WHERE r.section_rank = r.best_section_rank
+        GROUP BY r.parcel_index
+    """
+    exact_marker_sql = """
+        WITH wanted AS (
+            SELECT * FROM unnest(%s::int[], %s::text[], %s::int[])
+                AS w(parcel_index, national_reference, section_rank)
+        ), matched AS (
+            SELECT w.parcel_index, w.section_rank, p.national_cadastral_reference,
+                   p.canonical_reference, p.geom
+            FROM wanted AS w
+            JOIN spatial.cadastral_parcel AS p
+              ON p.id = (('x' || substr(md5('cadastral-parcels:' || w.national_reference), 1, 13))::bit(52)::bigint + 1)
+             AND upper(btrim(COALESCE(p.national_cadastral_reference, p.canonical_reference))) = w.national_reference
+        ), ranked AS (
+            SELECT *, max(section_rank) OVER (PARTITION BY parcel_index) AS best_section_rank
+            FROM matched
+        )
+        SELECT parcel_index,
+               count(DISTINCT COALESCE(national_cadastral_reference, canonical_reference)) AS reference_count,
+               min(ST_SRID(geom)) AS srid,
+               max(ST_SRID(geom)) AS max_srid,
+               ST_X(ST_Centroid(ST_Collect(geom))) AS longitude,
+               ST_Y(ST_Centroid(ST_Collect(geom))) AS latitude,
+               ST_AsGeoJSON(ST_UnaryUnion(ST_Collect(geom)), 6) AS geometry
+        FROM ranked
+        WHERE section_rank = best_section_rank
+        GROUP BY parcel_index
+    """
+    sheet_sql = """
+        WITH wanted AS (
+            SELECT * FROM unnest(%s::int[], %s::text[], %s::text[], %s::text[], %s::text[])
+                AS w(sheet_index, municipality, province, municipality_code, section)
+        ), wanted_refs AS (
+            SELECT * FROM unnest(%s::int[], %s::text[], %s::int[])
+                AS r(sheet_index, sheet_reference, section_rank)
+        ), matched AS (
+            SELECT w.sheet_index, r.section_rank, s.sheet_reference, s.geom
+            FROM wanted AS w
+            JOIN wanted_refs AS r ON r.sheet_index = w.sheet_index
+            JOIN spatial.cadastral_sheet AS s
+              ON s.id = (('x' || substr(md5('cadastral-sheets:' || r.sheet_reference), 1, 13))::bit(52)::bigint + 1)
+             AND s.sheet_reference = r.sheet_reference
+             AND (
+                    (w.municipality_code <> '' AND upper(btrim(s.municipality_code)) = w.municipality_code)
+                    OR (
+                        lower(btrim(s.municipality_name)) = lower(btrim(w.municipality))
+                        AND upper(btrim(s.province)) = upper(btrim(w.province))
+                        AND (w.municipality_code = '' OR s.municipality_code IS NULL OR btrim(s.municipality_code) = '')
+                    )
+                 )
+        ), ranked AS (
+            SELECT *, max(section_rank) OVER (PARTITION BY sheet_index) AS best_section_rank
+            FROM matched
+        )
+        SELECT sheet_index,
+               count(DISTINCT sheet_reference) AS reference_count,
+               min(ST_SRID(geom)) AS srid,
+               max(ST_SRID(geom)) AS max_srid,
+               ST_AsGeoJSON(ST_UnaryUnion(ST_Collect(geom)), 6) AS geometry
+        FROM ranked
+        WHERE section_rank = best_section_rank
+        GROUP BY sheet_index
+    """
+    rows = []
     adjacent_rows = []
+    marker_rows = []
+    sheet_rows = []
     try:
         import psycopg
 
@@ -2994,18 +3526,168 @@ async def _google_maps_context(doc: dict) -> dict[str, Any] | None:
             connect_timeout=2,
             options="-c default_transaction_read_only=on -c statement_timeout=2500",
         ) as connection:
-            cursor = await connection.execute(
-                sql,
-                (
-                    municipality,
-                    province,
-                    sorted(sheet_values),
-                    sorted(parcel_values),
-                    municipality_code,
-                    municipality_code,
-                ),
-            )
-            rows = await cursor.fetchall()
+            if not is_subject_visura:
+                cursor = await connection.execute(
+                    sql,
+                    (
+                        municipality,
+                        province,
+                        sorted(sheet_values),
+                        sorted(parcel_values),
+                        municipality_code,
+                        municipality_code,
+                    ),
+                )
+                rows = await cursor.fetchall()
+            if parcel_identifiers:
+                wanted_rows = []
+                exact_reference_wanted = []
+                for index, item in enumerate(parcel_identifiers):
+                    sheet_values = {item["sheet"].upper()}
+                    parcel_values = {item["parcel"].upper()}
+                    if item["sheet"].isdigit():
+                        numeric_sheet = str(int(item["sheet"]))
+                        sheet_values.update(numeric_sheet.zfill(width) for width in (2, 3, 4))
+                        if int(numeric_sheet) >= 100 and int(numeric_sheet) % 100 == 0:
+                            numeric_sheet = str(int(numeric_sheet) // 100)
+                            sheet_values.add(numeric_sheet)
+                            sheet_values.update(numeric_sheet.zfill(width) for width in (2, 3, 4))
+                    reference_sheet_values = set(sheet_values)
+                    if item["sheet"].isdigit():
+                        sheet_values.add(numeric_sheet.zfill(4) + "00")
+                    if item["parcel"].isdigit():
+                        normalized_parcel = str(int(item["parcel"]))
+                        parcel_values.update(normalized_parcel.zfill(width) for width in (2, 3, 4, 5))
+
+                    section_prefixes = []
+                    if item["section"]:
+                        section_prefixes.append((item["section"].upper(), 2))
+                        if len(item["section"]) > 1:
+                            section_prefixes.append((item["section"][0].upper(), 1))
+                    section_prefixes.append(("", 0))
+                    reference_candidates = set()
+                    for sheet_value in reference_sheet_values:
+                        normalized_value = str(int(sheet_value)) if sheet_value.isdigit() else sheet_value
+                        padded_sheet = normalized_value.zfill(4) if normalized_value.isdigit() else normalized_value
+                        sheet_suffixes = {padded_sheet, padded_sheet + "00"}
+                        if normalized_value.isdigit():
+                            sheet_suffixes.update({normalized_value, normalized_value + "00"})
+                        parcel_candidates = set(parcel_values)
+                        if item["parcel"].isdigit():
+                            parcel_candidates.add(str(int(item["parcel"])))
+                        for section_prefix, section_rank in section_prefixes:
+                            code_prefixes = [f"{item['municipality_code']}{section_prefix}"]
+                            if section_prefix:
+                                code_prefixes.append(f"{item['municipality_code']}{section_prefix}_")
+                            else:
+                                code_prefixes.append(f"{item['municipality_code']}_")
+                            if not section_prefix:
+                                code_prefixes.append(item["municipality_code"])
+                            for code_prefix in code_prefixes:
+                                for sheet_suffix in sheet_suffixes:
+                                    for parcel_value in parcel_candidates:
+                                        reference_candidates.add((
+                                            f"{code_prefix}{sheet_suffix}.{parcel_value}".upper(), section_rank,
+                                        ))
+                    exact_reference_wanted.extend(
+                        (index, reference, section_rank)
+                        for reference, section_rank in sorted(reference_candidates)
+                    )
+                    for sheet_value in sorted(sheet_values):
+                        for parcel_value in sorted(parcel_values):
+                            wanted_rows.append((
+                                index, item["municipality"], item["province"], item["municipality_code"],
+                                item["section"], sheet_value, parcel_value,
+                            ))
+                exact_indices = set()
+                if exact_reference_wanted:
+                    try:
+                        async with connection.transaction():
+                            exact_cursor = await connection.execute(
+                                exact_marker_sql,
+                                tuple([row[column] for row in exact_reference_wanted] for column in range(3)),
+                            )
+                            exact_marker_rows = await exact_cursor.fetchall()
+                            marker_rows.extend(exact_marker_rows)
+                            exact_indices = {int(row[0]) for row in exact_marker_rows}
+                    except Exception as exc:
+                        logger.warning("Exact cadastral parcel lookup unavailable: %s: %s", type(exc).__name__, exc)
+
+                # Fall back to municipality/sheet/parcel fields only for rows
+                # whose canonical reference did not resolve through the local
+                # cadastral identity index.
+                fallback_rows = [row for row in wanted_rows if row[0] not in exact_indices]
+                if fallback_rows:
+                    try:
+                        async with connection.transaction():
+                            marker_cursor = await connection.execute(
+                                marker_sql,
+                                tuple([row[column] for row in fallback_rows] for column in range(7)),
+                            )
+                            marker_rows.extend(await marker_cursor.fetchall())
+                    except Exception as exc:
+                        logger.warning("Cadastral parcel markers unavailable: %s: %s", type(exc).__name__, exc)
+
+                if is_subject_visura:
+                    sheet_wanted = []
+                    sheet_reference_wanted = []
+                    for index, item in enumerate(sheet_identifiers):
+                        sheet_values = {item["sheet"].upper()}
+                        if item["sheet"].isdigit():
+                            normalized_sheet = str(int(item["sheet"]))
+                            sheet_values.update(normalized_sheet.zfill(width) for width in (2, 3, 4))
+                            if int(normalized_sheet) >= 100 and int(normalized_sheet) % 100 == 0:
+                                normalized_sheet = str(int(normalized_sheet) // 100)
+                                sheet_values.add(normalized_sheet)
+                                sheet_values.update(normalized_sheet.zfill(width) for width in (2, 3, 4))
+
+                        section = item["section"].upper()
+                        section_prefixes = []
+                        if section:
+                            section_prefixes.append((section, 2))
+                            if len(section) > 1:
+                                section_prefixes.append((section[:1], 1))
+                        section_prefixes.append(("", 0))
+
+                        reference_candidates = set()
+                        for sheet_value in sheet_values:
+                            numeric_sheet = str(int(sheet_value)) if sheet_value.isdigit() else sheet_value
+                            padded_sheet = numeric_sheet.zfill(4) if numeric_sheet.isdigit() else numeric_sheet
+                            for section_prefix, section_rank in section_prefixes:
+                                for suffix in ("", "00"):
+                                    reference = f"{item['municipality_code']}{section_prefix}{padded_sheet}{suffix}"
+                                    reference_candidates.add((reference, section_rank))
+                                    if section_prefix:
+                                        reference_candidates.add((
+                                            f"{item['municipality_code']}{section_prefix}_{padded_sheet}{suffix}",
+                                            section_rank,
+                                        ))
+                                    else:
+                                        reference_candidates.add((
+                                            f"{item['municipality_code']}_{padded_sheet}{suffix}", section_rank,
+                                        ))
+                                        reference_candidates.add((
+                                            f"{item['municipality_code']}{padded_sheet}{suffix}", section_rank,
+                                        ))
+                        sheet_wanted.append((
+                            index, item["municipality"], item["province"], item["municipality_code"], section,
+                        ))
+                        sheet_reference_wanted.extend(
+                            (index, reference, section_rank)
+                            for reference, section_rank in sorted(reference_candidates)
+                        )
+
+                    if sheet_wanted and sheet_reference_wanted:
+                        try:
+                            async with connection.transaction():
+                                sheet_cursor = await connection.execute(
+                                    sheet_sql,
+                                    tuple([row[column] for row in sheet_wanted] for column in range(5))
+                                    + tuple([row[column] for row in sheet_reference_wanted] for column in range(3)),
+                                )
+                                sheet_rows = await sheet_cursor.fetchall()
+                        except Exception as exc:
+                            logger.warning("Cadastral sheet geometries unavailable: %s: %s", type(exc).__name__, exc)
             if len(rows) == 1 and rows[0][0]:
                 try:
                     adjacent_cursor = await connection.execute(adjacent_sql, (rows[0][0], rows[0][0]))
@@ -3014,9 +3696,145 @@ async def _google_maps_context(doc: dict) -> dict[str, Any] | None:
                     logger.warning("Adjacent cadastral parcels unavailable: %s", type(exc).__name__)
     except Exception as exc:
         logger.warning("Cadastral map lookup unavailable: %s", type(exc).__name__)
+        if use_cached_map_features(cached_map_rows, require_fresh=False):
+            return context
         context["lookup_status"] = "unavailable"
         context["lookup_message"] = (
             "La cartografia catastale locale non è disponibile; i collegamenti cercano l’indirizzo della visura."
+        )
+        return context
+
+    import json
+
+    matched_indices = set()
+    parcel_geometries = {}
+    sheet_geometries = {}
+    for marker_row in marker_rows:
+        try:
+            index = int(marker_row[0])
+            reference_count = int(marker_row[1])
+            srid, max_srid = int(marker_row[2]), int(marker_row[3])
+            longitude, latitude = float(marker_row[4]), float(marker_row[5])
+        except (TypeError, ValueError, IndexError):
+            continue
+        if (
+            reference_count < 1 or srid != 4326 or max_srid != 4326
+            or not (-180 <= longitude <= 180) or not (-90 <= latitude <= 90)
+            or not (0 <= index < len(parcel_identifiers))
+        ):
+            continue
+        item = parcel_identifiers[index]
+        matched_indices.add(index)
+        context["parcel_markers"].append({
+            "latitude": latitude,
+            "longitude": longitude,
+            "reference": item["reference"],
+            "municipality": item["municipality"],
+            "municipality_code": item["municipality_code"],
+            "province": item["province"],
+            "sheet": item["sheet"],
+            "parcel": item["parcel"],
+            "selected": item["key"] == selected_key,
+        })
+        if marker_row[6]:
+            try:
+                geometry = json.loads(marker_row[6]) if isinstance(marker_row[6], str) else marker_row[6]
+                if isinstance(geometry, dict):
+                    parcel_geometries[index] = geometry
+                    if context["listed_only"]:
+                        context["parcel_features"].append({
+                            "type": "Feature",
+                            "properties": {
+                                "reference": item["reference"],
+                                "sheet": item["sheet"],
+                                "parcel": item["parcel"],
+                                "municipality": item["municipality"],
+                                "municipality_code": item["municipality_code"],
+                                "province": item["province"],
+                            },
+                            "geometry": geometry,
+                        })
+            except (TypeError, ValueError, json.JSONDecodeError):
+                logger.warning("Cadastral parcel geometry could not be decoded")
+
+    if context["listed_only"]:
+        context["sheet_count"] = len({
+            (
+                item["municipality"].casefold(), item["province"].upper(), item["municipality_code"],
+                item["section"], item["sheet"],
+            )
+            for item in parcel_identifiers
+        })
+        for sheet_row in sheet_rows:
+            try:
+                index = int(sheet_row[0])
+                srid, max_srid = int(sheet_row[2]), int(sheet_row[3])
+                if not (0 <= index < len(sheet_identifiers)) or srid != 4326 or max_srid != 4326:
+                    continue
+                geometry = json.loads(sheet_row[4]) if isinstance(sheet_row[4], str) else sheet_row[4]
+                if not isinstance(geometry, dict):
+                    continue
+            except (TypeError, ValueError, IndexError, json.JSONDecodeError):
+                continue
+            item = sheet_identifiers[index]
+            sheet_geometries[index] = geometry
+            context["sheet_features"].append({
+                "type": "Feature",
+                "properties": {
+                    "reference": f"{item['municipality']} ({item['municipality_code']}) · Foglio {item['sheet']}",
+                    "sheet": item["sheet"],
+                    "municipality": item["municipality"],
+                    "municipality_code": item["municipality_code"],
+                },
+                "geometry": geometry,
+            })
+        context["mapped_sheet_count"] = len(context["sheet_features"])
+
+    if document_id is not None:
+        cache_records = []
+        for index, item in enumerate(parcel_identifiers):
+            geometry = parcel_geometries.get(index)
+            cache_records.append((
+                "parcel",
+                _cadastral_map_lookup_key(item, feature_type="parcel"),
+                item["municipality"],
+                item["province"],
+                item["municipality_code"],
+                item["section"],
+                item["sheet"],
+                item["parcel"],
+                None,
+                json.dumps(geometry, separators=(",", ":")) if geometry else None,
+            ))
+        for index, item in enumerate(sheet_identifiers):
+            geometry = sheet_geometries.get(index)
+            cache_records.append((
+                "sheet",
+                _cadastral_map_lookup_key(item, feature_type="sheet"),
+                item["municipality"],
+                item["province"],
+                item["municipality_code"],
+                item["section"],
+                item["sheet"],
+                "",
+                None,
+                json.dumps(geometry, separators=(",", ":")) if geometry else None,
+            ))
+        await _write_visura_cadastral_map_cache(cache_records)
+
+    context["unmapped_parcels"] = [
+        item["reference"] for index, item in enumerate(parcel_identifiers) if index not in matched_indices
+    ]
+    if context["parcel_markers"] and not any(marker["selected"] for marker in context["parcel_markers"]):
+        context["parcel_markers"][0]["selected"] = True
+    context["mapped_parcel_count"] = len(context["parcel_markers"])
+
+    if is_subject_visura:
+        context["lookup_status"] = "matched" if context["parcel_markers"] else "not_found"
+        context["lookup_message"] = (
+            f"Trovate {context['mapped_parcel_count']} particelle tra quelle elencate nelle tabelle della visura."
+            if context["parcel_markers"]
+            else "Nessuna geometria particellare trovata per i riferimenti elencati nelle tabelle della visura."
         )
         return context
 
@@ -3102,6 +3920,120 @@ async def _google_maps_context(doc: dict) -> dict[str, Any] | None:
     return context
 
 
+# Document kind -> (theme template that renders the document, block of that template that holds the map).
+# `catasto/land_map.html` extends the parent and places the map in the slot.
+_LAND_MAP_LAYOUTS: dict[str, tuple[str, str]] = {
+    "fabbricati": ("catasto/visura_fabbricati.html", "after_query"),
+    "terreni": ("catasto/visura_terreni.html", "after_query"),
+    "soggetto": ("catasto/visura_soggetto.html", "sidecar"),
+    "ipotecaria": ("catasto/ispezione_ipotecaria.html", "content"),
+}
+
+
+def _land_map_layout(kind: str) -> dict[str, str]:
+    """Template variables for `catasto/land_map.html` for one document kind."""
+    parent, slot = _LAND_MAP_LAYOUTS[kind]
+    return {"land_map_parent": parent, "land_map_slot": slot}
+
+
+async def _land_registry_map_context(lookup: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Build an embeddable map, using a municipality center if parcel coordinates are unknown."""
+    if not lookup or not (lookup.get("sheet") and lookup.get("parcel")):
+        return None
+
+    context: dict[str, Any] = {
+        "available": False,
+        "data_url": (
+            f"/documents/{int(lookup['document_id'])}/parcel-map.json"
+            if lookup.get("document_id") is not None else ""
+        ),
+        "sheet": lookup["sheet"],
+        "parcel": lookup["parcel"],
+        "municipality": lookup.get("municipality") or "",
+        "province": lookup.get("province") or "",
+        "parcel_markers": lookup.get("parcel_markers") or [],
+        "parcel_features": lookup.get("parcel_features") or [],
+        "sheet_features": lookup.get("sheet_features") or [],
+        "listed_only": bool(lookup.get("listed_only")),
+        "unmapped_parcels": lookup.get("unmapped_parcels") or [],
+        "parcel_count": lookup.get("parcel_count") or 0,
+        "mapped_parcel_count": lookup.get("mapped_parcel_count") or 0,
+        "sheet_count": lookup.get("sheet_count") or 0,
+        "mapped_sheet_count": lookup.get("mapped_sheet_count") or 0,
+        "message": lookup.get("lookup_message")
+        or "La geometria catastale non è disponibile nella cartografia locale.",
+    }
+    centroid = lookup.get("centroid")
+    center_kind = "parcel"
+    if not context["parcel_markers"] and centroid:
+        try:
+            marker_latitude, marker_longitude = map(float, str(centroid).split(",", 1))
+            if -90 <= marker_latitude <= 90 and -180 <= marker_longitude <= 180:
+                context["parcel_markers"] = [{
+                    "latitude": marker_latitude,
+                    "longitude": marker_longitude,
+                    "reference": lookup.get("selected_parcel_reference") or f"FG {context['sheet']} · PT {context['parcel']}",
+                    "selected": True,
+                }]
+                context["mapped_parcel_count"] = max(context["mapped_parcel_count"], 1)
+                context["unmapped_parcels"] = [
+                    reference for reference in context["unmapped_parcels"]
+                    if reference != lookup.get("selected_parcel_reference")
+                ]
+        except (TypeError, ValueError):
+            pass
+    if not centroid and context["parcel_markers"]:
+        first_marker = context["parcel_markers"][0]
+        centroid = f"{first_marker['latitude']},{first_marker['longitude']}"
+        center_kind = "parcel" if len(context["parcel_markers"]) == 1 else "parcels"
+    if not centroid and context["municipality"]:
+        try:
+            from land_registry.map_layers import get_map_search_source
+
+            matches = await asyncio.wait_for(
+                get_map_search_source().search_municipalities(context["municipality"], limit=10),
+                timeout=3,
+            )
+            municipality_key = context["municipality"].casefold()
+            match = next(
+                (
+                    item for item in matches
+                    if str(item.get("canonical_name") or "").strip().casefold() == municipality_key
+                ),
+                matches[0] if len(matches) == 1 else None,
+            )
+            if match and match.get("latitude") is not None and match.get("longitude") is not None:
+                centroid = f"{match['latitude']},{match['longitude']}"
+                center_kind = "municipality"
+        except Exception as exc:
+            logger.warning("Municipality map center unavailable: %s", type(exc).__name__)
+    if not centroid:
+        return context
+    try:
+        latitude_text, longitude_text = str(centroid).split(",", 1)
+        latitude, longitude = float(latitude_text), float(longitude_text)
+    except (TypeError, ValueError):
+        return context
+    if not (-90 <= latitude <= 90 and -180 <= longitude <= 180):
+        return context
+
+    context.update(
+        {
+            "available": True,
+            "latitude": latitude,
+            "longitude": longitude,
+        "zoom": 17 if center_kind in ("parcel", "parcels") else 14,
+            "center_kind": center_kind,
+            "message": (
+                "La posizione esatta della particella non è disponibile; la mappa è centrata sul comune."
+                if center_kind == "municipality"
+                else lookup.get("lookup_message") or ""
+            ),
+        }
+    )
+    return context
+
+
 def _doc_as_result(doc: dict) -> dict:
     """Wrap a single DB document into a synthetic ``result`` object so that
     result_detail.html (which is built around a request ``result`` with a list
@@ -3129,6 +4061,7 @@ def _doc_as_result(doc: dict) -> dict:
         "data": {"document": True},
         "sections": [],
         "documents": [doc],
+        "land_registry_map": doc.get("land_registry_map"),
         "page_visit_rows": [],
     }
 
@@ -3735,6 +4668,38 @@ async def web_document_geojson(doc_id: int, request: Request, user=Depends(_requ
     })
 
 
+@router.get("/documents/{doc_id}/parcel-map.json", response_class=JSONResponse)
+async def web_document_parcel_map_data(doc_id: int, user=Depends(_require_auth)):
+    """Return the parcel geometries and markers for an authenticated document map."""
+    from fastapi import HTTPException
+
+    doc = await get_document_by_id(doc_id)
+    if doc is None:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    xml_content = doc.get("xml_content", "")
+    doc["xml_parsed"] = _parse_xml_to_dict(xml_content)
+    doc["view"] = build_visura_view(xml_content)
+    lookup = await _google_maps_context(doc)
+    if lookup is None:
+        raise HTTPException(status_code=422, detail="Parcel map data is not available")
+
+    return JSONResponse(
+        {
+            "parcel_markers": lookup.get("parcel_markers") or [],
+            "parcel_features": {
+                "type": "FeatureCollection",
+                "features": lookup.get("parcel_features") or [],
+            },
+            "sheet_features": {
+                "type": "FeatureCollection",
+                "features": lookup.get("sheet_features") or [],
+            },
+        },
+        headers={"Cache-Control": "private, max-age=300"},
+    )
+
+
 async def _backfill_document_metadata(base: Path, parsed_by_stem: dict) -> None:
     """Backfill document_metadata for existing visura_documents that lack it.
 
@@ -4089,8 +5054,9 @@ async def web_documents(
             if fp.is_file():
                 gj_result = _read_planimetria_geojson(str(fp))
                 if gj_result is not None:
+                    map_lookup = await _google_maps_context(doc)
                     return theme.render(
-                        "planimetria.html",
+                        "planimetria_land_map.html",
                         request,
                         user=user,
                         doc=doc,
@@ -4102,6 +5068,7 @@ async def web_documents(
                         has_geojson=gj_result.get("geojson") is not None,
                         fmt=gj_result.get("fmt", "unknown"),
                         zip_files=gj_result.get("files", []),
+                        land_registry_map=await _land_registry_map_context(map_lookup),
                     )
                 # P7M not extractable — fall through to direct download
                 return FileResponse(str(fp), filename=fp.name, media_type="application/octet-stream")
@@ -4158,14 +5125,17 @@ async def web_documents(
 
             inspection_documents = await asyncio.gather(*(_parse_sibling(path) for path in siblings))
             ocular_extraction = await get_document_structured_extraction(int(doc["id"]))
+            map_lookup = await _google_maps_context(doc)
             return theme.render(
-                "catasto/ispezione_ipotecaria.html",
+                "catasto/land_map.html",
                 request,
                 user=user,
                 doc=doc,
                 inspection_documents=inspection_documents,
                 ocular_extraction=ocular_extraction,
+                land_registry_map=await _land_registry_map_context(map_lookup),
                 request_id=str(doc.get("id") or doc.get("filename") or ""),
+                **_land_map_layout("ipotecaria"),
             )
         return await _render_doc_from_db(doc, request, theme, user, force_template=template or None)
 
