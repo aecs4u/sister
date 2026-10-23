@@ -559,6 +559,7 @@ try:
 
     # --- Theme setup --- read the theme settings from env and provide SISTER's default logo.
     theme_config = ThemeConfig()
+    theme_config.site_name = "Sister"
     # Self-hosted vendor assets (sister/static/vendor): no render-blocking third-party CDN requests for the core UI.
     theme_config.bootstrap_css_url = "/static/vendor/bootstrap-5.3.2/css/bootstrap.min.css"
     theme_config.bootstrap_css_integrity = ""
