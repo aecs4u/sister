@@ -4,8 +4,8 @@
   `web._LAND_MAP_LAYOUTS`. Parents without a given block simply ignore the override.
 #}
 {% extends land_map_parent %}
-{% from "components/cadastral_assets.html" import cadastral_asset_assets, cadastral_asset_scripts, cadastral_asset_sidebar, cadastral_table_scripts, cadastral_asset_enrichment_data, cadastral_asset_enrichment_scripts %}
-{% from "components/document_parcel_map.html" import document_parcel_map %}
+{% from "components/cadastral_assets.html" import cadastral_asset_kpis, cadastral_table_scripts, cadastral_asset_enrichment_data, cadastral_asset_enrichment_scripts %}
+{% from "land_registry/components/document_parcel_map.html" import document_parcel_map_assets, document_parcel_map_scripts, document_parcel_map %}
 {% from "components/subject_documents.html" import subject_document_nav as theme_subject_document_nav %}
 {% set subject_documents = subject_documents|default([]) %}
 {% set subject_fiscal_code = subject_fiscal_code|default('') %}
@@ -14,7 +14,7 @@
 
 {% block extra_css %}
 {{ super() }}
-{{ cadastral_asset_assets(land_registry_map, include_layout=land_map_slot == 'sidecar' and land_registry_kpis) }}
+{{ document_parcel_map_assets(land_registry_map, include_layout=land_map_slot == 'sidecar' and land_registry_kpis) }}
 <link rel="stylesheet" href="/static/css/pages/document_visura.css?v=20261023g">
 {% endblock %}
 
@@ -36,9 +36,12 @@
         }, nonce=csp_nonce) }}
         {% endif %}
     </div>
-    {{ cadastral_asset_sidebar(land_registry_kpis, land_registry_map,
-        omi_valuation_url='/valuation#stima-omi',
-        cadastral_valuation_url='/valuation#valore-catastale') }}
+    <aside class="document-land-map-aside" aria-label="{{ 'Indicatori e mappa delle particelle del soggetto' if land_registry_map else 'Indicatori del patrimonio catastale' }}">
+        {{ cadastral_asset_kpis(land_registry_kpis,
+            omi_valuation_url='/valuation#stima-omi',
+            cadastral_valuation_url='/valuation#valore-catastale') }}
+        {{ document_parcel_map(land_registry_map) }}
+    </aside>
 </div>
 {% else %}
 {% if subject_documents|length > 1 %}{{ theme_subject_document_nav(subject_documents, subject_fiscal_code, subject_route_prefix, subject_document_id) }}{% endif %}
@@ -62,7 +65,7 @@
 {% block extra_js %}
 {{ super() }}
 {{ cadastral_table_scripts() }}
-{{ cadastral_asset_scripts(land_registry_map, nonce=csp_nonce) }}
+{{ document_parcel_map_scripts(land_registry_map, nonce=csp_nonce) }}
 {# PDF export: the page's own print layout rendered by headless Chromium (/documents/<id>/pdf). #}
 {% if doc and doc.id %}
 <script nonce="{{ csp_nonce }}">

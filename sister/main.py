@@ -617,8 +617,18 @@ try:
 
     # Cadastral map assets and tile/identify API used by /documents?view=cadastral-map
     try:
+        from jinja2 import ChoiceLoader, FileSystemLoader, PrefixLoader
+        from land_registry import consumer as land_registry_consumer
         from land_registry.consumer import install_land_registry_consumer
 
+        # Keep Land Registry's reusable map components beside the map engine,
+        # while exposing them to SISTER templates through a namespaced loader.
+        land_registry_templates = Path(land_registry_consumer.__file__).resolve().parent / "templates"
+        template_env = theme_setup.templates.env
+        template_env.loader = ChoiceLoader([
+            PrefixLoader({"land_registry": FileSystemLoader(land_registry_templates)}),
+            template_env.loader,
+        ])
         install_land_registry_consumer(app, prefix="/land-registry")
     except ImportError as e:
         logger.warning("land_registry consumer non disponibile: %s", e)

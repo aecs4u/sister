@@ -1,12 +1,11 @@
 {% extends "_base.html" %}
-{% from "components/land_registry_map.html" import cadastral_map_view, cadastral_layer_control %}
+{% from "land_registry/components/land_registry_map.html" import cadastral_map_assets, cadastral_map_scripts, cadastral_map_view, cadastral_layer_control %}
 
 {% block page_title %}Mappa catastale{% endblock %}
 
 {% block extra_css %}
 {{ super() }}
-<link rel="stylesheet" href="/static/vendor/leaflet/leaflet.css">
-<link rel="stylesheet" href="{{ static_url_path|default('/static/aecs4u-theme') }}/css/components/land_registry_map.css">
+{{ cadastral_map_assets(leaflet_css_url='/static/vendor/leaflet/leaflet.css', static_base=land_registry_static_base|default('/land-registry/static', true)) }}
 <link rel="stylesheet" href="/static/css/pages/documents_map_view.css?v=20261021a">
 {% endblock %}
 
@@ -65,7 +64,5 @@
 
 {% block extra_js %}
 {{ super() }}
-<script src="/static/vendor/leaflet/leaflet.js" defer></script>
-<script src="{{ land_registry_static_base }}/consumer-map.js" defer></script>
-<script src="{{ static_url_path|default('/static/aecs4u-theme') }}/js/land-registry-map.js" defer></script>
+{{ cadastral_map_scripts(static_base=land_registry_static_base|default('/land-registry/static', true), leaflet_js_url='/static/vendor/leaflet/leaflet.js') }}
 {% endblock %}

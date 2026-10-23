@@ -44,6 +44,7 @@ dependencies = [
     "typer>=0.9.0",
     "httpx>=0.27.0,<1",  # 1.0 pre-releases drop AsyncClient (breaks VisuraClient); uv.lock pins 0.28.1
     "jinja2>=3.1.0",
+    "land_registry>=0.1.4",
     "aecs4u-theme>=1.6.0",
     "lxml>=6.1.1",
     "sqlalchemy>=2.0.50",
@@ -84,6 +85,7 @@ aecs4u-domain = { git = "https://github.com/aecs4u/aecs4u-domain.git", branch = 
 aecs4u-email = { git = "https://github.com/aecs4u/aecs4u-email.git", branch = "main" }
 aecs4u-crypto = { git = "https://github.com/aecs4u/aecs4u-crypto.git", branch = "main" }
 aecs4u-theme = { git = "https://github.com/aecs4u/aecs4u-theme.git", branch = "main" }
+land_registry = { git = "https://github.com/aecs4u/land-registry.git", branch = "main" }
 aecs4u-workflow = { git = "https://github.com/aecs4u/aecs4u-workflow.git", branch = "main" }
 ocular = { git = "https://github.com/aecs4u/ocular.git", branch = "main" }
 
