@@ -9,6 +9,7 @@ from typing import Optional
 from uuid import uuid4
 
 from fastapi import HTTPException
+from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
 
 from .database import count_responses, find_responses
@@ -209,6 +210,7 @@ async def richiedi_intestati_immobile(request: VisuraIntestatiInput, service: Vi
             subunit=request.subunit,
             section=section,
             urban_section=request.urban_section,
+            request_documents=request.request_documents,
         )
 
         result = await service.add_intestati_request(intestati_request, force=force)
@@ -303,42 +305,57 @@ async def graceful_shutdown_endpoint(service: VisuraService):
 
 
 async def extract_sezioni(request: SezioniExtractionRequest, service: VisuraService):
-    """
-    Estrae le sezioni territoriali d'Italia per il tipo catasto specificato.
-    ATTENZIONE: Questa operazione può richiedere diverse ore!
-    I dati vengono restituiti nella risposta.
-    """
+    """Start a durable extraction job and return links to poll and control it."""
     try:
-        logger.info(
-            "Iniziando estrazione sezioni per tipo catasto: %s, max province: %s",
-            request.cadastre_type,
-            request.max_provinces,
-        )
+        job_id = str(uuid4())
+        job = await service.start_section_extraction(job_id, request.cadastre_type, request.max_provinces)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return JSONResponse(
+        jsonable_encoder({
+            **job,
+            "status_url": f"/sezioni/extract/{job_id}",
+            "cancel_url": f"/sezioni/extract/{job_id}/cancel",
+            "resume_url": f"/sezioni/extract/{job_id}/resume",
+        }),
+        status_code=202,
+    )
 
-        sezioni_data = await service.browser_manager.esegui_extract_sezioni(request.cadastre_type, request.max_provinces)
 
-        if not sezioni_data:
-            return JSONResponse({"status": "no_data", "message": "Nessuna sezione estratta", "count": 0})
+async def get_section_extraction(job_id: str):
+    from .extraction_jobs import get_extraction_job
 
-        logger.info("Estrazione sezioni completata: %d totali", len(sezioni_data))
+    job = await get_extraction_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Estrazione non trovata")
+    return JSONResponse(jsonable_encoder(job))
 
-        return JSONResponse(
-            {
-                "status": "success",
-                "message": f"Estrazione completata per tipo catasto {request.cadastre_type}",
-                "total_extracted": len(sezioni_data),
-                "tipo_catasto": request.cadastre_type,
-                "sezioni": sezioni_data,
-            }
-        )
 
-    except HTTPException:
-        raise
-    except AuthenticationError as e:
-        raise HTTPException(status_code=503, detail=str(e))
-    except Exception as e:
-        logger.error("Errore durante estrazione sezioni: %s", e)
-        raise HTTPException(status_code=500, detail="Errore interno del server")
+async def list_section_extractions(limit: int = 50):
+    from .extraction_jobs import list_extraction_jobs
+
+    jobs = await list_extraction_jobs(limit=max(1, min(limit, 200)))
+    return JSONResponse(jsonable_encoder({"count": len(jobs), "jobs": jobs}))
+
+
+async def cancel_section_extraction(job_id: str, service: VisuraService):
+    try:
+        job = await service.cancel_section_extraction(job_id)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if job is None:
+        raise HTTPException(status_code=404, detail="Estrazione non trovata")
+    return JSONResponse(jsonable_encoder(job))
+
+
+async def resume_section_extraction(job_id: str, service: VisuraService):
+    try:
+        job = await service.resume_section_extraction(job_id)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if job is None:
+        raise HTTPException(status_code=404, detail="Estrazione non trovata")
+    return JSONResponse(jsonable_encoder(job), status_code=202)
 
 
 async def richiedi_visura_soggetto(request: VisuraSoggettoInput, service: VisuraService, force: bool = False):
@@ -488,7 +505,12 @@ async def download_documents(service: VisuraService, since: str = "", skip_known
         raise HTTPException(status_code=500, detail=str(e))
 
 
-async def richiedi_ispezione_ipotecaria(request: IspezioneIpotecariaInput, service: VisuraService, force: bool = False):
+async def richiedi_ispezione_ipotecaria(
+    request: IspezioneIpotecariaInput,
+    service: VisuraService,
+    force: bool = False,
+    reuse_cached: bool = False,
+):
     """Submit an Ispezione Ipotecaria (paid inspection) request."""
     try:
         tipo_catasto = request.cadastre_type or "T"
@@ -509,7 +531,9 @@ async def richiedi_ispezione_ipotecaria(request: IspezioneIpotecariaInput, servi
             auto_confirm=request.auto_confirm,
         )
 
-        result = await service.add_ispezione_ipotecaria_request(ipotecaria_request, force=force)
+        result = await service.add_ispezione_ipotecaria_request(
+            ipotecaria_request, force=force, reuse_cached=reuse_cached
+        )
 
         if isinstance(result, SubmitResult) and result.cached and result.response:
             return JSONResponse(

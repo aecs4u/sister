@@ -43,11 +43,14 @@ from .models import (  # noqa: F401
     VisuraSoggettoInput,
 )
 from .routes import (
+    cancel_section_extraction,
     download_documents,
     extract_sezioni,
+    get_section_extraction,
     graceful_shutdown_endpoint,
     health_check,
     ottieni_visura,
+    list_section_extractions,
     richiedi_elenco_immobili,
     richiedi_generic_sister,
     richiedi_intestati_immobile,
@@ -55,6 +58,7 @@ from .routes import (
     richiedi_visura,
     richiedi_visura_persona_giuridica,
     richiedi_visura_soggetto,
+    resume_section_extraction,
     visura_history,
 )
 from .passwords import is_hashed_password, verify_local_password
@@ -108,7 +112,7 @@ if not api_key:
     logger.warning("API_KEY non configurata: endpoint operativi accessibili senza autenticazione")
 
 
-def get_visura_service() -> VisuraService:
+async def get_visura_service() -> VisuraService:
     """Dependency to get the visura service"""
     if visura_service is None:
         raise HTTPException(status_code=503, detail="Servizio non inizializzato")
@@ -121,6 +125,13 @@ def require_api_key(x_api_key: Optional[str] = Header(default=None, alias="X-API
         return
     if not x_api_key or not secrets.compare_digest(x_api_key, api_key):
         raise HTTPException(status_code=401, detail="API key non valida")
+
+
+async def require_api_key_dependency(
+    x_api_key: Optional[str] = Header(default=None, alias="X-API-Key"),
+) -> None:
+    """Async FastAPI adapter; keep the sync helper callable by existing tests/tools."""
+    require_api_key(x_api_key)
 
 
 def require_shutdown_api_key(x_api_key: Optional[str] = Header(default=None, alias="X-API-Key")) -> None:
@@ -664,7 +675,7 @@ async def _richiedi_visura(
     request: VisuraInput,
     force: bool = False,
     service: VisuraService = Depends(get_visura_service),
-    _: None = Depends(require_api_key),
+    _: None = Depends(require_api_key_dependency),
 ):
     return await richiedi_visura(request, service, force=force)
 
@@ -674,7 +685,7 @@ async def _richiedi_intestati_immobile(
     request: VisuraIntestatiInput,
     force: bool = False,
     service: VisuraService = Depends(get_visura_service),
-    _: None = Depends(require_api_key),
+    _: None = Depends(require_api_key_dependency),
 ):
     return await richiedi_intestati_immobile(request, service, force=force)
 
@@ -684,7 +695,7 @@ async def _richiedi_visura_soggetto(
     request: VisuraSoggettoInput,
     force: bool = False,
     service: VisuraService = Depends(get_visura_service),
-    _: None = Depends(require_api_key),
+    _: None = Depends(require_api_key_dependency),
 ):
     return await richiedi_visura_soggetto(request, service, force=force)
 
@@ -694,7 +705,7 @@ async def _richiedi_visura_persona_giuridica(
     request: VisuraPersonaGiuridicaInput,
     force: bool = False,
     service: VisuraService = Depends(get_visura_service),
-    _: None = Depends(require_api_key),
+    _: None = Depends(require_api_key_dependency),
 ):
     return await richiedi_visura_persona_giuridica(request, service, force=force)
 
@@ -704,7 +715,7 @@ async def _richiedi_elenco_immobili(
     request: ElencoImmobiliInput,
     force: bool = False,
     service: VisuraService = Depends(get_visura_service),
-    _: None = Depends(require_api_key),
+    _: None = Depends(require_api_key_dependency),
 ):
     return await richiedi_elenco_immobili(request, service, force=force)
 
@@ -714,7 +725,7 @@ async def _download_documents(
     since: str = "",
     skip_known: bool = False,
     service: VisuraService = Depends(get_visura_service),
-    _: None = Depends(require_api_key),
+    _: None = Depends(require_api_key_dependency),
 ):
     return await download_documents(service, since=since, skip_known=skip_known)
 
@@ -723,27 +734,76 @@ async def _download_documents(
 async def _richiedi_ispezione_ipotecaria(
     request: IspezioneIpotecariaInput,
     force: bool = False,
+    reuse_cached: bool = False,
     service: VisuraService = Depends(get_visura_service),
-    _: None = Depends(require_api_key),
+    _: None = Depends(require_api_key_dependency),
 ):
-    return await richiedi_ispezione_ipotecaria(request, service, force=force)
+    return await richiedi_ispezione_ipotecaria(
+        request, service, force=force, reuse_cached=reuse_cached
+    )
+
+
+async def _workflow_backend_request(method: str, path: str, **kwargs):
+    """Forward workflow lifecycle calls to OpenData, the owner of persisted runs."""
+    import httpx
+
+    base_url = os.getenv("OPENDATA_API_URL", "http://localhost:8024").rstrip("/")
+    headers = {}
+    if api_key := os.getenv("OPENDATA_API_KEY"):
+        headers["X-API-Key"] = api_key
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(4.0, connect=1.0)) as client:
+            response = await client.request(method, f"{base_url}{path}", headers=headers, **kwargs)
+    except httpx.RequestError as exc:
+        raise HTTPException(status_code=503, detail=f"Workflow service unavailable: {exc}") from exc
+    if response.status_code >= 400:
+        try:
+            detail = response.json().get("detail", response.text)
+        except Exception:
+            detail = response.text
+        raise HTTPException(status_code=response.status_code, detail=detail)
+    if not response.content:
+        return {}
+    return response.json()
+
+
+async def _run_workflow_backend(payload: dict):
+    return await _workflow_backend_request("POST", "/catasto/workflow/run", json=payload)
+
+
+@app.post("/catasto/workflow/run")
+async def _workflow_run(
+    body: dict,
+    resume: bool = False,
+    workflow_id: Optional[str] = None,
+    _: None = Depends(require_api_key_dependency),
+):
+    if resume:
+        if not workflow_id:
+            raise HTTPException(status_code=422, detail="workflow_id is required to resume a run")
+        return await _workflow_backend_request(
+            "POST",
+            "/catasto/workflow/run",
+            params={"resume": "true", "workflow_id": workflow_id},
+            json=body,
+        )
+    return await _run_workflow_backend(body)
+
+
+@app.get("/catasto/workflow/runs/{workflow_id}")
+async def _workflow_status(workflow_id: str, _: None = Depends(require_api_key_dependency)):
+    return await _workflow_backend_request("GET", f"/catasto/workflow/runs/{workflow_id}")
+
+
+@app.post("/catasto/workflow/runs/{workflow_id}/cancel")
+async def _workflow_cancel(workflow_id: str, _: None = Depends(require_api_key_dependency)):
+    return await _workflow_backend_request("POST", f"/catasto/workflow/runs/{workflow_id}/cancel")
 
 
 @app.post("/visura/workflow")
-async def _execute_workflow(
-    body: dict,
-    _: None = Depends(require_api_key),
-):
-    """Execute a named multi-step workflow using Sister's own query service."""
-    from pydantic import ValidationError
-
-    from .workflows import run_workflow
-
-    try:
-        result = await run_workflow(body)
-    except (ValidationError, ValueError) as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    return JSONResponse(result, status_code=422 if result.get("event") == "error" else 200)
+async def _execute_workflow(body: dict, _: None = Depends(require_api_key_dependency)):
+    """Compatibility route for existing SISTER workflow clients."""
+    return await _run_workflow_backend(body)
 
 
 @app.post("/visura/{search_type}")
@@ -755,7 +815,7 @@ async def _richiedi_generic(
     comune: Optional[str] = None,
     tipo_catasto: str = "T",
     service: VisuraService = Depends(get_visura_service),
-    _: None = Depends(require_api_key),
+    _: None = Depends(require_api_key_dependency),
 ):
     """Single-step query by search type (indirizzo, partita, nota, mappa, ...).
 
@@ -814,7 +874,7 @@ async def _visura_history(
     tipo_catasto: Optional[str] = None,
     limit: int = 50,
     offset: int = 0,
-    _: None = Depends(require_api_key),
+    _: None = Depends(require_api_key_dependency),
 ):
     return await visura_history(provincia, comune, foglio, particella, tipo_catasto, limit, offset)
 
@@ -823,7 +883,7 @@ async def _visura_history(
 async def _ottieni_visura(
     request_id: str,
     service: VisuraService = Depends(get_visura_service),
-    _: None = Depends(require_api_key),
+    _: None = Depends(require_api_key_dependency),
 ):
     return await ottieni_visura(request_id, service)
 
@@ -831,7 +891,7 @@ async def _ottieni_visura(
 @app.post("/visura/queue/clear")
 async def _clear_queue(
     service: VisuraService = Depends(get_visura_service),
-    _: None = Depends(require_api_key),
+    _: None = Depends(require_api_key_dependency),
 ):
     """Drain all pending requests from the queue without stopping the worker."""
     drained = 0
@@ -859,6 +919,40 @@ async def _graceful_shutdown_endpoint(
 async def _extract_sezioni(
     request: SezioniExtractionRequest,
     service: VisuraService = Depends(get_visura_service),
-    _: None = Depends(require_api_key),
+    _: None = Depends(require_api_key_dependency),
 ):
     return await extract_sezioni(request, service)
+
+
+@app.get("/sezioni/extract")
+async def _list_section_extractions(
+    limit: int = 50,
+    _: None = Depends(require_api_key_dependency),
+):
+    return await list_section_extractions(limit)
+
+
+@app.get("/sezioni/extract/{job_id}")
+async def _get_section_extraction(
+    job_id: str,
+    _: None = Depends(require_api_key_dependency),
+):
+    return await get_section_extraction(job_id)
+
+
+@app.post("/sezioni/extract/{job_id}/cancel")
+async def _cancel_section_extraction(
+    job_id: str,
+    service: VisuraService = Depends(get_visura_service),
+    _: None = Depends(require_api_key_dependency),
+):
+    return await cancel_section_extraction(job_id, service)
+
+
+@app.post("/sezioni/extract/{job_id}/resume")
+async def _resume_section_extraction(
+    job_id: str,
+    service: VisuraService = Depends(get_visura_service),
+    _: None = Depends(require_api_key_dependency),
+):
+    return await resume_section_extraction(job_id, service)

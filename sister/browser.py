@@ -80,7 +80,21 @@ _NOARGS_DISPATCHERS = {
 }
 
 
-_PARAM_ALIASES = {"sheet": "foglio", "parcel": "particella", "section": "sezione", "subunit": "subalterno"}
+_PARAM_ALIASES = {
+    "sheet": "foglio",
+    "parcel": "particella",
+    "section": "sezione",
+    "subunit": "subalterno",
+    "urban_section": "sezione_urbana",
+}
+
+
+def _normalised_request_params(request: GenericSisterRequest) -> dict:
+    params = dict(request.params or {})
+    for alias, name in _PARAM_ALIASES.items():
+        if alias in params:
+            params.setdefault(name, params.pop(alias))
+    return params
 
 
 async def _run_with_network_json(page, extraction):
@@ -138,20 +152,34 @@ def _dispatcher_kwargs(dispatcher, request: GenericSisterRequest) -> dict:
     Dispatchers take different subsets of (foglio, particella, sezione, ...), and ``params`` may spell a name
     either in English or Italian, so normalise the aliases and keep only what the dispatcher accepts.
     """
-    params = dict(request.params or {})
-    for alias, name in _PARAM_ALIASES.items():
-        if alias in params:
-            params.setdefault(name, params.pop(alias))
+    params = _normalised_request_params(request)
     kwargs = {
         "tipo_catasto": request.cadastre_type,
         "provincia": request.province,
         "comune": request.municipality,
+        # Include known route fields as None so **kwargs dispatchers do not
+        # inherit helper defaults (notably the sample parcel in visura_immobile).
+        "foglio": None,
+        "particella": None,
+        "sezione": None,
+        "subalterno": None,
+        "sezione_urbana": None,
+        "indirizzo": None,
+        "partita": None,
+        "numero_nota": None,
+        "anno_nota": None,
+        "codice_fiscale": None,
+        "identificativo": None,
         **params,
     }
     accepted = inspect.signature(dispatcher).parameters
     if any(p.kind is inspect.Parameter.VAR_KEYWORD for p in accepted.values()):
         return kwargs
     return {key: value for key, value in kwargs.items() if key in accepted}
+
+
+# Kept as a compatibility alias for callers and the dispatch-contract tests.
+_dispatch_kwargs = _dispatcher_kwargs
 
 
 def _with_form_fields(query):
@@ -174,8 +202,15 @@ class BrowserManager:
     """Manages Playwright browser lifecycle and dispatches SISTER portal commands."""
 
     def __init__(self):
-        self._auth = AuthBrowserManager(BrowserConfig())
+        config = BrowserConfig()
+        # Expose SISTER's launch policy alongside the auth package config.
+        # The shared auth package currently accepts Chromium launch flags via
+        # its module configuration, while viewport is applied after launch.
+        object.__setattr__(config, "no_viewport", True)
+        object.__setattr__(config, "browser_args", ["--start-maximized"])
+        self._auth = AuthBrowserManager(config)
         self.last_login_time = None
+        self._session_origin = None
         self._page_lock = asyncio.Lock()
 
     @property
@@ -185,6 +220,10 @@ class BrowserManager:
     @property
     def is_cdp(self) -> bool:
         return self._auth.is_cdp
+
+    @property
+    def session_origin(self) -> Optional[str]:
+        return getattr(self._auth, "session_origin", None) or self._session_origin
 
     @property
     def auth_page(self) -> Optional[Page]:
@@ -263,7 +302,16 @@ class BrowserManager:
 
     async def login(self):
         try:
-            await self._auth.login(service="sister")
+            ensure_session = getattr(self._auth, "ensure_service_session", None)
+            if ensure_session is not None:
+                session = await ensure_session("sister")
+                self._session_origin = getattr(session, "origin", None) or getattr(
+                    self._auth, "session_origin", None
+                )
+                await self._auth.start_keepalive()
+            else:
+                await self._auth.login(service="sister")
+                self._session_origin = "authenticated"
             self.last_login_time = datetime.now()
             logger.info("Login completato con successo")
         except Exception as e:
@@ -315,9 +363,10 @@ class BrowserManager:
                         request.sheet,
                         request.parcel,
                         request.cadastre_type,
-                        extract_intestati=False,
+                        extract_intestati=True,
                         subalterno=request.subunit,
                         sezione_urbana=request.urban_section,
+                        request_documents=False,
                     )
                 except Exception as inner_e:
                     return VisuraResponse(
@@ -359,6 +408,7 @@ class BrowserManager:
                     extract_intestati=True,
                     subalterno=request.subunit,
                     sezione_urbana=request.urban_section,
+                    request_documents=request.request_documents,
                 )
             return VisuraResponse(
                 request_id=request.request_id,
@@ -385,6 +435,8 @@ class BrowserManager:
                     request.fiscal_code,
                     tipo_catasto=request.cadastre_type or "E",
                     provincia=request.province,
+                    cognome=None,
+                    nome=None,
                 )
             return VisuraResponse(
                 request_id=request.request_id,
@@ -463,15 +515,16 @@ class BrowserManager:
                 search_type = request.search_type
 
                 if search_type == "visura_immobile":
+                    params = _normalised_request_params(request)
                     result = await run_visura_immobile(
                         page,
                         provincia=request.province,
                         comune=request.municipality,
-                        foglio=request.params.get("sheet") or request.params.get("foglio") if request.params else None,
-                        particella=request.params.get("parcel") or request.params.get("particella") if request.params else None,
-                        tipo_catasto=request.cadastre_type,
-                        subalterno=request.params.get("subunit") or request.params.get("subalterno") if request.params else None,
-                        sezione=request.params.get("section") or request.params.get("sezione") if request.params else None,
+                        foglio=params.get("foglio"),
+                        particella=params.get("particella"),
+                        subalterno=params.get("subalterno"),
+                        sezione=params.get("sezione"),
+                        sezione_urbana=params.get("sezione_urbana"),
                     )
                 elif search_type in _GENERIC_DISPATCHERS:
                     dispatcher = _GENERIC_DISPATCHERS[search_type]
@@ -515,8 +568,10 @@ class BrowserManager:
                     foglio=request.sheet,
                     particella=request.parcel,
                     tipo_ricerca=request.search_type,
-                    subalterno=getattr(request, "subunit", None),
-                    sezione=getattr(request, "section", None),
+                    codice_fiscale=request.fiscal_code,
+                    identificativo=request.identifier,
+                    numero_nota=request.note_number,
+                    anno_nota=request.note_year,
                     auto_confirm=getattr(request, "auto_confirm", False),
                 )
             return VisuraResponse(
@@ -534,10 +589,25 @@ class BrowserManager:
                 error=str(e),
             )
 
-    async def esegui_extract_sezioni(self, tipo_catasto: str, max_province: int = 0) -> list:
+    async def esegui_extract_sezioni(
+        self,
+        tipo_catasto: str,
+        max_province: int = 0,
+        *,
+        progress_callback=None,
+        completed_province_values=None,
+        initial_results=None,
+    ) -> list:
         async with self._page_lock:
             page = await self._get_authenticated_page()
-            return await extract_all_sezioni(page, tipo_catasto=tipo_catasto, max_province=max_province)
+            return await extract_all_sezioni(
+                page,
+                tipo_catasto=tipo_catasto,
+                max_province=max_province,
+                progress_callback=progress_callback,
+                completed_province_values=completed_province_values,
+                initial_results=initial_results,
+            )
 
     async def download_richieste_documents(self, *, since: str = "", skip_known: bool = False) -> list[dict]:
         from .utils import PageLogger, _download_richieste_documents

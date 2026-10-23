@@ -41,8 +41,33 @@ def test_migration_steps_exist_in_order():
         assert (SQL_DIR / name).is_file(), name
 
 
-def test_migration_is_the_single_alembic_head():
-    assert _heads() == [_load_migration().revision]
+def _history() -> list[str]:
+    from alembic.config import Config
+    from alembic.script import ScriptDirectory
+
+    config = Config(str(ROOT / "alembic.ini"))
+    config.set_main_option("script_location", str(ROOT / "alembic"))
+    return [rev.revision for rev in ScriptDirectory.from_config(config).walk_revisions()]
+
+
+def test_there_is_a_single_alembic_head_and_it_descends_from_the_flat_migration():
+    heads = _heads()
+    assert len(heads) == 1, f"several Alembic heads: {heads}"
+    assert _load_migration().revision in _history()
+    assert "20261026_flat_normalised_fixes" in _history()
+
+
+def test_forward_fix_is_idempotent_by_construction():
+    sql = (ROOT / "alembic" / "sql" / "20261026_flat_normalised_fixes" / "up.sql").read_text(encoding="utf-8")
+    assert "ADD COLUMN IF NOT EXISTS" in sql and "ADD COLUMN " not in sql.replace("ADD COLUMN IF NOT EXISTS", "")
+    assert "CREATE TABLE IF NOT EXISTS sister.sister_request_jobs" in sql
+    assert "to_regclass('sister_legacy." in sql  # backfill only while the legacy tables exist
+
+
+def test_swap_and_downgrade_move_only_named_relations():
+    for name in ("06_swap.sql", "07_down.sql"):
+        sql = (SQL_DIR / name).read_text(encoding="utf-8")
+        assert "= ANY (" in sql, f"{name} must restrict the schema move to an explicit list"
 
 
 def test_schema_has_no_json_columns_outside_the_archive():
@@ -80,7 +105,9 @@ def test_every_foreign_key_column_is_indexed():
             assert covered, f"{table}.{column} has a foreign key but no index"
 
 
-def test_swap_keeps_postgis_and_alembic_in_place():
+def test_swap_never_names_postgis_or_alembic_tables():
     swap = (SQL_DIR / "06_swap.sql").read_text(encoding="utf-8")
-    assert "'alembic_version', 'spatial_ref_sys'" in swap
-    assert "deptype = 'e'" in swap  # extension members (PostGIS) are never moved
+    replaced = swap.split("replaced text[] := ARRAY[", 1)[1].split("];", 1)[0]
+    names = set(re.findall(r"'([a-z_0-9]+)'", replaced))
+    assert {"alembic_version", "spatial_ref_sys", "sister_request_jobs"}.isdisjoint(names)
+    assert {"visura_requests", "cadastral_locations", "sister_owner_index"} <= names  # the legacy layout is covered

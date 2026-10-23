@@ -139,6 +139,7 @@ class VisuraIntestatiRequest(SQLModel):
     subunit: Optional[str] = None
     section: Optional[str] = None
     urban_section: Optional[str] = None
+    request_documents: bool = False
     timestamp: datetime = Field(default_factory=_default_timestamp)
 
     form_fields: Dict[str, Any] = Field(
@@ -260,6 +261,7 @@ class VisuraIntestatiInput(SQLModel):
     subunit: Optional[str] = Field(None, validation_alias=AliasChoices("subunit", "subalterno"), description="Subunit number (required for Fabbricati)")
     section: Optional[str] = Field(None, validation_alias=AliasChoices("section", "sezione"))
     urban_section: Optional[str] = Field(None, validation_alias=AliasChoices("urban_section", "sezione_urbana"))
+    request_documents: bool = False
 
     form_fields: Dict[str, Any] = Field(
         default_factory=dict,

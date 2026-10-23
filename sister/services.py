@@ -19,10 +19,16 @@ from .browser import BrowserManager  # noqa: F401 (re-exported)
 from .database import (
     cleanup_old_responses,
     compute_cache_key,
+    claim_request_job,
+    create_request_job,
     find_cached_response,
+    get_request_job,
+    heartbeat_request_job,
+    list_request_jobs_for_recovery,
     save_request,
     save_requests_batch,
     save_response,
+    update_request_job,
 )
 from .database import (
     get_response as load_stored_response,
@@ -94,6 +100,7 @@ class VisuraService:
         self.request_queue: asyncio.Queue = asyncio.Queue(maxsize=self.queue_max_size)
         self._queue_lock = asyncio.Lock()
         self.response_store: Dict[str, VisuraResponse] = {}
+        self.request_status: Dict[str, str] = {}
         self.pending_request_ids: set[str] = set()
         self.expired_request_ids: Dict[str, datetime] = {}
         self.response_ttl_seconds = self._parse_positive_int_env("RESPONSE_TTL_SECONDS", 6 * 3600)
@@ -104,6 +111,8 @@ class VisuraService:
         self.processing = False
         self._worker_task: Optional[asyncio.Task] = None
         self._cleanup_task: Optional[asyncio.Task] = None
+        self._extraction_tasks: dict[str, asyncio.Task] = {}
+        self._cancelled_extractions: set[str] = set()
 
     @staticmethod
     def _parse_positive_int_env(var_name: str, default: int) -> int:
@@ -140,6 +149,11 @@ class VisuraService:
             logger.info("Browser auth differita — usa /browser per avviare la sessione")
             return
 
+        try:
+            await self._restore_request_jobs()
+        except Exception as e:
+            logger.error("Impossibile ripristinare le richieste persistenti: %s", e)
+
         if attach_only:
             self._auth_task = asyncio.create_task(self._background_attach(), name="visura-browser-attach")
         elif background_auth:
@@ -164,7 +178,8 @@ class VisuraService:
     async def _do_auth(self):
         await self.browser_manager.initialize()
         # Reuse a session already open in the shared Chrome before falling back to a full login
-        if not await self.browser_manager.attach_existing_session():
+        attach = getattr(self.browser_manager, "attach_existing_session", None)
+        if attach is None or not await attach():
             await self.browser_manager.login()
         await self.browser_manager.start_keep_alive()
         self._auth_ready = True
@@ -176,20 +191,24 @@ class VisuraService:
         logger.info("Autenticazione browser in corso...")
         try:
             await self._do_auth()
+            self._auth_error_kind = None
         except _AuthError as e:
             cause = str(e)
             if "active session" in cause.lower() or "già in sessione" in cause.lower():
                 await self._try_close_stale_session()
             msg = f"Autenticazione fallita — riprova dal pannello Browser. ({e})"
             self._auth_failed_message = msg
+            self._auth_error_kind = "authentication_failed"
             logger.error("Browser auth failed: %s", e)
         except _BrowserError as e:
             msg = f"Errore inizializzazione browser — riprova dal pannello Browser. ({e})"
             self._auth_failed_message = msg
+            self._auth_error_kind = "browser_unavailable"
             logger.error("Browser init error: %s", e)
         except Exception as e:
             msg = f"Errore inatteso durante l'autenticazione: {type(e).__name__}: {e}"
             self._auth_failed_message = msg
+            self._auth_error_kind = "unexpected_error"
             logger.error("Browser auth unexpected error: %s", msg)
 
     async def _try_close_stale_session(self):
@@ -233,7 +252,13 @@ class VisuraService:
             return {"state": "ready", "mode": mode, "message": "Browser authenticated"}
         failed_msg = getattr(self, "_auth_failed_message", None)
         if failed_msg:
-            return {"state": "unavailable", "mode": mode, "message": failed_msg}
+            return {
+                "state": "unavailable",
+                "mode": mode,
+                "message": failed_msg,
+                "error_kind": getattr(self, "_auth_error_kind", None),
+                "session_origin": getattr(self.browser_manager, "session_origin", None),
+            }
         auth_task = getattr(self, "_auth_task", None)
         if auth_task is not None and not auth_task.done():
             return {"state": "connecting", "mode": mode, "message": "Authentication in progress..."}
@@ -267,9 +292,38 @@ class VisuraService:
                                 break
                             await asyncio.sleep(5)
                         if not self.auth_ready:
-                            logger.error("Autenticazione non completata — richiesta scartata")
-                            self.request_queue.task_done()
+                            logger.error("Autenticazione non completata — richiesta terminata senza invio")
+                            response = VisuraResponse(
+                                request_id=request.request_id,
+                                success=False,
+                                cadastre_type=getattr(request, "cadastre_type", "E"),
+                                error="AuthenticationError: browser authentication timed out before portal submission",
+                            )
+                            await self._store_response(response)
+                            await update_request_job(
+                                request.request_id, "failed", error_kind="auth_timeout"
+                            )
+                            self.request_status[request.request_id] = "failed"
                             continue
+
+                    claimed = await claim_request_job(request.request_id)
+                    if not claimed:
+                        logger.info("Richiesta %s già acquisita o non più accodabile", request.request_id)
+                        continue
+
+                    marker_saved = await update_request_job(
+                        request.request_id, "running", side_effect_started=True
+                    )
+                    if marker_saved is False:
+                        response = VisuraResponse(
+                            request_id=request.request_id,
+                            success=False,
+                            cadastre_type=getattr(request, "cadastre_type", "E"),
+                            error="Could not persist the portal side-effect boundary",
+                        )
+                        await self._store_response(response)
+                        self.request_status[request.request_id] = "failed"
+                        continue
 
                     if isinstance(request, VisuraRequest):
                         response = await self.browser_manager.esegui_visura(request)
@@ -316,9 +370,37 @@ class VisuraService:
                     else:
                         logger.error("Tipo di richiesta sconosciuto: %s", type(request))
 
+                    if isinstance(
+                        request,
+                        (
+                            VisuraRequest,
+                            VisuraIntestatiRequest,
+                            VisuraSoggettoRequest,
+                            VisuraPersonaGiuridicaRequest,
+                            ElencoImmobiliRequest,
+                            GenericSisterRequest,
+                            IspezioneIpotecariaRequest,
+                        ),
+                    ):
+                        outcome, error_kind = _request_job_outcome(response)
+                        self.request_status[request.request_id] = outcome
+                        await update_request_job(request.request_id, outcome, error_kind=error_kind)
+
                 except Exception as e:
                     logger.error("Errore nel processare richieste: %s", e)
-                    await asyncio.sleep(5)
+                    if request is not None and hasattr(request, "request_id"):
+                        response = VisuraResponse(
+                            request_id=request.request_id,
+                            success=False,
+                            cadastre_type=getattr(request, "cadastre_type", "E"),
+                            error=f"{type(e).__name__}: {e}",
+                        )
+                        with suppress(Exception):
+                            await self._store_response(response)
+                        status, error_kind = _request_job_outcome(response)
+                        self.request_status[request.request_id] = status
+                        with suppress(Exception):
+                            await update_request_job(request.request_id, status, error_kind=error_kind)
                 finally:
                     if isinstance(
                         request,
@@ -452,6 +534,215 @@ class VisuraService:
             )
 
     @staticmethod
+    def _request_from_job(job: dict):
+        payload = job.get("payload") or {}
+        kind = payload.pop("_request_type", job.get("request_type", "visura"))
+        request_models = {
+            "visura": VisuraRequest,
+            "intestati": VisuraIntestatiRequest,
+            "soggetto": VisuraSoggettoRequest,
+            "persona_giuridica": VisuraPersonaGiuridicaRequest,
+            "elenco_immobili": ElencoImmobiliRequest,
+            "ispezione_ipotecaria": IspezioneIpotecariaRequest,
+        }
+        model = request_models.get(kind)
+        if kind.startswith("ipotecaria_"):
+            model = IspezioneIpotecariaRequest
+        if kind not in request_models and not kind.startswith("ipotecaria_"):
+            model = GenericSisterRequest
+        return model.model_validate(payload)
+
+    async def _restore_request_jobs(self):
+        """Restore safe queued work and resolve expired jobs without replaying paid side effects."""
+        jobs = await list_request_jobs_for_recovery()
+        now = datetime.now().astimezone()
+        for job in jobs:
+            request_id = job["request_id"]
+            status = job["status"]
+            if status == "running":
+                # A response may have been committed just before the worker died,
+                # while the lease is still live. Resolve that outcome first so a
+                # restart preserves terminal results such as ``no_match``.
+                response = await load_stored_response(request_id)
+                if response is not None:
+                    recovered = self._response_from_db_record(response)
+                    outcome, error_kind = _request_job_outcome(recovered)
+                    self.request_status[request_id] = outcome
+                    await update_request_job(request_id, outcome, error_kind=error_kind)
+                    continue
+
+                lease_until = job.get("lease_until")
+                if lease_until is not None and lease_until > now:
+                    continue
+                if job.get("side_effect_started"):
+                    cadastre_type = (job.get("payload") or {}).get("cadastre_type", "E")
+                    response = VisuraResponse(
+                        request_id=request_id,
+                        success=False,
+                        cadastre_type=cadastre_type,
+                        error="Portal submission outcome is unknown after worker interruption",
+                    )
+                    await self._store_response(response)
+                    self.request_status[request_id] = "failed"
+                    await update_request_job(
+                        request_id, "failed", error_kind="interrupted_unknown"
+                    )
+                    continue
+                await update_request_job(request_id, "queued", side_effect_started=False)
+                job["status"] = "queued"
+            if job["status"] == "queued":
+                request = self._request_from_job(job)
+                self.request_status[request_id] = "queued"
+                if request_id not in self.pending_request_ids:
+                    self._enqueue_request_nowait(request)
+
+    async def clear_queue(self) -> int:
+        """Cancel queued requests and persist an outcome for each drained item."""
+        drained = 0
+        while True:
+            try:
+                request = self.request_queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+            try:
+                if request is not None:
+                    drained += 1
+                    response = VisuraResponse(
+                        request_id=request.request_id,
+                        success=False,
+                        cadastre_type=getattr(request, "cadastre_type", "E"),
+                        error="Request cancelled before processing",
+                    )
+                    await self._store_response(response)
+                    await update_request_job(request.request_id, "cancelled", error_kind="cancelled")
+                    self.request_status[request.request_id] = "cancelled"
+                    self.pending_request_ids.discard(request.request_id)
+            finally:
+                self.request_queue.task_done()
+        return drained
+
+    async def start_section_extraction(self, job_id: str, cadastre_type: str, max_provinces: int) -> dict:
+        from .extraction_jobs import create_extraction_job
+
+        job = await create_extraction_job(job_id, cadastre_type, max_provinces)
+        self._launch_section_extraction(job_id)
+        return job
+
+    def _launch_section_extraction(self, job_id: str) -> None:
+        task = self._extraction_tasks.get(job_id)
+        if task is not None and not task.done():
+            raise RuntimeError("Estrazione già in esecuzione")
+        self._extraction_tasks[job_id] = asyncio.create_task(
+            self._run_section_extraction(job_id), name=f"sezioni-extraction-{job_id}"
+        )
+
+    async def _run_section_extraction(self, job_id: str) -> None:
+        from .extraction_jobs import get_extraction_job, update_extraction_job
+
+        job = await get_extraction_job(job_id)
+        if job is None:
+            self._extraction_tasks.pop(job_id, None)
+            return
+        progress = dict(job.get("progress") or {})
+        results = list(job.get("results") or [])
+        completed_values = set(progress.get("completed_province_values") or ())
+        await update_extraction_job(job_id, status="running")
+
+        async def on_progress(update: dict) -> bool:
+            nonlocal progress, results, completed_values
+            province = update.get("province") or {}
+            province_value = str(province.get("value") or "")
+            records = list(update.get("records") or [])
+            if province_value:
+                results = [
+                    row for row in results if str(row.get("provincia_value") or "") != province_value
+                ] + records
+            reported_completed = update.get("completed_province_values")
+            if reported_completed is not None:
+                completed_values = set(reported_completed)
+            progress = {
+                **progress,
+                **{key: value for key, value in update.items() if key not in {"records"}},
+                "completed_province_values": sorted(completed_values),
+            }
+            await update_extraction_job(
+                job_id, status="running", progress=progress, results=results
+            )
+            return job_id in self._cancelled_extractions
+
+        try:
+            final_results = await self.browser_manager.esegui_extract_sezioni(
+                job["cadastre_type"],
+                job["max_provinces"],
+                progress_callback=on_progress,
+                completed_province_values=completed_values,
+                initial_results=results,
+            )
+            if final_results is not None:
+                results = list(final_results)
+            if job_id in self._cancelled_extractions:
+                status = "cancelled"
+            else:
+                total = int(progress.get("total") or 0)
+                completed = int(progress.get("completed") or len(completed_values))
+                status = "partial" if total and completed < total else "completed"
+            await update_extraction_job(job_id, status=status, progress=progress, results=results)
+        except asyncio.CancelledError:
+            current = await get_extraction_job(job_id)
+            if current and current.get("status") == "running":
+                await update_extraction_job(job_id, status="paused", progress=progress, results=results)
+            raise
+        except Exception as exc:
+            await update_extraction_job(
+                job_id, status="failed", progress=progress, results=results, error=str(exc)
+            )
+        finally:
+            self._cancelled_extractions.discard(job_id)
+            self._extraction_tasks.pop(job_id, None)
+
+    async def resume_section_extraction(self, job_id: str) -> dict | None:
+        from .extraction_jobs import get_extraction_job, update_extraction_job
+
+        job = await get_extraction_job(job_id)
+        if job is None:
+            return None
+        if job["status"] in {"running", "queued", "completed", "cancelling"}:
+            raise RuntimeError("Estrazione non riprendibile nello stato corrente")
+        queued = await update_extraction_job(job_id, status="queued", error=None)
+        self._launch_section_extraction(job_id)
+        return queued
+
+    async def cancel_section_extraction(self, job_id: str) -> dict | None:
+        from .extraction_jobs import get_extraction_job, update_extraction_job
+
+        job = await get_extraction_job(job_id)
+        if job is None:
+            return None
+        if job["status"] == "completed":
+            raise RuntimeError("Estrazione già completata")
+        task = self._extraction_tasks.get(job_id)
+        if task is not None and not task.done():
+            self._cancelled_extractions.add(job_id)
+            return await update_extraction_job(job_id, status="cancelling")
+        if job["status"] in {"queued", "running", "cancelling"}:
+            return await update_extraction_job(job_id, status="paused")
+        return job
+
+    async def _stop_extraction_jobs(self) -> None:
+        from .extraction_jobs import get_extraction_job, update_extraction_job
+
+        tasks = list(self._extraction_tasks.items())
+        for job_id, task in tasks:
+            if not task.done():
+                task.cancel()
+            with suppress(asyncio.CancelledError):
+                await task
+            job = await get_extraction_job(job_id)
+            if job and job.get("status") == "running":
+                await update_extraction_job(job_id, status="paused")
+            self._extraction_tasks.pop(job_id, None)
+
+    @staticmethod
     def _response_from_db_record(record: dict) -> VisuraResponse:
         timestamp_raw = record.get("created_at")
         timestamp = datetime.now()
@@ -512,7 +803,12 @@ class VisuraService:
             return None
         params = self._request_cache_params(request_type, request)
         cache_key = compute_cache_key(request_type, **params)
-        record = await find_cached_response(cache_key, self.response_ttl_seconds)
+        ttl_name = f"RESPONSE_TTL_SECONDS_{request_type.upper()}"
+        try:
+            ttl = max(1, int(os.getenv(ttl_name, self.response_ttl_seconds)))
+        except (TypeError, ValueError):
+            ttl = self.response_ttl_seconds
+        record = await find_cached_response(cache_key, ttl)
         stale = False
         if record is None and reuse_previous_var.get():
             # outside the cache window the same query would be a new (paid) request: hand the previous answer back,
@@ -535,7 +831,7 @@ class VisuraService:
         from .database import is_db_writable
 
         if not is_db_writable():
-            return
+            raise RuntimeError("durable request submission is unavailable")
         params = self._request_cache_params(request_type, request)
         cache_key = compute_cache_key(request_type, **params)
         try:
@@ -551,6 +847,9 @@ class VisuraService:
                 subalterno=getattr(request, "subunit", None),
                 cache_key=cache_key,
             )
+            payload = request.model_dump(mode="json")
+            payload["_request_type"] = request_type
+            await create_request_job(request.request_id, request_type, payload)
         except Exception as e:
             logger.error("Errore persistenza richiesta %s: %s", request.request_id, e)
             raise RuntimeError("Errore durante il salvataggio della richiesta") from e
@@ -559,7 +858,7 @@ class VisuraService:
         from .database import is_db_writable
 
         if not is_db_writable():
-            return
+            raise RuntimeError("durable request submission is unavailable")
         rows = [
             {
                 "request_id": request.request_id,
@@ -576,6 +875,10 @@ class VisuraService:
         ]
         try:
             await save_requests_batch(rows)
+            for request in requests:
+                payload = request.model_dump(mode="json")
+                payload["_request_type"] = "visura"
+                await create_request_job(request.request_id, "visura", payload)
         except Exception as e:
             logger.error("Errore persistenza batch richieste (%d item): %s", len(requests), e)
             raise RuntimeError("Errore durante il salvataggio delle richieste") from e
@@ -615,6 +918,7 @@ class VisuraService:
             self._ensure_capacity(required_slots=1)
             await self._persist_single_request(request_type, request)
             self._enqueue_request_nowait(request)
+            self.request_status[request.request_id] = "queued"
         logger.info(
             "Richiesta %s %s aggiunta alla coda (posizione: %d)",
             request_type,
@@ -641,9 +945,18 @@ class VisuraService:
         return await self._add_single(request.search_type, request, force=force)
 
     async def add_ispezione_ipotecaria_request(
-        self, request: IspezioneIpotecariaRequest, force: bool = False
+        self,
+        request: IspezioneIpotecariaRequest,
+        force: bool = False,
+        reuse_cached: bool = False,
     ) -> str | SubmitResult:
-        return await self._add_single(f"ipotecaria_{request.search_type}", request, force=force)
+        # Paid searches reuse a previous result only when the caller opts in.
+        request_type = f"ipotecaria_{request.search_type}"
+        if force:
+            return await self._add_single(request_type, request, force=True)
+        if reuse_cached:
+            return await self._add_single(request_type, request)
+        return await self._add_single(request_type, request, force=True)
 
     async def add_elenco_immobili_request(
         self, request: ElencoImmobiliRequest, force: bool = False
@@ -673,6 +986,7 @@ class VisuraService:
                 await self._persist_request_batch(to_enqueue)
                 for request in to_enqueue:
                     self._enqueue_request_nowait(request)
+                    self.request_status[request.request_id] = "queued"
             for request in to_enqueue:
                 logger.info("Richiesta visura %s aggiunta alla coda", request.request_id)
 
@@ -776,7 +1090,9 @@ class VisuraService:
                 await auth_task
         # Explicit stop: release the SISTER session too (a --reload restart deliberately does not, see
         # BrowserManager.graceful_shutdown), otherwise the next login fails with "Utente gia' in sessione"
-        await self.browser_manager.close_sister_session()
+        close_session = getattr(self.browser_manager, "close_sister_session", None)
+        if close_session is not None:
+            await close_session()
         await self.browser_manager.close()
         self._auth_ready = False
         logger.info("Browser session fermata (force=%s)", force)

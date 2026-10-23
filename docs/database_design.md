@@ -108,12 +108,14 @@ Read views: `v_cadastral_unit`, `v_property`, `v_result_owner`, `v_property_owne
 2. **Shares are reduced**: `1000/1000` → `1/1`, `500/1000` → `1/2`; this merged 9 rights.
 3. **Categories** `A02` and `A/2: ABITAZIONI…` are one code `A/2` (with description in `cadastral_category`); classes
    lose leading zeros (`01` → `1`) and have no lookup (open vocabulary).
-4. **Dropped as redundant or constant**: `property_owners` inline text, `land_parcels`/`building_identifiers`/
-   `related_parcels` inline location text, `ownership_mutations.ref_*` and `mutation_date` (never populated),
-   `visura_requests.cost_*`, `visura_properties.province`/`municipality`, `document_metadata.requester`/historical areas/
-   constant `registry_view_type` (`Visura telematica`) and `service_type` (`Servizi Catastali`)/`liquidation_units` (always 0),
-   mortgage `*_original`, `raw_*`, text interest rate, and the derived counts `unit_count`/`party_*_count`. Originals remain
-   in `sister_legacy` and `sister_archive`.
+4. **Dropped as redundant or never populated**: `property_owners` inline text, `land_parcels`/`building_identifiers`/
+   `related_parcels` inline location text, `ownership_mutations.ref_*` text (the code lives on `comune`),
+   `visura_requests.cost_*`, `visura_properties.province`/`municipality`, mortgage `*_original`, `raw_*`, text interest rate,
+   and the derived counts `unit_count`/`party_*_count`. Header fields that the XML defines are kept even where every
+   current row is empty or constant (`requester`, `registry_view_type`, `service_type`, `liquidation_units`, historical
+   areas, `mutation_date`), so a document that fills them is not silently truncated. Originals remain in `sister_legacy`
+   and `sister_archive`.
+   `ownership_mutation.is_current` replaces the `mutation_index = 'current'` marker (602 rows) now that the index is an integer.
 5. **Mortgage parties become `subject` rows** (3 new subjects; matched by fiscal code first).
 6. **Timestamps**: `requested_at` is read as Europe/Rome local time; 21 date-only values become midnight.
 7. **Document paths** are stored as `file_name` only; the documents directory is configuration, not data.
@@ -131,6 +133,24 @@ Read views: `v_cadastral_unit`, `v_property`, `v_result_owner`, `v_property_owne
   of a document is `<documents dir>/<file_name>`; map code looks geometry up by comune/section/sheet/parcel.
 - Tests: `tests/pg_isolation.py` builds its throwaway schema from the models, so it follows the model change.
 
+## Databases that ran the first variant (including live)
+
+The first variant of `20261024_flat_normalised` was applied to the live database on 2026-10-23. Auditing every lossy
+conversion afterwards found two defects: the 602 `mutation_index = 'current'` markers became NULL, and XML header fields that
+the visura schema defines (`requester`, `registry_view_type`, `service_type`, `liquidation_units`, historical areas,
+`mutation_date`) were dropped as "dead" because every current row was empty or constant. The corrected SQL fixes both for
+fresh runs, and `04_validate.sql` now fails if a Belfiore code, an index cast or a marker is lost. (A third suspected defect,
+units losing their comune, was checked and does not exist.) Databases that already ran the first variant take
+`20261026_flat_normalised_fixes`, which restores both from `sister_legacy` (ids were preserved), ensures the durable request
+job table exists on databases already stamped at the earlier revision, and is idempotent. It was checked by reproducing the
+first variant on a copy, applying the fix, and comparing it with a database built from the corrected
+migration: same columns, mutations, document headers, 3266 units with the same comune codes, same row counts. It was applied to
+the live database on 2026-10-23 after a `pg_dump` and `alembic stamp --purge 20261024_flat_normalised` (the live stamp named a
+revision that is not in the tree).
+
+The swap and the downgrade now move only the relations named in the migration, so tables added by other migrations
+(`sister_request_jobs`, …) stay in `sister`.
+
 ## Applying it
 
 1. Back up: `pg_dump -Fc sister > sister_pre_flat.dump` (step 1 deletes rows; downgrade does not restore them).
@@ -139,7 +159,7 @@ Read views: `v_cadastral_unit`, `v_property`, `v_result_owner`, `v_property_owne
 3. The previous layout is in `sister_legacy`. `alembic downgrade -1` swaps it back (rows written after the upgrade are lost).
 4. When nothing reads `sister_legacy` any more: `DROP SCHEMA sister_legacy CASCADE`.
 
-Verified on a `pg_dump` copy (about 12 s): 65 reconciliation checks (row counts, NULL-parity of every link, totals of
+Verified on a `pg_dump` copy (about 12 s): 73 reconciliation checks (row counts, NULL-parity of every link, totals of
 income/area/file size), upgrade → downgrade → upgrade, and an audit of the result (no JSON columns, a primary key
 and an indexed foreign key everywhere, 59 foreign keys, no isolated tables).
 

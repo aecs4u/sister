@@ -56,6 +56,10 @@ from .result_parsers import workflow_columns
 
 logger = logging.getLogger("sister")
 
+# Public for introspection and audits: the shared workflow package owns the
+# executor implementations, while this module composes them into SISTER runs.
+_STEP_EXECUTORS = STEP_EXECUTORS
+
 
 class _WorkflowVisuraClient(VisuraClient):
     """Reuse identical free query submissions during one workflow run.

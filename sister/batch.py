@@ -528,7 +528,9 @@ class BatchRunner:
         if self.confirm is None:
             return False
         async with self._prompt_lock:
-            return bool(await asyncio.to_thread(self.confirm, stale_result))
+            # Confirmation is an interactive gate: while the operator decides,
+            # pause the batch event loop so concurrent rows cannot submit paid work.
+            return bool(self.confirm(stale_result))
 
     async def _wait(self, item: PlannedQuery, request_ids: list[str]) -> dict:
         results: dict[str, dict] = {}

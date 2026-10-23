@@ -441,7 +441,9 @@ async def _resolve_option_ties(page, ties):
                         for tie in eligible
                     ],
                 )
-                if isinstance(batch, dict):
+                # A batch is atomic: a partial map must not mix remote choices
+                # with local fallbacks for other controls on the same page.
+                if isinstance(batch, dict) and all(tie["id"] in batch for tie in eligible):
                     choices.update(batch)
         except Exception as exc:
             log.warning("Jev cadastral choice unavailable (%s); retaining local decision", type(exc).__name__)
@@ -2908,6 +2910,8 @@ async def run_visura_soggetto(
     codice_fiscale,
     tipo_catasto="E",
     provincia=None,
+    cognome=None,
+    nome=None,
     motivo="Esplorazione",
     per_conto_di=None,
 ):
@@ -4397,7 +4401,15 @@ async def run_ispezioni_ipotecarie_elenchi(page):
     return {"risultati": results, "total_results": len(results)}
 
 
-async def extract_all_sezioni(page: Page, tipo_catasto: str = "T", max_province: int = 200) -> list:
+async def extract_all_sezioni(
+    page: Page,
+    tipo_catasto: str = "T",
+    max_province: int = 200,
+    *,
+    progress_callback=None,
+    completed_province_values=None,
+    initial_results=None,
+) -> list:
     """
     Estrae tutte le sezioni per tutte le province e comuni d'Italia.
 
@@ -4409,7 +4421,8 @@ async def extract_all_sezioni(page: Page, tipo_catasto: str = "T", max_province:
     Returns:
         Lista di dizionari con dati delle sezioni
     """
-    sezioni_data = []
+    sezioni_data = list(initial_results or [])
+    completed_values = set(completed_province_values or ())
     page_logger = PageLogger("sezioni")
 
     try:
@@ -4428,11 +4441,21 @@ async def extract_all_sezioni(page: Page, tipo_catasto: str = "T", max_province:
                 if "NAZIONALE" not in text.upper():
                     province_list.append({"value": value.strip(), "text": text.strip()})
 
-        province_list = province_list[:max_province]
-        log.info("Processando %d province", len(province_list))
+        total_provinces = len(province_list)
+        work_list = province_list[:max_province] if max_province > 0 else province_list
+        log.info("Processando %d province", len(work_list))
 
-        for i, provincia in enumerate(province_list):
-            log.info("[bold]Provincia %d/%d[/bold]: %s", i + 1, len(province_list), provincia["text"])
+        for i, provincia in enumerate(work_list):
+            provincia_value = provincia["value"]
+            if provincia_value in completed_values:
+                continue
+            # A retry replaces this province's earlier partial chunk.
+            sezioni_data = [
+                row for row in sezioni_data
+                if str(row.get("provincia_value") or "") != provincia_value
+            ]
+            log.info("[bold]Provincia %d/%d[/bold]: %s", i + 1, len(work_list), provincia["text"])
+            province_ok = False
 
             try:
                 await page.locator("select[name='listacom']").select_option(provincia["value"])
@@ -4534,6 +4557,7 @@ async def extract_all_sezioni(page: Page, tipo_catasto: str = "T", max_province:
                     provincia["text"],
                     len(sezioni_data),
                 )
+                province_ok = True
 
                 # Torna alla pagina principale per la prossima provincia
                 await page.goto(SISTER_SCELTA_SERVIZIO_URL, timeout=60000)
@@ -4541,7 +4565,25 @@ async def extract_all_sezioni(page: Page, tipo_catasto: str = "T", max_province:
 
             except Exception as e:
                 log.error("Errore provincia %s: %s", provincia["text"], e)
-                continue
+
+            if province_ok:
+                completed_values.add(provincia_value)
+            if progress_callback is not None:
+                records = [
+                    row for row in sezioni_data
+                    if str(row.get("provincia_value") or "") == provincia_value
+                ]
+                should_stop = await progress_callback(
+                    {
+                        "province": provincia,
+                        "records": records,
+                        "completed": len(completed_values),
+                        "total": total_provinces,
+                        "completed_province_values": sorted(completed_values),
+                    }
+                )
+                if should_stop:
+                    break
 
         log.info("[green]Estrazione completata[/green]: %d sezioni totali", len(sezioni_data))
         return sezioni_data

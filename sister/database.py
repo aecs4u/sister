@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from dotenv import load_dotenv
-from sqlalchemy import column, delete, func, inspect, table, text
+from sqlalchemy import column, delete, func, inspect, or_, table, text
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.engine import make_url
 from sqlalchemy.orm import sessionmaker
@@ -71,7 +71,8 @@ load_dotenv(PROJECT_ROOT / ".env")
 load_dotenv(PROJECT_ROOT.parent / ".env", override=False)
 DATA_ROOT = Path(os.getenv("SISTER_DATA_ROOT", str(PROJECT_ROOT))).expanduser().resolve()
 DATABASE_DSN = os.getenv("DATABASE_DSN")
-DATABASE_REVISION = "20261023_normalize_catalogs"
+DATABASE_SCHEMA = os.getenv("DATABASE_SCHEMA", "sister")
+DATABASE_REVISION = "20261026_flat_normalised_fixes"
 
 # ---------------------------------------------------------------------------
 # Engine and session
@@ -127,8 +128,9 @@ async def init_db() -> None:
         # Sister owns a dedicated schema. Qualifying the schema here avoids a
         # false "incomplete schema" error when the connection's search_path is
         # changed by deployment configuration or a pooled connection.
+        schema = DATABASE_SCHEMA
         table_names = await conn.run_sync(
-            lambda sync_conn: set(inspect(sync_conn).get_table_names(schema="sister"))
+            lambda sync_conn: set(inspect(sync_conn).get_table_names(schema=schema))
         )
         required_tables = {
             "ownership_right_catalog",
@@ -142,6 +144,8 @@ async def init_db() -> None:
             "visura_documents",
             "document_metadata",
             "document_structured_extractions",
+            "sister_request_jobs",
+            "sezioni_extraction_jobs",
             "mortgage_inspections",
             "mortgage_inspection_titles",
             "mortgage_inspection_liens",
@@ -156,7 +160,7 @@ async def init_db() -> None:
                 "PostgreSQL schema is incomplete (missing: " + ", ".join(missing) + "). Run `alembic upgrade head`."
             )
         view_names = await conn.run_sync(
-            lambda sync_conn: set(inspect(sync_conn).get_view_names(schema="sister"))
+            lambda sync_conn: set(inspect(sync_conn).get_view_names(schema=schema))
         )
         if "v_sister_visura_cadastral_polygons" not in view_names:
             raise RuntimeError(
@@ -164,14 +168,166 @@ async def init_db() -> None:
             )
         if "alembic_version" not in table_names:
             raise RuntimeError("PostgreSQL migrations are not installed. Run `alembic upgrade head`.")
+        quoted_schema = conn.dialect.identifier_preparer.quote_schema(schema)
         version = (
-            await conn.execute(text("SELECT version_num FROM sister.alembic_version"))
+            await conn.execute(text(f"SELECT version_num FROM {quoted_schema}.alembic_version"))
         ).scalar_one_or_none()
         if version != DATABASE_REVISION:
             raise RuntimeError(
                 f"PostgreSQL schema is at {version!r}; expected {DATABASE_REVISION!r}. Run `alembic upgrade head`."
             )
     logger.info("Database PostgreSQL inizializzato (writable=%s)", is_db_writable())
+
+
+# ---------------------------------------------------------------------------
+# Durable request worker state
+# ---------------------------------------------------------------------------
+
+
+def _decode_request_job(row) -> dict[str, Any] | None:
+    if row is None:
+        return None
+    payload = row[2]
+    if isinstance(payload, str):
+        payload = json.loads(payload or "{}")
+    return {
+        "request_id": row[0],
+        "request_type": row[1],
+        "payload": payload or {},
+        "status": row[3],
+        "error_kind": row[4],
+        "attempts": row[5],
+        "side_effect_started": row[6],
+        "lease_until": row[7],
+        "created_at": row[8],
+        "updated_at": row[9],
+    }
+
+
+async def create_request_job(request_id: str, request_type: str, payload: dict[str, Any]) -> dict:
+    """Persist a queued request and the full payload needed to recover it after restart."""
+    now = datetime.now(timezone.utc)
+    async with _get_session_factory()() as session:
+        await session.execute(
+            text("""INSERT INTO sister_request_jobs
+                (request_id, request_type, payload_json, status, error_kind, attempts,
+                 side_effect_started, lease_until, created_at, updated_at)
+                VALUES (:id, :type, :payload, 'queued', NULL, 0, FALSE, NULL, :now, :now)
+                ON CONFLICT (request_id) DO UPDATE SET
+                    request_type = EXCLUDED.request_type,
+                    payload_json = EXCLUDED.payload_json,
+                    status = 'queued', error_kind = NULL, attempts = 0,
+                    side_effect_started = FALSE, lease_until = NULL,
+                    updated_at = EXCLUDED.updated_at"""),
+            {
+                "id": request_id,
+                "type": request_type,
+                "payload": json.dumps(payload, ensure_ascii=False),
+                "now": now,
+            },
+        )
+        await session.commit()
+    job = await get_request_job(request_id)
+    assert job is not None
+    return job
+
+
+async def get_request_job(request_id: str) -> dict[str, Any] | None:
+    async with _get_session_factory()() as session:
+        row = (
+            await session.execute(
+                text("""SELECT request_id, request_type, payload_json, status, error_kind,
+                             attempts, side_effect_started, lease_until, created_at, updated_at
+                      FROM sister_request_jobs WHERE request_id = :id"""),
+                {"id": request_id},
+            )
+        ).first()
+    return _decode_request_job(row)
+
+
+async def update_request_job(
+    request_id: str,
+    status: str,
+    *,
+    error_kind: str | None = None,
+    side_effect_started: bool | None = None,
+    lease_seconds: int = 180,
+) -> bool:
+    """Update a job state, counting a worker attempt only when it enters running."""
+    now = datetime.now(timezone.utc)
+    async with _get_session_factory()() as session:
+        result = await session.execute(
+            text("""UPDATE sister_request_jobs
+                   SET status = CAST(:status AS VARCHAR),
+                       error_kind = CASE
+                           WHEN CAST(:error_kind AS VARCHAR) IS NOT NULL THEN CAST(:error_kind AS VARCHAR)
+                           WHEN CAST(:status AS VARCHAR) IN ('completed', 'no_match', 'cancelled') THEN NULL
+                           ELSE error_kind
+                       END,
+                       side_effect_started = COALESCE(CAST(:side_effect_started AS BOOLEAN), side_effect_started),
+                       attempts = attempts + CASE WHEN CAST(:status AS VARCHAR) = 'running' AND status <> 'running' THEN 1 ELSE 0 END,
+                       lease_until = CASE
+                           WHEN CAST(:status AS VARCHAR) = 'running' THEN :now + (CAST(:lease_seconds AS INTEGER) * INTERVAL '1 second')
+                           ELSE NULL
+                       END,
+                       updated_at = :now
+                   WHERE request_id = :id"""),
+            {
+                "id": request_id,
+                "status": status,
+                "error_kind": error_kind,
+                "side_effect_started": side_effect_started,
+                "lease_seconds": lease_seconds,
+                "now": now,
+            },
+        )
+        await session.commit()
+    return result.rowcount == 1
+
+
+async def claim_request_job(request_id: str, lease_seconds: int = 180) -> bool:
+    """Atomically claim one queued job and count exactly one attempt."""
+    now = datetime.now(timezone.utc)
+    async with _get_session_factory()() as session:
+        result = await session.execute(
+            text("""UPDATE sister_request_jobs
+                   SET status = 'running', attempts = attempts + 1,
+                       side_effect_started = FALSE,
+                       lease_until = :now + (:lease_seconds * INTERVAL '1 second'),
+                       updated_at = :now
+                   WHERE request_id = :id AND status = 'queued'
+                   RETURNING request_id"""),
+            {"id": request_id, "lease_seconds": lease_seconds, "now": now},
+        )
+        await session.commit()
+    return result.scalar_one_or_none() is not None
+
+
+async def heartbeat_request_job(request_id: str, lease_seconds: int = 180) -> bool:
+    now = datetime.now(timezone.utc)
+    async with _get_session_factory()() as session:
+        result = await session.execute(
+            text("""UPDATE sister_request_jobs
+                   SET lease_until = :now + (:lease_seconds * INTERVAL '1 second'), updated_at = :now
+                   WHERE request_id = :id AND status = 'running' AND lease_until > :now
+                   RETURNING request_id"""),
+            {"id": request_id, "lease_seconds": lease_seconds, "now": now},
+        )
+        await session.commit()
+    return result.scalar_one_or_none() is not None
+
+
+async def list_request_jobs_for_recovery() -> list[dict[str, Any]]:
+    async with _get_session_factory()() as session:
+        rows = (
+            await session.execute(
+                text("""SELECT request_id, request_type, payload_json, status, error_kind,
+                             attempts, side_effect_started, lease_until, created_at, updated_at
+                      FROM sister_request_jobs WHERE status IN ('queued', 'running')
+                      ORDER BY created_at, request_id""")
+            )
+        ).fetchall()
+    return [_decode_request_job(row) for row in rows]
 
 
 # ---------------------------------------------------------------------------
@@ -1635,10 +1791,25 @@ async def find_responses(
         ]
 
 
-def _single_result_status(success: Optional[bool]) -> str:
+_NO_MATCH_ERROR = "nessuna corrispondenza trovata"
+
+
+def _is_no_match_error(error: Optional[str]) -> bool:
+    normalized = " ".join(str(error or "").casefold().split())
+    return _NO_MATCH_ERROR in normalized or normalized == "no_match"
+
+
+def _no_match_sql_condition():
+    normalized_error = func.lower(func.coalesce(VisuraResponse.error, ""))
+    return or_(normalized_error.like(f"%{_NO_MATCH_ERROR}%"), normalized_error == "no_match")
+
+
+def _single_result_status(success: Optional[bool], error: Optional[str] = None) -> str:
     if success is True:
         return "completed"
     if success is False:
+        if _is_no_match_error(error):
+            return "no_match"
         return "failed"
     return "pending"
 
@@ -1657,7 +1828,7 @@ async def find_result_rows(
     """Search single-query responses and workflow runs for the web results page."""
     if source not in {"single", "workflow"}:
         source = None
-    if status not in {"completed", "partial", "failed", "error", "pending", "running"}:
+    if status not in {"completed", "partial", "failed", "error", "pending", "running", "no_match"}:
         status = None
 
     single_rows: list[dict] = []
@@ -1720,7 +1891,7 @@ async def find_result_rows(
                     "subalterno": row["subunit"],
                     "requested_at": row["requested_at"],
                     "success": success,
-                    "status": _single_result_status(success),
+                    "status": _single_result_status(success, row["error"]),
                     "data": None,
                     "error": row["error"],
                     "responded_at": row["responded_at"],
@@ -1849,8 +2020,10 @@ def _build_single_where(
         conditions.append(CadastralLocation.cadastre_type == tipo_catasto)
     if status == "completed":
         conditions.append(VisuraResponse.success.is_(True))
+    elif status == "no_match":
+        conditions.extend((VisuraResponse.success.is_(False), _no_match_sql_condition()))
     elif status in ("failed", "error"):
-        conditions.append(VisuraResponse.success.is_(False))
+        conditions.extend((VisuraResponse.success.is_(False), ~_no_match_sql_condition()))
     elif status == "pending":
         conditions.append(VisuraResponse.request_id.is_(None))
     return conditions
@@ -1868,7 +2041,7 @@ async def count_total_result_rows(
     """Return total count of result rows matching filters, using SQL COUNT(*)."""
     if source not in {"single", "workflow"}:
         source = None
-    if status not in {"completed", "partial", "failed", "error", "pending", "running"}:
+    if status not in {"completed", "partial", "failed", "error", "pending", "running", "no_match"}:
         status = None
 
     if source not in (None, "single"):
@@ -1899,26 +2072,32 @@ async def count_result_rows(
     if source not in {"single", "workflow"}:
         source = None
 
-    s_total = s_ok = s_fail = s_pending = 0
+    s_total = s_ok = s_fail = s_no_match = s_pending = 0
     if source in (None, "single"):
         filters = _build_single_where(provincia, comune, foglio, particella, tipo_catasto)
         stmt = select(
             func.count().label("total"),
             func.count().filter(VisuraResponse.success.is_(True)).label("successful"),
-            func.count().filter(VisuraResponse.success.is_(False)).label("failed"),
+            func.count().filter(
+                VisuraResponse.success.is_(False), ~_no_match_sql_condition()
+            ).label("failed"),
+            func.count().filter(
+                VisuraResponse.success.is_(False), _no_match_sql_condition()
+            ).label("no_match"),
             func.count().filter(VisuraResponse.request_id.is_(None)).label("pending"),
         ).select_from(VisuraRequest).outerjoin(
             VisuraResponse, VisuraRequest.request_id == VisuraResponse.request_id
         ).outerjoin(CadastralLocation, VisuraRequest.location_id == CadastralLocation.id).where(*filters)
         async with _get_session_factory()() as session:
             counts = (await session.execute(stmt)).one()
-        s_total, s_ok, s_fail, s_pending = counts
+        s_total, s_ok, s_fail, s_no_match, s_pending = counts
 
     return {
         "total_requests": s_total,
         "total_responses": s_total - s_pending,
         "successful": s_ok,
         "failed": s_fail,
+        "no_match": s_no_match,
         "partial": 0,
         "pending": s_pending,
     }

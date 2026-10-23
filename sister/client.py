@@ -126,11 +126,14 @@ class VisuraClient:
         json: dict | None = None,
         params: dict | None = None,
         force: bool = False,
+        reuse_cached: bool = False,
     ) -> dict:
-        if force or _REUSE_PREVIOUS.get():
+        if force or reuse_cached or _REUSE_PREVIOUS.get():
             params = dict(params or {})
             if force:
                 params["force"] = "true"
+            if reuse_cached:
+                params["reuse_cached"] = "true"
             if _REUSE_PREVIOUS.get():
                 params["reuse_previous"] = "true"
         async with self._get_client() as client:
@@ -187,6 +190,7 @@ class VisuraClient:
         subalterno: str | None = None,
         sezione: str | None = None,
         form_fields: dict[str, Any] | None = None,
+        request_documents: bool = False,
         force: bool = False,
     ) -> dict:
         """Submit an owners (intestati) lookup (POST /visura/intestati)."""
@@ -203,6 +207,8 @@ class VisuraClient:
             payload["sezione"] = sezione
         if form_fields:
             payload["form_fields"] = form_fields
+        if request_documents:
+            payload["request_documents"] = True
         return await self._request("POST", "/visura/intestati", json=payload, force=force)
 
     async def soggetto(
@@ -293,8 +299,9 @@ class VisuraClient:
         max_historical_properties: int = 5,
         max_paid_steps: int = 3,
         max_total_steps: int = 100,
+        custom_steps: list[str] | None = None,
     ) -> dict:
-        """Execute a multi-step workflow (POST /visura/workflow)."""
+        """Submit a persisted multi-step workflow to the workflow service."""
         payload: dict[str, Any] = {
             "preset": preset,
             "depth": depth,
@@ -327,13 +334,15 @@ class VisuraClient:
             payload["indirizzo"] = indirizzo
         if numero_nota:
             payload["numero_nota"] = numero_nota
+        if custom_steps is not None:
+            payload["custom_steps"] = custom_steps
         if include_history:
             payload["include_history"] = True
         if auto_confirm:
             payload["auto_confirm"] = True
         if include_paid_steps:
             payload["include_paid_steps"] = True
-        return await self._request("POST", "/visura/workflow", json=payload)
+        return await self._request("POST", "/catasto/workflow/run", json=payload)
 
     async def ispezione_ipotecaria(
         self,
@@ -350,6 +359,7 @@ class VisuraClient:
         anno_nota: str | None = None,
         auto_confirm: bool = False,
         force: bool = False,
+        reuse_cached: bool = False,
     ) -> dict:
         """Submit an Ispezione Ipotecaria (POST /visura/ispezione-ipotecaria)."""
         payload: dict[str, Any] = {
@@ -373,7 +383,28 @@ class VisuraClient:
             payload["numero_nota"] = numero_nota
         if anno_nota:
             payload["anno_nota"] = anno_nota
-        return await self._request("POST", "/visura/ispezione-ipotecaria", json=payload, force=force)
+        return await self._request(
+            "POST", "/visura/ispezione-ipotecaria", json=payload, force=force, reuse_cached=reuse_cached
+        )
+
+    async def workflow_status(self, workflow_id: str) -> dict:
+        return await self._request("GET", f"/catasto/workflow/runs/{workflow_id}")
+
+    async def cancel_workflow(self, workflow_id: str) -> dict:
+        return await self._request("POST", f"/catasto/workflow/runs/{workflow_id}/cancel", json={})
+
+    async def resume_workflow(
+        self, workflow_id: str, *, preset: str, custom_steps: list[str] | None = None, **params
+    ) -> dict:
+        payload: dict[str, Any] = {"preset": preset, **params}
+        if custom_steps is not None:
+            payload["custom_steps"] = custom_steps
+        return await self._request(
+            "POST",
+            "/catasto/workflow/run",
+            params={"resume": "true", "workflow_id": workflow_id},
+            json=payload,
+        )
 
     async def generic_search(
         self,

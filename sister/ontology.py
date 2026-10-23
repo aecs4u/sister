@@ -129,6 +129,7 @@ class DatiRicercaImmobile(BaseModel):
     immobili: list[dict[str, Any]] = Field(default_factory=list)
     results: list[dict[str, Any]] = Field(default_factory=list)
     total_results: int = 0
+    error: Optional[str] = None
     intestati: list[dict[str, Any]] = Field(default_factory=list)
     skipped_soppresso: int = 0
     downloaded_pdfs: list[str] = Field(default_factory=list)
@@ -152,6 +153,7 @@ class DatiSoggetto(BaseModel):
     soggetto: str  # codice fiscale
     immobili: list[dict[str, Any]] = Field(default_factory=list)
     total_results: int = 0
+    error: Optional[str] = None
 
 
 class DatiPersonaGiuridica(BaseModel):
@@ -168,6 +170,9 @@ class DatiElencoImmobili(BaseModel):
 
     immobili: list[dict[str, Any]] = Field(default_factory=list)
     total_results: int = 0
+    provincia: Optional[str] = None
+    comune: Optional[str] = None
+    foglio: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------

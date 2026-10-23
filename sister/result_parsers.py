@@ -8,8 +8,10 @@ database) gives the extraction code and the persistence layer one normalised vie
 
 from __future__ import annotations
 
+import math
 import re
 from datetime import date
+from decimal import Decimal, InvalidOperation
 from typing import Any
 
 _SPACES = re.compile(r"\s+")
@@ -536,3 +538,123 @@ def clean_quota(value: Any) -> str:
 def clean_right_description(value: Any) -> str:
     """``"Livellario per"`` → ``Livellario`` (the portal leaves the preposition of the quota in the description)."""
     return re.sub(r"\s+per$", "", squeeze(value), flags=re.IGNORECASE)
+
+
+# ---------------------------------------------------------------------------------------------------------
+# Typed values: the database stores dates, shares and amounts as real types (see docs/database_design.md)
+# ---------------------------------------------------------------------------------------------------------
+
+_IT_DATE = re.compile(r"^\s*(\d{2})/(\d{2})/(\d{4})\s*$")
+_ISO_DATE = re.compile(r"^\s*(\d{4})-(\d{2})-(\d{2})(?!\d)")
+_COMPACT_DATE = re.compile(r"^\s*(\d{4})(\d{2})(\d{2})\s*$")
+_FRACTION = re.compile(r"^\s*(\d{1,9})\s*/\s*(\d{1,9})\s*$")
+_PERCENT = re.compile(r"^\s*(\d{1,3})\s*%\s*$")
+_ITALIAN_AMOUNT = re.compile(r"\d[\d.]*(?:,\d+)?")
+_PLAIN_NUMBER = re.compile(r"\d+(?:[.,]\d+)?")
+_CATEGORY_LONG = re.compile(r"^\s*([A-Z])\s*/\s*(\d+)")
+_CATEGORY_SHORT = re.compile(r"^\s*([A-Z])0*(\d+)\s*$")
+
+
+def parse_it_date(value: Any) -> date | None:
+    """``dd/mm/yyyy``, ``yyyy-mm-dd`` (a time after it is ignored) or ``yyyymmdd`` → date; None for anything else."""
+    text = str(value if value is not None else "")
+    for pattern, order in ((_IT_DATE, (3, 2, 1)), (_ISO_DATE, (1, 2, 3)), (_COMPACT_DATE, (1, 2, 3))):
+        found = pattern.match(text)
+        if found:
+            try:
+                return date(*(int(found.group(i)) for i in order))
+            except ValueError:
+                return None
+    return None
+
+
+def format_it_date(value: date | None) -> str:
+    """Date → ``dd/mm/yyyy`` (empty string for None), the form the portal and the pages use."""
+    return value.strftime("%d/%m/%Y") if value else ""
+
+
+def parse_share(value: Any) -> tuple[int, int] | None:
+    """``1/2`` → (1, 2); ``500/1000`` → (1, 2) (lowest terms); ``50%`` → (1, 2); None when it is not a share."""
+    text = str(value if value is not None else "")
+    found = _FRACTION.match(text)
+    if found:
+        numerator, denominator = int(found.group(1)), int(found.group(2))
+    else:
+        percent = _PERCENT.match(text)
+        if not percent:
+            return None
+        numerator, denominator = int(percent.group(1)), 100
+    if denominator == 0:
+        return None
+    divisor = math.gcd(numerator, denominator) or 1
+    return numerator // divisor, denominator // divisor
+
+
+def format_share(numerator: int | None, denominator: int | None) -> str:
+    """(1, 2) → ``1/2``; empty string when there is no share."""
+    return f"{numerator}/{denominator}" if numerator is not None and denominator else ""
+
+
+def parse_amount_it(value: Any) -> Decimal | None:
+    """Money as the portal prints it: ``R.Euro:1.704,31`` → 1704.31 (point = thousands, comma = decimals)."""
+    found = _ITALIAN_AMOUNT.search(squeeze(value))
+    if not found:
+        return None
+    try:
+        return Decimal(found.group(0).replace(".", "").replace(",", "."))
+    except InvalidOperation:
+        return None
+
+
+def format_amount_it(value: Decimal | float | int | None) -> str | None:
+    """1704.31 → ``1704,31`` (the form ``clean_amount`` used to store); None for None."""
+    if value is None:
+        return None
+    return f"{Decimal(str(value)):f}".replace(".", ",")
+
+
+def parse_consistency(value: Any) -> tuple[Decimal | None, str | None]:
+    """``11 vani`` → (11, 'VANI'); ``254 m2`` → (254, 'MQ'); ``12 mc`` → (12, 'MC'); a bare number has no unit."""
+    text = squeeze(value)
+    found = _PLAIN_NUMBER.search(text)
+    number = Decimal(found.group(0).replace(",", ".")) if found else None
+    lowered = text.lower()
+    if "vani" in lowered:
+        unit = "VANI"
+    elif re.search(r"m\s*2|mq", lowered):
+        unit = "MQ"
+    elif re.search(r"mc|m\s*3", lowered):
+        unit = "MC"
+    else:
+        unit = None
+    return number, unit
+
+
+def format_consistency(value: Decimal | None, unit: str | None) -> str | None:
+    """(11, 'VANI') → ``11 vani``; (254, 'MQ') → ``254 m2``; the inverse of ``parse_consistency`` for display."""
+    if value is None:
+        return None
+    number = f"{value:f}".rstrip("0").rstrip(".") if "." in f"{value:f}" else f"{value:f}"
+    suffix = {"VANI": " vani", "MQ": " m2", "MC": " mc"}.get(unit or "", "")
+    return number.replace(".", ",") + suffix if unit == "VANI" else number + suffix
+
+
+def normalize_category(value: Any) -> tuple[str | None, str | None]:
+    """``A02`` / ``A/2`` / ``A/2: ABITAZIONI DI TIPO CIVILE`` → (``A/2``, description or None)."""
+    text = squeeze(value)
+    found = _CATEGORY_LONG.match(text)
+    if found:
+        description = text.split(":", 1)[1].strip() if ":" in text else ""
+        return f"{found.group(1)}/{int(found.group(2))}", description or None
+    short = _CATEGORY_SHORT.match(text)
+    if short:
+        return f"{short.group(1)}/{int(short.group(2))}", None
+    return None, None
+
+
+def normalize_class(value: Any) -> str | None:
+    """Cadastral class without leading zeros: ``01`` → ``1``; ``U`` stays; empty → None."""
+    text = squeeze(value)
+    if not text:
+        return None
+    return (text.lstrip("0") or None) if text.isdigit() else text

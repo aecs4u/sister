@@ -51,16 +51,150 @@ def _apply_table_migrations(engine) -> None:
     import importlib.util
     from pathlib import Path
 
+    from sqlalchemy import text
     from alembic.migration import MigrationContext
     from alembic.operations import Operations
 
-    path = Path(__file__).resolve().parent.parent / "alembic" / "versions" / "20260925_add_sezioni_extraction_jobs.py"
-    spec = importlib.util.spec_from_file_location("_sezioni_jobs_migration", path)
-    migration = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(migration)
+    migration_dir = Path(__file__).resolve().parent.parent / "alembic" / "versions"
+    migrations = []
+    for name in (
+        "20260925_add_sezioni_extraction_jobs.py",
+    ):
+        path = migration_dir / name
+        spec = importlib.util.spec_from_file_location(f"_{path.stem}_migration", path)
+        migration = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(migration)
+        migrations.append(migration)
     with engine.begin() as conn:
         with Operations.context(MigrationContext.configure(conn)):
-            migration.upgrade()
+            for migration in migrations:
+                migration.upgrade()
+        conn.execute(
+            text(
+                """CREATE TABLE sister_request_jobs (
+                    request_id VARCHAR PRIMARY KEY,
+                    request_type VARCHAR NOT NULL,
+                    payload_json TEXT NOT NULL,
+                    status VARCHAR NOT NULL DEFAULT 'queued',
+                    error_kind VARCHAR,
+                    attempts INTEGER NOT NULL DEFAULT 0,
+                    side_effect_started BOOLEAN NOT NULL DEFAULT FALSE,
+                    lease_until TIMESTAMPTZ,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                )"""
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX ix_sister_request_jobs_status_lease "
+                "ON sister_request_jobs (status, lease_until)"
+            )
+        )
+        conn.execute(
+            text(
+                """CREATE TABLE cadastral_map_geometry_cache (
+                    feature_type TEXT NOT NULL,
+                    lookup_key TEXT NOT NULL,
+                    municipality TEXT NOT NULL DEFAULT '',
+                    province TEXT NOT NULL DEFAULT '',
+                    municipality_code TEXT NOT NULL DEFAULT '',
+                    section TEXT NOT NULL DEFAULT '',
+                    sheet TEXT NOT NULL DEFAULT '',
+                    parcel TEXT NOT NULL DEFAULT '',
+                    source_reference TEXT,
+                    geom TEXT,
+                    checked_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    PRIMARY KEY (feature_type, lookup_key)
+                )"""
+            )
+        )
+        # DB-layer tests do not need PostGIS; provide the map view's schema
+        # sentinel so init_db can validate the rest of the isolated schema.
+        conn.execute(
+            text(
+                """CREATE VIEW v_sister_visura_cadastral_polygons AS
+                   SELECT NULL::BIGINT AS document_id,
+                          NULL::TEXT AS feature_type,
+                          NULL::TEXT AS lookup_key,
+                          NULL::BIGINT AS location_id,
+                          NULL::TEXT AS municipality_code,
+                          NULL::TEXT AS municipality,
+                          NULL::TEXT AS province,
+                          NULL::TEXT AS section,
+                          NULL::TEXT AS sheet,
+                          NULL::TEXT AS parcel,
+                          NULL::TEXT AS source_reference,
+                          NULL::TIMESTAMPTZ AS checked_at,
+                          NULL::TEXT AS geom
+                   WHERE FALSE"""
+            )
+        )
+
+
+def _apply_enum_catalog_triggers(engine) -> None:
+    """Mirror the catalog triggers added by Alembic in this ORM-created test schema.
+
+    The isolated test schema is built with ``SQLModel.metadata.create_all`` rather
+    than by replaying the full production migration chain. The model includes the
+    catalog foreign keys, so these triggers are needed to keep newly observed
+    categorical values valid just as they are in a migrated production schema.
+    """
+    from sqlalchemy import text
+
+    from sister.db_models import ENUM_CATALOG_TABLES
+    from sqlmodel import SQLModel
+
+    groups = {}
+    for table in SQLModel.metadata.tables.values():
+        fields = []
+        for column in table.columns:
+            for foreign_key in column.foreign_keys:
+                target = foreign_key.target_fullname
+                catalog_name = target.split(".", 1)[0]
+                if catalog_name in ENUM_CATALOG_TABLES:
+                    fields.append((column.name, catalog_name))
+        if fields:
+            groups[table.name] = fields
+
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """CREATE FUNCTION ensure_enum_reference_value()
+                   RETURNS trigger
+                   LANGUAGE plpgsql
+                   AS $$
+                   DECLARE
+                       pair_index INTEGER;
+                       source_column TEXT;
+                       enum_table TEXT;
+                       source_value TEXT;
+                   BEGIN
+                       FOR pair_index IN 0..(TG_NARGS / 2 - 1) LOOP
+                           source_column := TG_ARGV[pair_index * 2];
+                           enum_table := TG_ARGV[pair_index * 2 + 1];
+                           source_value := to_jsonb(NEW) ->> source_column;
+                           IF source_value IS NOT NULL THEN
+                               EXECUTE format(
+                                   'INSERT INTO %I (value) VALUES ($1) ON CONFLICT (value) DO NOTHING',
+                                   enum_table
+                               ) USING source_value;
+                           END IF;
+                       END LOOP;
+                       RETURN NEW;
+                   END;
+                   $$"""
+            )
+        )
+        for table_name, fields in groups.items():
+            trigger_name = f"trg_enum_catalog_{table_name}"
+            args = ", ".join(f"'{column}', '{catalog}'" for column, catalog in fields)
+            conn.execute(
+                text(
+                    f"CREATE TRIGGER {trigger_name} BEFORE INSERT OR UPDATE ON {table_name} "
+                    f"FOR EACH ROW EXECUTE FUNCTION ensure_enum_reference_value({args})"
+                )
+            )
 
 
 @pytest.fixture(scope="session")
@@ -102,6 +236,7 @@ def pg_test_schema():
         engine = create_engine(schema_sync_url)
         SQLModel.metadata.create_all(engine)
         _apply_table_migrations(engine)
+        _apply_enum_catalog_triggers(engine)
         with engine.begin() as conn:
             conn.execute(text("CREATE TABLE alembic_version (version_num varchar(64) NOT NULL PRIMARY KEY)"))
             conn.execute(text("INSERT INTO alembic_version VALUES (:v)"), {"v": database.DATABASE_REVISION})
@@ -134,6 +269,7 @@ async def fresh_db(pg_test_schema, monkeypatch):
         engine.dispose()
 
     monkeypatch.setattr(database, "DATABASE_DSN", async_dsn)
+    monkeypatch.setattr(database, "DATABASE_SCHEMA", schema)
     monkeypatch.setattr(database, "_engine", None)
     monkeypatch.setattr(database, "_db_writable", None)
     yield

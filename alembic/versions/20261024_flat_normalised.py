@@ -17,6 +17,7 @@ Design, mapping and application impact: ``docs/database_design.md``.
 from pathlib import Path
 from typing import Sequence, Union
 
+import sqlalchemy as sa
 from alembic import op
 
 revision: str = "20261024_flat_normalised"
@@ -44,7 +45,30 @@ def _run(steps: Sequence[str]) -> None:
 
 def upgrade() -> None:
     _run(UP_STEPS)
+    op.create_table(
+        "sister_request_jobs",
+        sa.Column("request_id", sa.String(), nullable=False),
+        sa.Column("request_type", sa.String(), nullable=False),
+        sa.Column("payload_json", sa.Text(), nullable=False),
+        sa.Column("status", sa.String(), nullable=False, server_default="queued"),
+        sa.Column("error_kind", sa.String(), nullable=True),
+        sa.Column("attempts", sa.Integer(), nullable=False, server_default="0"),
+        sa.Column("side_effect_started", sa.Boolean(), nullable=False, server_default=sa.false()),
+        sa.Column("lease_until", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
+        sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
+        sa.PrimaryKeyConstraint("request_id"),
+        schema="sister",
+    )
+    op.create_index(
+        "ix_sister_request_jobs_status_lease",
+        "sister_request_jobs",
+        ["status", "lease_until"],
+        schema="sister",
+    )
 
 
 def downgrade() -> None:
+    op.drop_index("ix_sister_request_jobs_status_lease", table_name="sister_request_jobs", schema="sister")
+    op.drop_table("sister_request_jobs", schema="sister")
     _run(DOWN_STEPS)

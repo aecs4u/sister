@@ -9,6 +9,7 @@ CREATE FUNCTION pg_temp.it_date(t text) RETURNS date LANGUAGE plpgsql IMMUTABLE 
 BEGIN
     IF t ~ '^\s*\d{2}/\d{2}/\d{4}\s*$' THEN RETURN to_date(btrim(t), 'DD/MM/YYYY'); END IF;
     IF t ~ '^\s*\d{4}-\d{2}-\d{2}' THEN RETURN left(btrim(t), 10)::date; END IF;
+    IF t ~ '^\s*\d{8}\s*$' THEN RETURN to_date(btrim(t), 'YYYYMMDD'); END IF;
     RETURN NULL;
 EXCEPTION WHEN others THEN RETURN NULL;
 END $$;
@@ -305,13 +306,16 @@ ORDER BY rm.id, o.result_id, o.subject_id, orm.new_id, o.id;
 -- ---------------------------------------------------------------------------------------------------------
 INSERT INTO sister_next.document (id, request_id, document_type, file_format, file_name, file_size, created_at, subject_text, requested_at,
                                   cadastral_unit_id, land_registry_office_id, view_subtype, protocol, protocol_year, title, reference_date,
-                                  generated_at, liquidation_protocol, liquidation_year)
+                                  generated_at, registry_view_type, service_type, requester, liquidation_protocol, liquidation_year,
+                                  liquidation_units, historical_total_area_sqm, historical_excluded_area_sqm)
 SELECT d.id, rm.id, nullif(btrim(d.document_type), ''), nullif(btrim(d.file_format), ''), d.filename, d.file_size, d.created_at,
        nullif(btrim(d.subject), ''), pg_temp.it_ts(d.requested_at), um.new_id, o.id,
        nullif(btrim(m.view_subtype), ''), nullif(btrim(m.protocol), ''),
        CASE WHEN btrim(m.year) ~ '^\d{4}$' THEN btrim(m.year)::smallint END, nullif(btrim(m.title), ''),
        pg_temp.it_date(m.reference_date), pg_temp.compact_ts(m.generation_date, m.generation_time),
-       nullif(btrim(m.liquidation_protocol), ''), CASE WHEN btrim(m.liquidation_year) ~ '^\d{4}$' THEN btrim(m.liquidation_year)::smallint END
+       nullif(btrim(m.registry_view_type), ''), nullif(btrim(m.service_type), ''), nullif(btrim(m.requester), ''),
+       nullif(btrim(m.liquidation_protocol), ''), CASE WHEN btrim(m.liquidation_year) ~ '^\d{4}$' THEN btrim(m.liquidation_year)::smallint END,
+       m.liquidation_units, m.historical_total_area, m.historical_excluded_area
 FROM visura_documents d
 LEFT JOIN req_map rm ON rm.request_ref = d.response_id
 LEFT JOIN document_metadata m ON m.id = d.id
@@ -384,10 +388,10 @@ SELECT c.id, c.parcel_id, nullif(upper(btrim(c.quality)), ''), pg_temp.norm_clas
        nullif(replace(btrim(c.dominical_income_lire), '.', ''), '')::numeric, nullif(replace(btrim(c.agricultural_income_lire), '.', ''), '')::numeric
 FROM land_classifications c;
 
-INSERT INTO sister_next.ownership_mutation (id, document_id, property_group_id, land_parcel_id, mutation_index, source_description, status,
-                                            reference_cadastral_unit_id)
+INSERT INTO sister_next.ownership_mutation (id, document_id, property_group_id, land_parcel_id, mutation_index, is_current,
+                                            mutation_date, source_description, status, reference_cadastral_unit_id)
 SELECT m.id, coalesce(m.document_id, g.document_id, lp.document_id), m.property_group_id, m.land_parcel_id,
-       CASE WHEN btrim(m.mutation_index) ~ '^\d+$' THEN btrim(m.mutation_index)::int END,
+       CASE WHEN btrim(m.mutation_index) ~ '^\d+$' THEN btrim(m.mutation_index)::int END, m.mutation_index = 'current', pg_temp.it_date(m.mutation_date),
        nullif(btrim(m.source_description), ''), nullif(btrim(m.ref_property_status), ''), um.new_id
 FROM ownership_mutations m
 LEFT JOIN property_groups g ON g.id = m.property_group_id

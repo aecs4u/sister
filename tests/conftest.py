@@ -149,6 +149,18 @@ async def _db_stats(*_args, **_kwargs):
     return {"total_requests": 0, "total_responses": 0, "successful": 0, "failed": 0, "pending": 0}
 
 
+async def _job_ok(*_args, **_kwargs):
+    return True
+
+
+async def _job_none(*_args, **_kwargs):
+    return None
+
+
+async def _job_list(*_args, **_kwargs):
+    return []
+
+
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
@@ -160,6 +172,7 @@ def main_module(monkeypatch):
     module = importlib.import_module("sister.main")
     services_mod = importlib.import_module("sister.services")
     routes_mod = importlib.import_module("sister.routes")
+    database_mod = importlib.import_module("sister.database")
 
     # Stub DB functions on the modules that actually import them
     monkeypatch.setattr(services_mod, "save_request", _noop, raising=False)
@@ -169,6 +182,13 @@ def main_module(monkeypatch):
     monkeypatch.setattr(services_mod, "load_stored_response", _noop, raising=False)
     monkeypatch.setattr(services_mod, "find_cached_response", _noop, raising=False)
     monkeypatch.setattr(services_mod, "compute_cache_key", lambda *a, **kw: "test_key", raising=False)
+    monkeypatch.setattr(database_mod, "is_db_writable", lambda: True)
+    monkeypatch.setattr(services_mod, "create_request_job", _job_ok, raising=False)
+    monkeypatch.setattr(services_mod, "claim_request_job", _job_ok, raising=False)
+    monkeypatch.setattr(services_mod, "update_request_job", _job_ok, raising=False)
+    monkeypatch.setattr(services_mod, "get_request_job", _job_none, raising=False)
+    monkeypatch.setattr(services_mod, "list_request_jobs_for_recovery", _job_list, raising=False)
+    monkeypatch.setattr(services_mod, "heartbeat_request_job", _job_ok, raising=False)
     monkeypatch.setattr(routes_mod, "find_responses", _empty_list, raising=False)
     monkeypatch.setattr(routes_mod, "count_responses", _db_stats, raising=False)
 

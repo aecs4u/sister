@@ -115,6 +115,34 @@ SELECT pg_temp.expect('archive xml attributes', (SELECT count(*) FROM document_x
 SELECT pg_temp.expect('archive extraction payloads', (SELECT count(*) FROM document_structured_extractions), (SELECT count(*) FROM sister_archive.document_extraction_payload));
 SELECT pg_temp.expect('archive activity payloads', (SELECT count(*) FROM activity_log), (SELECT count(*) FROM sister_archive.activity_log_payload));
 
+-- ---- text -> integer casts lose nothing: every non-blank source is numeric, or is a known marker ------------------
+SELECT pg_temp.expect('mutation_index is numeric or the "current" marker', 0,
+       (SELECT count(*) FROM ownership_mutations WHERE mutation_index IS NOT NULL AND mutation_index !~ '^\d+$' AND mutation_index <> 'current'));
+SELECT pg_temp.expect('mutation is_current', (SELECT count(*) FROM ownership_mutations WHERE mutation_index = 'current'),
+       (SELECT count(*) FROM sister_next.ownership_mutation WHERE is_current));
+SELECT pg_temp.expect('mutation_index numeric', (SELECT count(*) FROM ownership_mutations WHERE mutation_index ~ '^\d+$'),
+       (SELECT count(*) FROM sister_next.ownership_mutation WHERE mutation_index IS NOT NULL));
+SELECT pg_temp.expect('group_index numeric', 0, (SELECT count(*) FROM property_groups WHERE nullif(btrim(group_index), '') IS NOT NULL AND btrim(group_index) !~ '^\d+$'));
+SELECT pg_temp.expect('unit_index numeric', 0, (SELECT count(*) FROM building_units WHERE nullif(btrim(unit_index), '') IS NOT NULL AND btrim(unit_index) !~ '^\d+$'));
+SELECT pg_temp.expect('owner_index numeric', 0, (SELECT count(*) FROM property_owners WHERE nullif(btrim(owner_index), '') IS NOT NULL AND btrim(owner_index) !~ '^\d+$'));
+SELECT pg_temp.expect('document protocol_year/liquidation_year numeric', 0,
+       (SELECT count(*) FROM document_metadata WHERE (nullif(btrim(year), '') IS NOT NULL AND btrim(year) !~ '^\d{4}$')
+                                                   OR (nullif(btrim(liquidation_year), '') IS NOT NULL AND btrim(liquidation_year) !~ '^\d{4}$')));
+
+-- ---- Belfiore codes carried by the old rows are still reachable through the unit's comune --------------------------
+SELECT pg_temp.expect('municipality_code preserved on ' || s, 0, (
+    SELECT count(*) FROM (
+        SELECT 'building_identifiers' AS s, bi.location_id AS loc, btrim(bi.municipality_code) AS code FROM building_identifiers bi
+        UNION ALL SELECT 'land_parcels', p.location_id, btrim(p.municipality_code) FROM land_parcels p
+        UNION ALL SELECT 'document_metadata', m.location_id, btrim(m.municipality_code) FROM document_metadata m
+        UNION ALL SELECT 'ownership_mutations', m.reference_location_id, btrim(m.ref_municipality_code) FROM ownership_mutations m
+    ) x
+    LEFT JOIN unit_map um ON um.old_id = x.loc
+    LEFT JOIN sister_next.cadastral_unit u ON u.id = um.new_id
+    LEFT JOIN sister_next.comune c ON c.id = u.comune_id
+    WHERE nullif(x.code, '') IS NOT NULL AND x.s = s AND c.cadastral_code IS DISTINCT FROM x.code))
+FROM (VALUES ('building_identifiers'), ('land_parcels'), ('document_metadata'), ('ownership_mutations')) AS t (s);
+
 -- ---- structural invariants ------------------------------------------------------------------------------------
 SELECT pg_temp.expect('mutations with no document', 0, (SELECT count(*) FROM sister_next.ownership_mutation WHERE document_id IS NULL));
 SELECT pg_temp.expect('documents with more than one current building state', 0,

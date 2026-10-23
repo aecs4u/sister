@@ -9,14 +9,24 @@ END $$;
 
 CREATE SCHEMA sister_next;
 DO $$
-DECLARE r record;
+DECLARE
+    r record;
+    -- the relations the upgrade created in `sister`; anything else there is not ours to move
+    created text[] := ARRAY[
+        'activity_action', 'activity_log', 'activity_log_attribute', 'building_unit', 'building_unit_related_parcel', 'cadastral_category',
+        'cadastral_unit', 'comune', 'document', 'document_address', 'document_extraction', 'document_subject', 'document_type', 'land_parcel',
+        'land_parcel_classification', 'land_quality', 'land_registry_office', 'mortgage_inspection', 'mortgage_inspection_party',
+        'mortgage_inspection_property', 'mortgage_lien_type', 'mortgage_note_type', 'mortgage_party_quality', 'mortgage_title_type',
+        'mutation_owner', 'ownership_mutation', 'ownership_right', 'page_visit', 'page_visit_error', 'page_visit_form_element',
+        'parcel_geometry_cache', 'property', 'property_group', 'request', 'request_result', 'request_type', 'result_owner', 'right_kind',
+        'subject', 'v_cadastral_unit', 'v_cadastral_unit_index', 'v_document_cadastral_unit', 'v_property', 'v_property_owner', 'v_result_owner',
+        'v_visura_cadastral_polygon'
+    ];
 BEGIN
     FOR r IN
         SELECT c.relname, c.relkind
         FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
-        WHERE n.nspname = 'sister' AND c.relkind IN ('r', 'p', 'v', 'm')
-          AND c.relname NOT IN ('alembic_version', 'spatial_ref_sys')
-          AND NOT EXISTS (SELECT 1 FROM pg_depend d WHERE d.classid = 'pg_class'::regclass AND d.objid = c.oid AND d.deptype = 'e')
+        WHERE n.nspname = 'sister' AND c.relkind IN ('r', 'p', 'v', 'm') AND c.relname = ANY (created)
         ORDER BY c.relkind DESC, c.relname
     LOOP
         EXECUTE format('ALTER %s sister.%I SET SCHEMA sister_next',
