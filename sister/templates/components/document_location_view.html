@@ -11,7 +11,14 @@
 {% else %}{% set cls = 'chip-other' %}{% set ic = 'fa-file' %}
 {% endif %}
 {% set label = (d.oggetto or d.filename or ('Doc ' ~ d.id)) | truncate(40, True, '…') %}
-<a href="/documents/{{ d.id }}" class="tree-doc-chip {{ cls }}" title="{{ d.oggetto or d.filename or '' }}">
+{% if d.document_type == 'visura_soggetto' and d.vat %}
+{% set document_url = '/companies/' ~ d.vat %}
+{% elif d.document_type == 'visura_soggetto' and d.cf %}
+{% set document_url = '/persons/' ~ d.cf %}
+{% else %}
+{% set document_url = '/documents/' ~ d.id %}
+{% endif %}
+<a href="{{ document_url }}" class="tree-doc-chip {{ cls }}" title="{{ d.oggetto or d.filename or '' }}">
     <i class="fas {{ ic }} fa-xs"></i>{{ label }}{% if d.n_files and d.n_files > 1 %} <span class="opacity-60 ms-1">+{{ d.n_files - 1 }}</span>{% endif %}
 </a>
 {% endmacro %}

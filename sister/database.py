@@ -1333,6 +1333,35 @@ async def get_document_by_id(doc_id: int) -> dict | None:
     }
 
 
+async def get_subject_document_ids(fiscal_code: str) -> set[int]:
+    """Return document IDs linked to a queried subject's canonical fiscal code."""
+    from .visura_xml_models import DocumentSubject
+
+    session_factory = _get_session_factory()
+    async with session_factory() as session:
+        result = await session.execute(
+            select(DocumentSubject.id)
+            .join(CadastralSubject, DocumentSubject.subject_id == CadastralSubject.id)
+            .where(CadastralSubject.fiscal_code == fiscal_code.upper())
+        )
+        return {int(document_id) for document_id in result.scalars().all() if document_id is not None}
+
+
+async def get_subject_fiscal_code_for_document(doc_id: int) -> str | None:
+    """Return the canonical queried-subject fiscal code for one document, if indexed."""
+    from .visura_xml_models import DocumentSubject
+
+    session_factory = _get_session_factory()
+    async with session_factory() as session:
+        result = await session.execute(
+            select(CadastralSubject.fiscal_code)
+            .join(DocumentSubject, DocumentSubject.subject_id == CadastralSubject.id)
+            .where(DocumentSubject.id == doc_id)
+        )
+        fiscal_code = result.scalar_one_or_none()
+    return str(fiscal_code).strip().upper() if fiscal_code else None
+
+
 async def get_cadastral_sibling_visuras(
     *,
     province: str,

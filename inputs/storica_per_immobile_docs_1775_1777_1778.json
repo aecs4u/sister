@@ -1,0 +1,553 @@
+{
+  "$schema": "../docs/batch_submission.schema.json",
+  "version": 1,
+  "name": "Visura storica per immobile - documents 1775, 1777, 1778",
+  "description": "Storica Analitica Visura per Immobile for every unit listed in the subject visure vs_att_CMMLNZ77A17F839A_NA, vs_att_GRSNTN62D08G273W_PA and vs_att_00110110822_PA (2026-10-22) that has no stored historical visura with ownership history. Each request needs a human CAPTCHA in the SISTER tab; run with --resume after an interruption.",
+  "defaults": {
+    "command": "visura-storica"
+  },
+  "options": {
+    "wait": true,
+    "reuse": "reuse",
+    "max_in_flight": 1,
+    "retries": 1,
+    "retry_delay": 5,
+    "poll_timeout": 900,
+    "on_error": "continue",
+    "output_dir": "outputs/storica_per_immobile_1775_1777_1778"
+  },
+  "queries": [
+    {
+      "id": "f-na-capri-fg4-p522-sub18",
+      "command": "visura-storica",
+      "params": {
+        "provincia": "Napoli",
+        "comune": "CAPRI",
+        "foglio": "4",
+        "particella": "522",
+        "tipo_catasto": "F",
+        "subalterno": "18"
+      },
+      "metadata": {
+        "source_files": "documents/1775 (CMMLNZ77A17F839A)",
+        "scope_note": "Storica Analitica per immobile, to trace ownership back beyond the current holders."
+      }
+    },
+    {
+      "id": "f-na-napoli-ssfe-fg4-p51-sub69",
+      "command": "visura-storica",
+      "params": {
+        "provincia": "Napoli",
+        "comune": "NAPOLI",
+        "foglio": "4",
+        "particella": "51",
+        "tipo_catasto": "F",
+        "subalterno": "69",
+        "sezione": "SFE"
+      },
+      "metadata": {
+        "source_files": "documents/1775 (CMMLNZ77A17F839A)",
+        "scope_note": "Storica Analitica per immobile, to trace ownership back beyond the current holders."
+      }
+    },
+    {
+      "id": "f-na-napoli-ssfe-fg4-p51-sub47",
+      "command": "visura-storica",
+      "params": {
+        "provincia": "Napoli",
+        "comune": "NAPOLI",
+        "foglio": "4",
+        "particella": "51",
+        "tipo_catasto": "F",
+        "subalterno": "47",
+        "sezione": "SFE"
+      },
+      "metadata": {
+        "source_files": "documents/1775 (CMMLNZ77A17F839A)",
+        "scope_note": "Storica Analitica per immobile, to trace ownership back beyond the current holders."
+      }
+    },
+    {
+      "id": "f-na-napoli-ssfe-fg4-p51-sub68",
+      "command": "visura-storica",
+      "params": {
+        "provincia": "Napoli",
+        "comune": "NAPOLI",
+        "foglio": "4",
+        "particella": "51",
+        "tipo_catasto": "F",
+        "subalterno": "68",
+        "sezione": "SFE"
+      },
+      "metadata": {
+        "source_files": "documents/1775 (CMMLNZ77A17F839A)",
+        "scope_note": "Storica Analitica per immobile, to trace ownership back beyond the current holders."
+      }
+    },
+    {
+      "id": "f-na-napoli-ssfe-fg4-p51-sub201",
+      "command": "visura-storica",
+      "params": {
+        "provincia": "Napoli",
+        "comune": "NAPOLI",
+        "foglio": "4",
+        "particella": "51",
+        "tipo_catasto": "F",
+        "subalterno": "201",
+        "sezione": "SFE"
+      },
+      "metadata": {
+        "source_files": "documents/1775 (CMMLNZ77A17F839A)",
+        "scope_note": "Storica Analitica per immobile, to trace ownership back beyond the current holders."
+      }
+    },
+    {
+      "id": "f-pa-palermo-fg81-p207-sub2",
+      "command": "visura-storica",
+      "params": {
+        "provincia": "Palermo",
+        "comune": "PALERMO",
+        "foglio": "81",
+        "particella": "207",
+        "tipo_catasto": "F",
+        "subalterno": "2"
+      },
+      "metadata": {
+        "source_files": "documents/1777 (GRSNTN62D08G273W)",
+        "scope_note": "Storica Analitica per immobile, to trace ownership back beyond the current holders."
+      }
+    },
+    {
+      "id": "f-pa-palermo-fg44-p1110-sub21",
+      "command": "visura-storica",
+      "params": {
+        "provincia": "Palermo",
+        "comune": "PALERMO",
+        "foglio": "44",
+        "particella": "1110",
+        "tipo_catasto": "F",
+        "subalterno": "21"
+      },
+      "metadata": {
+        "source_files": "documents/1777 (GRSNTN62D08G273W)",
+        "scope_note": "Storica Analitica per immobile, to trace ownership back beyond the current holders."
+      }
+    },
+    {
+      "id": "f-pa-palermo-fg80-p738-sub19",
+      "command": "visura-storica",
+      "params": {
+        "provincia": "Palermo",
+        "comune": "PALERMO",
+        "foglio": "80",
+        "particella": "738",
+        "tipo_catasto": "F",
+        "subalterno": "19"
+      },
+      "metadata": {
+        "source_files": "documents/1777 (GRSNTN62D08G273W)",
+        "scope_note": "Storica Analitica per immobile, to trace ownership back beyond the current holders."
+      }
+    },
+    {
+      "id": "f-pa-palermo-fg99-p60",
+      "command": "visura-storica",
+      "params": {
+        "provincia": "Palermo",
+        "comune": "PALERMO",
+        "foglio": "99",
+        "particella": "60",
+        "tipo_catasto": "F"
+      },
+      "metadata": {
+        "source_files": "documents/1777 (GRSNTN62D08G273W)",
+        "scope_note": "Storica Analitica per immobile, to trace ownership back beyond the current holders."
+      }
+    },
+    {
+      "id": "f-pa-palermo-fg81-p206-sub2",
+      "command": "visura-storica",
+      "params": {
+        "provincia": "Palermo",
+        "comune": "PALERMO",
+        "foglio": "81",
+        "particella": "206",
+        "tipo_catasto": "F",
+        "subalterno": "2"
+      },
+      "metadata": {
+        "source_files": "documents/1777 (GRSNTN62D08G273W)",
+        "scope_note": "Storica Analitica per immobile, to trace ownership back beyond the current holders."
+      }
+    },
+    {
+      "id": "f-pa-palermo-fg81-p206-sub3",
+      "command": "visura-storica",
+      "params": {
+        "provincia": "Palermo",
+        "comune": "PALERMO",
+        "foglio": "81",
+        "particella": "206",
+        "tipo_catasto": "F",
+        "subalterno": "3"
+      },
+      "metadata": {
+        "source_files": "documents/1777 (GRSNTN62D08G273W)",
+        "scope_note": "Storica Analitica per immobile, to trace ownership back beyond the current holders."
+      }
+    },
+    {
+      "id": "f-pa-palermo-fg71-p1789",
+      "command": "visura-storica",
+      "params": {
+        "provincia": "Palermo",
+        "comune": "PALERMO",
+        "foglio": "71",
+        "particella": "1789",
+        "tipo_catasto": "F"
+      },
+      "metadata": {
+        "source_files": "documents/1777 (GRSNTN62D08G273W)",
+        "scope_note": "Storica Analitica per immobile, to trace ownership back beyond the current holders."
+      }
+    },
+    {
+      "id": "f-pa-palermo-fg81-p210-sub1",
+      "command": "visura-storica",
+      "params": {
+        "provincia": "Palermo",
+        "comune": "PALERMO",
+        "foglio": "81",
+        "particella": "210",
+        "tipo_catasto": "F",
+        "subalterno": "1"
+      },
+      "metadata": {
+        "source_files": "documents/1777 (GRSNTN62D08G273W)",
+        "scope_note": "Storica Analitica per immobile, to trace ownership back beyond the current holders."
+      }
+    },
+    {
+      "id": "f-pa-palermo-fg81-p210-sub2",
+      "command": "visura-storica",
+      "params": {
+        "provincia": "Palermo",
+        "comune": "PALERMO",
+        "foglio": "81",
+        "particella": "210",
+        "tipo_catasto": "F",
+        "subalterno": "2"
+      },
+      "metadata": {
+        "source_files": "documents/1777 (GRSNTN62D08G273W)",
+        "scope_note": "Storica Analitica per immobile, to trace ownership back beyond the current holders."
+      }
+    },
+    {
+      "id": "f-pa-palermo-fg81-p1862-sub1",
+      "command": "visura-storica",
+      "params": {
+        "provincia": "Palermo",
+        "comune": "PALERMO",
+        "foglio": "81",
+        "particella": "1862",
+        "tipo_catasto": "F",
+        "subalterno": "1"
+      },
+      "metadata": {
+        "source_files": "documents/1777 (GRSNTN62D08G273W)",
+        "scope_note": "Storica Analitica per immobile, to trace ownership back beyond the current holders."
+      }
+    },
+    {
+      "id": "f-pa-palermo-fg81-p1862-sub2",
+      "command": "visura-storica",
+      "params": {
+        "provincia": "Palermo",
+        "comune": "PALERMO",
+        "foglio": "81",
+        "particella": "1862",
+        "tipo_catasto": "F",
+        "subalterno": "2"
+      },
+      "metadata": {
+        "source_files": "documents/1777 (GRSNTN62D08G273W)",
+        "scope_note": "Storica Analitica per immobile, to trace ownership back beyond the current holders."
+      }
+    },
+    {
+      "id": "f-pa-petralia-sottana-fg5-p65",
+      "command": "visura-storica",
+      "params": {
+        "provincia": "Palermo",
+        "comune": "PETRALIA SOTTANA",
+        "foglio": "5",
+        "particella": "65",
+        "tipo_catasto": "F"
+      },
+      "metadata": {
+        "source_files": "documents/1777 (GRSNTN62D08G273W)",
+        "scope_note": "Storica Analitica per immobile, to trace ownership back beyond the current holders."
+      }
+    },
+    {
+      "id": "f-pa-petralia-sottana-fg5-p495",
+      "command": "visura-storica",
+      "params": {
+        "provincia": "Palermo",
+        "comune": "PETRALIA SOTTANA",
+        "foglio": "5",
+        "particella": "495",
+        "tipo_catasto": "F"
+      },
+      "metadata": {
+        "source_files": "documents/1777 (GRSNTN62D08G273W)",
+        "scope_note": "Storica Analitica per immobile, to trace ownership back beyond the current holders."
+      }
+    },
+    {
+      "id": "t-pa-palazzo-adriano-fg5-p154",
+      "command": "visura-storica",
+      "params": {
+        "provincia": "Palermo",
+        "comune": "PALAZZO ADRIANO",
+        "foglio": "5",
+        "particella": "154",
+        "tipo_catasto": "T"
+      },
+      "metadata": {
+        "source_files": "documents/1777 (GRSNTN62D08G273W)",
+        "scope_note": "Storica Analitica per immobile, to trace ownership back beyond the current holders."
+      }
+    },
+    {
+      "id": "t-pa-palazzo-adriano-fg5-p369",
+      "command": "visura-storica",
+      "params": {
+        "provincia": "Palermo",
+        "comune": "PALAZZO ADRIANO",
+        "foglio": "5",
+        "particella": "369",
+        "tipo_catasto": "T"
+      },
+      "metadata": {
+        "source_files": "documents/1777 (GRSNTN62D08G273W)",
+        "scope_note": "Storica Analitica per immobile, to trace ownership back beyond the current holders."
+      }
+    },
+    {
+      "id": "t-pa-palermo-fg71-p1790",
+      "command": "visura-storica",
+      "params": {
+        "provincia": "Palermo",
+        "comune": "PALERMO",
+        "foglio": "71",
+        "particella": "1790",
+        "tipo_catasto": "T"
+      },
+      "metadata": {
+        "source_files": "documents/1777 (GRSNTN62D08G273W)",
+        "scope_note": "Storica Analitica per immobile, to trace ownership back beyond the current holders."
+      }
+    },
+    {
+      "id": "t-pa-palermo-fg81-p214",
+      "command": "visura-storica",
+      "params": {
+        "provincia": "Palermo",
+        "comune": "PALERMO",
+        "foglio": "81",
+        "particella": "214",
+        "tipo_catasto": "T"
+      },
+      "metadata": {
+        "source_files": "documents/1777 (GRSNTN62D08G273W)",
+        "scope_note": "Storica Analitica per immobile, to trace ownership back beyond the current holders."
+      }
+    },
+    {
+      "id": "t-pa-palermo-fg81-p276",
+      "command": "visura-storica",
+      "params": {
+        "provincia": "Palermo",
+        "comune": "PALERMO",
+        "foglio": "81",
+        "particella": "276",
+        "tipo_catasto": "T"
+      },
+      "metadata": {
+        "source_files": "documents/1777 (GRSNTN62D08G273W)",
+        "scope_note": "Storica Analitica per immobile, to trace ownership back beyond the current holders."
+      }
+    },
+    {
+      "id": "t-pa-palermo-fg81-p483",
+      "command": "visura-storica",
+      "params": {
+        "provincia": "Palermo",
+        "comune": "PALERMO",
+        "foglio": "81",
+        "particella": "483",
+        "tipo_catasto": "T"
+      },
+      "metadata": {
+        "source_files": "documents/1777 (GRSNTN62D08G273W)",
+        "scope_note": "Storica Analitica per immobile, to trace ownership back beyond the current holders."
+      }
+    },
+    {
+      "id": "t-pa-palermo-fg71-p150",
+      "command": "visura-storica",
+      "params": {
+        "provincia": "Palermo",
+        "comune": "PALERMO",
+        "foglio": "71",
+        "particella": "150",
+        "tipo_catasto": "T"
+      },
+      "metadata": {
+        "source_files": "documents/1777 (GRSNTN62D08G273W)",
+        "scope_note": "Storica Analitica per immobile, to trace ownership back beyond the current holders."
+      }
+    },
+    {
+      "id": "t-pa-palermo-fg71-p205",
+      "command": "visura-storica",
+      "params": {
+        "provincia": "Palermo",
+        "comune": "PALERMO",
+        "foglio": "71",
+        "particella": "205",
+        "tipo_catasto": "T"
+      },
+      "metadata": {
+        "source_files": "documents/1777 (GRSNTN62D08G273W)",
+        "scope_note": "Storica Analitica per immobile, to trace ownership back beyond the current holders."
+      }
+    },
+    {
+      "id": "t-pa-palermo-fg71-p214",
+      "command": "visura-storica",
+      "params": {
+        "provincia": "Palermo",
+        "comune": "PALERMO",
+        "foglio": "71",
+        "particella": "214",
+        "tipo_catasto": "T"
+      },
+      "metadata": {
+        "source_files": "documents/1777 (GRSNTN62D08G273W)",
+        "scope_note": "Storica Analitica per immobile, to trace ownership back beyond the current holders."
+      }
+    },
+    {
+      "id": "t-pa-palermo-fg99-p47",
+      "command": "visura-storica",
+      "params": {
+        "provincia": "Palermo",
+        "comune": "PALERMO",
+        "foglio": "99",
+        "particella": "47",
+        "tipo_catasto": "T"
+      },
+      "metadata": {
+        "source_files": "documents/1777 (GRSNTN62D08G273W)",
+        "scope_note": "Storica Analitica per immobile, to trace ownership back beyond the current holders."
+      }
+    },
+    {
+      "id": "t-pa-palermo-fg99-p48",
+      "command": "visura-storica",
+      "params": {
+        "provincia": "Palermo",
+        "comune": "PALERMO",
+        "foglio": "99",
+        "particella": "48",
+        "tipo_catasto": "T"
+      },
+      "metadata": {
+        "source_files": "documents/1777 (GRSNTN62D08G273W)",
+        "scope_note": "Storica Analitica per immobile, to trace ownership back beyond the current holders."
+      }
+    },
+    {
+      "id": "t-pa-palermo-fg81-p496",
+      "command": "visura-storica",
+      "params": {
+        "provincia": "Palermo",
+        "comune": "PALERMO",
+        "foglio": "81",
+        "particella": "496",
+        "tipo_catasto": "T"
+      },
+      "metadata": {
+        "source_files": "documents/1777 (GRSNTN62D08G273W)",
+        "scope_note": "Storica Analitica per immobile, to trace ownership back beyond the current holders."
+      }
+    },
+    {
+      "id": "f-pa-palermo-fg5-p1-sub6",
+      "command": "visura-storica",
+      "params": {
+        "provincia": "Palermo",
+        "comune": "PALERMO",
+        "foglio": "5",
+        "particella": "1",
+        "tipo_catasto": "F",
+        "subalterno": "6"
+      },
+      "metadata": {
+        "source_files": "documents/1778 (00110110822)",
+        "scope_note": "Storica Analitica per immobile, to trace ownership back beyond the current holders."
+      }
+    },
+    {
+      "id": "f-pa-palermo-fg5-p1-sub5",
+      "command": "visura-storica",
+      "params": {
+        "provincia": "Palermo",
+        "comune": "PALERMO",
+        "foglio": "5",
+        "particella": "1",
+        "tipo_catasto": "F",
+        "subalterno": "5"
+      },
+      "metadata": {
+        "source_files": "documents/1778 (00110110822)",
+        "scope_note": "Storica Analitica per immobile, to trace ownership back beyond the current holders."
+      }
+    },
+    {
+      "id": "f-pa-palermo-fg5-p1-sub2",
+      "command": "visura-storica",
+      "params": {
+        "provincia": "Palermo",
+        "comune": "PALERMO",
+        "foglio": "5",
+        "particella": "1",
+        "tipo_catasto": "F",
+        "subalterno": "2"
+      },
+      "metadata": {
+        "source_files": "documents/1778 (00110110822)",
+        "scope_note": "Storica Analitica per immobile, to trace ownership back beyond the current holders."
+      }
+    },
+    {
+      "id": "f-pa-palermo-fg5-p1-sub4",
+      "command": "visura-storica",
+      "params": {
+        "provincia": "Palermo",
+        "comune": "PALERMO",
+        "foglio": "5",
+        "particella": "1",
+        "tipo_catasto": "F",
+        "subalterno": "4"
+      },
+      "metadata": {
+        "source_files": "documents/1778 (00110110822)",
+        "scope_note": "Storica Analitica per immobile, to trace ownership back beyond the current holders."
+      }
+    }
+  ]
+}

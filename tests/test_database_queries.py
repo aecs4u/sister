@@ -158,6 +158,10 @@ def test_parse_owners_splits_subject_and_right():
         "gender": "M",
         "birth_municipality_code": "H501",
         "subject_type": "person",
+        # the table row has no birth data: the codice fiscale (28/05/1985, two-word name) completes the subject
+        "date_of_birth": "28/05/1985",
+        "last_name": "ROSSI",
+        "first_name": "MARIO",
     }
     assert right == {"right_type": "Proprietà", "ownership_share": "1/1"}
 

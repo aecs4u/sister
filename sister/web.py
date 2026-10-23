@@ -37,6 +37,8 @@ from .database import (
     get_documents_for_response,
     get_indexed_file_metadata,
     get_result_record,
+    get_subject_document_ids,
+    get_subject_fiscal_code_for_document,
     record_activity,
 )
 from .form_config import get_available_form_groups, get_single_step_groups, get_workflow_groups
@@ -153,6 +155,9 @@ def _extract_cf(d: dict) -> str | None:
     convention) takes priority; intestati_json is a last-resort fallback for
     docs whose name contains no CF (e.g. "VISURA LORENZIN BARBARA").
     """
+    queried_code = str(d.get("queried_fiscal_code") or "").strip().upper()
+    if _CF_RE.fullmatch(queried_code):
+        return queried_code
     for text in (d.get("oggetto") or "", d.get("filename") or ""):
         m = _CF_RE.search(text.upper())
         if m:
@@ -167,6 +172,25 @@ def _extract_cf(d: dict) -> str | None:
                 return ints[0]["CF"]
         except Exception:
             pass
+    return None
+
+
+def _document_subject_fiscal_code(doc: dict) -> str | None:
+    """Return the queried subject's code from structured XML, with filename fallback."""
+    content = doc.get("xml_content")
+    if content:
+        try:
+            from .xml_ingest import parse_visura_xml
+
+            parsed = parse_visura_xml(content)
+            subject = parsed.get("subject") if parsed else None
+            fiscal_code = str((subject or {}).get("CodiceFiscale") or "").strip().upper()
+            if fiscal_code:
+                return fiscal_code
+        except Exception as exc:  # The filename still provides a useful fallback for older imports.
+            logger.debug("Could not read queried fiscal code from document XML: %s", type(exc).__name__)
+    if (doc.get("document_type") or "") == "visura_soggetto":
+        return _extract_cf(doc)
     return None
 
 
@@ -312,6 +336,7 @@ def _link_related_visura_docs(docs: list[dict]) -> None:
                 property_links.setdefault(property_id, {})[subject_id] = {
                     "id": subject_id,
                     "label": subject_doc.get("oggetto") or subject_doc.get("filename") or f"Doc {subject_id}",
+                    "fiscal_code": cf,
                 }
 
     for doc in docs:
@@ -2806,7 +2831,16 @@ def _file_icon(ext: str, is_dir: bool) -> tuple[str, str]:
     }.get(ext, ("fa-file", "text-muted"))
 
 
-async def _render_doc_from_db(doc: dict, request, theme, user, force_template: str | None = None):
+async def _render_doc_from_db(
+    doc: dict,
+    request,
+    theme,
+    user,
+    force_template: str | None = None,
+    subject_fiscal_code: str | None = None,
+    subject_route_prefix: str | None = None,
+    subject_documents: list[dict] | None = None,
+):
     """Finalize a doc dict fetched from the DB and render the matching visura template.
 
     By default the template is chosen from the XML root element. Pass
@@ -2920,6 +2954,10 @@ async def _render_doc_from_db(doc: dict, request, theme, user, force_template: s
         land_registry_map=doc.get("land_registry_map"),
         land_registry_kpis=land_registry_kpis,
         land_registry_history=land_registry_history,
+        subject_fiscal_code=subject_fiscal_code,
+        subject_route_prefix=subject_route_prefix,
+        subject_documents=subject_documents,
+        subject_document_id=doc.get("id") if subject_fiscal_code else None,
         **_land_map_layout(land_map_kind),
     )
 
@@ -5200,6 +5238,16 @@ async def web_documents(
         doc = await get_document_by_id(int(path))
         if doc is None:
             return theme.render("result_detail.html", request, user=user, result=None, request_id=path, not_found=True)
+        if not template and (doc.get("document_type") or "") == "visura_soggetto":
+            fiscal_code = _document_subject_fiscal_code(doc)
+            if not fiscal_code:
+                try:
+                    fiscal_code = await get_subject_fiscal_code_for_document(int(path))
+                except Exception as exc:  # noqa: BLE001 - older databases may not have populated the subject index.
+                    logger.debug("Subject identity unavailable for document %s: %s", path, type(exc).__name__)
+            if fiscal_code:
+                route = "/companies" if len(fiscal_code) == 11 and fiscal_code.isdigit() else "/persons"
+                return RedirectResponse(url=f"{route}/{fiscal_code}", status_code=307)
         # Planimetria P7M: render interactive GeoJSON map viewer when possible.
         if (
             not template
@@ -5422,6 +5470,138 @@ async def web_documents(
         n_dirs=n_dirs,
         fs_n_files=n_files,
         total_size=_human_size(total_size) if total_size else None,
+    )
+
+
+async def _web_subject_profile(
+    request: Request,
+    fiscal_code: str,
+    document: int | None = None,
+    *,
+    user,
+    route_prefix: str,
+    code_pattern: str,
+):
+    """Open a canonical subject route and allow switching between its subject visure."""
+    from fastapi import HTTPException
+
+    normalized_code = fiscal_code.strip().upper()
+    if not re.fullmatch(code_pattern, normalized_code):
+        raise HTTPException(status_code=404, detail="Soggetto non trovato")
+    if normalized_code != fiscal_code:
+        query = f"?document={document}" if document is not None else ""
+        return RedirectResponse(url=f"{route_prefix}/{normalized_code}{query}", status_code=308)
+
+    # The subject relation provides a canonical match for imported XML. Filenames
+    # remain a fallback for older/history documents that predate typed ingestion.
+    try:
+        subject_document_ids = await get_subject_document_ids(normalized_code)
+    except Exception as exc:  # noqa: BLE001 - retain filename based navigation if this optional index is unavailable.
+        logger.debug("Subject document index unavailable: %s", type(exc).__name__)
+        subject_document_ids = set()
+
+    indexed_files = await get_all_documents(limit=10000)
+    candidates = [
+        dict(item)
+        for item in indexed_files
+        if (item.get("document_type") or "") == "visura_soggetto"
+        and (item.get("id") in subject_document_ids or _extract_cf(item) == normalized_code)
+    ]
+    for item in candidates:
+        item["queried_fiscal_code"] = normalized_code
+    candidate_ids = {item.get("id") for item in candidates}
+    for subject_document_id in sorted(subject_document_ids - candidate_ids):
+        item = await get_document_by_id(subject_document_id)
+        if item and (item.get("document_type") or "") == "visura_soggetto":
+            candidates.append(
+                {
+                    **item,
+                    "response_id": None,
+                    "visura_subtype": None,
+                    "situazione_al": None,
+                    "queried_fiscal_code": normalized_code,
+                }
+            )
+
+    subject_documents = _collapse_to_logical_docs(candidates)
+    if not subject_documents:
+        raise HTTPException(status_code=404, detail="Nessuna visura trovata per questo codice fiscale")
+
+    def logical_doc_contains(logical_doc: dict, requested_id: int) -> bool:
+        ids = {logical_doc.get("id")}
+        ids.update(file.get("id") for file in logical_doc.get("files", []))
+        return requested_id in ids
+
+    selected = None
+    if document is not None:
+        selected = next((item for item in subject_documents if logical_doc_contains(item, document)), None)
+        if selected is None:
+            raise HTTPException(status_code=404, detail="Visura non trovata per questo soggetto")
+    else:
+        selected = subject_documents[0]
+
+    selected_id = int(selected["id"])
+    doc = await get_document_by_id(selected_id)
+    if doc is None:
+        raise HTTPException(status_code=404, detail="Visura non trovata")
+    document_code = _document_subject_fiscal_code(doc)
+    if document_code and document_code != normalized_code:
+        raise HTTPException(status_code=404, detail="Visura non trovata per questo soggetto")
+
+    document_navigation = [
+        {
+            "id": int(item["id"]),
+            "title": item.get("oggetto") or item.get("filename") or f"Visura #{item['id']}",
+            "date": item.get("situazione_al") or item.get("requested_at") or item.get("created_at") or "",
+        }
+        for item in subject_documents
+        if item.get("id") is not None
+    ]
+    theme = _get_theme(request)
+    return await _render_doc_from_db(
+        doc,
+        request,
+        theme,
+        user,
+        subject_fiscal_code=normalized_code,
+        subject_route_prefix=route_prefix,
+        subject_documents=document_navigation,
+    )
+
+
+@router.get("/persons/{fiscal_code}", response_class=HTMLResponse)
+async def web_person(
+    request: Request,
+    fiscal_code: str,
+    document: int | None = None,
+    user=Depends(_require_auth),
+):
+    """Open a canonical person route and switch between that person's subject visure."""
+    return await _web_subject_profile(
+        request,
+        fiscal_code,
+        document,
+        user=user,
+        route_prefix="/persons",
+        code_pattern=r"[A-Z0-9]{16}",
+    )
+
+
+@router.get("/companies/{fiscal_code}", response_class=HTMLResponse)
+async def web_company(
+    request: Request,
+    fiscal_code: str,
+    document: int | None = None,
+    user=Depends(_require_auth),
+):
+    """Open a company route using its 11-digit VAT/fiscal code."""
+    return await _web_subject_profile(
+        request,
+        fiscal_code,
+        document,
+        user=user,
+        route_prefix="/companies",
+        code_pattern=r"\d{11}",
     )
 
 

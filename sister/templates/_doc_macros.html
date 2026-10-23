@@ -227,6 +227,13 @@
 </div>
 {% endmacro %}
 
+{% macro document_href(d, prefix='/documents') -%}
+{% set subject_code = d.cf or d.vat or d.fiscal_code %}
+{% if prefix == '/documents' and subject_code and subject_code|length == 11 %}/companies/{{ subject_code }}
+{% elif prefix == '/documents' and subject_code %}/persons/{{ subject_code }}
+{% else %}{{ prefix }}/{{ d.id }}{% endif %}
+{%- endmacro %}
+
 {# Documents table. `docs` = list of logical documents; links use `prefix`
    (/documents or /dossiers). `show_location` toggles the Ubicazione
    column (hidden inside a property dossier where it is redundant).
@@ -262,7 +269,7 @@
             <tr>
                 <td>
                     {% if d.viewable %}
-                    <a href="{{ prefix }}/{{ d.id }}" class="fw-semibold text-decoration-none">{{ d.oggetto or d.filename or ('Doc ' ~ d.id) }}</a>
+                    <a href="{{ document_href(d, prefix) }}" class="fw-semibold text-decoration-none">{{ d.oggetto or d.filename or ('Doc ' ~ d.id) }}</a>
                     {% else %}
                     <span class="fw-semibold">{{ d.oggetto or d.filename or ('Doc ' ~ d.id) }}</span>
                     {% endif %}
@@ -272,13 +279,13 @@
                     {% if d.related_immobile_docs %}
                     <br><small class="d-block mt-1"><span class="text-muted">Visure per immobile:</span>
                         {% for related in d.related_immobile_docs %}
-                        <a href="{{ prefix }}/{{ related.id }}">{{ related.label }}</a>{% if not loop.last %}<span class="text-muted"> · </span>{% endif %}
+                        <a href="{{ document_href(related, prefix) }}">{{ related.label }}</a>{% if not loop.last %}<span class="text-muted"> · </span>{% endif %}
                         {% endfor %}
                     </small>
                     {% elif d.related_soggetto_docs %}
                     <br><small class="d-block mt-1"><span class="text-muted">Visure per soggetto:</span>
                         {% for related in d.related_soggetto_docs %}
-                        <a href="{{ prefix }}/{{ related.id }}">{{ related.label }}</a>{% if not loop.last %}<span class="text-muted"> · </span>{% endif %}
+                        <a href="{{ document_href(related, prefix) }}">{{ related.label }}</a>{% if not loop.last %}<span class="text-muted"> · </span>{% endif %}
                         {% endfor %}
                     </small>
                     {% endif %}
@@ -329,7 +336,7 @@
                 <td class="text-end no-print">
                     <div class="btn-group doc-actions" role="group">
                         {% if d.viewable %}
-                        <a href="{{ prefix }}/{{ d.id }}" class="btn btn-outline-{{ color }}" title="{{ 'Apri ispezione ipotecaria' if d.document_type == 'ispezione_ipotecaria' else 'Apri visura' }}"><i class="fas fa-eye"></i></a>
+                        <a href="{{ document_href(d, prefix) }}" class="btn btn-outline-{{ color }}" title="{{ 'Apri ispezione ipotecaria' if d.document_type == 'ispezione_ipotecaria' else 'Apri visura' }}"><i class="fas fa-eye"></i></a>
                         {% endif %}
                         <a href="{{ prefix }}/{{ d.id }}?template=result_detail" class="btn btn-outline-secondary" title="Dati completi"><i class="fas fa-table-list"></i></a>
                     </div>

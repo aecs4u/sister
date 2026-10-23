@@ -19,12 +19,14 @@ Usage:
 import asyncio
 import inspect
 import json
+import os
 import sys
 import time
 from pathlib import Path
 from typing import Optional
 
 import typer
+from dotenv import find_dotenv, load_dotenv
 from rich.console import Console
 from rich.markup import escape
 from rich.table import Table
@@ -1744,8 +1746,21 @@ def db_backfill(
 # -- entry point --------------------------------------------------------------
 
 
+def _load_environment() -> None:
+    """Read the service's .env (the shell's own variables win).
+
+    `uv run --no-project sister ...` does not load it, so VISURA_API_URL / VISURA_API_KEY and the database settings
+    would be missing. Done in the entry point, not at import, so tests importing this module keep their environment.
+    """
+    load_dotenv(find_dotenv(usecwd=True))
+    load_dotenv(Path(__file__).resolve().parents[1] / ".env", override=False)
+    if os.getenv("API_KEY"):
+        os.environ.setdefault("VISURA_API_KEY", os.environ["API_KEY"])  # the service's key is the one the CLI must send
+
+
 def run():
     """Entry point for the sister CLI."""
+    _load_environment()
     app()
 
 
