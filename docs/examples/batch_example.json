@@ -1,0 +1,44 @@
+{
+  "$schema": "../batch_submission.schema.json",
+  "version": 1,
+  "name": "Due diligence Trieste foglio 9",
+  "description": "Esempio del formato `sister query batch`: una ricerca immobili, un soggetto e una visura storica.",
+  "defaults": {
+    "command": "search",
+    "params": { "tipo_catasto": "F" }
+  },
+  "options": {
+    "wait": true,
+    "reuse": "ask",
+    "max_in_flight": 1,
+    "retries": 1,
+    "retry_delay": 5,
+    "poll_timeout": 900,
+    "on_error": "continue",
+    "output_dir": "outputs/due_diligence_trieste"
+  },
+  "queries": [
+    {
+      "id": "trieste-9-166",
+      "params": { "provincia": "Trieste", "comune": "TRIESTE", "foglio": 9, "particella": 166 },
+      "metadata": { "source_files": "vi_att_TS_FG9_PT166.pdf" }
+    },
+    {
+      "id": "proprietario",
+      "command": "soggetto",
+      "params": { "codice_fiscale": "RSSMRA85M01H501Z", "tipo_catasto": null }
+    },
+    {
+      "id": "storica-9-166-3",
+      "command": "visura-storica",
+      "params": { "provincia": "Trieste", "comune": "TRIESTE", "foglio": 9, "particella": 166, "subalterno": 3, "vista": "analitica" },
+      "reuse": "reuse",
+      "metadata": { "scope_note": "Storica analitica per immobile" }
+    },
+    {
+      "id": "da-fare-dopo",
+      "params": { "provincia": "Roma", "comune": "ROMA", "foglio": 100, "particella": 50, "tipo_catasto": "T" },
+      "enabled": false
+    }
+  ]
+}
