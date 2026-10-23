@@ -8,6 +8,7 @@ Usage:
     sister query intestati -P Trieste -C TRIESTE -F 9 -p 166 -t F -sub 3
     sister query workflow -P Trieste -C TRIESTE -F 9 -p 166 -t F
     sister query batch --input parcels.csv --wait
+    sister query batch --input batch.json -O outputs/run1 [--resume]
     sister get <request_id>
     sister wait <request_id>
     sister requests --status pending
@@ -16,9 +17,7 @@ Usage:
 """
 
 import asyncio
-import csv
 import inspect
-import io
 import json
 import sys
 import time
@@ -29,6 +28,7 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
+from . import batch as batch_engine
 from .client import VisuraAPIError, VisuraClient
 from .query_forms import QUERY_FORMS, get_query_form, option_flags, param_names, validate_params
 
@@ -1122,23 +1122,54 @@ def workflow(
 
 # -- batch command (supports all query types) ---------------------------------
 
-# Maps CSV 'command' column values to (client_method_name, required_fields, extra_field_mapping)
+
+def _batch_printer(total: int):
+    """Console progress for the batch engine's events."""
+
+    def emit(event: str, item, **info) -> None:
+        tag = f"[dim]({item.index}/{total})[/dim]"
+        if event == "skip":
+            why = "already done (resume)" if info.get("resumed") else info["status"]
+            detail = item.error or (f"same as {item.duplicate_of}" if item.duplicate_of else "")
+            style = "red" if info["status"] == "invalid" else "yellow"
+            console.print(f"  {tag} [{style}]{why}[/{style}] {item.id} {item.label} {detail}".rstrip())
+        elif event == "start":
+            console.print(f"\n{tag} {item.id} {item.label}")
+        elif event == "submitted":
+            console.print(f"  Submitted: {', '.join(info['request_ids'])}")
+        elif event == "result":
+            _print_result(info["result"])
+        elif event == "retry":
+            console.print(
+                f"  [yellow]Attempt {info['attempt']} failed ({info['error']}); retrying in {info['delay']:.0f}s[/yellow]"
+            )
+        elif event == "done" and info["entry"]["status"] not in batch_engine.OK_STATUSES:
+            entry = info["entry"]
+            console.print(f"  [red]{entry['status']}[/red] {entry.get('error', '')}".rstrip())
+
+    return emit
+
+
 @query_app.command()
 def batch(
-    input_file: str = typer.Option(..., "--input", "-I", help="File CSV con le righe delle query"),
-    command: str = typer.Option(
-        "search",
+    input_file: str = typer.Option(..., "--input", "-I", help="File JSON (vedi `sister query batch-schema`) o CSV"),
+    command: Optional[str] = typer.Option(
+        None,
         "--command",
         "-c",
         help=(
-            "Comando di query (qualsiasi comando a passo singolo di `sister query`)"
-            " oppure 'auto' per leggerlo dalla colonna 'command' del CSV"
+            "Comando di query per le righe senza comando proprio (default: search)."
+            " 'auto' = solo quello indicato nella riga/nel file"
         ),
     ),
-    wait: bool = typer.Option(False, "--wait", "-w", help="Attende ogni risultato prima di inviare il successivo"),
-    output_dir: Optional[str] = typer.Option(None, "--output-dir", "-O", help="Cartella — scrive un JSON per riga"),
-    output: Optional[str] = typer.Option(None, "--output", "-o", help="File di output unico (tutti i risultati uniti)"),
-    dry_run: bool = typer.Option(False, "--dry-run", help="Mostra le righe senza eseguirle"),
+    wait: Optional[bool] = typer.Option(
+        None, "--wait/--no-wait", "-w", help="Attende ogni risultato (default: options.wait del file, altrimenti no)"
+    ),
+    output_dir: Optional[str] = typer.Option(
+        None, "--output-dir", "-O", help="Cartella: un JSON per riga + il journal che permette --resume"
+    ),
+    output: Optional[str] = typer.Option(None, "--output", "-o", help="File di output unico (rapporto con tutti i risultati)"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Valida e mostra il piano senza inviare nulla"),
     force: bool = typer.Option(False, "--force", help="Ignora la cache e invia sempre una nuova richiesta"),
     redownload: Optional[bool] = typer.Option(
         None,
@@ -1146,21 +1177,38 @@ def batch(
         help="Righe gia' scaricate: scarica di nuovo (--yes) o riusa il risultato (--no) senza chiedere. "
         "Senza opzione chiede conferma per ogni riga (default: no)",
     ),
+    resume: bool = typer.Option(
+        False,
+        "--resume",
+        help="Riprende dal journal: salta le righe completate, riattende quelle gia' inviate (senza reinviarle) "
+        "e ripete quelle fallite",
+    ),
+    journal: Optional[str] = typer.Option(
+        None, "--journal", help="File journal (default: <output-dir>/batch_journal.jsonl)"
+    ),
+    max_in_flight: Optional[int] = typer.Option(None, "--max-in-flight", min=1, max=8, help="Righe gestite insieme"),
+    retries: Optional[int] = typer.Option(None, "--retries", min=0, max=5, help="Tentativi extra per riga fallita"),
+    poll_timeout: Optional[float] = typer.Option(None, "--poll-timeout", help="Secondi di attesa massima per richiesta"),
+    on_error: Optional[str] = typer.Option(None, "--on-error", help="'continue' (default) o 'stop' al primo errore"),
+    skip_invalid: bool = typer.Option(False, "--skip-invalid", help="Esegue le righe valide anche se altre non lo sono"),
 ):
-    """Invia più query da un file CSV.
+    """Invia piu' query da un file JSON o CSV, con validazione preventiva, retry e ripresa.
 
-    Supports all query types. Use --command to set the type for all rows,
-    or add a 'command' column in the CSV for per-row dispatch.
+    Il file JSON (formato: docs/batch_format.md, schema: `sister query batch-schema`) contiene `defaults`, `options`
+    e la lista `queries`. Il CSV resta supportato: le colonne sono i parametri del comando (stessi input del form
+    SISTER, vedi ``sister query <command> --help``), una colonna `command` sceglie il comando di ogni riga, le altre
+    colonne sono metadati.
 
-    The columns are the parameters of the command (see ``sister query <command> --help``, the same inputs
-    as the SISTER form); columns that are not parameters of the command are ignored, so a CSV can carry
-    extra metadata. Missing required parameters are reported per row.
+    Tutte le righe sono validate prima di inviare qualsiasi richiesta; le query identiche sono eseguite una volta.
+    Con --output-dir ogni cambio di stato va nel journal: dopo un'interruzione, --resume non reinvia le righe gia'
+    inviate (una richiesta ripetuta puo' essere a pagamento).
 
     \b
-    Example CSV (search):
-        provincia,comune,foglio,particella,tipo_catasto
-        Trieste,TRIESTE,9,166,F
-        Roma,ROMA,100,50,T
+    Example JSON:
+        {"version": 1, "defaults": {"command": "search", "params": {"tipo_catasto": "F"}},
+         "options": {"wait": true},
+         "queries": [{"params": {"provincia": "Trieste", "comune": "TRIESTE", "foglio": 9, "particella": 166}},
+                     {"command": "soggetto", "params": {"codice_fiscale": "RSSMRA85M01H501Z"}}]}
 
     \b
     Example CSV (mixed, using 'command' column):
@@ -1168,147 +1216,103 @@ def batch(
         search,Trieste,TRIESTE,9,166,,F
         soggetto,,,,,RSSMRA85M01H501Z,
     """
-    import os
-
     path = Path(input_file)
     if not path.exists():
         console.print(f"[red]File not found: {input_file}[/red]")
         raise typer.Exit(1)
-
-    rows = []
-    with path.open(encoding="utf-8") as fh:
-        lines = [line for line in fh if not line.strip().startswith("#")]
-        reader = csv.DictReader(io.StringIO("".join(lines)))
-        for row in reader:
-            row = {k.strip().lower(): v.strip() for k, v in row.items() if v and v.strip()}
-            if row:
-                rows.append(row)
-
-    if not rows:
-        console.print("[red]No valid rows found in input file.[/red]")
+    try:
+        spec = batch_engine.load_batch(path, None if command in (None, "auto") else command)
+    except ValueError as e:  # pydantic's ValidationError is one
+        console.print(f"[red]Invalid input file: {e}[/red]")
         raise typer.Exit(1)
 
-    console.print(f"Loaded [cyan]{len(rows)}[/cyan] row(s) from {path.name}")
+    overrides = {
+        "wait": wait,
+        "output_dir": output_dir,
+        "max_in_flight": max_in_flight,
+        "retries": retries,
+        "poll_timeout": poll_timeout,
+        "on_error": on_error,
+        "reuse": "force" if (force or redownload is True) else ("reuse" if redownload is False else None),
+    }
+    try:
+        options = batch_engine.BatchOptions.model_validate(
+            {**spec.options.model_dump(), **{k: v for k, v in overrides.items() if v is not None}}
+        )
+    except ValueError as e:
+        console.print(f"[red]Invalid option: {e}[/red]")
+        raise typer.Exit(2)
+
+    plan = batch_engine.plan_batch(spec, options)
+    console.print(f"Loaded [cyan]{len(plan)}[/cyan] row(s) from {path.name}" + (f" — {spec.name}" if spec.name else ""))
+
+    invalid = [item for item in plan if item.state == "invalid"]
+    for item in invalid:
+        console.print(f"  [red]({item.index}/{len(plan)}) {item.id}: {item.error}[/red]")
+    if invalid and not (skip_invalid or dry_run):
+        console.print(
+            f"[red]{len(invalid)} invalid row(s): nothing was sent. Fix the file or use --skip-invalid.[/red]"
+        )
+        raise typer.Exit(2)
 
     if dry_run:
         console.print("[bold yellow]DRY RUN[/bold yellow] — requests will not be sent")
-        for i, row in enumerate(rows, 1):
-            cmd = row.get("command", command)
-            console.print(f"  {i}. [{cmd}] {' '.join(f'{k}={v}' for k, v in row.items() if k != 'command')}")
+        for item in plan:
+            note = {"duplicate": f" (duplicate of {item.duplicate_of})", "disabled": " (disabled)"}.get(item.state, "")
+            if item.state != "invalid":
+                console.print(f"  {item.index}. {item.id} {item.label}{note}")
         return
 
-    if output_dir:
-        os.makedirs(output_dir, exist_ok=True)
+    journal_path = Path(journal) if journal else (Path(options.output_dir) / batch_engine.JOURNAL_NAME if options.output_dir else None)
+    if resume and journal_path is None:
+        console.print("[red]--resume needs --output-dir or --journal (where the previous run was recorded).[/red]")
+        raise typer.Exit(2)
+    if resume and not journal_path.exists():
+        console.print(f"[yellow]No journal at {journal_path}: running everything.[/yellow]")
+    if journal_path and not resume and journal_path.exists():
+        console.print(f"[dim]Appending to existing journal {journal_path} (use --resume to continue it).[/dim]")
 
     client = VisuraClient()
-    all_results = []
-    ok_count = 0
-    err_count = 0
-
-    for i, row in enumerate(rows, 1):
-        cmd = row.pop("command", command)
-        input_metadata = {
-            key: row[key]
-            for key in ("source_files", "scope_note")
-            if row.get(key)
-        }
-        spec = get_query_form(cmd)
-
-        if spec is None:
-            console.print(f"  [red]({i}/{len(rows)}) Unknown command: {cmd}[/red]")
-            err_count += 1
-            all_results.append(
-                {"row": i, "command": cmd, **input_metadata, "status": "error", "error": f"Unknown command: {cmd}"}
-            )
-            continue
-
-        # the CSV columns that are parameters of the query (anything else is row metadata)
-        params = {name: row[name] for name in param_names(spec.command) if name in row}
-        try:
-            validate_params(spec.command, params)
-        except ValueError as e:
-            console.print(f"  [red]({i}/{len(rows)}) [{cmd}] {e}[/red]")
-            err_count += 1
-            all_results.append({"row": i, "command": cmd, **input_metadata, "status": "error", "error": str(e)})
-            continue
-
-        label = f"[{cmd}] " + " ".join(f"{k}={v}" for k, v in list(row.items())[:4])
-        console.print(f"\n[dim]({i}/{len(rows)})[/dim] {label}")
-
-        try:
-            if force or redownload is True:
-                result = asyncio.run(client.submit(spec.command, params, force=True))
-            else:
-                result = asyncio.run(client.submit(spec.command, params, reuse_previous=True))
-                if result.get("stale") and _confirm_download_again(result, redownload):
-                    result = asyncio.run(client.submit(spec.command, params, force=True))
-        except VisuraAPIError as e:
-            console.print(f"  [red]Submit failed: HTTP {e.status_code}: {e.detail}[/red]")
-            err_count += 1
-            all_results.append({"row": i, "command": cmd, "label": label, "status": "error", "error": str(e)})
-            continue
-
-        # Extract request_id(s)
-        request_ids = result.get("request_ids", [])
-        if not request_ids:
-            rid = result.get("request_id", "")
-            if rid:
-                request_ids = [rid]
-
-        console.print(f"  Submitted: {', '.join(request_ids)}")
-
-        if wait and request_ids:
-            row_results = {}
-            for rid in request_ids:
-                try:
-                    res = asyncio.run(client.wait_for_result(rid))
-                    row_results[rid] = res
-                    _print_result(res)
-                except TimeoutError as e:
-                    console.print(f"  [yellow]{e}[/yellow]")
-                    row_results[rid] = {"status": "timeout"}
-                except VisuraAPIError as e:
-                    console.print(f"  [red]{rid}: HTTP {e.status_code}: {e.detail}[/red]")
-                    row_results[rid] = {"status": "error"}
-
-            entry = {
-                "row": i,
-                "command": cmd,
-                **input_metadata,
-                "label": label,
-                "request_ids": request_ids,
-                "results": row_results,
-            }
-            all_results.append(entry)
-
-            if output_dir:
-                row_file = os.path.join(output_dir, f"batch_{i:04d}_{cmd}.json")
-                _write_output(entry, row_file)
-
-            if all(r.get("status") == "completed" for r in row_results.values()):
-                ok_count += 1
-            else:
-                err_count += 1
-        else:
-            all_results.append(
-                {
-                    "row": i,
-                    "command": cmd,
-                    **input_metadata,
-                    "label": label,
-                    "request_ids": request_ids,
-                    "status": "queued",
-                }
-            )
-            ok_count += 1
-
-    console.rule("[bold green]Batch complete[/bold green]")
-    console.print(
-        f"  Total: [cyan]{len(rows)}[/cyan]  " f"OK: [green]{ok_count}[/green]  " f"Errors: [red]{err_count}[/red]"
+    runner = batch_engine.BatchRunner(
+        client,
+        options,
+        journal=batch_engine.BatchJournal(journal_path) if journal_path else None,
+        resume=resume,
+        confirm=(lambda result: _confirm_download_again(result, None)) if options.reuse == "ask" else None,
+        emit=_batch_printer(len(plan)),
     )
 
+    async def go():
+        async with client:
+            return await runner.run(plan, spec.name)
+
+    try:
+        report = asyncio.run(go())
+    except KeyboardInterrupt:
+        console.print("\n[yellow]Interrupted. Rerun with --resume to continue without resending.[/yellow]")
+        raise typer.Exit(130)
+
+    console.rule("[bold green]Batch complete[/bold green]")
+    counts = report.counts
+    ok = counts.get("completed", 0) + counts.get("queued", 0)
+    console.print(
+        f"  Total: [cyan]{len(report.entries)}[/cyan]  OK: [green]{ok}[/green]  Errors: [red]{report.failed}[/red]"
+        + "".join(f"  {k}: {v}" for k, v in sorted(counts.items()) if k not in ("completed", "queued", "error"))
+    )
     if output:
-        _write_output(all_results, output)
+        _write_output(report.to_dict(), output)
+    if report.failed:
+        raise typer.Exit(1)
+
+
+@query_app.command("batch-schema")
+def batch_schema(output: Optional[str] = typer.Option(None, "--output", "-o", help="Scrive lo schema su file")):
+    """Stampa lo JSON Schema del file di sottomissione di `query batch` (per editor e validatori)."""
+    schema = batch_engine.batch_json_schema()
+    if output:
+        _write_output(schema, output)
+    else:
+        typer.echo(json.dumps(schema, indent=2, ensure_ascii=False))
 
 
 # =============================================================================
@@ -1329,7 +1333,7 @@ def queries():
     rows = [(f"query {form.command}", "POST", form.path, form.summary) for form in QUERY_FORMS.values()]
     rows += [
         ("query workflow", "—", "search → intestati", "Full two-phase: immobili + intestati"),
-        ("query batch", "POST", "/visura (×N)", "Batch search from CSV file"),
+        ("query batch", "POST", "/visura (×N)", "Batch of queries from a JSON/CSV file (resumable)"),
         ("get", "GET", "/visura/{request_id}", "Poll for a single result"),
         ("wait", "GET", "/visura/{request_id}", "Poll until complete or timeout"),
         ("requests", "GET", "/visura/history", "List all requests with status"),
