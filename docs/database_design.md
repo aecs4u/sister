@@ -165,7 +165,9 @@ The swap and the downgrade now move only the relations named in the migration, s
 
 Verified on a `pg_dump` copy (about 12 s): 73 reconciliation checks (row counts, NULL-parity of every link, totals of
 income/area/file size), upgrade → downgrade → upgrade, and an audit of the result (no JSON columns, a primary key
-and an indexed foreign key everywhere, 59 foreign keys, no isolated tables).
+and an indexed foreign key everywhere, 59 foreign keys). `20261030_request_jobs_fk` adds two more (`sister_request_jobs` → `request`,
+`request_type`). Tables left without relations on purpose: `sezioni_extraction_jobs` (standalone job store), `parcel_geometry_cache`
+(keyed by ISTAT `comune_id`, a foreign table), `comune_pre_istat` (rollback snapshot), `alembic_version`, `spatial_ref_sys`.
 
 ## Regenerate the diagram
 

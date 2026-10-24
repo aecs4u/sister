@@ -137,3 +137,30 @@ def test_google_3d_sources_are_added_only_on_the_3d_page():
     assert "'unsafe-inline'" not in next(d for d in page.split("; ") if d.startswith("script-src"))
     assert "connect-src 'self' https://*.googleapis.com" in page and "worker-src blob:" in page
     assert "googleapis" not in client.get("/other").headers["content-security-policy"]
+
+
+def test_clerk_sources_are_added_only_on_the_clerk_auth_pages():
+    from fastapi import FastAPI
+    from starlette.responses import PlainTextResponse
+    from starlette.testclient import TestClient
+
+    app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
+    for path in ("/auth/login", "/auth/clerk/callback", "/auth/forgot-password", "/other"):
+
+        def make(body=path):
+            async def view():
+                return PlainTextResponse(body, headers={"Content-Security-Policy": PACKAGE_CSP})
+
+            return view
+
+        app.get(path)(make())
+
+    app.add_middleware(CspNonceMiddleware)
+    client = TestClient(app)
+    for path in ("/auth/login", "/auth/clerk/callback"):
+        csp = client.get(path).headers["content-security-policy"]
+        script = next(d for d in csp.split("; ") if d.startswith("script-src"))
+        assert "https://cdn.jsdelivr.net" in script and "'unsafe-inline'" not in script
+        assert "https://*.clerk.accounts.dev" in next(d for d in csp.split("; ") if d.startswith("connect-src"))
+    for path in ("/auth/forgot-password", "/other"):
+        assert "jsdelivr" not in client.get(path).headers["content-security-policy"]

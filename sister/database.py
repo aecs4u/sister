@@ -97,7 +97,7 @@ DATABASE_SCHEMA = os.getenv("DATABASE_SCHEMA", "sister")
 DATABASE_ISTAT_SCHEMA = os.getenv("DATABASE_ISTAT_SCHEMA", "istat")
 # raw payloads (response JSON, XML tree, extraction JSON) live in their own schema; tests point it at a throwaway one
 DATABASE_ARCHIVE_SCHEMA = os.getenv("DATABASE_ARCHIVE_SCHEMA", "sister_archive")
-DATABASE_REVISION = "20261028_istat_municipalities"
+DATABASE_REVISION = "20261030_request_jobs_fk"
 
 # ---------------------------------------------------------------------------
 # Engine and session
@@ -197,11 +197,19 @@ async def init_db() -> None:
             raise RuntimeError(
                 "PostgreSQL schema is incomplete (missing: " + ", ".join(missing) + "). Run `alembic upgrade head`."
             )
-        istat_columns = await conn.run_sync(
-            lambda sync_conn: {
-                column["name"]
-                for column in inspect(sync_conn).get_columns("municipalities", schema=DATABASE_ISTAT_SCHEMA)
-            }
+        # We only need the names here. Reflecting full column types makes
+        # SQLAlchemy warn about PostGIS's ``geometry`` columns in this shared
+        # table, even though the application never maps those columns.
+        istat_columns = set(
+            (
+                await conn.execute(
+                    text(
+                        "SELECT column_name FROM information_schema.columns "
+                        "WHERE table_schema = :schema AND table_name = 'municipalities'"
+                    ),
+                    {"schema": DATABASE_ISTAT_SCHEMA},
+                )
+            ).scalars()
         )
         missing_istat = sorted(
             {

@@ -6,6 +6,19 @@
 {% block auth_card %}
 <div class="card-modern auth-card">
     <div class="card-body p-4">
+        {% if clerk_publishable_key %}
+        <div class="d-grid mb-3">
+            <button type="button" class="btn btn-outline-secondary" id="clerkSignIn">
+                <span class="btn-text">Accedi con Google</span>
+                <span class="btn-spinner d-none">
+                    <span class="spinner-border spinner-border-sm ms-2" role="status" aria-hidden="true"></span>
+                </span>
+            </button>
+        </div>
+        <div class="d-flex align-items-center gap-3 mb-3" aria-hidden="true">
+            <hr class="flex-grow-1 m-0"><span class="text-body-secondary small">oppure</span><hr class="flex-grow-1 m-0">
+        </div>
+        {% endif %}
         {# method=post: without JavaScript the credentials still never end up in the URL #}
         <form id="loginForm" method="post" action="/auth/login" novalidate>
             <input type="hidden" name="next" value="{{ next_url }}">
@@ -56,4 +69,10 @@
 
 {% block auth_scripts %}
 <script src="/static/js/sister_login.js?v=20261009a" defer></script>
+{% if clerk_publishable_key %}
+<script nonce="{{ csp_nonce }}">
+window.SisterLoginClerk = { nextUrl: {{ next_url | tojson }}, callbackUrl: "/auth/clerk/callback" };
+</script>
+<script src="/static/js/sister_login_clerk.js?v=20261024a" defer></script>
+{% endif %}
 {% endblock %}

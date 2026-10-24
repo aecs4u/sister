@@ -372,9 +372,15 @@ try:
         import aecs4u_auth
         from aecs4u_auth import AuthConfig, setup_auth
 
+        # Like crowdaction: Clerk SSO next to the local (file-backed) accounts when the Clerk keys are configured
+        # (NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY / CLERK_SECRET_KEY are read from the environment), local only otherwise.
+        _clerk_configured = bool(
+            os.getenv("NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY", "").strip() and os.getenv("CLERK_SECRET_KEY", "").strip()
+        )
         auth_config = AuthConfig(
             AECS4U_SITE_ID="sister",
             AECS4U_SITE_NAME="SISTER",
+            AUTH_MODE="clerk_and_local" if _clerk_configured else "local",
             CLERK_AFTER_SIGN_IN_URL="/",
             CLERK_AFTER_SIGN_UP_URL="/",
         )
@@ -428,6 +434,12 @@ try:
         from .auth_pages import router as auth_pages_router
 
         app.include_router(auth_pages_router)  # SISTER's own sign-in/out pages win over the package's (same paths)
+        if _clerk_configured:
+            # The package's demo callback page has no CSP nonce on its inline script; the nonce-aware one from
+            # aecs4u_auth.routers.clerk wins (same path). Only its page router: the session sync stays the package's.
+            from aecs4u_auth.routers.clerk import create_clerk_router
+
+            app.include_router(create_clerk_router(prefix="/auth", session_url="/auth/clerk/session").page_router)
         app.include_router(auth_router)
 
         if require_auth:

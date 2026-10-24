@@ -41,6 +41,15 @@ _CADASTRAL_MAP_SOURCES = {
 }
 
 
+# Clerk SSO: aecs4u-theme's auth_base.html and aecs4u-auth's /auth/clerk/callback load clerk-js from jsDelivr and talk
+# to the Clerk frontend API; only these two pages get those sources (no other page, no other script host).
+_CLERK_AUTH_PATHS = ("/auth/login", "/auth/clerk/callback")
+_CLERK_SOURCES = {
+    "script-src": "https://cdn.jsdelivr.net",
+    "connect-src": "https://*.clerk.accounts.dev https://clerk-telemetry.com",
+}
+
+
 def strip_unsafe_eval(csp: str) -> str:
     """Remove ``'unsafe-eval'`` from every directive of a Content-Security-Policy value."""
     directives = []
@@ -105,6 +114,8 @@ class CspNonceMiddleware:
         document_path = scope["path"].rstrip("/")
         if scope["path"] in _GOOGLE_3D_PATHS:
             extra = _GOOGLE_3D_SOURCES
+        elif document_path in _CLERK_AUTH_PATHS:
+            extra = _CLERK_SOURCES
         elif scope["path"] == "/documents" and "view=cadastral-map" in query.split("&"):
             extra = _CADASTRAL_MAP_SOURCES
         elif document_path.startswith("/documents/") and document_path[len("/documents/"):].isdigit():

@@ -47,7 +47,10 @@ async def login_page(request: Request, next_url: str | None = None, next: str | 
     target = _safe_next(next_url or next)
     if await _signed_in(request):
         return RedirectResponse(target, status_code=303)
-    return _render(request, "auth_login.html", next_url=target)
+    # Clerk SSO next to the local accounts (AUTH_MODE=clerk_and_local); the key also makes aecs4u-theme load clerk-js.
+    auth_config = getattr(request.app.state, "auth_config", None)
+    clerk_key = auth_config.clerk_publishable_key if auth_config and auth_config.clerk_enabled else None
+    return _render(request, "auth_login.html", next_url=target, clerk_publishable_key=clerk_key)
 
 
 @router.get("/auth/logout", response_class=HTMLResponse)
