@@ -8,40 +8,54 @@ from __future__ import annotations
 
 import asyncio
 import functools
+import hashlib
+import json
 import logging
 import os
 import re
 import time
 from datetime import datetime, timezone
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from threading import Lock
 from typing import Any, Optional
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlsplit
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
+from jinja2 import TemplateNotFound
 from starlette.concurrency import run_in_threadpool
 from starlette.responses import StreamingResponse
 
 from .database import (
     count_result_rows,
     count_total_result_rows,
+    find_parcel_document_ids,
+    find_parcel_request_records,
+    find_parcels_with_geometry,
     find_result_rows,
+    find_subject_inspection_document_ids,
+    find_subject_query_requests,
     get_all_documents,
     get_cadastral_sibling_visuras,
+    get_comune_centroids,
     get_db_owners_for_response,
     get_db_properties_for_response,
     get_document_by_id,
     get_document_structured_extraction,
     get_documents_for_response,
-    get_indexed_file_metadata,
+    get_response,
     get_result_record,
     get_subject_document_ids,
     get_subject_fiscal_code_for_document,
+    get_subject_name,
+    parcel_key,
     record_activity,
 )
+from .document_scope import subject_search_scope as _subject_search_scope
 from .form_config import get_available_form_groups, get_single_step_groups, get_workflow_groups
+from .request_types import known_request_tags, known_request_types, request_type_info
 from .visura_view import build_visura_view
 
 # Opendata API URL — workflow runs/steps are owned by opendata, not sister.
@@ -119,29 +133,82 @@ def _doc_tipo_visura(d: dict) -> Optional[str]:
 
 
 def _doc_catasto_ft(d: dict) -> Optional[str]:
-    """Classify a visura along the *Fabbricati e Terreni* facet."""
+    """Classify a property visura by cadastre, including canonical filename cues."""
     dt = d.get("document_type") or ""
-    tc = (d.get("tipo_catasto") or "").upper()
-    if dt == "visura_terreni" or tc == "T":
+    tc = str(d.get("tipo_catasto") or "").strip().upper()
+    if dt == "visura_terreni" or tc in {"T", "CT", "TERRENI"}:
         return "terreni"
-    if dt == "visura_fabbricati" or tc == "F":
+    if dt == "visura_fabbricati" or tc in {"F", "CF", "FABBRICATI"}:
+        return "fabbricati"
+
+    filename = str(d.get("filename") or d.get("file_path") or "").replace("\\", "/").rsplit("/", 1)[-1]
+    match = re.match(r"^vi_(?:att|sto|sin)(?:_(ter))?_", filename, re.IGNORECASE)
+    if match:
+        return "terreni" if match.group(1) else "fabbricati"
+
+    title = str(d.get("oggetto") or "").casefold()
+    title_and_filename = f"{title} {filename.casefold()}"
+    if "terren" in title_and_filename or "fondo rustico" in title_and_filename:
+        return "terreni"
+    if "fabbricat" in title_and_filename or "urbano" in title_and_filename:
         return "fabbricati"
     return None
 
 
-def _soggetto_kind(d: dict) -> str:
-    """Persona Fisica vs Persona Giuridica.
+def _doc_visura_subtype(d: dict) -> str:
+    """Use parsed metadata, display text, or canonical ``vi_*`` filename to label a visura."""
+    raw_subtype = str(d.get("visura_subtype") or "").strip().casefold().replace("-", "_").replace(" ", "_")
+    aliases = {
+        "att": "attuale",
+        "sto": "storica",
+        "sin": "sintetica",
+    }
+    raw_subtype = aliases.get(raw_subtype, raw_subtype)
+    known_subtypes = {
+        "attuale",
+        "analitica",
+        "sintetica",
+        "storica",
+        "storica_analitica",
+        "storica_sintetica",
+        "storica_completa",
+    }
+    if raw_subtype in known_subtypes:
+        return raw_subtype
 
-    11-digit VAT numbers indicate Persona Giuridica; 16-char alphanumeric CFs
-    indicate Persona Fisica. Explicit keywords in the name are also checked.
-    """
-    blob = ((d.get("oggetto") or "") + " " + (d.get("filename") or "")).lower()
-    if "giuridic" in blob or "pnf" in blob or "_pg_" in blob or "persona_giuridica" in blob:
-        return "pg"
-    cf = _extract_cf(d)
-    if cf and len(cf) == 11 and cf.isdigit():
-        return "pg"
-    return "pf"
+    title = str(d.get("oggetto") or "").casefold()
+    filename = str(d.get("filename") or d.get("file_path") or "").replace("\\", "/").rsplit("/", 1)[-1]
+    title_and_filename = f"{title} {filename.casefold()}"
+    if "storic" in title_and_filename and "analitic" in title_and_filename:
+        return "storica_analitica"
+    if "storic" in title_and_filename and "sintetic" in title_and_filename:
+        return "storica_sintetica"
+    if "storic" in title_and_filename and "complet" in title_and_filename:
+        return "storica_completa"
+    if "storic" in title_and_filename:
+        return "storica"
+    if "attual" in title_and_filename and "sintetic" in title_and_filename:
+        return "sintetica"
+    if "attual" in title_and_filename:
+        return "attuale"
+    if "sintetic" in title_and_filename:
+        return "sintetica"
+    if "analitic" in title_and_filename:
+        return "analitica"
+
+    match = re.match(r"^vi_(att|sto|sin)(?:_ter)?_", filename, re.IGNORECASE)
+    if match:
+        return {"att": "attuale", "sto": "storica", "sin": "sintetica"}[match.group(1).casefold()]
+
+    # Older typed records lack the detailed subtype column; the query type still
+    # distinguishes the common analytical property visura from a generic visura.
+    if d.get("document_type") in {"visura_fabbricati", "visura_terreni"}:
+        return "analitica"
+    if d.get("document_type") == "visura_storica":
+        return "storica"
+    if d.get("document_type") == "visura":
+        return "sintetica"
+    return ""
 
 
 _CF_RE = re.compile(r"(?<![A-Z0-9])([A-Z]{6}\d{2}[A-Z]\d{2}[A-Z]\d{3}[A-Z]|\d{11})(?![A-Z0-9])", re.IGNORECASE)
@@ -194,6 +261,49 @@ def _document_subject_fiscal_code(doc: dict) -> str | None:
     return None
 
 
+def _subject_cadastre_type(doc: dict) -> str | None:
+    """Return E/F/T for a subject visura, falling back to its canonical name."""
+    stored = str(doc.get("tipo_catasto") or "").strip().upper()
+    if stored in {"E", "F", "T"}:
+        return stored
+
+    category_by_token = {"CE": "E", "CF": "F", "CT": "T"}
+    tokens = Path(str(doc.get("filename") or "")).stem.upper().split("_")
+    return next((category_by_token[token] for token in reversed(tokens[3:]) if token in category_by_token), None)
+
+
+def _document_display_name(doc: dict) -> tuple[str, bool]:
+    """Return a human-readable list label and whether it is cadastral-derived."""
+    document_type = doc.get("document_type") or ""
+    sheet = str(doc.get("foglio") or "").strip()
+    parcel = str(doc.get("particella") or "").strip()
+    filename = Path(str(doc.get("filename") or "")).name
+    file_coordinates = re.search(
+        r"(?:^|_)FG(?P<sheet>[^_]+)_PT(?P<parcel>[^_]+)(?:_SUB(?P<subunit>[^_]+))?(?:_|$)",
+        Path(filename).stem,
+        re.IGNORECASE,
+    )
+    is_property_visura = document_type in _VISURA_TYPES or bool(
+        re.match(r"^vi_(?:att|sto|sin)(?:_ter)?_", filename, re.IGNORECASE)
+    )
+    if file_coordinates:
+        sheet = sheet or file_coordinates.group("sheet")
+        parcel = parcel or file_coordinates.group("parcel")
+    if is_property_visura and sheet and parcel:
+        parts = ["VISURA", "FG.", sheet, "PART.", parcel]
+        subunit = str(doc.get("subalterno") or "").strip() or (
+            file_coordinates.group("subunit") if file_coordinates else ""
+        )
+        municipality = str(doc.get("comune") or "").strip()
+        if subunit:
+            parts.extend(("SUB.", subunit))
+        if municipality:
+            parts.extend(("DI", municipality.upper()))
+        return " ".join(parts), True
+
+    return str(doc.get("oggetto") or doc.get("filename") or f"Doc {doc.get('id', '')}").strip(), False
+
+
 def _collapse_to_logical_docs(docs: list[dict]) -> list[dict]:
     """Collapse raw file rows into logical documents, with PDFs as attachments.
 
@@ -206,11 +316,11 @@ def _collapse_to_logical_docs(docs: list[dict]) -> list[dict]:
     Logical identity (in priority order):
       1. response_id + document_type + cadastral coords  (when available)
       2. document_type + cadastral coords                (foglio/particella present)
-      3. visura_soggetto: document_type + CF + visura_subtype
+      3. visura_soggetto: document_type + CF + search scope + subtype/date
       4. document_type + oggetto/filename                (fallback)
 
-    response_id is honoured first so that, once live/backfilled data links files to
-    their Richiesta, attachments group correctly without code changes.
+    Files with the same basename and different extensions are also joined, even
+    when request IDs or metadata differ between their rows.
     """
     from collections import defaultdict
 
@@ -221,12 +331,25 @@ def _collapse_to_logical_docs(docs: list[dict]) -> list[dict]:
             # Keep each report/RP note independent; only pair alternate formats
             # that share the same filename stem.
             return (rid, dt, Path(d.get("filename") or str(d.get("id"))).stem.casefold())
-        # Soggetto visure: group by CF + subtype regardless of coordinates.
-        # Coordinates on soggetto P7Ms are the first owned property, not the identity key.
+        # Soggetto visure: group by CF + search scope + subtype/date regardless
+        # of coordinates, which are only the first owned property in the XML.
         if dt == "visura_soggetto":
             cf = _extract_cf(d)
             if cf:
-                return (rid, dt, cf, d.get("visura_subtype") or "", d.get("situazione_al") or "")
+                scope = _subject_search_scope(
+                    d.get("filename"),
+                    stored_scope=d.get("subject_search_scope"),
+                    stored_province=d.get("subject_search_province"),
+                )
+                return (
+                    rid,
+                    dt,
+                    cf,
+                    _subject_cadastre_type(d) or "",
+                    d.get("visura_subtype") or "",
+                    d.get("situazione_al") or "",
+                    scope["search_scope_label"],
+                )
         if d.get("foglio") or d.get("particella"):
             return (
                 rid,
@@ -243,12 +366,51 @@ def _collapse_to_logical_docs(docs: list[dict]) -> list[dict]:
     def _fmt_rank(d: dict) -> int:  # structured files first
         return {"P7M": 0, "XML": 1}.get((d.get("file_format") or "").upper(), 2)
 
-    groups: dict[object, list[dict]] = defaultdict(list)
+    groups_by_identity: dict[object, list[dict]] = defaultdict(list)
     for d in docs:
-        groups[_logical_key(d)].append(d)
+        groups_by_identity[_logical_key(d)].append(d)
+
+    # Some imports do not link the PDF and structured file to the same request
+    # row, so the identity keys above can split a P7M/XML and PDF pair. Join
+    # logical groups sharing a basename only when that basename has multiple
+    # extensions; same-extension files retain their normal identity grouping.
+    initial_groups = list(groups_by_identity.values())
+    groups_by_basename: dict[str, set[int]] = defaultdict(set)
+    extensions_by_basename: dict[str, set[str]] = defaultdict(set)
+    for group_index, items in enumerate(initial_groups):
+        for item in items:
+            file_name = str(item.get("filename") or "")
+            file_path = Path(file_name)
+            basename = file_path.stem.casefold()
+            extension = file_path.suffix.casefold()
+            if basename and extension:
+                groups_by_basename[basename].add(group_index)
+                extensions_by_basename[basename].add(extension)
+
+    parents = list(range(len(initial_groups)))
+
+    def _find_group(index: int) -> int:
+        while parents[index] != index:
+            parents[index] = parents[parents[index]]
+            index = parents[index]
+        return index
+
+    for basename, group_indexes in groups_by_basename.items():
+        if len(extensions_by_basename[basename]) < 2:
+            continue
+        first = next(iter(group_indexes))
+        for group_index in group_indexes:
+            first_root = _find_group(first)
+            group_root = _find_group(group_index)
+            if group_root != first_root:
+                parents[group_root] = first_root
+
+    merged_groups: dict[int, list[dict]] = defaultdict(list)
+    for group_index, items in enumerate(initial_groups):
+        merged_groups[_find_group(group_index)].extend(items)
 
     logical: list[dict] = []
-    for items in groups.values():
+    for items in merged_groups.values():
         ordered = sorted(items, key=lambda x: (_fmt_rank(x), x.get("id") or 0))
         primary = dict(ordered[0])  # copy — primary carries the document metadata
         primary["files"] = [
@@ -256,18 +418,30 @@ def _collapse_to_logical_docs(docs: list[dict]) -> list[dict]:
                 "id": it.get("id"),
                 "file_format": (it.get("file_format") or "").upper(),
                 "filename": it.get("filename") or "",
+                "size_bytes": it.get("file_size") or 0,
                 "size_human": _human_size(it["file_size"]) if it.get("file_size") else "",
             }
             for it in ordered
         ]
         primary["n_files"] = len(ordered)
         primary["n_pdf"] = sum(1 for f in primary["files"] if f["file_format"] == "PDF")
+        primary["total_file_size"] = sum(it.get("file_size") or 0 for it in ordered)
+        primary["total_size_human"] = _human_size(primary["total_file_size"]) if primary["total_file_size"] else ""
+        primary["display_name"], primary["cadastral_display_name"] = _document_display_name(primary)
         primary_structured = (primary.get("file_format") or "").upper() in ("P7M", "XML")
         is_ispezione = (primary.get("document_type") or "") == "ispezione_ipotecaria"
         primary["viewable"] = is_ispezione or (
             primary_structured and (primary.get("document_type") or "") in _VIEWABLE_DOC_TYPES
         )
         if primary.get("document_type") == "visura_soggetto":
+            primary["tipo_catasto"] = _subject_cadastre_type(primary)
+            primary.update(
+                _subject_search_scope(
+                    primary.get("filename"),
+                    stored_scope=primary.get("subject_search_scope"),
+                    stored_province=primary.get("subject_search_province"),
+                )
+            )
             cf = _extract_cf(primary)
             if cf and len(cf) == 16:
                 primary["cf"] = cf
@@ -331,11 +505,21 @@ def _link_related_visura_docs(docs: list[dict]) -> None:
                     continue
                 subject_links.setdefault(subject_id, {})[property_id] = {
                     "id": property_id,
-                    "label": property_doc.get("oggetto") or property_doc.get("filename") or f"Doc {property_id}",
+                    "label": (
+                        property_doc.get("display_name")
+                        or property_doc.get("oggetto")
+                        or property_doc.get("filename")
+                        or f"Doc {property_id}"
+                    ),
                 }
                 property_links.setdefault(property_id, {})[subject_id] = {
                     "id": subject_id,
-                    "label": subject_doc.get("oggetto") or subject_doc.get("filename") or f"Doc {subject_id}",
+                    "label": (
+                        subject_doc.get("display_name")
+                        or subject_doc.get("oggetto")
+                        or subject_doc.get("filename")
+                        or f"Doc {subject_id}"
+                    ),
                     "fiscal_code": cf,
                 }
 
@@ -352,12 +536,13 @@ def _build_property_map(docs: list[dict]) -> dict:
 
     Visura-soggetto documents are nested as owner children under property docs
     (visura_storica / visura_fabbricati / visura_terreni) whose ``intestati_json``
-    lists their CF.  Documents not linked to any property parcel appear in the
-    ``soggetti`` section grouped by person.
+    lists their CF. Unlinked subject documents are grouped by person; documents
+    without a property or subject grouping are collected under ``altri``.
 
     Returns:
       ``immobili``: provincia → foglio → particella → subalterno → docs
       ``soggetti``: list of {cf, label, docs} for unlinked soggetto documents
+      ``altri``: indexed documents that have no cadastral or subject grouping
     """
     import json
     import re
@@ -493,7 +678,11 @@ def _build_property_map(docs: list[dict]) -> dict:
                             "comune": pt_data["comune"],
                             "sezione_urbana": pt_data["sezione_urbana"],
                             "subalternos": subs_list,
-                            "total_docs": sum(len(s["docs"]) for s in subs_list),
+                            "total_docs": sum(
+                                1 + len(d.get("owner_docs", []))
+                                for s in subs_list
+                                for d in s["docs"]
+                            ),
                         }
                     )
                 fogli_list.append(
@@ -556,19 +745,43 @@ def _build_property_map(docs: list[dict]) -> dict:
         return sorted(by_person.values(), key=lambda x: x["label"].casefold())
 
     immobili_tree = _build_tree()
-    return {"immobili": immobili_tree, "soggetti": _build_soggetti(immobili_tree)}
+    soggetti_tree = _build_soggetti(immobili_tree)
+
+    # The location view is a different arrangement of the same logical
+    # documents used by the category and file views. Keep records without
+    # cadastral coordinates visible in an explicit catch-all group.
+    represented_ids: set[int] = set()
+    for province in immobili_tree:
+        for sheet in province["fogli"]:
+            for parcel in sheet["particelle"]:
+                for sub in parcel["subalternos"]:
+                    for document in sub["docs"]:
+                        if document.get("id") is not None:
+                            represented_ids.add(document["id"])
+                        represented_ids.update(
+                            owner["id"] for owner in document.get("owner_docs", []) if owner.get("id") is not None
+                        )
+    for subject in soggetti_tree:
+        represented_ids.update(document["id"] for document in subject["docs"] if document.get("id") is not None)
+
+    other_docs = [
+        _decorate_one(d)
+        for d in docs
+        if d.get("id") not in represented_ids
+    ]
+    other_docs.sort(key=lambda d: (d.get("created_at") or "", d.get("id") or 0), reverse=True)
+    return {"immobili": immobili_tree, "soggetti": soggetti_tree, "altri": other_docs}
 
 
 def _build_document_tree(docs: list[dict]) -> list[dict]:
     """Build the hierarchical document index using the unified query-type taxonomy.
 
-    Single-step query groups (top-level), with subtypes as children:
-      Visura per Immobile → Fabbricati / Terreni / (non classificate)
-      Visura per Soggetto → Persona Fisica / Persona Giuridica
-      Intestatari
-      Planimetrie
-      Elaborati Planimetrici → EPA
-      Richieste
+    Single-step query groups (top-level):
+      Visura per Immobile → one table with catasto and subtype columns
+      Visura per Soggetto → one table with fiscal-code and VAT columns
+      Elenco degli Immobili, Planimetria Catastale, Elaborato Planimetrico,
+      Estratto di Mappa, Elenco Subalterni, Ispezione / Visura Ipotecaria,
+      Note di Trascrizione / Iscrizione, Titoli Telematici, Richieste.
 
     Input should already be collapsed via _collapse_to_logical_docs().
     Returns node dicts: {key, label, icon, color, count, docs, children}.
@@ -612,125 +825,142 @@ def _build_document_tree(docs: list[dict]) -> list[dict]:
         by_type[d.get("document_type") or "(altro)"].append(d)
 
     tree: list[dict] = []
+    classified_types = set(_VISURA_TYPES) | {"visura_soggetto"}
+
+    def add_document_category(key, label, icon, color, *type_codes, always=False):
+        items = [d for d in docs if (d.get("document_type") or "") in type_codes]
+        classified_types.update(type_codes)
+        if items or always:
+            category = leaf(key, label, icon, color, items)
+            category["empty_message"] = "Nessun documento indicizzato in questa categoria."
+            tree.append(category)
 
     # ── Visura per Immobile ────────────────────────────────────────────────
-    # Subtype order and display metadata for grouping within Fabbricati / Terreni.
-    _SUBTYPE_ORDER = [
-        ("attuale", "Attuale", "fa-calendar-check", "success"),
-        ("storica_analitica", "Storica Analitica", "fa-clock-rotate-left", "secondary"),
-        ("storica_sintetica", "Storica Sintetica", "fa-clock-rotate-left", "secondary"),
-        ("storica_completa", "Storica Completa", "fa-clock-rotate-left", "secondary"),
-        ("storica", "Storica", "fa-clock-rotate-left", "secondary"),
-        ("", "Non classificate", "fa-file-contract", "secondary"),
-    ]
-
-    def _catasto_subtype_leaves(
-        items: list[dict], catasto_label: str, catasto_key: str, catasto_color: str
-    ) -> list[dict]:
-        """Flatten catasto type + subtype into sibling leaves: 'Fabbricati · Storica' etc."""
-        from collections import defaultdict
-
-        by_sub: dict[str, list[dict]] = defaultdict(list)
-        for d in items:
-            by_sub[d.get("visura_subtype") or ""].append(d)
-        present_subs = [sub for sub, *_ in _SUBTYPE_ORDER if by_sub.get(sub)]
-        if len(present_subs) <= 1:
-            # Only one subtype — keep as simple leaf with just the catasto label
-            return [
-                leaf(
-                    catasto_key,
-                    catasto_label,
-                    "fa-building" if catasto_key == "visura_fabbricati" else "fa-seedling",
-                    catasto_color,
-                    items,
-                )
-            ]
-        result = []
-        for sub, sub_label, icon, color in _SUBTYPE_ORDER:
-            group = by_sub.get(sub, [])
-            if not group:
-                continue
-            combined_label = f"{catasto_label} · {sub_label}" if sub else f"{catasto_label} · Non classificate"
-            result.append(leaf(f"{catasto_key}_{sub or 'altro'}", combined_label, icon, color, group))
-        return result
-
     visure = [d for d in docs if (d.get("document_type") or "") in _VISURA_TYPES]
     if visure:
-        fab = [d for d in visure if _doc_catasto_ft(d) == "fabbricati"]
-        ter = [d for d in visure if _doc_catasto_ft(d) == "terreni"]
-        rest = [d for d in visure if _doc_catasto_ft(d) is None]
-        children: list[dict] = []
-        if fab:
-            children.extend(_catasto_subtype_leaves(fab, "Fabbricati", "visura_fabbricati", "success"))
-        if ter:
-            children.extend(_catasto_subtype_leaves(ter, "Terreni", "visura_terreni", "warning"))
-        if rest:
-            children.append(leaf("visura_altro", "Non classificate", "fa-file-contract", "secondary", rest))
-        tree.append(node("visura_immobile", "Visura per Immobile", "fa-house", "success", children, count=len(visure)))
+        for doc in visure:
+            if not doc.get("tipo_catasto"):
+                cadastre = _doc_catasto_ft(doc)
+                if cadastre:
+                    doc["tipo_catasto"] = "F" if cadastre == "fabbricati" else "T"
+            if not doc.get("visura_subtype"):
+                doc["visura_subtype"] = _doc_visura_subtype(doc) or None
+        tree.append(
+            node(
+                "visura_immobile",
+                "Visura per Immobile",
+                "fa-house",
+                "success",
+                [],
+                count=len(visure),
+                docs=visure,
+            )
+        )
 
     # ── Visura per Soggetto ────────────────────────────────────────────────
     soggetti = by_type.get("visura_soggetto", [])
     if soggetti:
-        pf = [d for d in soggetti if _soggetto_kind(d) == "pf"]
-        pg = [d for d in soggetti if _soggetto_kind(d) == "pg"]
-        children = []
-        if pf:
-            children.append(leaf("soggetto_pf", "Persona Fisica", "fa-user", "info", pf, is_soggetto=True))
-        if pg:
-            children.append(leaf("soggetto_pg", "Persona Giuridica", "fa-building-user", "info", pg, is_soggetto=True))
         tree.append(
-            node(
+            leaf(
                 "visura_soggetto",
                 "Visura per Soggetto",
                 "fa-user-group",
                 "info",
-                children,
-                count=len(soggetti),
+                soggetti,
                 is_soggetto=True,
             )
         )
 
     # ── Intestatari ────────────────────────────────────────────────────────
-    if by_type.get("elenco_immobili"):
-        tree.append(leaf("intestati", "Intestatari", "fa-users", "primary", by_type["elenco_immobili"]))
+    add_document_category(
+        "elenco_immobili",
+        "Elenco degli Immobili",
+        "fa-list",
+        "primary",
+        "elenco_immobili",
+        "intestati",
+    )
 
-    # ── Planimetrie ────────────────────────────────────────────────────────
-    if by_type.get("planimetria"):
-        tree.append(leaf("planimetria", "Planimetrie", "fa-ruler-combined", "secondary", by_type["planimetria"]))
+    # ── Planimetria Catastale ──────────────────────────────────────────────
+    add_document_category(
+        "planimetria",
+        "Planimetria Catastale",
+        "fa-ruler-combined",
+        "secondary",
+        "planimetria",
+        "planimetria_catastale",
+    )
 
-    # ── Elaborati Planimetrici ─────────────────────────────────────────────
-    elab = by_type.get("elaborato_planimetrico", [])
-    epa = by_type.get("epa", [])
-    if elab or epa:
-        children = [leaf("epa", "EPA", "fa-file-lines", "secondary", epa)] if epa else []
-        tree.append(
-            node(
-                "epa",
-                "Elaborati Planimetrici",
-                "fa-drafting-compass",
-                "secondary",
-                children,
-                count=len(elab) + len(epa),
-                docs=elab,
-            )
-        )
+    # ── Elaborato Planimetrico (EPA) ──────────────────────────────────────
+    add_document_category(
+        "elaborato_planimetrico",
+        "Elaborato Planimetrico (EPA)",
+        "fa-drafting-compass",
+        "secondary",
+        "elaborato_planimetrico",
+        "epa",
+    )
 
     # ── Richieste ──────────────────────────────────────────────────────────
-    if by_type.get("richieste"):
-        tree.append(leaf("richieste", "Richieste", "fa-clock-rotate-left", "secondary", by_type["richieste"]))
+    add_document_category("richieste", "Richieste", "fa-clock-rotate-left", "secondary", "richieste")
 
-    # ── Ispezioni ipotecarie ────────────────────────────────────────────────
-    ispezioni = by_type.get("ispezione_ipotecaria", [])
-    if ispezioni:
-        tree.append(
-            leaf(
-                "ispezione_ipotecaria",
-                "Ispezione ipotecaria",
-                "fa-file-circle-check",
-                "primary",
-                ispezioni,
-            )
-        )
+    # ── Additional cadastral document families ────────────────────────────
+    add_document_category(
+        "estratto_mappa",
+        "Estratto di Mappa o Visura di Mappa",
+        "fa-map",
+        "secondary",
+        "estratto_mappa",
+        "estratto_di_mappa",
+        "visura_mappa",
+        "mappa",
+        always=True,
+    )
+    add_document_category(
+        "elenco_subalterni",
+        "Elenco Subalterni",
+        "fa-layer-group",
+        "secondary",
+        "elenco_subalterni",
+        "elenco_subalterno",
+        always=True,
+    )
+    add_document_category(
+        "ispezione_ipotecaria",
+        "Ispezione / Visura Ipotecaria",
+        "fa-file-circle-check",
+        "primary",
+        "ispezione_ipotecaria",
+        "visura_ipotecaria",
+    )
+    add_document_category(
+        "nota_trascrizione_iscrizione",
+        "Nota di Trascrizione o Iscrizione",
+        "fa-file-signature",
+        "primary",
+        "nota_trascrizione",
+        "nota_iscrizione",
+        "nota_trascrizione_iscrizione",
+        "nota_annotazione",
+        always=True,
+    )
+    add_document_category(
+        "titolo_telematico",
+        "Titolo Telematico (Atto Notarile)",
+        "fa-file-contract",
+        "primary",
+        "titolo_telematico",
+        "titolo_notarile",
+        "atto_notarile",
+        always=True,
+    )
+
+    # Keep unexpected and newly imported document codes visible as well.
+    unclassified = [
+        d for d in docs if (d.get("document_type") or "(altro)") not in classified_types
+    ]
+    if unclassified:
+        tree.append(leaf("altro", "Altri documenti", "fa-file", "secondary", unclassified))
 
     return tree
 
@@ -1450,6 +1680,124 @@ def _actor(user) -> str:
     return "anonymous"
 
 
+def _favorite_user_key(user) -> Optional[str]:
+    """Return the stable authenticated identity used to scope document favourites."""
+    user_id = getattr(user, "id", None)
+    if user_id is not None:
+        return f"id:{user_id}"
+    for attr in ("username", "email"):
+        value = getattr(user, attr, None)
+        if isinstance(value, str) and value.strip():
+            return f"{attr}:{value.strip().casefold()}"
+    return None
+
+
+async def _apply_user_manual_valuations(kpis: dict[str, Any] | None, user) -> dict[str, Any] | None:
+    """Decorate subject KPIs with the signed-in user's provider entries and selected sources."""
+    if not kpis:
+        return kpis
+    asset_keys = {
+        identity.get("asset_key")
+        for group in kpis.get("table_estimates", [])
+        for kind in ("buildings", "lands")
+        for estimate in group.get(kind, [])
+        for identity in [estimate.get("asset_identity") or {}]
+        if identity.get("asset_key")
+    }
+    saved_values = {}
+    user_key = _favorite_user_key(user)
+    if user_key and asset_keys:
+        try:
+            from .database import ensure_user_property_omi_selections, get_user_manual_property_valuations
+
+            saved_values = await get_user_manual_property_valuations(user_key, asset_keys)
+            guessed_selections = []
+            for group in kpis.get("table_estimates", []):
+                for estimate in group.get("buildings", []):
+                    identity = estimate.get("asset_identity") or {}
+                    if not identity.get("asset_key"):
+                        continue
+                    try:
+                        typology_code = int(estimate["omi_tipologia"]) if estimate.get("omi_tipologia") else None
+                    except (TypeError, ValueError):
+                        typology_code = None
+                    guessed_selections.append({
+                        "asset_key": identity["asset_key"],
+                        "zone_code": estimate.get("omi_zona"),
+                        "typology_code": typology_code,
+                    })
+            await ensure_user_property_omi_selections(user_key, guessed_selections)
+        except Exception as exc:  # The official valuation page remains available if this optional data is unavailable.
+            logger.warning("Manual property valuations unavailable: %s", type(exc).__name__)
+    from .land_registry_kpis import apply_user_manual_valuations
+
+    return apply_user_manual_valuations(kpis, saved_values)
+
+
+_LAND_REGISTRY_CALCULATION_TYPE = "subject_land_registry_kpis"
+_LAND_REGISTRY_CALCULATION_VERSION = "9"
+_LAND_REGISTRY_CALCULATION_MAX_AGE_SECONDS = 12 * 60 * 60
+
+
+async def _subject_land_registry_calculation(
+    xml_parsed: dict[str, Any], map_lookup: dict[str, Any] | None, user, *, scope_type: str, scope_id: Any
+) -> dict[str, Any]:
+    """Load or persist the complete subject valuation/KPI result for these source inputs."""
+    normalized_scope_id = str(scope_id or "").strip()
+    viewer_key = _favorite_user_key(user) or "anonymous"
+    input_payload = json.dumps(
+        {"xml": xml_parsed, "map": map_lookup},
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    )
+    input_hash = hashlib.sha256(input_payload.encode("utf-8")).hexdigest()
+    if normalized_scope_id:
+        try:
+            from .database import get_calculation_snapshot
+
+            cached = await get_calculation_snapshot(
+                scope_type=scope_type,
+                scope_id=normalized_scope_id,
+                viewer_key=viewer_key,
+                calculation_type=_LAND_REGISTRY_CALCULATION_TYPE,
+                input_hash=input_hash,
+                algorithm_version=_LAND_REGISTRY_CALCULATION_VERSION,
+                max_age_seconds=_LAND_REGISTRY_CALCULATION_MAX_AGE_SECONDS,
+            )
+            if cached is not None:
+                return cached
+        except Exception as exc:  # Calculations still work when the optional snapshot store is unavailable.
+            logger.warning("Land registry calculation snapshot unavailable: %s", type(exc).__name__)
+
+    from .land_registry_kpis import subject_land_registry_kpis
+
+    kpis = await subject_land_registry_kpis(
+        xml_parsed,
+        map_lookup,
+        include_assessment_context=True,
+        selection_user_id=_favorite_user_key(user),
+    )
+    kpis = await _apply_user_manual_valuations(kpis, user)
+    if normalized_scope_id:
+        try:
+            from .database import set_calculation_snapshot
+
+            await set_calculation_snapshot(
+                scope_type=scope_type,
+                scope_id=normalized_scope_id,
+                viewer_key=viewer_key,
+                calculation_type=_LAND_REGISTRY_CALCULATION_TYPE,
+                input_hash=input_hash,
+                algorithm_version=_LAND_REGISTRY_CALCULATION_VERSION,
+                result=kpis,
+            )
+        except Exception as exc:  # Persistence is additive; a database write must not hide the page calculation.
+            logger.warning("Land registry calculation snapshot could not be saved: %s", type(exc).__name__)
+    return kpis
+
+
 def _client_ip(request: Optional[Request]) -> Optional[str]:
     return request.client.host if request is not None and request.client else None
 
@@ -1581,6 +1929,61 @@ def _parse_xml_to_dict(xml_str: str) -> dict:
         return d if d else ""
 
     return _elem_to_dict(root)
+
+
+def _merge_subject_visura_asset_groups(parsed_documents: list[dict]) -> dict:
+    """Combine the asset groups from same-period subject visure for one portfolio view."""
+    if not parsed_documents:
+        return {}
+
+    root_names = (
+        "VisuraSoggettoAttuale",
+        "VisuraSoggettoStorica",
+        "VisuraSoggettoSintetica",
+        "VisuraSoggetto",
+    )
+    primary = dict(parsed_documents[0])
+    primary_root_name = next((name for name in root_names if isinstance(primary.get(name), dict)), None)
+    if not primary_root_name:
+        return primary
+
+    import json
+    from .provinces import province_code
+
+    all_groups = []
+    seen_groups = set()
+
+    def group_items(value):
+        if isinstance(value, list):
+            for child in value:
+                yield from group_items(child)
+        elif isinstance(value, dict):
+            yield value
+
+    for parsed in parsed_documents:
+        root_name = next((name for name in root_names if isinstance(parsed.get(name), dict)), None)
+        if not root_name:
+            continue
+        visura = parsed[root_name]
+        request = visura.get("DatiRichiesta") or {}
+        source_province = ""
+        if isinstance(request, dict):
+            raw_province = request.get("Provincia") or ""
+            source_province = province_code(raw_province) or str(raw_province).strip().upper()
+        raw_groups = visura.get("GruppoUnitaImmobiliari")
+        for group in group_items(raw_groups):
+            if source_province and not group.get("Provincia"):
+                group = {**group, "Provincia": source_province}
+            fingerprint = json.dumps(group, ensure_ascii=False, sort_keys=True, default=str)
+            if fingerprint not in seen_groups:
+                seen_groups.add(fingerprint)
+                all_groups.append(group)
+
+    if all_groups:
+        primary_visura = dict(primary[primary_root_name])
+        primary_visura["GruppoUnitaImmobiliari"] = all_groups
+        primary[primary_root_name] = primary_visura
+    return primary
 
 
 def _titleize_key(value: str) -> str:
@@ -2287,8 +2690,13 @@ async def web_results(
     foglio: Optional[str] = None,
     particella: Optional[str] = None,
     tipo_catasto: Optional[str] = None,
+    request_type: Optional[str] = None,
+    tag: Optional[str] = None,
     source: Optional[str] = None,
     status: Optional[str] = None,
+    fiscal_code: Optional[str] = None,
+    person: Optional[str] = None,
+    company: Optional[str] = None,
     limit: int = 50,
     offset: int = 0,
 ):
@@ -2302,10 +2710,15 @@ async def web_results(
         foglio=foglio,
         particella=particella,
         tipo_catasto=tipo_catasto,
+        request_type=request_type,
+        tag=tag,
         source=source,
         status=status,
         limit=limit,
         offset=offset,
+        fiscal_code=fiscal_code,
+        person=person,
+        company=company,
     )
     total_count = await count_total_result_rows(
         provincia=provincia,
@@ -2313,12 +2726,21 @@ async def web_results(
         foglio=foglio,
         particella=particella,
         tipo_catasto=tipo_catasto,
+        request_type=request_type,
+        tag=tag,
         source=source,
         status=status,
+        fiscal_code=fiscal_code,
+        person=person,
+        company=company,
     )
     for item in results:
         item["requested_at_display"] = _format_timestamp(item.get("requested_at"))
         item["responded_at_display"] = _format_timestamp(item.get("responded_at"))
+        type_info = request_type_info(item.get("request_type"))
+        item["request_type_label"] = item.get("request_type_label") or type_info.label
+        item["request_type_description"] = item.get("request_type_description") or type_info.description
+        item["request_type_tags"] = item.get("request_type_tags") or list(type_info.tags)
         if item.get("source") != "workflow":
             item["status"] = (
                 "completed" if item.get("success") is True else "failed" if item.get("success") is False else "pending"
@@ -2330,15 +2752,43 @@ async def web_results(
         particella=particella,
         tipo_catasto=tipo_catasto,
         source=source,
+        request_type=request_type,
+        tag=tag,
+        fiscal_code=fiscal_code,
+        person=person,
+        company=company,
     )
+
+    request_type_options = [{"code": code, "label": info.label} for code, info in known_request_types()]
+    known_codes = {item["code"] for item in request_type_options}
+    if request_type and request_type not in known_codes:
+        request_type_options.append({"code": request_type, "label": request_type_info(request_type).label})
+        known_codes.add(request_type)
+    for item in results:
+        code = item.get("request_type")
+        if code and code not in known_codes:
+            request_type_options.append({"code": code, "label": item["request_type_label"]})
+            known_codes.add(code)
+    request_type_options.sort(key=lambda item: item["label"].casefold())
+    tag_options = set(known_request_tags())
+    if tag:
+        tag_options.add(tag)
+    for item in results:
+        tag_options.update(item.get("request_type_tags") or [])
+    tag_options = sorted(tag_options, key=str.casefold)
     current_filters = {
         "provincia": provincia,
         "comune": comune,
         "foglio": foglio,
         "particella": particella,
         "tipo_catasto": tipo_catasto,
+        "request_type": request_type,
+        "tag": tag,
         "source": source,
         "status": status,
+        "fiscal_code": fiscal_code,
+        "person": person,
+        "company": company,
         "limit": limit,
     }
     filter_labels = {
@@ -2347,14 +2797,26 @@ async def web_results(
         "foglio": "Foglio",
         "particella": "Particella",
         "tipo_catasto": "Catasto",
-        "source": "Source",
-        "status": "Status",
+        "request_type": "Tipo richiesta",
+        "tag": "Categoria",
+        "source": "Origine",
+        "status": "Stato",
+        "fiscal_code": "Codice fiscale / P.IVA",
+        "person": "Persona",
+        "company": "Azienda",
     }
+    request_type_labels = {item["code"]: item["label"] for item in request_type_options}
     active_filters = [
         {
             "key": key,
             "label": filter_labels[key],
-            "value": str(value).replace("_", " ").title() if key in {"source", "status"} else value,
+            "value": (
+                request_type_labels.get(value, request_type_info(value).label)
+                if key == "request_type"
+                else str(value).replace("_", " ").title()
+                if key in {"source", "status"}
+                else value
+            ),
             "remove_url": _filter_remove_url(key, current_filters),
         }
         for key, value in current_filters.items()
@@ -2366,7 +2828,12 @@ async def web_results(
         "foglio": foglio,
         "particella": particella,
         "tipo_catasto": tipo_catasto,
+        "request_type": request_type,
+        "tag": tag,
         "source": source,
+        "fiscal_code": fiscal_code,
+        "person": person,
+        "company": company,
     }
     stats_urls = {
         "total": _build_url("/results", **stats_filters),
@@ -2393,14 +2860,21 @@ async def web_results(
         foglio=foglio,
         particella=particella,
         tipo_catasto=tipo_catasto,
+        request_type=request_type,
+        tag=tag,
         source=source,
         status=status,
+        fiscal_code=fiscal_code,
+        person=person,
+        company=company,
         limit=limit,
         offset=offset,
         prev_url=prev_url,
         next_url=next_url,
         stats_urls=stats_urls,
         active_filters=active_filters,
+        request_type_options=request_type_options,
+        tag_options=tag_options,
         current_count=len(results),
         total_count=total_count,
     )
@@ -2810,27 +3284,6 @@ def _human_size(n: int) -> str:
     return f"{n:.1f} TB"
 
 
-def _file_icon(ext: str, is_dir: bool) -> tuple[str, str]:
-    """Return (fa-icon-class, text-color-class) for a file extension."""
-    if is_dir:
-        return "fa-folder", "text-warning"
-    return {
-        ".pdf": ("fa-file-pdf", "text-danger"),
-        ".p7m": ("fa-file-shield", "text-warning"),
-        ".json": ("fa-file-code", "text-info"),
-        ".xml": ("fa-file-code", "text-secondary"),
-        ".csv": ("fa-file-csv", "text-success"),
-        ".xlsx": ("fa-file-excel", "text-success"),
-        ".xls": ("fa-file-excel", "text-success"),
-        ".png": ("fa-file-image", "text-secondary"),
-        ".jpg": ("fa-file-image", "text-secondary"),
-        ".jpeg": ("fa-file-image", "text-secondary"),
-        ".log": ("fa-scroll", "text-muted"),
-        ".txt": ("fa-file-lines", "text-muted"),
-        ".zip": ("fa-file-zipper", "text-secondary"),
-    }.get(ext, ("fa-file", "text-muted"))
-
-
 async def _render_doc_from_db(
     doc: dict,
     request,
@@ -2840,6 +3293,10 @@ async def _render_doc_from_db(
     subject_fiscal_code: str | None = None,
     subject_route_prefix: str | None = None,
     subject_documents: list[dict] | None = None,
+    subject_asset_documents: list[dict] | None = None,
+    subject_portfolio: dict | None = None,
+    subject_hub: dict | None = None,
+    as_pdf: bool = False,
 ):
     """Finalize a doc dict fetched from the DB and render the matching visura template.
 
@@ -2849,6 +3306,13 @@ async def _render_doc_from_db(
     generic, exhaustive view of any document.
     """
     doc["xml_parsed"] = _parse_xml_to_dict(doc.get("xml_content", ""))
+    if subject_asset_documents:
+        doc["xml_parsed"] = _merge_subject_visura_asset_groups(
+            [
+                doc["xml_parsed"],
+                *(_parse_xml_to_dict(source.get("xml_content", "")) for source in subject_asset_documents),
+            ]
+        )
     doc["view"] = build_visura_view(doc.get("xml_content", ""))
     doc.pop("xml_content", None)
     doc["intestati_rows"] = [
@@ -2887,6 +3351,10 @@ async def _render_doc_from_db(
     xml_p = doc.get("xml_parsed") or {}
 
     map_lookup = await _google_maps_context(doc)
+    if map_lookup is not None and subject_asset_documents:
+        map_lookup["related_document_ids"] = [
+            int(source["id"]) for source in subject_asset_documents if source.get("id") is not None
+        ]
     doc["land_registry_map"] = await _land_registry_map_context(map_lookup)
 
     # Explicit override → generic exhaustive view via result_detail.html
@@ -2937,16 +3405,31 @@ async def _render_doc_from_db(
     land_registry_kpis = None
     land_registry_history = None
     if land_map_kind == "soggetto":
-        from .land_registry_kpis import subject_land_registry_kpis
         from .land_registry_history import subject_land_registry_history
 
-        land_registry_kpis = await subject_land_registry_kpis(xml_p, map_lookup)
+        # the groups only the elenco lists carry its ownership, so the valuation covers them too
+        xml_shown = _subject_tree_with_elenco(xml_p, subject_hub)
+        land_registry_kpis = await _subject_land_registry_calculation(
+            xml_shown, map_lookup, user, scope_type="document", scope_id=doc.get("id") or doc.get("filename")
+        )
         land_registry_history = await subject_land_registry_history(xml_p)
     from .display import merge_identifiers, readable_owners, subject_for_theme
 
-    doc = {**doc, "xml_parsed": merge_identifiers(subject_for_theme(readable_owners(xml_p)))}  # after the lookups above, which need the original tree
+    # the lookups above need the visura's own tree; the page then lists the elenco immobili's other units too
+    if land_map_kind != "soggetto":
+        xml_shown = xml_p
+    doc = {**doc, "xml_parsed": merge_identifiers(subject_for_theme(readable_owners(xml_shown)))}
+    if as_pdf:
+        # the PDF of the page: same tree (visura + elenco groups), same valuation
+        return await _subject_pdf_response(
+            {**doc, "xml_parsed": xml_shown}, land_registry_kpis, map_lookup if land_map_kind == "soggetto" else None,
+            subject_fiscal_code or "",
+        )
+    if land_map_kind == "soggetto" and subject_hub:
+        # every parcel of the elenco is on the map, not only the ones the visura lists
+        doc["land_registry_map"] = await _hub_parcel_map(subject_hub) or doc.get("land_registry_map")
     return theme.render(
-        "catasto/land_map.html",
+        "catasto/entity.html",
         request,
         user=user,
         doc=doc,
@@ -2957,8 +3440,11 @@ async def _render_doc_from_db(
         subject_fiscal_code=subject_fiscal_code,
         subject_route_prefix=subject_route_prefix,
         subject_documents=subject_documents,
+        subject_portfolio=subject_portfolio,
+        subject_hub=subject_hub,
         subject_document_id=doc.get("id") if subject_fiscal_code else None,
-        **_land_map_layout(land_map_kind),
+        manual_valuation_enabled=bool(_favorite_user_key(user)),
+        **_land_map_layout(land_map_kind, theme),
     )
 
 
@@ -3115,15 +3601,19 @@ async def _google_maps_context(doc: dict) -> dict[str, Any] | None:
 
     def as_items(value):
         if isinstance(value, list):
-            return value
+            return [item for child in value for item in as_items(child)]
         return [value] if isinstance(value, dict) else []
 
     # Keep this source in sync with the two tables rendered by the subject
     # visura template: only current Fabbricati/Terreni rows are shown there.
     subject_table_identifiers = []
     for group in as_items(subject_body.get("GruppoUnitaImmobiliari")):
+        if not isinstance(group, dict):
+            continue
         for row_key in ("ImmobileFabbricatiS", "ImmobileTerreniS"):
             for property_row in as_items(group.get(row_key)):
+                if not isinstance(property_row, dict):
+                    continue
                 dati = property_row.get("DatiIdentificativi") or {}
                 identifiers = as_items(dati.get("IdentificativoDefinitivo")) if isinstance(dati, dict) else []
                 for table_identifier in identifiers:
@@ -3135,6 +3625,8 @@ async def _google_maps_context(doc: dict) -> dict[str, Any] | None:
                         item["CodiceComune"] = group["CodiceComune"]
                     if not item.get("Comune") and group.get("Descrizione"):
                         item["Comune"] = re.sub(r"\s*\([^)]*\)\s*$", "", str(group["Descrizione"])).strip()
+                    if not item.get("Provincia") and group.get("Provincia"):
+                        item["Provincia"] = group["Provincia"]
                     if not item.get("Provincia") and request.get("Provincia"):
                         item["Provincia"] = request["Provincia"]
                     subject_table_identifiers.append(item)
@@ -4125,18 +4617,33 @@ async def _google_maps_context(doc: dict) -> dict[str, Any] | None:
 
 
 # Document kind -> (theme template that renders the document, block of that template that holds the map).
-# `catasto/land_map.html` extends the parent and places the map in the slot.
+# `catasto/entity.html` extends the parent and places the map in the slot.
 _LAND_MAP_LAYOUTS: dict[str, tuple[str, str]] = {
-    "fabbricati": ("catasto/visura_fabbricati.html", "after_query"),
-    "terreni": ("catasto/visura_terreni.html", "after_query"),
-    "soggetto": ("catasto/visura_soggetto.html", "sidecar"),
+    "fabbricati": ("catasto/visura_immobile.html", "after_query"),
+    "terreni": ("catasto/visura_immobile.html", "after_query"),
+    "soggetto": ("catasto/visura_soggetto_archive.html", "sidecar"),
     "ipotecaria": ("catasto/ispezione_ipotecaria.html", "content"),
 }
 
 
-def _land_map_layout(kind: str) -> dict[str, str]:
-    """Template variables for `catasto/land_map.html` for one document kind."""
+def _land_map_layout(kind: str, theme=None) -> dict[str, str]:
+    """Template variables for `catasto/entity.html` for one document kind.
+
+    Older installed theme releases still provide separate Fabbricati and
+    Terreni templates. Keep those releases working while preferring the
+    unified template when it is available.
+    """
     parent, slot = _LAND_MAP_LAYOUTS[kind]
+    if theme is not None and kind in ("fabbricati", "terreni"):
+        try:
+            theme.templates.env.get_template(parent)
+        except TemplateNotFound:
+            parent = {
+                "fabbricati": "catasto/visura_fabbricati.html",
+                "terreni": "catasto/visura_terreni.html",
+            }[kind]
+            # Let a missing fallback raise with the actual template name.
+            theme.templates.env.get_template(parent)
     return {"land_map_parent": parent, "land_map_slot": slot}
 
 
@@ -4145,12 +4652,18 @@ async def _land_registry_map_context(lookup: dict[str, Any] | None) -> dict[str,
     if not lookup or not (lookup.get("sheet") and lookup.get("parcel")):
         return None
 
+    document_id = lookup.get("document_id")
+    data_url = lookup.get("data_url") or (
+        f"/documents/{int(document_id)}/parcel-map.json" if document_id is not None else ""
+    )
+    related_ids = [int(value) for value in lookup.get("related_document_ids") or [] if value is not None]
+    if related_ids and data_url:
+        data_url += "&" if "?" in data_url else "?"
+        data_url += urlencode({"also": related_ids}, doseq=True)
+
     context: dict[str, Any] = {
         "available": False,
-        "data_url": (
-            f"/documents/{int(lookup['document_id'])}/parcel-map.json"
-            if lookup.get("document_id") is not None else ""
-        ),
+        "data_url": data_url,
         "sheet": lookup["sheet"],
         "parcel": lookup["parcel"],
         "municipality": lookup.get("municipality") or "",
@@ -4397,11 +4910,13 @@ async def web_document_view(request: Request, path: str, user=Depends(_require_a
     ]
 
     # Select template by XML root element
+    is_fabbricati = False
     if any(
         key in xml_parsed
         for key in ("VisuraFabbricatiStorica", "VisuraFabbricatiAttuale", "VisuraFabbricatiSintetica", "VisuraFabbricati")
     ):
-        template = "catasto/visura_fabbricati.html"
+        template = "catasto/visura_immobile.html"
+        is_fabbricati = True
     elif any(
         key in xml_parsed
         for key in ("VisuraSoggettoAttuale", "VisuraSoggettoStorica", "VisuraSoggettoSintetica", "VisuraSoggetto")
@@ -4419,7 +4934,7 @@ async def web_document_view(request: Request, path: str, user=Depends(_require_a
             "VisuraTerreno",
         )
     ):
-        template = "catasto/visura_terreni.html"
+        template = "catasto/visura_immobile.html"
     else:
         template = "result_detail.html"
 
@@ -4428,7 +4943,7 @@ async def web_document_view(request: Request, path: str, user=Depends(_require_a
         request,
         user=user,
         doc=doc,
-        google_maps=await _google_maps_context(doc) if template == "catasto/visura_fabbricati.html" else None,
+        google_maps=await _google_maps_context(doc) if is_fabbricati else None,
     )
 
 
@@ -4509,7 +5024,6 @@ async def web_document_pdf(request: Request, doc_id: int, user=Depends(_require_
     from fastapi import HTTPException
     from fastapi.responses import Response
 
-    from .land_registry_kpis import subject_land_registry_kpis
     from .pdf_typst import PdfExportError, build_context, pdf_filename, render_pdf
 
     doc = await get_document_by_id(doc_id)
@@ -4522,7 +5036,9 @@ async def web_document_pdf(request: Request, doc_id: int, user=Depends(_require_
     kpis = None
     if any(key in doc["xml_parsed"] for key in ("VisuraSoggettoAttuale", "VisuraSoggettoStorica",
                                                 "VisuraSoggettoSintetica", "VisuraSoggetto")):
-        kpis = await subject_land_registry_kpis(doc["xml_parsed"], lookup)
+        kpis = await _subject_land_registry_calculation(
+            doc["xml_parsed"], lookup, user, scope_type="document", scope_id=doc.get("id")
+        )
     try:
         context = build_context(doc, kpis, lookup)
         content = await run_in_threadpool(render_pdf, context)
@@ -4910,6 +5426,367 @@ async def web_document_plan(doc_id: int, request: Request, user=Depends(_require
     return JSONResponse(result)
 
 
+@router.put("/documents/{doc_id}/favorite", response_class=JSONResponse)
+async def web_document_favorite(request: Request, doc_id: int, user=Depends(_require_auth)):
+    """Set a signed-in user's favourite state for one indexed document."""
+    from fastapi import HTTPException
+
+    user_key = _favorite_user_key(user)
+    if not user_key:
+        raise HTTPException(status_code=401, detail="Authentication required to save favourites")
+    try:
+        payload = await request.json()
+    except (ValueError, UnicodeDecodeError):
+        raise HTTPException(status_code=400, detail="Expected a JSON body") from None
+    if not isinstance(payload, dict) or type(payload.get("favorite")) is not bool:
+        raise HTTPException(status_code=422, detail="favorite must be a boolean")
+
+    document = await get_document_by_id(doc_id)
+    if document is None:
+        raise HTTPException(status_code=404, detail="Document not found")
+    from .database import set_document_favorite
+
+    await set_document_favorite(user_key, doc_id, payload["favorite"])
+    return JSONResponse({"document_id": doc_id, "favorite": payload["favorite"]})
+
+
+_MANUAL_VALUATION_PROVIDERS = {"immobiliare", "idealista", "other"}
+_MANUAL_VALUATION_SOURCE_DOMAINS = {
+    "immobiliare": ("immobiliare.it",),
+    "idealista": ("idealista.it",),
+}
+
+
+def _manual_valuation_decimal(value: Any) -> Decimal | None:
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return None
+    text = str(value).strip().replace("€", "").replace(" ", "")
+    if "," in text:
+        text = text.replace(".", "").replace(",", ".")
+    try:
+        amount = Decimal(text)
+    except (InvalidOperation, TypeError, ValueError):
+        return None
+    if not amount.is_finite() or amount <= 0 or amount >= Decimal("1000000000000"):
+        return None
+    rounded = amount.quantize(Decimal("0.01"))
+    return rounded if Decimal("0") < rounded < Decimal("1000000000000") else None
+
+
+def _manual_affrancation_decimal(value: Any) -> Decimal | None:
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return None
+    text = str(value).strip().replace("€", "").replace(" ", "")
+    if "," in text:
+        text = text.replace(".", "").replace(",", ".")
+    elif text.count(".") > 1 or ("." in text and len(text.rsplit(".", 1)[1]) == 3):
+        text = text.replace(".", "")
+    try:
+        amount = Decimal(text)
+    except (InvalidOperation, TypeError, ValueError):
+        return None
+    if not amount.is_finite() or amount < 0 or amount >= Decimal("1000000000000"):
+        return None
+    try:
+        return amount.quantize(Decimal("0.01"))
+    except InvalidOperation:
+        return None
+
+
+def _manual_actual_size_decimal(value: Any) -> Decimal | None:
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return None
+    text = (
+        str(value)
+        .strip()
+        .replace("m²", "")
+        .replace("m2", "")
+        .replace("M²", "")
+        .replace("M2", "")
+    )
+    text = text.replace(" ", "")
+    if "," in text:
+        text = text.replace(".", "").replace(",", ".")
+    elif text.count(".") > 1 or ("." in text and len(text.rsplit(".", 1)[1]) == 3):
+        text = text.replace(".", "")
+    try:
+        amount = Decimal(text)
+    except (InvalidOperation, TypeError, ValueError):
+        return None
+    if not amount.is_finite() or amount <= 0 or amount >= Decimal("10000000"):
+        return None
+    try:
+        rounded = amount.quantize(Decimal("0.01"))
+    except InvalidOperation:
+        return None
+    return rounded if Decimal("0") < rounded < Decimal("10000000") else None
+
+
+def _manual_valuation_source_url(provider: str, value: Any) -> str | None:
+    if value is None or not str(value).strip():
+        return None
+    source_url = str(value).strip()
+    if len(source_url) > 2000:
+        raise ValueError("Il link della fonte supera il limite di 2000 caratteri.")
+    try:
+        parsed = urlsplit(source_url)
+        hostname = parsed.hostname
+    except ValueError:
+        raise ValueError("Inserisci un link http o https valido.") from None
+    if parsed.scheme not in {"https", "http"} or not hostname or any(char.isspace() for char in hostname):
+        raise ValueError("Inserisci un link http o https valido.")
+    if parsed.username or parsed.password:
+        raise ValueError("Il link non può contenere credenziali.")
+    allowed_domains = _MANUAL_VALUATION_SOURCE_DOMAINS.get(provider)
+    if allowed_domains and not any(
+        hostname.casefold() == domain or hostname.casefold().endswith("." + domain)
+        for domain in allowed_domains
+    ):
+        raise ValueError("Il link deve appartenere al portale selezionato.")
+    return source_url
+
+
+@router.put("/manual-property-valuations/{asset_key}", response_class=JSONResponse)
+async def web_manual_property_valuation(request: Request, asset_key: str, user=Depends(_require_auth)):
+    """Save or replace a user's manually transcribed estimate from an external provider."""
+    from fastapi import HTTPException
+
+    user_key = _favorite_user_key(user)
+    if not user_key:
+        raise HTTPException(status_code=401, detail="Authentication required to save valuations")
+    if not re.fullmatch(r"[a-f0-9]{64}", asset_key):
+        raise HTTPException(status_code=404, detail="Cadastral property not found")
+    try:
+        payload = await request.json()
+    except (ValueError, UnicodeDecodeError):
+        raise HTTPException(status_code=400, detail="Expected a JSON body") from None
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=422, detail="Expected a JSON object")
+
+    provider = str(payload.get("provider") or "").strip().lower()
+    if provider not in _MANUAL_VALUATION_PROVIDERS:
+        raise HTTPException(status_code=422, detail="provider must be immobiliare, idealista, or other")
+    value_min = _manual_valuation_decimal(payload.get("value_min"))
+    raw_value_max = payload.get("value_max")
+    value_max = _manual_valuation_decimal(raw_value_max)
+    if value_min is None:
+        raise HTTPException(status_code=422, detail="Inserisci un valore minimo maggiore di zero.")
+    if raw_value_max is not None and str(raw_value_max).strip() and value_max is None:
+        raise HTTPException(status_code=422, detail="Il valore massimo non è un importo valido.")
+    if value_max is not None and value_max < value_min:
+        raise HTTPException(status_code=422, detail="Il valore massimo deve essere almeno quello minimo.")
+    source_date = None
+    raw_date = str(payload.get("source_date") or "").strip()
+    if raw_date:
+        try:
+            source_date = datetime.strptime(raw_date, "%Y-%m-%d").date()
+        except ValueError:
+            raise HTTPException(status_code=422, detail="source_date must use YYYY-MM-DD") from None
+    notes = str(payload.get("notes") or "").strip() or None
+    if notes and len(notes) > 1000:
+        raise HTTPException(status_code=422, detail="Le note non possono superare 1000 caratteri.")
+    try:
+        source_url = _manual_valuation_source_url(provider, payload.get("source_url"))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from None
+
+    from .database import set_user_manual_property_valuation
+
+    await set_user_manual_property_valuation(
+        user_key, asset_key, provider, value_min, value_max, source_date, source_url, notes
+    )
+    return JSONResponse({"ok": True, "asset_key": asset_key, "provider": provider})
+
+
+@router.put("/manual-property-valuations/{asset_key}/affrancation", response_class=JSONResponse)
+async def web_property_affrancation_amount(request: Request, asset_key: str, user=Depends(_require_auth)):
+    """Save a user's affrancazione amount, or clear it to use the automatic estimate again."""
+    from fastapi import HTTPException
+
+    user_key = _favorite_user_key(user)
+    if not user_key:
+        raise HTTPException(status_code=401, detail="Authentication required to save affrancazione amounts")
+    if not re.fullmatch(r"[a-f0-9]{64}", asset_key):
+        raise HTTPException(status_code=404, detail="Cadastral property not found")
+    try:
+        payload = await request.json()
+    except (ValueError, UnicodeDecodeError):
+        raise HTTPException(status_code=400, detail="Expected a JSON body") from None
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=422, detail="Expected a JSON object")
+    raw_amount = payload.get("amount")
+    amount = _manual_affrancation_decimal(raw_amount)
+    if raw_amount is not None and str(raw_amount).strip() and amount is None:
+        raise HTTPException(status_code=422, detail="Inserisci un importo di affrancazione valido, pari o superiore a zero.")
+
+    from .database import set_user_property_affrancation_amount
+
+    await set_user_property_affrancation_amount(user_key, asset_key, amount)
+    return JSONResponse({"ok": True, "asset_key": asset_key, "amount": str(amount) if amount is not None else None})
+
+
+@router.put("/manual-property-valuations/{asset_key}/omi-override", response_class=JSONResponse)
+async def web_property_omi_override(request: Request, asset_key: str, user=Depends(_require_auth)):
+    """Save or clear a user's custom value range for one OMI-valued building."""
+    from fastapi import HTTPException
+
+    user_key = _favorite_user_key(user)
+    if not user_key:
+        raise HTTPException(status_code=401, detail="Authentication required to save OMI adjustments")
+    if not re.fullmatch(r"[a-f0-9]{64}", asset_key):
+        raise HTTPException(status_code=404, detail="Cadastral property not found")
+    try:
+        payload = await request.json()
+    except (ValueError, UnicodeDecodeError):
+        raise HTTPException(status_code=400, detail="Expected a JSON body") from None
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=422, detail="Expected a JSON object")
+
+    raw_min = payload.get("value_min")
+    raw_max = payload.get("value_max")
+    if raw_min is None or not str(raw_min).strip():
+        if raw_max is not None and str(raw_max).strip():
+            raise HTTPException(status_code=422, detail="Inserisci anche il valore minimo.")
+        value_min = value_max = None
+    else:
+        value_min = _manual_valuation_decimal(raw_min)
+        value_max = _manual_valuation_decimal(raw_max) if raw_max is not None and str(raw_max).strip() else None
+        if value_min is None:
+            raise HTTPException(status_code=422, detail="Inserisci un valore minimo maggiore di zero.")
+        if raw_max is not None and str(raw_max).strip() and value_max is None:
+            raise HTTPException(status_code=422, detail="Il valore massimo non è un importo valido.")
+        if value_max is not None and value_max < value_min:
+            raise HTTPException(status_code=422, detail="Il valore massimo deve essere almeno quello minimo.")
+
+    from .database import set_user_property_omi_override
+
+    await set_user_property_omi_override(user_key, asset_key, value_min, value_max)
+    return JSONResponse({
+        "ok": True,
+        "asset_key": asset_key,
+        "value_min": str(value_min) if value_min is not None else None,
+        "value_max": str(value_max) if value_max is not None else None,
+    })
+
+
+@router.put("/manual-property-valuations/{asset_key}/omi-selection", response_class=JSONResponse)
+async def web_property_omi_selection(request: Request, asset_key: str, user=Depends(_require_auth)):
+    """Save one user's OMI zone and typology choice for a cadastral property."""
+    from fastapi import HTTPException
+
+    user_key = _favorite_user_key(user)
+    if not user_key:
+        raise HTTPException(status_code=401, detail="Authentication required to select OMI data")
+    if not re.fullmatch(r"[a-f0-9]{64}", asset_key):
+        raise HTTPException(status_code=404, detail="Cadastral property not found")
+    try:
+        payload = await request.json()
+    except (ValueError, UnicodeDecodeError):
+        raise HTTPException(status_code=400, detail="Expected a JSON body") from None
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=422, detail="Expected a JSON object")
+
+    comune_code = str(payload.get("comune_code") or "").strip().upper()
+    is_cadastral_code = re.fullmatch(r"[A-Z0-9]{4}", comune_code)
+    is_istat_code = re.fullmatch(r"\d{5,6}", comune_code)
+    if not (is_cadastral_code or is_istat_code):
+        raise HTTPException(status_code=422, detail="Codice catastale o ISTAT del comune non valido.")
+    raw_zone = payload.get("zone_code")
+    zone_code = str(raw_zone or "").strip().upper() or None
+    if zone_code is not None and len(zone_code) > 24:
+        raise HTTPException(status_code=422, detail="Codice zona OMI non valido.")
+    raw_typology = payload.get("typology_code")
+    if raw_typology is None or not str(raw_typology).strip():
+        typology_code = None
+    else:
+        try:
+            typology_code = int(raw_typology)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=422, detail="Tipologia OMI non valida.") from None
+        if typology_code <= 0:
+            raise HTTPException(status_code=422, detail="Tipologia OMI non valida.")
+
+    from .omi_quotes import omi_comune_quotes
+
+    quotes = await omi_comune_quotes(comune_code)
+    if quotes is None:
+        raise HTTPException(status_code=503, detail="Le quotazioni OMI non sono temporaneamente disponibili.")
+    zone_quotes = [row for row in quotes if str(row.get("zona") or "").strip().upper() == zone_code] if zone_code else quotes
+    if zone_code and not zone_quotes:
+        raise HTTPException(status_code=422, detail="La zona OMI non è disponibile per questo comune.")
+    if typology_code is not None and not any(
+        str(row.get("cod_tipologia") or "").strip() == str(typology_code) for row in zone_quotes
+    ):
+        raise HTTPException(status_code=422, detail="La tipologia OMI non è disponibile nella zona selezionata.")
+
+    from .database import set_user_property_omi_selection
+
+    await set_user_property_omi_selection(user_key, asset_key, zone_code, typology_code)
+    return JSONResponse({
+        "ok": True,
+        "asset_key": asset_key,
+        "zone_code": zone_code,
+        "typology_code": typology_code,
+    })
+
+
+@router.put("/manual-property-valuations/{asset_key}/actual-size", response_class=JSONResponse)
+async def web_property_actual_size(request: Request, asset_key: str, user=Depends(_require_auth)):
+    """Save or clear this user's effective square-metre size for one cadastral property."""
+    from fastapi import HTTPException
+
+    user_key = _favorite_user_key(user)
+    if not user_key:
+        raise HTTPException(status_code=401, detail="Authentication required to edit property size")
+    if not re.fullmatch(r"[a-f0-9]{64}", asset_key):
+        raise HTTPException(status_code=404, detail="Cadastral property not found")
+    try:
+        payload = await request.json()
+    except (ValueError, UnicodeDecodeError):
+        raise HTTPException(status_code=400, detail="Expected a JSON body") from None
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=422, detail="Expected a JSON object")
+
+    raw_size = payload.get("actual_size_sqm")
+    actual_size_sqm = _manual_actual_size_decimal(raw_size)
+    if raw_size is not None and str(raw_size).strip() and actual_size_sqm is None:
+        raise HTTPException(status_code=422, detail="Inserisci una superficie valida maggiore di zero.")
+
+    from .database import set_user_property_actual_size
+
+    await set_user_property_actual_size(user_key, asset_key, actual_size_sqm)
+    return JSONResponse({
+        "ok": True,
+        "asset_key": asset_key,
+        "actual_size_sqm": str(actual_size_sqm) if actual_size_sqm is not None else None,
+    })
+
+
+@router.put("/manual-property-valuations/{asset_key}/preference", response_class=JSONResponse)
+async def web_manual_property_valuation_preference(request: Request, asset_key: str, user=Depends(_require_auth)):
+    """Set which available valuation source this user prefers for one cadastral property."""
+    from fastapi import HTTPException
+
+    user_key = _favorite_user_key(user)
+    if not user_key:
+        raise HTTPException(status_code=401, detail="Authentication required to select a valuation source")
+    if not re.fullmatch(r"[a-f0-9]{64}", asset_key):
+        raise HTTPException(status_code=404, detail="Cadastral property not found")
+    try:
+        payload = await request.json()
+    except (ValueError, UnicodeDecodeError):
+        raise HTTPException(status_code=400, detail="Expected a JSON body") from None
+    source = str(payload.get("source") or "").strip().lower() if isinstance(payload, dict) else ""
+    if source != "omi" and source not in _MANUAL_VALUATION_PROVIDERS:
+        raise HTTPException(status_code=422, detail="source must be omi, immobiliare, idealista, or other")
+    from .database import set_user_property_valuation_preference
+
+    saved = await set_user_property_valuation_preference(user_key, asset_key, source)
+    if not saved:
+        raise HTTPException(status_code=422, detail="Inserisci prima una stima per la fonte scelta.")
+    return JSONResponse({"ok": True, "asset_key": asset_key, "preferred_source": source})
+
+
 @router.get("/documents/{doc_id}/geojson")
 async def web_document_geojson(doc_id: int, request: Request, user=Depends(_require_auth)):
     """Return the GeoJSON payload extracted from a planimetria P7M document."""
@@ -4933,7 +5810,11 @@ async def web_document_geojson(doc_id: int, request: Request, user=Depends(_requ
 
 
 @router.get("/documents/{doc_id}/parcel-map.json", response_class=JSONResponse)
-async def web_document_parcel_map_data(doc_id: int, user=Depends(_require_auth)):
+async def web_document_parcel_map_data(
+    doc_id: int,
+    also: list[int] = Query(default=[]),
+    user=Depends(_require_auth),
+):
     """Return the parcel geometries and markers for an authenticated document map."""
     from fastapi import HTTPException
 
@@ -4943,26 +5824,112 @@ async def web_document_parcel_map_data(doc_id: int, user=Depends(_require_auth))
 
     xml_content = doc.get("xml_content", "")
     doc["xml_parsed"] = _parse_xml_to_dict(xml_content)
+    if also:
+        if (doc.get("document_type") or "") != "visura_soggetto":
+            raise HTTPException(status_code=422, detail="Related visure are only supported for subject maps")
+        fiscal_code = _document_subject_fiscal_code(doc)
+        primary_scope = _subject_search_scope(
+            doc.get("filename"),
+            stored_scope=doc.get("subject_search_scope"),
+            stored_province=doc.get("subject_search_province"),
+        )
+        if not fiscal_code:
+            raise HTTPException(status_code=422, detail="Subject identity is missing")
+        if _subject_cadastre_type(doc) != "E" or primary_scope["search_scope"] != "provincial":
+            raise HTTPException(status_code=422, detail="This map is not a provincial E-cadastre portfolio")
+
+        related_parsed = [doc["xml_parsed"]]
+        seen_ids = {doc_id}
+        for related_id in also:
+            if related_id in seen_ids:
+                continue
+            seen_ids.add(related_id)
+            related = await get_document_by_id(related_id)
+            if not related:
+                raise HTTPException(status_code=422, detail="Related visura does not match this subject portfolio")
+            related_scope = _subject_search_scope(
+                related.get("filename"),
+                stored_scope=related.get("subject_search_scope"),
+                stored_province=related.get("subject_search_province"),
+            )
+            if (
+                related.get("document_type") != "visura_soggetto"
+                or _document_subject_fiscal_code(related) != fiscal_code
+                or _subject_cadastre_type(related) != "E"
+                or related.get("visura_subtype") != doc.get("visura_subtype")
+                or related.get("situazione_al") != doc.get("situazione_al")
+                or related_scope["search_scope"] != "provincial"
+            ):
+                raise HTTPException(status_code=422, detail="Related visura does not match this subject portfolio")
+            related_parsed.append(_parse_xml_to_dict(related.get("xml_content", "")))
+        doc["xml_parsed"] = _merge_subject_visura_asset_groups(related_parsed)
     doc["view"] = build_visura_view(xml_content)
     lookup = await _google_maps_context(doc)
     if lookup is None:
         raise HTTPException(status_code=422, detail="Parcel map data is not available")
 
-    return JSONResponse(
-        {
-            "parcel_markers": lookup.get("parcel_markers") or [],
-            "parcel_features": {
-                "type": "FeatureCollection",
-                "features": lookup.get("parcel_features") or [],
-            },
-            "sheet_features": {
-                "type": "FeatureCollection",
-                "features": lookup.get("sheet_features") or [],
-            },
-            "unmapped_parcels": lookup.get("unmapped_parcel_items") or [],
+    return JSONResponse(await _parcel_map_payload(lookup), headers={"Cache-Control": "private, max-age=300"})
+
+
+async def _parcel_map_payload(lookup: dict[str, Any]) -> dict[str, Any]:
+    """The JSON the parcel map script fetches: markers, parcel and sheet outlines, parcels without a position."""
+    # A parcel with no outline and no sheet outline has no position of its own: send the centre of what is known of its
+    # comune, so the map places it in the right city instead of falling back to the map centre.
+    unmapped_parcels = [dict(item) for item in lookup.get("unmapped_parcel_items") or []]
+    centroids = await get_comune_centroids(item.get("municipality_code") for item in unmapped_parcels)
+    for item in unmapped_parcels:
+        point = centroids.get(str(item.get("municipality_code") or "").strip().upper())
+        if point:
+            item["latitude"], item["longitude"] = point
+    return {
+        "parcel_markers": lookup.get("parcel_markers") or [],
+        "parcel_features": {
+            "type": "FeatureCollection",
+            "features": lookup.get("parcel_features") or [],
         },
-        headers={"Cache-Control": "private, max-age=300"},
-    )
+        "sheet_features": {
+            "type": "FeatureCollection",
+            "features": lookup.get("sheet_features") or [],
+        },
+        "unmapped_parcels": unmapped_parcels,
+    }
+
+
+async def _subject_parcel_map_data(code: str, code_pattern: str, key: str | None, after: int):
+    """Map data of a subject page without a document behind it, as increments (``after`` = chunks already drawn).
+
+    The page names the data it was built with (``k``). If the service no longer has it (restart, eviction) the map is
+    rebuilt from the subject's saved search, so a page left open never ends on "map not loaded". A lookup that failed
+    answers an empty, finished map, not an error.
+    """
+    from fastapi import HTTPException
+
+    normalized_code = code.strip().upper()
+    if not re.fullmatch(code_pattern, normalized_code):
+        raise HTTPException(status_code=404, detail="Soggetto non trovato")
+    headers = {"Cache-Control": "no-store"}
+    if not key or (key not in _HUB_MAP_DATA and key not in _HUB_MAP_TASKS):
+        profile = await _subject_query_profile(normalized_code, [], [], 1)
+        if profile is None:
+            raise HTTPException(status_code=404, detail="Nessuna ricerca per soggetto archiviata")
+        parcels = _hub_map_parcels(profile)
+        if not parcels:
+            return JSONResponse({**_empty_map_payload(), "next": 0, "done": True, "progress": 1.0}, headers=headers)
+        key = _hub_map_key(parcels)
+        if key not in _HUB_MAP_DATA and key not in _HUB_MAP_TASKS:
+            _HUB_MAP_TASKS[key] = asyncio.create_task(_build_hub_map(key, parcels, _hub_data_url(profile, key)))
+            await asyncio.sleep(0)  # let the task register its progress before the first poll
+    return JSONResponse(await _hub_map_increment(key, max(0, after)), headers=headers)
+
+
+@router.get("/persons/{fiscal_code}/parcel-map.json", response_class=JSONResponse)
+async def web_person_parcel_map_data(fiscal_code: str, k: str | None = None, after: int = 0, user=Depends(_require_auth)):
+    return await _subject_parcel_map_data(fiscal_code, r"[A-Z0-9]{16}", k, after)
+
+
+@router.get("/companies/{fiscal_code}/parcel-map.json", response_class=JSONResponse)
+async def web_company_parcel_map_data(fiscal_code: str, k: str | None = None, after: int = 0, user=Depends(_require_auth)):
+    return await _subject_parcel_map_data(fiscal_code, r"\d{11}", k, after)
 
 
 async def _backfill_document_metadata(base: Path, parsed_by_stem: dict) -> None:
@@ -4990,11 +5957,27 @@ async def _backfill_document_metadata(base: Path, parsed_by_stem: dict) -> None:
     # even when their metadata already exists.
     async with session_factory() as session:
         await ensure_lookup(session, "document_type", "ispezione_ipotecaria")
+        await ensure_lookup(session, "document_type", "elenco_immobili")
+        await ensure_lookup(session, "document_type", "elenco_subalterni")
         await session.execute(
             text(
                 "UPDATE document SET document_type = 'ispezione_ipotecaria' "
                 "WHERE substr(lower(file_name), 1, 4) = 'isp_' "
                 "AND document_type IS DISTINCT FROM 'ispezione_ipotecaria'"
+            )
+        )
+        await session.execute(
+            text(
+                "UPDATE document SET document_type = 'elenco_subalterni' "
+                "WHERE substr(lower(file_name), 1, 7) = 'el_sub_' "
+                "AND document_type IS DISTINCT FROM 'elenco_subalterni'"
+            )
+        )
+        await session.execute(
+            text(
+                "UPDATE document SET document_type = 'elenco_immobili' "
+                "WHERE lower(file_name) LIKE '%.dat' "
+                "AND document_type IS DISTINCT FROM 'elenco_immobili'"
             )
         )
         await session.commit()
@@ -5127,9 +6110,10 @@ async def _rescan_documents_dir() -> int | None:
     indexed_paths = set((await get_indexed_file_paths()).keys())
     indexed_names = await get_indexed_filenames()
 
-    _EXT_FORMAT = {".pdf": "PDF", ".xml": "XML", ".p7m": "P7M"}
+    _EXT_FORMAT = {".pdf": "PDF", ".xml": "XML", ".p7m": "P7M", ".dat": "DAT"}
     _NAME_TYPE = [
         ("isp_", "ispezione_ipotecaria"),
+        ("el_sub_", "elenco_subalterni"),
         ("vi_att_fab", "visura_fabbricati"),
         ("vi_sto_fab", "visura_fabbricati"),
         ("vi_att_ter", "visura_terreni"),
@@ -5189,7 +6173,7 @@ async def _rescan_documents_dir() -> int | None:
             if fpath.name.casefold().startswith("isp_"):
                 parsed = dict(parsed or {})
                 parsed["tipo"] = "ispezione_ipotecaria"
-        else:
+        elif ext == ".pdf":
             # PDF: try to inherit metadata from a paired P7M/XML with the same stem (or the same without the date)
             parsed = parsed_by_stem.get(fpath.stem) or parsed_by_stem.get(_document_key(fpath.stem))
             if fpath.name.casefold().startswith("isp_"):
@@ -5197,6 +6181,15 @@ async def _rescan_documents_dir() -> int | None:
             elif parsed is None:
                 # No paired structured file — parse PDF content directly
                 parsed = await asyncio.to_thread(_parse_visura_pdf, str(fpath))
+        else:
+            parsed = {}
+
+        if ext == ".dat":
+            parsed = dict(parsed or {})
+            parsed["tipo"] = "elenco_immobili"
+        elif fpath.name.casefold().startswith("el_sub_"):
+            parsed = dict(parsed or {})
+            parsed["tipo"] = "elenco_subalterni"
 
         if parsed is None:
             parsed = {"tipo": _guess_type_from_name(fpath.name)}
@@ -5267,13 +6260,13 @@ async def web_documents(
 ):
     """Documents hub — single-step query responses.
 
-    Root (``/documents``) shows the category, location, and filesystem views in
-    one tabbed hub. ``?view=map`` and ``?view=files`` select the matching tab;
-    filesystem paths keep their location while browsing. Pure-integer paths
-    dispatch to the single-document viewer.
+    Root (``/documents``) shows category, location, and file-oriented views of
+    the same indexed document records. ``?view=map`` and ``?view=files`` select
+    the matching layout. Pure-integer paths dispatch to the single-document
+    viewer; other paths may still address a specific stored file.
 
     Query params:
-        view: ``map`` to select the location tab or ``files`` to select the filesystem tab.
+        view: ``map`` to select the location tab or ``files`` to select the file-oriented tab.
         template: force a viewer template, e.g. ``?template=result_detail`` for
             the exhaustive field-by-field view.
     """
@@ -5382,7 +6375,7 @@ async def web_documents(
             ocular_extraction = await get_document_structured_extraction(int(doc["id"]))
             map_lookup = await _google_maps_context(doc)
             return theme.render(
-                "catasto/land_map.html",
+                "catasto/entity.html",
                 request,
                 user=user,
                 doc=doc,
@@ -5409,83 +6402,21 @@ async def web_documents(
             land_registry_static_base="/land-registry/static",
         )
 
-    base = _files_base()
-    target = (base / path).resolve() if path else base
+    if path:
+        base = _files_base()
+        target = (base / path).resolve()
+        # Keep direct file URLs available, while deriving all three browser
+        # views solely from indexed database records.
+        if target != base and base not in target.parents:
+            from fastapi import HTTPException
 
-    # Prevent path traversal
-    if not str(target).startswith(str(base)):
-        from fastapi import HTTPException
+            raise HTTPException(status_code=403, detail="Access denied")
+        if target.is_file():
+            return FileResponse(str(target), filename=target.name)
+        if not target.is_dir():
+            from fastapi import HTTPException
 
-        raise HTTPException(status_code=403, detail="Access denied")
-    if not target.exists():
-        from fastapi import HTTPException
-
-        raise HTTPException(status_code=404, detail="Not found")
-
-    # Serve files directly
-    if target.is_file():
-        return FileResponse(str(target), filename=target.name)
-
-    # Build indexed-file map (file_path → {id, oggetto}) for linking files to DB rows
-    try:
-        indexed = await get_indexed_file_metadata()
-    except Exception:
-        indexed = {}
-
-    entries = []
-    total_size = 0
-    for child in sorted(target.iterdir(), key=lambda p: (not p.is_dir(), p.name.lower())):
-        try:
-            stat = child.stat()
-        except OSError:
-            continue
-        rel_path = str(child.relative_to(base))
-        is_dir = child.is_dir()
-        ext = child.suffix.lower() if not is_dir else ""
-        size_bytes = stat.st_size if not is_dir else 0
-        total_size += size_bytes
-
-        # Sub-directory: count direct children
-        child_count: Optional[int] = None
-        if is_dir:
-            try:
-                child_count = sum(1 for _ in child.iterdir())
-            except OSError:
-                pass
-
-        icon, icon_color = _file_icon(ext, is_dir)
-        meta = indexed.get(str(child)) if not is_dir else None
-        doc_id = meta["id"] if meta else None
-        new_name = meta["oggetto"] if meta else None
-
-        entries.append(
-            {
-                "name": child.name,
-                "new_name": new_name or "",
-                "path": rel_path,
-                "is_dir": is_dir,
-                "ext": ext,
-                "size_bytes": size_bytes,
-                "size_human": (
-                    _human_size(size_bytes)
-                    if not is_dir
-                    else (f"{child_count} items" if child_count is not None else "")
-                ),
-                "mtime": datetime.fromtimestamp(stat.st_mtime).strftime("%Y-%m-%d %H:%M"),
-                "icon": icon,
-                "icon_color": icon_color,
-                "doc_id": doc_id,
-            }
-        )
-
-    # Breadcrumbs
-    parts = [p for p in path.split("/") if p] if path else []
-    breadcrumbs = [{"name": base.name, "path": ""}]
-    for i, part in enumerate(parts):
-        breadcrumbs.append({"name": part, "path": "/".join(parts[: i + 1])})
-
-    n_dirs = sum(1 for e in entries if e["is_dir"])
-    n_files = len(entries) - n_dirs
+            raise HTTPException(status_code=404, detail="Not found")
 
     active_view = (
         "files"
@@ -5494,14 +6425,19 @@ async def web_documents(
         if view in ("map", "tree")
         else "categories"
     )
-    try:
-        document_files = await get_all_documents(limit=10000)
-    except Exception:
-        if active_view != "files":
-            raise
-        logger.exception("Document index unavailable while opening filesystem browser")
-        document_files = []
+    document_files = await get_all_documents(limit=10000)
     logical = _collapse_to_logical_docs(document_files)
+    favorite_user = _favorite_user_key(user)
+    favorite_document_ids = set()
+    if favorite_user:
+        from .database import get_document_favorite_ids
+
+        favorite_document_ids = await get_document_favorite_ids(favorite_user)
+    for document in logical:
+        logical_file_ids = {file.get("id") for file in document.get("files") or []}
+        if document.get("id") is not None:
+            logical_file_ids.add(document["id"])
+        document["is_favorite"] = bool(logical_file_ids & favorite_document_ids)
     _link_related_visura_docs(logical)
     tree = _build_document_tree(logical)
     prop_map = _build_property_map(logical)
@@ -5514,12 +6450,855 @@ async def web_documents(
         total=len(logical),
         document_file_count=len(document_files),
         active_view=active_view,
-        entries=entries,
-        current_path=path,
-        breadcrumbs=breadcrumbs,
-        n_dirs=n_dirs,
-        fs_n_files=n_files,
-        total_size=_human_size(total_size) if total_size else None,
+        files=logical,
+        favorites_enabled=bool(favorite_user),
+    )
+
+
+# Document families shown for every parcel of the hub, in display order: (key, label, icon, document types)
+_PARCEL_DOCUMENT_KINDS = (
+    ("visure", "Visure", "fa-file-lines", {"visura_fabbricati", "visura_terreni", "visura", "elenco_subalterni"}),
+    ("planimetrie", "Planimetrie", "fa-ruler-combined", {"planimetria", "elaborato_planimetrico", "epa"}),
+    ("mappe", "Mappe", "fa-map", {"estratto_mappa", "mappa", "fiduciali", "export_mappa", "originali"}),
+    ("ispezioni", "Ispezioni ipotecarie", "fa-landmark", {"ispezione_ipotecaria"}),
+)
+_PARCEL_REQUEST_KINDS = (
+    ("ispezioni_catastali", "Ispezioni catastali", "fa-magnifying-glass", {"ispezioni", "ispezioni_cart", "ispezioni_cartacee"}),
+    ("mappe", "Mappe", "fa-map", {"mappa", "export_mappa", "fiduciali"}),
+)
+
+_HUB_MISSING_LISTED = 150  # parcels named per kind in the "still to request" lists (the counts are always complete)
+_HUB_OWNERSHIP_DOCUMENTS = 150  # visure parsed for the parcels of one hub page (each is a P7M read in memory)
+_HUB_PAGE_PARCELS = 100_000  # every parcel of the query is listed (the comuni are folded accordions); `?page=` still works
+
+
+def _hub_document(item: dict) -> dict:
+    """The few fields the hub needs from a logical document."""
+    formats = sorted({f.get("file_format") for f in item.get("files") or [] if f.get("file_format")})
+    return {
+        "id": item.get("id"),
+        "title": item.get("display_name") or item.get("oggetto") or item.get("filename") or f"Documento {item.get('id')}",
+        "type": item.get("document_type") or "",
+        "date": item.get("situazione_al") or item.get("richiesta_del") or "",
+        "subunit": item.get("subalterno") or "",
+        "formats": formats,
+    }
+
+
+def _hub_documents(ids: set[int], indexed_by_id: dict[int, dict]) -> list[dict]:
+    rows = [dict(indexed_by_id[i]) for i in ids if i in indexed_by_id]
+    return [_hub_document(item) for item in _collapse_to_logical_docs(rows)]
+
+
+def _hub_request(item: dict) -> dict:
+    request_type = str(item.get("request_type") or "").strip().casefold().replace("-", "_")
+    label = {
+        "ispezioni": "Ispezione catastale",
+        "ispezioni_cart": "Ispezione catastale cartacea",
+        "ispezioni_cartacee": "Ispezione catastale cartacea",
+    }.get(request_type, request_type_info(request_type).label)
+    return {
+        "request_id": item.get("request_id"),
+        "type": request_type,
+        "label": label,
+        "date": _format_timestamp(item.get("responded_at") or item.get("requested_at")),
+        "success": item.get("success"),
+        "total_results": item.get("total_results"),
+    }
+
+
+def _hub_owner(owner: dict, own_code: str) -> dict:
+    return {
+        "name": owner.get("name") or "-",
+        "fiscal_code": owner.get("fiscal_code") or "",
+        "right": owner.get("right") or "",
+        "quota": owner.get("quota") or "",
+        "period": (owner.get("period") or {}).get("label") or "",
+        "birth": " · ".join(x for x in (owner.get("birth_date"), owner.get("birth_place") or owner.get("registered_office")) if x),
+        "is_subject": bool(own_code) and (owner.get("fiscal_code") or "").upper() == own_code,
+    }
+
+
+async def _hub_parcel_ownership(documents: list[dict], own_code: str, budget: list[int]) -> list[dict]:
+    """Full ownership (current owners + acts) from the newest visura of each subalterno of a parcel.
+
+    ``documents`` are the hub's logical documents of the parcel's visure; ``budget`` is the shared count of visure
+    that may still be parsed for this page.
+    """
+    from decimal import Decimal
+
+    from .cadastral_values import building_cadastral_value, land_cadastral_value
+    from .land_registry_kpis import _format_currency_it
+
+    newest: dict[str, dict] = {}
+    for d in documents:  # newest first
+        newest.setdefault(d["subunit"] or "", d)
+    out = []
+    for subunit, d in newest.items():
+        if budget[0] <= 0:
+            break
+        budget[0] -= 1
+        doc = await get_document_by_id(int(d["id"]))
+        view = build_visura_view((doc or {}).get("xml_content", ""))
+        if not view:
+            continue
+        units = view.get("units") or []
+        unit = next((u for u in units if (u.get("identifier") or {}).get("subunit", "") == subunit), units[0] if units else {})
+        acts = [
+            {
+                "type": (m.get("act") or {}).get("type") or (m.get("act") or {}).get("text") or "",
+                "date": (m.get("act") or {}).get("date") or "",
+                "current": bool(m.get("current")),
+                "start": m.get("start") or "",
+                "end": m.get("end") or "",
+                "owners": [_hub_owner(o, own_code) for o in m.get("owners") or []],
+            }
+            for m in view.get("ownership") or []
+        ]
+        classification = unit.get("classification") or {}
+        totals = unit.get("totals") or {}
+        if view.get("family") == "fabbricati":
+            cadastral_value = building_cadastral_value(
+                classification.get("income_eur"), classification.get("category")
+            )
+            financial = {
+                "base_label": "Rendita catastale",
+                "base_value": classification.get("income_eur") or "",
+                "cadastral_value": _format_currency_it(float(cadastral_value.value)) if cadastral_value else "",
+                "formula": (
+                    f"rendita × 1,05 × {cadastral_value.multiplier}"
+                    if cadastral_value else ""
+                ),
+                "other_income": "",
+                "note": (
+                    "Valore fiscale ai fini IMU, riferito all'intera unità; non è una stima di mercato e non applica la quota di proprietà."
+                    if cadastral_value else "Valore catastale non calcolabile: rendita o moltiplicatore catastale non disponibile."
+                ),
+            }
+        else:
+            land_values = [
+                land_cadastral_value(row.get("dominical_income_eur"))
+                for row in unit.get("classifications") or []
+            ]
+            land_values = [value for value in land_values if value is not None]
+            taxable_base = sum((value.value for value in land_values), Decimal("0"))
+            financial = {
+                "base_label": "Reddito dominicale",
+                "base_value": totals.get("dominical_eur") or "",
+                "cadastral_value": _format_currency_it(float(taxable_base)) if land_values else "",
+                "formula": "reddito dominicale × 1,25 × 135" if land_values else "",
+                "other_income": totals.get("agricultural_eur") or "",
+                "note": (
+                    "Valore fiscale ai fini IMU, riferito all'intera particella; non è una stima di mercato e non applica la quota di proprietà. Il moltiplicatore ridotto per CD/IAP non è applicato."
+                    if land_values else "Valore catastale non calcolabile: reddito dominicale non disponibile."
+                ),
+            }
+        out.append(
+            {
+                "document_id": d["id"],
+                "subunit": subunit,
+                # Full interpreted Visura: unit facts, property history and every ownership act are rendered
+                # together inside the parcel group rather than being split across the page.
+                "view": view,
+                "unit_view": unit,
+                "financial": financial,
+                # what the visura says about the unit itself, to fill what the saved query left blank
+                "unit": {
+                    "address": unit.get("address") or "",
+                    "category": classification.get("category") or "",
+                    "cadastral_class": classification.get("class") or "",
+                    "consistency": classification.get("consistency") or "",
+                    "income": classification.get("income_eur") or "",
+                    "area": (unit.get("surface") or {}).get("total") or (f"{totals['area_m2']} m²" if totals.get("area_m2") else ""),
+                    "dominical_income": totals.get("dominical_eur") or "",
+                    "agricultural_income": totals.get("agricultural_eur") or "",
+                },
+                "as_of": view.get("as_of") or d["date"],
+                "current_owners": [_hub_owner(o, own_code) for o in unit.get("current_owners") or []],
+                "acts": acts,
+            }
+        )
+    return out
+
+
+def _enrich_units_from_visure(units: list[dict], ownership: list[dict]) -> None:
+    """Fill the fields the saved query left blank from the visura of the same subalterno (in place).
+
+    A unit that got something from a visura carries ``enriched_from`` (the document id) and the filled field names.
+    """
+    by_subunit = {o["subunit"]: o for o in ownership}
+    for unit in units:
+        source = by_subunit.get(str(unit.get("subunit") or "").strip())
+        if source is None:
+            continue
+        filled = [field for field, value in source["unit"].items() if value and not unit.get(field)]
+        for field in filled:
+            unit[field] = source["unit"][field]
+        if filled:
+            unit["enriched_from"] = source["document_id"]
+            unit["enriched_fields"] = filled
+
+
+async def _subject_query_profile(
+    code: str, subject_documents: list[dict], indexed_files: list[dict], page: int = 1
+) -> dict | None:
+    """Hub of a subject built on its newest saved ``soggetto`` query (None when it was never queried).
+
+    The query result is the skeleton: provinces → comuni → parcels (with their units and this subject's right).
+    Everything else stored hangs off it: the subject's own visure and ipotecarie, per parcel the visure,
+    planimetrie, map documents, ipotecarie, cadastral inspection and map request results, and cached map geometry.
+    What is missing is shown as missing, so the page doubles as the checklist of what is still to request.
+    """
+    queries = await find_subject_query_requests(code)
+    if not queries:
+        return None
+    latest = queries[0]
+    request_id = latest["request_id"]
+    record = await get_result_record(request_id)
+    response = await get_response(request_id)
+    data = (response or {}).get("data") or {}
+    properties = await get_db_properties_for_response(request_id)
+    owners = await get_db_owners_for_response(request_id)
+
+    own_rights = {o["result_id"]: o for o in owners if (o.get("fiscal_code") or "").upper() == code}
+    name = next((o["nominativo"] for o in owners if o.get("fiscal_code") == code and o.get("nominativo")), None)
+    name = name or await get_subject_name(code)
+
+    indexed_by_id = {int(item["id"]): item for item in indexed_files if item.get("id") is not None}
+    keys = {parcel_key(p.get("comune_id"), p.get("section"), p.get("sheet"), p.get("parcel")) for p in properties}
+    keys.discard(None)
+    document_ids = await find_parcel_document_ids(keys)
+    request_records = await find_parcel_request_records(keys)
+    with_map = await find_parcels_with_geometry(keys)
+
+    ownership_budget = [_HUB_OWNERSHIP_DOCUMENTS]
+    parcels: dict[tuple, dict] = {}
+    for prop in properties:
+        right = own_rights.get(prop.get("result_id")) or {}
+        unit = {**prop, "right_type": right.get("right_type"), "ownership_share": right.get("ownership_share")}
+        key = parcel_key(prop.get("comune_id"), prop.get("section"), prop.get("sheet"), prop.get("parcel"))
+        group_key = key or (None, prop.get("section"), prop.get("sheet"), prop.get("parcel"), prop.get("municipality"))
+        parcel = parcels.setdefault(
+            group_key,
+            {
+                "province": prop.get("province") or "-",
+                "municipality": prop.get("municipality") or "-",
+                "section": prop.get("section") or "",
+                "sheet": prop.get("sheet") or "-",
+                "parcel": prop.get("parcel") or "-",
+                "units": [],
+                "key": key,
+                "municipality_code": prop.get("municipality_code") or "",
+                "province_code": prop.get("province_code") or "",
+            },
+        )
+        parcel["units"].append(unit)
+
+    for parcel in parcels.values():
+        units = parcel["units"]
+        parcel["is_building"] = any(u.get("property_type") == "building" for u in units)
+        address = next((u.get("address") for u in units if u.get("address")), None)
+        parcel["map_query"] = f"{address}, {parcel['municipality']}" if address else ""
+        ids = {i for i in document_ids.get(parcel["key"], set()) if (indexed_by_id.get(i) or {}).get("document_type") != "visura_soggetto"}
+        docs = _hub_documents(ids, indexed_by_id)
+        # a building's parcel holds the visure of every subalterno, most of them other owners': keep this subject's own
+        own_subunits = {str(u.get("subunit") or "").strip() for u in units if u.get("subunit")}
+        parcel["other_units_documents"] = sum(1 for d in docs if d["subunit"] and d["subunit"] not in own_subunits)
+        docs = [d for d in docs if not d["subunit"] or d["subunit"] in own_subunits]
+        grouped = {kind: [d for d in docs if d["type"] in types] for kind, _l, _i, types in _PARCEL_DOCUMENT_KINDS}
+        known = set().union(*(types for *_x, types in _PARCEL_DOCUMENT_KINDS))
+        grouped["altri"] = [d for d in docs if d["type"] not in known]
+        for group in grouped.values():
+            group.sort(key=lambda d: d["date"], reverse=True)
+        parcel["documents"] = grouped
+        parcel_requests = {kind: [] for kind, _label, _icon, _types in _PARCEL_REQUEST_KINDS}
+        for request_record in request_records.get(parcel["key"], []):
+            normalized_type = str(request_record.get("request_type") or "").casefold().replace("-", "_")
+            request_kind = next(
+                (kind for kind, _label, _icon, types in _PARCEL_REQUEST_KINDS if normalized_type in types),
+                None,
+            )
+            if request_kind:
+                parcel_requests[request_kind].append(_hub_request(request_record))
+        parcel["requests"] = parcel_requests
+        parcel["has_map"] = parcel["key"] in with_map
+        parcel["map_document_id"] = next((d["id"] for d in grouped["visure"]), None)
+
+    ordered = sorted(
+        parcels.values(),
+        key=lambda x: (not x["is_building"], x["province"], x["municipality"], x["sheet"].zfill(5), x["parcel"].zfill(6)),
+    )
+    municipality_totals: dict[tuple, int] = {}
+    for parcel in ordered:
+        municipality = (parcel["province"], parcel["municipality"])
+        municipality_totals[municipality] = municipality_totals.get(municipality, 0) + 1
+
+    pages = max(1, -(-len(ordered) // _HUB_PAGE_PARCELS))
+    page = min(max(page, 1), pages)
+    first = (page - 1) * _HUB_PAGE_PARCELS
+    page_parcels = ordered[first : first + _HUB_PAGE_PARCELS]
+    # ownership comes from parsing the visure, so only the parcels shown get it (and it is not capped for them)
+    for parcel in page_parcels:
+        parcel["ownership"] = await _hub_parcel_ownership(parcel["documents"]["visure"], code, ownership_budget)
+        _enrich_units_from_visure(parcel["units"], parcel["ownership"])
+
+    def build_tree(parcel_list: list[dict]) -> list[dict]:
+        tree: list[dict] = []
+        for parcel in parcel_list:
+            if not tree or tree[-1]["province"] != parcel["province"]:
+                tree.append({"province": parcel["province"], "municipalities": []})
+            municipalities = tree[-1]["municipalities"]
+            if not municipalities or municipalities[-1]["name"] != parcel["municipality"]:
+                municipalities.append(
+                    {
+                        "name": parcel["municipality"],
+                        "parcels": [],
+                        "total": municipality_totals[(parcel["province"], parcel["municipality"])],
+                    }
+                )
+            municipalities[-1]["parcels"].append(parcel)
+        return tree
+
+    tree = build_tree(page_parcels)
+    # the parcels something is archived for (documents or full ownership): the enrichment section of the subject page
+    documented_tree = build_tree(
+        [
+            p for p in page_parcels
+            if p.get("ownership") or any(p["documents"].values()) or any(p["requests"].values())
+        ]
+    )
+
+    inspection_ids = await find_subject_inspection_document_ids(code)
+    subject_visure = [
+        {
+            "id": d.get("id"),
+            "title": d.get("search_scope_label") or d.get("display_name") or d.get("oggetto") or d.get("filename"),
+            "tipo_catasto": d.get("tipo_catasto") or "",
+            "subtype": d.get("visura_subtype") or "",
+            "date": d.get("situazione_al") or d.get("richiesta_del") or "",
+            "formats": sorted({f.get("file_format") for f in d.get("files") or [] if f.get("file_format")}),
+        }
+        for d in subject_documents
+    ]
+    all_parcels = list(parcels.values())
+
+    def missing_for(kind: str, label: str, icon: str) -> dict:
+        """The parcels nothing of this kind is archived for, by comune: the checklist of what is left to request."""
+        by_comune: dict[tuple, list[str]] = {}
+        count = 0
+        for parcel in ordered:
+            if parcel["documents"][kind] or (kind == "mappe" and parcel["has_map"]):
+                continue
+            count += 1
+            by_comune.setdefault((parcel["province"], parcel["municipality"]), []).append(
+                f"{'Sez. ' + parcel['section'] + ' · ' if parcel['section'] else ''}Fg {parcel['sheet']} · P.lla {parcel['parcel']}"
+            )
+        shown, groups = 0, []
+        for (province, municipality), refs in by_comune.items():
+            room = _HUB_MISSING_LISTED - shown
+            if room <= 0:
+                break
+            groups.append({"province": province, "municipality": municipality, "parcels": refs[:room], "total": len(refs)})
+            shown += min(len(refs), room)
+        return {"kind": kind, "label": label, "icon": icon, "count": count, "groups": groups, "more": count - shown}
+
+    missing = [missing_for(kind, label, icon) for kind, label, icon, _types in _PARCEL_DOCUMENT_KINDS if kind != "mappe"]
+    return {
+        "code": code,
+        "name": name,
+        "request_id": request_id,
+        "tipo_catasto": latest["tipo_catasto"],
+        "requested_at_display": _format_timestamp((record or {}).get("requested_at")),
+        "responded_at_display": _format_timestamp(latest["responded_at"]),
+        "provinces": [p for p in (data.get("province") or []) if isinstance(p, dict)],
+        "tree": tree,
+        "missing": missing,
+        "documented_tree": documented_tree,
+        "map_parcels": ordered,  # every parcel of the query: the map is not limited to the listed page
+        "subject_visure": subject_visure,
+        "subject_inspections": sorted(
+            _hub_documents(inspection_ids, indexed_by_id), key=lambda d: d["date"], reverse=True
+        ),
+        "kinds": [
+            *((kind, label, icon) for kind, label, icon, _types in _PARCEL_DOCUMENT_KINDS),
+            *((kind, label, icon) for kind, label, icon, _types in _PARCEL_REQUEST_KINDS if kind != "mappe"),
+        ],
+        "totals": {
+            "units": len(properties),
+            "buildings": sum(1 for p in properties if p.get("property_type") == "building"),
+            "lands": sum(1 for p in properties if p.get("property_type") == "land"),
+            "parcels": len(all_parcels),
+            "with_visure": sum(1 for p in all_parcels if p["documents"]["visure"]),
+            "with_planimetrie": sum(1 for p in all_parcels if p["documents"]["planimetrie"]),
+            "with_ispezioni": sum(1 for p in all_parcels if p["documents"]["ispezioni"]),
+            "with_ispezioni_catastali": sum(1 for p in all_parcels if p["requests"]["ispezioni_catastali"]),
+            "with_map": sum(
+                1 for p in all_parcels if p["has_map"] or p["documents"]["mappe"] or p["requests"]["mappe"]
+            ),
+        },
+        "pagination": {
+            "page": page,
+            "pages": pages,
+            "size": _HUB_PAGE_PARCELS,
+            "total": len(ordered),
+            "first": first + 1 if page_parcels else 0,
+            "last": first + len(page_parcels),
+            "query": "",  # extra query string the route keeps on the page links
+        },
+        "other_queries": [
+            {**q, "responded_at_display": _format_timestamp(q["responded_at"])} for q in queries[1:]
+        ],
+    }
+
+
+_HUB_MAP_CACHE: dict[str, tuple[float, dict | None]] = {}
+_HUB_MAP_DATA: dict[str, dict] = {}  # map_key -> {"chunks": [map JSON per chunk], "done", "total"}, served by .../parcel-map.json?k=&after=
+_HUB_MAP_CACHE_SECONDS = 3600
+_HUB_MAP_CACHE_ENTRIES = 64
+
+
+def _hub_map_subject_xml(parcels: list[dict]) -> dict:
+    """Parcels of a hub as the subject-visura tree ``_google_maps_context`` reads its parcels from."""
+    groups: dict[tuple, dict] = {}
+    for parcel in parcels:
+        if not parcel.get("municipality_code") or not parcel.get("province_code"):
+            continue  # without its codes a parcel cannot be matched against the cadastral map
+        group = groups.setdefault(
+            (parcel["province_code"], parcel["municipality_code"]),
+            {
+                "CodiceComune": parcel["municipality_code"],
+                "Descrizione": parcel["municipality"],
+                "Provincia": parcel["province_code"],
+                "ImmobileFabbricatiS": [],
+                "ImmobileTerreniS": [],
+            },
+        )
+        identifier = {
+            "Provincia": parcel["province_code"],
+            "CodiceComune": parcel["municipality_code"],
+            "Comune": parcel["municipality"],
+            "Foglio": parcel["sheet"],
+            "ParticellaNum": parcel["parcel"],
+        }
+        if parcel["section"]:
+            identifier["SezUrbana"] = parcel["section"]
+        row: dict = {"DatiIdentificativi": {"IdentificativoDefinitivo": identifier}}
+        if parcel["is_building"]:
+            category = next((u.get("category") for u in parcel["units"] if u.get("category")), "")
+            row["DatiClassamentoF"] = {"Categoria": category}
+            group["ImmobileFabbricatiS"].append(row)
+        else:
+            group["ImmobileTerreniS"].append(row)
+    return {"VisuraSoggetto": {"GruppoUnitaImmobiliari": list(groups.values())}} if groups else {}
+
+
+def _elenco_number_unit(text: Any) -> tuple[str, str]:
+    """'7,5 vani' -> ('7,5', 'vani'); a bare number keeps an empty unit."""
+    match = re.match(r"^\s*([\d.,]+)\s*(.*?)\s*$", str(text or ""))
+    return (match.group(1), match.group(2)) if match else (str(text or "").strip(), "")
+
+
+def _elenco_row_key(province_code: str, municipality_code: str, section: Any, sheet: Any, parcel: Any, subunit: Any) -> tuple:
+    def plain(value: Any) -> str:
+        text = str(value or "").strip().upper()
+        return text.lstrip("0") or ("0" if text else "")
+
+    return (str(municipality_code or "").strip().upper(), plain(section), plain(sheet), plain(parcel), plain(subunit))
+
+
+def _elenco_groups(profile: dict, known_keys: set[tuple] = frozenset()) -> list[dict]:
+    """Groups of the subject's *elenco immobili* (saved soggetto query) in the shape of a subject visura.
+
+    One group per comune and cadastre type (F buildings / T lands), rows shaped like the visura's, so the visura layout
+    renders them with its own tables. Units whose key is in ``known_keys`` (already in a stored visura) are left out.
+    """
+    groups: dict[tuple, dict] = {}
+    for parcel in profile.get("map_parcels") or []:
+        for unit in parcel["units"]:
+            is_building = unit.get("property_type") == "building"
+            row_key = _elenco_row_key(
+                parcel.get("province_code"), parcel.get("municipality_code"), parcel.get("section"),
+                parcel.get("sheet"), parcel.get("parcel"), unit.get("subunit") if is_building else "",
+            )
+            if row_key in known_keys:
+                continue
+            # like a visura, a group is the units of one comune and type that the subject holds in the same way
+            right, share = str(unit.get("right_type") or "").strip(), str(unit.get("ownership_share") or "").strip()
+            group = groups.setdefault(
+                (parcel.get("province_code") or parcel["province"], parcel.get("municipality_code") or parcel["municipality"],
+                 "F" if is_building else "T", right, share),
+                {
+                    "TipoCatasto": "F" if is_building else "T",
+                    "CodiceComune": parcel.get("municipality_code") or "",
+                    "Descrizione": parcel["municipality"],
+                    "Provincia": parcel.get("province_code") or "",
+                    "FonteElenco": True,  # from the saved search only: no ownership history from a visura yet
+                    "TitolaritaElenco": {"Diritto": right, "Quota": share},
+                    # what the search says about the subject's right, shaped like the visura's ownership heading so the
+                    # valuation (valore catastale, quota, diritto) runs on it; the page shows it as a line, not a timeline
+                    "IntestazioneGruppo": {"MutazioneSoggettiva": [{"Intestazione": {"Intestato": [{
+                        "CF": profile.get("code") or "",
+                        "Nominativo": profile.get("name") or "",
+                        "DirittiReali": {"Descrizione": right, "Quota": share},
+                    }]}}]},
+                    "ImmobileFabbricatiS": [],
+                    "ImmobileTerreniS": [],
+                },
+            )
+            identifier = {
+                "Provincia": parcel.get("province_code") or "",
+                "CodiceComune": parcel.get("municipality_code") or "",
+                "Comune": parcel["municipality"],
+                "Foglio": parcel["sheet"],
+                "ParticellaNum": parcel["parcel"],
+            }
+            if parcel.get("section"):
+                identifier["SezUrbana"] = parcel["section"]
+            if unit.get("partita"):
+                identifier["Partita"] = unit["partita"]
+            if is_building:
+                if unit.get("subunit"):
+                    identifier["Subalterno"] = unit["subunit"]
+                value, unit_name = _elenco_number_unit(unit.get("consistency"))
+                classamento = {
+                    "ZonaCensuaria": unit.get("census_zone") or "",
+                    "Categoria": unit.get("category") or "",
+                    "Classe": unit.get("cadastral_class") or "",
+                    "RenditaEuro": unit.get("income") or "",
+                }
+                if value:
+                    classamento["Consistenza"] = {"Valore": value, "Unita": unit_name}
+                group["ImmobileFabbricatiS"].append({
+                    "DatiIdentificativi": {"IdentificativoDefinitivo": identifier},
+                    "DatiIndirizzo": {"IndirizzoImm": unit.get("address") or ""},
+                    "DatiClassamentoF": classamento,
+                })
+            else:
+                group["ImmobileTerreniS"].append({
+                    "DatiIdentificativi": {"IdentificativoDefinitivo": identifier},
+                    "DatiClassamentoT": {"ClassamentoT": {
+                        "Qualita": unit.get("quality") or "",
+                        "Classe": unit.get("cadastral_class") or "",
+                        "SuperficieMQ": unit.get("area") or unit.get("consistency") or "",  # a land's consistency is its m²
+                        "RedditoDominicaleEuro": unit.get("dominical_income") or "",
+                        "RedditoAgrarioEuro": unit.get("agricultural_income") or "",
+                    }},
+                })
+    return list(groups.values())
+
+
+def _subject_tree_with_elenco(xml_parsed: dict, profile: dict | None) -> dict:
+    """The subject visura tree completed with the units of the elenco immobili the visura does not list.
+
+    The stored visura wins for every unit it lists (it has classamento history, owners and the ownership timeline); the
+    elenco adds the rest as groups of its own, so the page lists every immobile of the saved search. Without a visura
+    (``xml_parsed`` empty) the elenco is the whole tree.
+    """
+    if not profile:
+        return xml_parsed
+
+    def items(value):
+        return value if isinstance(value, list) else ([value] if isinstance(value, dict) else [])
+
+    key = next((k for k in xml_parsed if str(k).startswith("VisuraSoggetto") and isinstance(xml_parsed[k], dict)), None)
+    body = dict(xml_parsed[key]) if key else {}
+    groups = items(body.get("GruppoUnitaImmobiliari"))
+    known: set[tuple] = set()
+    for group in groups:
+        for row_name in ("ImmobileFabbricatiS", "ImmobileTerreniS"):
+            for row in items(group.get(row_name)):
+                for identifier in items((row.get("DatiIdentificativi") or {}).get("IdentificativoDefinitivo")):
+                    known.add(_elenco_row_key(
+                        identifier.get("Provincia"), identifier.get("CodiceComune") or group.get("CodiceComune"),
+                        identifier.get("SezUrbana"), identifier.get("Foglio"),
+                        identifier.get("ParticellaNum") or identifier.get("Particella"),
+                        identifier.get("Subalterno") if row_name == "ImmobileFabbricatiS" else "",
+                    ))
+    extra = _elenco_groups(profile, known)
+    if not extra:
+        return xml_parsed
+    body["GruppoUnitaImmobiliari"] = groups + extra
+    return {**xml_parsed, key or "VisuraSoggetto": body}
+
+
+_HUB_MAP_CHUNK_PARCELS = 120  # parcels per spatial lookup: one query over thousands of parcels outlives its timeout
+_HUB_MAP_FIRST_CHUNK_PARCELS = 40  # a small first chunk: something is on the map within seconds
+_HUB_MAP_WAIT_SECONDS = 4  # how long the page waits for the whole map before it shows up as "loading" (and fills in)
+_HUB_MAP_TASKS: dict[str, asyncio.Task] = {}
+
+
+def _hub_map_chunks(parcels: list[dict]) -> list[list[dict]]:
+    """Parcels in lookup order (comune, then sheet) cut into chunks: a small one first, then the usual size."""
+    ordered = sorted(parcels, key=lambda p: (p.get("province_code") or "", p.get("municipality_code") or "", p["sheet"]))
+    chunks = [ordered[:_HUB_MAP_FIRST_CHUNK_PARCELS]]
+    rest = ordered[_HUB_MAP_FIRST_CHUNK_PARCELS:]
+    chunks.extend(rest[start : start + _HUB_MAP_CHUNK_PARCELS] for start in range(0, len(rest), _HUB_MAP_CHUNK_PARCELS))
+    return [chunk for chunk in chunks if chunk]
+
+
+async def _hub_map_lookup(parcels: list[dict], on_chunk=None) -> dict | None:
+    """Map lookup of every parcel of a hub, run in chunks and merged (each chunk fills the geometry cache).
+
+    ``on_chunk(lookup)`` is awaited with each chunk's own lookup as soon as it is done, before the merge.
+    """
+    merged: dict | None = None
+    failed_chunks = 0
+    for chunk in _hub_map_chunks(parcels):
+        xml_parsed = _hub_map_subject_xml(chunk)
+        if not xml_parsed:
+            continue
+        lookup = None
+        for attempt in (1, 2):  # a busy cadastral database cancels a query now and then: one retry
+            try:
+                lookup = await _google_maps_context({"id": None, "xml_parsed": xml_parsed, "view": {}})
+                break
+            except Exception as exc:  # noqa: BLE001 - one chunk without a map must not hide the others
+                logger.warning("Hub parcel map chunk unavailable (attempt %s): %s", attempt, type(exc).__name__)
+        if lookup is None:
+            failed_chunks += 1
+            continue
+        if on_chunk is not None:
+            await on_chunk(lookup)
+        if merged is None:
+            merged = lookup
+            merged["centroid"] = None  # the centre follows the markers of all the chunks
+            continue
+        for key in ("parcel_markers", "parcel_features", "unmapped_parcels", "unmapped_parcel_items"):
+            merged[key] = (merged.get(key) or []) + (lookup.get(key) or [])
+        known_sheets = {f.get("properties", {}).get("reference") for f in merged.get("sheet_features") or []}
+        merged["sheet_features"] = (merged.get("sheet_features") or []) + [
+            f for f in lookup.get("sheet_features") or [] if f.get("properties", {}).get("reference") not in known_sheets
+        ]
+        merged["parcel_count"] = (merged.get("parcel_count") or 0) + (lookup.get("parcel_count") or 0)
+        merged["sheet_count"] = (merged.get("sheet_count") or 0) + (lookup.get("sheet_count") or 0)
+    if merged is None:
+        return None
+    merged["failed_chunks"] = failed_chunks
+    for index, marker in enumerate(merged.get("parcel_markers") or []):
+        marker["selected"] = index == 0
+    merged["mapped_parcel_count"] = len(merged.get("parcel_markers") or [])
+    merged["mapped_sheet_count"] = len(merged.get("sheet_features") or [])
+    merged["lookup_message"] = (
+        f"Trovate {merged['mapped_parcel_count']} particelle tra quelle elencate nelle tabelle della visura."
+        if merged["mapped_parcel_count"]
+        else "Nessuna geometria particellare trovata per i riferimenti elencati."
+    )
+    return merged
+
+
+def _hub_map_parcels(profile: dict) -> list[dict]:
+    """The parcels of a hub the map can place (those with their comune and province codes)."""
+    return [p for p in profile.get("map_parcels") or [] if p.get("municipality_code") and p.get("province_code")]
+
+
+def _hub_map_key(parcels: list[dict]) -> str:
+    return hashlib.sha1(
+        json.dumps(sorted((p["province_code"], p["municipality_code"], p["section"], p["sheet"], p["parcel"], p["is_building"])
+                          for p in parcels)).encode()
+    ).hexdigest()
+
+
+def _hub_data_url(profile: dict, map_key: str) -> str:
+    code = profile["code"]
+    prefix = "/companies" if len(code) == 11 and code.isdigit() else "/persons"
+    return f"{prefix}/{code}/parcel-map.json?k={map_key}"
+
+
+def _empty_map_payload() -> dict:
+    empty = {"type": "FeatureCollection", "features": []}
+    return {"parcel_markers": [], "parcel_features": empty, "sheet_features": empty, "unmapped_parcels": []}
+
+
+async def _build_hub_map(map_key: str, parcels: list[dict], data_url: str) -> dict | None:
+    """Look every parcel up chunk by chunk and return the embeddable map context.
+
+    Each finished chunk is published in ``_HUB_MAP_DATA[map_key]`` (``chunks``) straight away, so the map script can draw
+    the first parcels while the rest is still being looked up. A lookup that lost chunks still serves what it found, but
+    its context is not remembered: the next page load tries again.
+    """
+    progress = _HUB_MAP_DATA[map_key] = {"chunks": [], "done": False, "total": len(_hub_map_chunks(parcels))}
+    seen_sheets: set[str] = set()
+
+    async def publish(lookup: dict) -> None:
+        for marker in lookup.get("parcel_markers") or []:
+            marker["selected"] = False  # the merged lookup selects the very first one
+        payload = await _parcel_map_payload(lookup)
+        fresh = []
+        for feature in payload["sheet_features"]["features"]:  # a sheet can be cut across two chunks
+            reference = (feature.get("properties") or {}).get("reference")
+            if reference in seen_sheets:
+                continue
+            seen_sheets.add(reference)
+            fresh.append(feature)
+        payload["sheet_features"]["features"] = fresh
+        progress["chunks"].append(payload)
+
+    complete = False
+    parcel_map = None
+    try:
+        lookup = await _hub_map_lookup(parcels, publish)
+        if lookup is not None:
+            lookup["data_url"] = data_url
+            parcel_map = await _land_registry_map_context(lookup)
+            complete = not lookup.get("failed_chunks")
+    except Exception as exc:  # noqa: BLE001 - the map is an addition: the archive must open without it
+        logger.warning("Hub parcel map unavailable: %s", type(exc).__name__)
+    finally:
+        progress["done"] = True
+        _HUB_MAP_TASKS.pop(map_key, None)
+    while len(_HUB_MAP_DATA) > _HUB_MAP_CACHE_ENTRIES:
+        _HUB_MAP_DATA.pop(next(iter(_HUB_MAP_DATA)))
+    if complete:
+        if len(_HUB_MAP_CACHE) >= _HUB_MAP_CACHE_ENTRIES:
+            _HUB_MAP_CACHE.pop(next(iter(_HUB_MAP_CACHE)))
+        _HUB_MAP_CACHE[map_key] = (time.monotonic(), parcel_map)
+    return parcel_map
+
+
+_HUB_MAP_CHUNKS_PER_ANSWER = 4  # keeps one draw step of the browser short, also when everything is already looked up
+
+
+async def _hub_map_increment(map_key: str, after: int, wait_seconds: float = 25.0) -> dict:
+    """What the map script has not drawn yet: the next few chunks after the first ``after``, merged into one answer.
+
+    Waits (long poll) for a new chunk, up to ``wait_seconds``; then answers an empty increment that says more follows.
+    """
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + wait_seconds
+    while True:
+        progress = _HUB_MAP_DATA.get(map_key)
+        if progress is None or len(progress["chunks"]) > after or progress["done"] or loop.time() >= deadline:
+            break
+        await asyncio.sleep(0.4)
+    progress = _HUB_MAP_DATA.get(map_key) or {"chunks": [], "done": True, "total": 0}
+    chunks = progress["chunks"]
+    fresh = chunks[after : after + _HUB_MAP_CHUNKS_PER_ANSWER]
+    done = bool(progress["done"]) and after + len(fresh) >= len(chunks)
+    increment = _empty_map_payload()
+    for payload in fresh:
+        increment["parcel_markers"].extend(payload["parcel_markers"])
+        increment["parcel_features"]["features"].extend(payload["parcel_features"]["features"])
+        increment["sheet_features"]["features"].extend(payload["sheet_features"]["features"])
+        increment["unmapped_parcels"].extend(payload["unmapped_parcels"])
+    increment["next"] = after + len(fresh)
+    increment["done"] = done
+    increment["progress"] = 1.0 if done else min(0.99, increment["next"] / max(1, progress.get("total") or 1))
+    return increment
+
+
+async def _hub_parcel_map(profile: dict) -> dict | None:
+    """Map (outlines and markers) of every parcel of a hub, None when nothing can be placed.
+
+    The lookup of thousands of parcels takes a while the first time (later ones come from the geometry cache), so it
+    runs as a task: the page waits a few seconds and otherwise renders the map as loading; its data URL answers when
+    the task is done (and rebuilds the map from the saved search if the service forgot it meanwhile).
+    """
+    parcels = _hub_map_parcels(profile)
+    if not parcels:
+        return None
+    map_key = _hub_map_key(parcels)
+    data_url = _hub_data_url(profile, map_key)
+    cached = _HUB_MAP_CACHE.get(map_key)
+    if cached and time.monotonic() - cached[0] < _HUB_MAP_CACHE_SECONDS and (_HUB_MAP_DATA.get(map_key) or {}).get("done"):
+        return cached[1]
+    task = _HUB_MAP_TASKS.get(map_key)
+    if task is None:
+        task = _HUB_MAP_TASKS[map_key] = asyncio.create_task(_build_hub_map(map_key, parcels, data_url))
+    done, _pending = await asyncio.wait({task}, timeout=_HUB_MAP_WAIT_SECONDS)
+    if done:
+        return task.result()
+    first = parcels[0]
+    return await _land_registry_map_context({
+        "sheet": first["sheet"],
+        "parcel": first["parcel"],
+        "municipality": first["municipality"],
+        "province": first["province"],
+        "data_url": data_url,
+        "listed_only": True,
+        "parcel_count": len(parcels),
+        "lookup_message": f"Posizionamento di {len(parcels)} particelle in corso…",
+    })
+
+
+async def _subject_pdf_response(doc: dict, kpis: dict | None, lookup: dict | None, code: str):
+    """PDF (Typst) of a subject page from the data the page was built on."""
+    from fastapi import HTTPException
+    from fastapi.responses import Response
+
+    from .pdf_typst import PdfExportError, build_context, pdf_filename, render_pdf
+
+    try:
+        context = build_context(doc, kpis, lookup)
+        content = await run_in_threadpool(render_pdf, context)
+    except PdfExportError as exc:
+        logger.warning("PDF export of subject %s failed: %s", code, exc)
+        raise HTTPException(status_code=422, detail=f"PDF export not available: {exc}") from exc
+    stem = Path(str(doc.get("filename") or "")).stem or f"elenco_immobili_{code}"
+    headers = {"Content-Disposition": f'attachment; filename="{pdf_filename(stem, doc.get("id") or 0)}"', "Cache-Control": "no-store"}
+    return Response(content=content, media_type="application/pdf", headers=headers)
+
+
+def _query_only_subject_doc(profile: dict) -> dict:
+    """Page data of a subject that has a saved soggetto query but no stored visura: the elenco as visura groups."""
+    return {
+        "id": None,
+        "query_only": True,  # the visura layout labels itself as the elenco of the saved query, not as a visura
+        "tipo_catasto": profile.get("tipo_catasto") or "",
+        "queried_at": profile.get("responded_at_display") or profile.get("requested_at_display") or "",
+        "oggetto": profile.get("name") or profile["code"],
+        "xml_parsed": _subject_tree_with_elenco(
+            {
+                "VisuraSoggetto": {
+                    "DatiRichiesta": {
+                        "TipoCatasto": profile.get("tipo_catasto") or "",
+                        "SoggettoIndividuato": {
+                            "SoggettoPF": {"Cognome": profile.get("name") or "", "CodiceFiscale": profile["code"]}
+                        },
+                    }
+                }
+            },
+            profile,
+        ),
+    }
+
+
+async def _render_query_only_subject(request, theme, user, profile: dict, route_prefix: str, as_pdf: bool = False):
+    """Render a subject that has a saved soggetto query but no structured visura on the visura layout.
+
+    /persons and /companies share ``catasto/entity.html``: a stored visura fills the layout, here the header
+    carries the subject's name and code and the archive hub (the saved query) is the content.
+    """
+    doc = _query_only_subject_doc(profile)
+
+    try:
+        land_registry_map = await _hub_parcel_map(profile)
+    except Exception as exc:  # noqa: BLE001 - the map and OMI estimate are optional additions to the subject archive
+        logger.warning("Subject parcel map unavailable: %s", type(exc).__name__)
+        land_registry_map = None
+    try:
+        # The saved search has ownership and the hub map has parcel positions; visure may add cadastral surfaces later.
+        land_registry_kpis = await _subject_land_registry_calculation(
+            doc["xml_parsed"], land_registry_map, user, scope_type="request",
+            scope_id=profile.get("request_id") or profile.get("code"),
+        )
+    except Exception as exc:  # noqa: BLE001 - the valuation is an addition: the archive must open without it
+        logger.warning("Subject valuation unavailable: %s", type(exc).__name__)
+        land_registry_kpis = None
+    if as_pdf:
+        return await _subject_pdf_response(doc, land_registry_kpis, land_registry_map, profile["code"])
+    return theme.render(
+        "catasto/entity.html",
+        request,
+        user=user,
+        doc=doc,
+        subject_fiscal_code=profile["code"],
+        subject_route_prefix=route_prefix,
+        subject_documents=[],
+        subject_hub=profile,
+        land_registry_kpis=land_registry_kpis,
+        manual_valuation_enabled=bool(_favorite_user_key(user)),
+        land_registry_map=land_registry_map,
+        **_land_map_layout("soggetto", theme),
     )
 
 
@@ -5531,16 +7310,21 @@ async def _web_subject_profile(
     user,
     route_prefix: str,
     code_pattern: str,
+    page: int = 1,
+    as_pdf: bool = False,
 ):
-    """Open a canonical subject route and allow switching between its subject visure."""
+    """Open a canonical subject route and allow switching between its subject visure.
+
+    ``as_pdf`` returns the PDF of the very same page instead of rendering it.
+    """
     from fastapi import HTTPException
 
     normalized_code = fiscal_code.strip().upper()
     if not re.fullmatch(code_pattern, normalized_code):
         raise HTTPException(status_code=404, detail="Soggetto non trovato")
     if normalized_code != fiscal_code:
-        query = f"?document={document}" if document is not None else ""
-        return RedirectResponse(url=f"{route_prefix}/{normalized_code}{query}", status_code=308)
+        query = urlencode({k: v for k, v in (("document", document), ("page", page if page > 1 else None)) if v is not None})
+        return RedirectResponse(url=f"{route_prefix}/{normalized_code}{'?' + query if query else ''}", status_code=308)
 
     # The subject relation provides a canonical match for imported XML. Filenames
     # remain a fallback for older/history documents that predate typed ingestion.
@@ -5574,8 +7358,40 @@ async def _web_subject_profile(
             )
 
     subject_documents = _collapse_to_logical_docs(candidates)
+    is_company = route_prefix == "/companies"
+    # the saved soggetto query is the hub's skeleton; it enriches the visura layout, or stands alone without a visura
+    subject_hub = await _subject_query_profile(normalized_code, subject_documents, indexed_files, page)
+    if subject_hub is not None and document is not None:
+        subject_hub["pagination"]["query"] = f"&document={document}"
+    if subject_hub is not None and not subject_documents:
+        return await _render_query_only_subject(request, _get_theme(request), user, subject_hub, route_prefix, as_pdf)
     if not subject_documents:
-        raise HTTPException(status_code=404, detail="Nessuna visura trovata per questo codice fiscale")
+        if as_pdf:
+            raise HTTPException(status_code=404, detail="Nessuna visura né ricerca per soggetto archiviata")
+        # a code nobody has queried yet is the normal outcome of the lookup form: stay on the form with a hint
+        response = _get_theme(request).render(
+            "companies_index.html" if is_company else "persons_index.html",
+            request,
+            user=user,
+            code=normalized_code,
+            error_message=(
+                f"Nessuna visura soggetto salvata per {normalized_code}. "
+                "Richiedila dalla pagina Query (visura per soggetto), poi riapri questo profilo."
+            ),
+        )
+        response.status_code = 404
+        return response
+
+    # Prefer the complete nationwide E-cadastre response. If none exists, prefer
+    # E-cadastre visure so same-period provincial responses can be combined into
+    # one profile view. The source order is newest-first, and sort stability keeps
+    # that ordering within each priority.
+    def subject_doc_priority(item: dict) -> int:
+        if item.get("search_scope") == "nationwide" and item.get("tipo_catasto") == "E":
+            return 0
+        return 1 if item.get("tipo_catasto") == "E" else 2
+
+    subject_documents.sort(key=subject_doc_priority)
 
     def logical_doc_contains(logical_doc: dict, requested_id: int) -> bool:
         ids = {logical_doc.get("id")}
@@ -5598,16 +7414,65 @@ async def _web_subject_profile(
     if document_code and document_code != normalized_code:
         raise HTTPException(status_code=404, detail="Visura non trovata per questo soggetto")
 
+    subject_asset_documents = []
+    subject_portfolio = None
+    if selected.get("tipo_catasto") == "E":
+        is_nationwide_e = selected.get("search_scope") == "nationwide"
+        if is_nationwide_e:
+            subject_portfolio = {
+                "scope_label": "Nazionale",
+                "tipo_catasto": "E",
+                "aggregated": False,
+                "provinces": [],
+            }
+        elif selected.get("situazione_al") and selected.get("visura_subtype"):
+            peer_documents = [
+                item
+                for item in subject_documents
+                if item.get("id") != selected.get("id")
+                and item.get("tipo_catasto") == "E"
+                and item.get("search_scope") == "provincial"
+                and item.get("situazione_al") == selected.get("situazione_al")
+                and item.get("visura_subtype") == selected.get("visura_subtype")
+            ]
+            for item in peer_documents:
+                source = await get_document_by_id(int(item["id"]))
+                if source and source.get("xml_content"):
+                    subject_asset_documents.append(source)
+            if subject_asset_documents:
+                provinces = sorted(
+                    {
+                        item.get("search_scope_label", "").removeprefix("Provinciale · ")
+                        for item in [selected, *peer_documents]
+                        if item.get("search_scope_label", "").startswith("Provinciale · ")
+                    }
+                )
+                subject_portfolio = {
+                    "scope_label": "Nazionale",
+                    "tipo_catasto": "E",
+                    "aggregated": True,
+                    "provinces": provinces,
+                }
+
     document_navigation = [
         {
             "id": int(item["id"]),
             "title": item.get("oggetto") or item.get("filename") or f"Visura #{item['id']}",
             "date": item.get("situazione_al") or item.get("requested_at") or item.get("created_at") or "",
+            # what the "Documento" card of the visura page used to show, now part of this visura's list entry
+            "tipo_catasto": item.get("tipo_catasto") or "",
+            "scope": item.get("search_scope_label") or "",
+            "situazione_al": item.get("situazione_al") or "",
+            "protocollo": item.get("protocollo") or "",
+            "protocollo_anno": item.get("protocollo_anno") or "",
         }
         for item in subject_documents
         if item.get("id") is not None
     ]
     theme = _get_theme(request)
+    if subject_hub is not None and not (doc.get("xml_content") or "").strip():
+        # a visura stored only as PDF has no structured data for the visura layout: show the hub (it lists the file)
+        return await _render_query_only_subject(request, theme, user, subject_hub, route_prefix, as_pdf)
     return await _render_doc_from_db(
         doc,
         request,
@@ -5616,6 +7481,26 @@ async def _web_subject_profile(
         subject_fiscal_code=normalized_code,
         subject_route_prefix=route_prefix,
         subject_documents=document_navigation,
+        subject_asset_documents=subject_asset_documents,
+        subject_portfolio=subject_portfolio,
+        subject_hub=subject_hub,
+        as_pdf=as_pdf,
+    )
+
+
+@router.get("/persons/{fiscal_code}/pdf")
+async def web_person_pdf(request: Request, fiscal_code: str, document: int | None = None, user=Depends(_require_auth)):
+    """PDF of the /persons page (the visura selected with ``?document=`` plus the elenco immobili's groups)."""
+    return await _web_subject_profile(
+        request, fiscal_code, document, user=user, route_prefix="/persons", code_pattern=r"[A-Z0-9]{16}", as_pdf=True
+    )
+
+
+@router.get("/companies/{fiscal_code}/pdf")
+async def web_company_pdf(request: Request, fiscal_code: str, document: int | None = None, user=Depends(_require_auth)):
+    """PDF of the /companies page."""
+    return await _web_subject_profile(
+        request, fiscal_code, document, user=user, route_prefix="/companies", code_pattern=r"\d{11}", as_pdf=True
     )
 
 
@@ -5672,6 +7557,7 @@ async def web_person(
     request: Request,
     fiscal_code: str,
     document: int | None = None,
+    page: int = 1,
     user=Depends(_require_auth),
 ):
     """Open a canonical person route and switch between that person's subject visure."""
@@ -5682,6 +7568,7 @@ async def web_person(
         user=user,
         route_prefix="/persons",
         code_pattern=r"[A-Z0-9]{16}",
+        page=page,
     )
 
 
@@ -5690,6 +7577,7 @@ async def web_company(
     request: Request,
     fiscal_code: str,
     document: int | None = None,
+    page: int = 1,
     user=Depends(_require_auth),
 ):
     """Open a company route using its 11-digit VAT/fiscal code."""
@@ -5700,6 +7588,7 @@ async def web_company(
         user=user,
         route_prefix="/companies",
         code_pattern=r"\d{11}",
+        page=page,
     )
 
 

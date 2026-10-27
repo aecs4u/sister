@@ -1,5 +1,5 @@
 /* Subject-visura document page (/documents/<id>): dark-mode fixes for the theme's ownership timeline, the
-   "Dati completi" dump, and the print / PDF layout. Loaded by catasto/land_map.html after the theme's CSS. */
+   "Dati completi" dump, and the print / PDF layout. Loaded by catasto/entity.html after the theme's CSS. */
 
 /* ── Ownership timeline in dark mode ──────────────────────────────────────────
    The theme hard-codes light backgrounds (#fff, #f8f9fa) but leaves the text colour inherited, which in dark mode is
@@ -106,3 +106,30 @@ table.cat-compact-table td:nth-child(8) { min-width: 9rem; }
 .land-map-trace .land-map-ownership-details > summary { cursor: pointer; min-height: 24px; }
 .land-map-trace .border.rounded { font-size: .85rem; }
 .land-map-trace ul { margin-bottom: .25rem; }
+
+/* Patrimonio KPI cards in the main section of the subject visura (above the stat cards): a responsive grid, not the sidebar stack */
+.document-land-map-kpis-main .document-land-map-kpis { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: .75rem; }
+.document-land-map-kpis-main .document-land-map-kpis article { margin-bottom: 0 !important; }
+.document-land-map-kpis-main .document-land-map-kpis article:last-child { grid-column: 1 / -1; }
+@media (max-width: 1199.98px) { .document-land-map-kpis-main .document-land-map-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 575.98px) { .document-land-map-kpis-main .document-land-map-kpis { grid-template-columns: minmax(0, 1fr); } }
+
+
+/* ── Visura groups as accordions ──────────────────────────────────────────────
+   One <details> per group (comune + F/T): the headings stay on screen, tables and ownership timeline open on demand.
+   Print opens them (sisterActions, beforeprint). */
+.visura-group { border: 1px solid var(--bs-border-color, #dee2e6); border-radius: .5rem; margin-bottom: .5rem; background: var(--bs-body-bg, #fff); }
+.visura-group[open] { margin-bottom: 1rem; }
+.visura-group-summary { display: flex; align-items: center; gap: .5rem; padding: .6rem .9rem; cursor: pointer; list-style: none; min-height: 24px; }
+.visura-group-summary::-webkit-details-marker { display: none; }
+.visura-group-summary::after {
+    content: ""; margin-left: auto; width: .55rem; height: .55rem; flex: none;
+    border-right: 2px solid currentColor; border-bottom: 2px solid currentColor; opacity: .6;
+    transform: rotate(45deg); transition: transform .15s;
+}
+.visura-group[open] > .visura-group-summary::after { transform: rotate(-135deg); }
+.visura-group[open] > .visura-group-summary { border-bottom: 1px solid var(--bs-border-color, #dee2e6); }
+.visura-group-summary:hover { background: var(--bs-tertiary-bg, #f8f9fa); }
+.visura-group-summary h2 { display: flex; flex-wrap: wrap; align-items: center; gap: .25rem; }
+.visura-group-body { padding: .75rem .9rem 0; }
+@media print { .visura-group-summary::after { display: none; } .visura-group { break-inside: auto; } }

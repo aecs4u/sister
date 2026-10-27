@@ -44,8 +44,12 @@
 .btn-compact, .doc-actions .btn {
     --bs-btn-padding-y: .15rem; --bs-btn-padding-x: .4rem; --bs-btn-font-size: .75rem;
 }
-.doc-table thead th.th-sortable { cursor: pointer; user-select: none; white-space: nowrap; }
-.doc-table thead th.th-sortable:hover { background: var(--bs-secondary-bg); }
+.doc-table thead th.th-sortable,
+.files-table thead th.th-sortable { cursor: pointer; user-select: none; white-space: nowrap; }
+.doc-table thead th.th-sortable:hover,
+.files-table thead th.th-sortable:hover { background: var(--bs-secondary-bg); }
+.doc-table thead th.th-sortable:focus-visible,
+.files-table thead th.th-sortable:focus-visible { outline: 2px solid var(--bs-primary); outline-offset: -2px; }
 .sort-icon { font-size: .7rem; opacity: .6; }
 @media print {
     .no-print { display: none !important; }

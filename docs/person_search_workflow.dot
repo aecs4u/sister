@@ -31,8 +31,8 @@ digraph PersonSearch {
     label="PHASE 1 — read all HTML pages (no CAPTCHA, nothing billed)"; style="rounded,filled"; fillcolor="#F1F8F4"; color="#34A853"; fontsize=11;
 
     scelta [shape=box, style="rounded,filled", fillcolor="#E8F0FE",
-            label="SceltaServizio.do\nselect Provincia / NAZIONALE\n(select[name=listacom]) → [Applica]"];
-    pf     [shape=box, style="filled", fillcolor="#FFF4E5", label="click left-menu link\n\"Persona fisica\""];
+            label="SceltaServizio.do — first query only\nselect Provincia / NAZIONALE\n(select[name=listacom]) → [Applica]\n(later queries keep the office applied)"];
+    pf     [shape=box, style="filled", fillcolor="#FFF4E5", label="click left-menu link \"Persona fisica\"\n(from whatever page the previous query ended on)"];
     form   [shape=box, style="rounded,filled", fillcolor="#E8F0FE",
             label="DataRichiesta.do — Ricerca persona fisica\n1) check CF radio  input[name=selDatiAna][value=CF_PF]\n2) fill  input[name=cod_fisc_pf]\n3) [Ricerca]"];
 

@@ -21,7 +21,7 @@
             </ol>
         </nav>
         <h1 class="display-6 fw-bold mb-1"><i class="fas fa-scale-balanced me-3"></i>Metodo di valutazione</h1>
-        <p class="lead mb-0 opacity-75">Come SISTER calcola il valore catastale e la stima OMI degli immobili di un soggetto</p>
+        <p class="lead mb-0 opacity-75">Come leggere il valore catastale, la stima OMI e le fonti esterne inserite dall'utente</p>
     </div>
 </div>
 
@@ -34,6 +34,7 @@
                 <a href="#valore-catastale" class="list-group-item list-group-item-action">Valore catastale (base IMU)</a>
                 <a href="#stima-omi" class="list-group-item list-group-item-action">Stima OMI indicativa</a>
                 <a href="#terreni" class="list-group-item list-group-item-action">Perché i terreni non hanno una stima OMI</a>
+                <a href="#fonti-esterne" class="list-group-item list-group-item-action">Valutazioni da fonti esterne</a>
                 <a href="#lettura" class="list-group-item list-group-item-action">Come leggere la pagina</a>
                 <a href="#limiti" class="list-group-item list-group-item-action">Limiti e avvertenze</a>
                 <a href="#fonti" class="list-group-item list-group-item-action">Fonti</a>
@@ -50,6 +51,7 @@
                     <a href="#valore-catastale" class="list-group-item list-group-item-action py-2">Valore catastale (base IMU)</a>
                     <a href="#stima-omi" class="list-group-item list-group-item-action py-2">Stima OMI indicativa</a>
                     <a href="#terreni" class="list-group-item list-group-item-action py-2">Terreni</a>
+                    <a href="#fonti-esterne" class="list-group-item list-group-item-action py-2">Fonti esterne</a>
                     <a href="#lettura" class="list-group-item list-group-item-action py-2">Come leggere la pagina</a>
                     <a href="#limiti" class="list-group-item list-group-item-action py-2">Limiti e avvertenze</a>
                     <a href="#fonti" class="list-group-item list-group-item-action py-2">Fonti</a>
@@ -69,11 +71,11 @@
                             <tr><th></th><th>Valore catastale</th><th>Stima OMI indicativa</th></tr>
                         </thead>
                         <tbody>
-                            <tr><th scope="row">Che cos'è</th><td>La base imponibile fiscale (IMU) calcolata dalla rendita catastale.</td><td>Un intervallo di valore di mercato ottenuto dalle quotazioni ufficiali dell'Osservatorio del Mercato Immobiliare.</td></tr>
+                            <tr><th scope="row">Che cos'è</th><td>La base imponibile fiscale (IMU) calcolata dalla rendita catastale.</td><td>La fascia ufficiale min–max e una stima centrale ricavata dalle quotazioni OMI della zona.</td></tr>
                             <tr><th scope="row">Si applica a</th><td>Fabbricati e terreni.</td><td>Solo fabbricati, e solo per alcune categorie.</td></tr>
-                            <tr><th scope="row">Da cosa dipende</th><td>Solo dai dati della visura (rendita, categoria, reddito dominicale).</td><td>Dalla zona OMI in cui si trova la particella, dalla tipologia e dalla superficie catastale.</td></tr>
+                            <tr><th scope="row">Da cosa dipende</th><td>Solo dai dati della visura (rendita, categoria, reddito dominicale).</td><td>Dalla zona OMI in cui si trova la particella, dalla tipologia e dalla superficie catastale; se manca, dalla consistenza in m² indicata in catasto, usata come proxy.</td></tr>
                             <tr><th scope="row">È un valore di mercato?</th><td><strong>No.</strong> È un valore convenzionale a fini fiscali.</td><td>È un'indicazione di ordine di grandezza, <strong>non una perizia</strong>.</td></tr>
-                            <tr><th scope="row">Quando manca</th><td>Se la rendita è assente o la categoria non ha un moltiplicatore.</td><td>Se la zona non è individuata, la categoria non ha una tipologia OMI o la quotazione è ambigua.</td></tr>
+                            <tr><th scope="row">Quando manca</th><td>Se la rendita è assente o la categoria non ha un moltiplicatore.</td><td>Se non si trovano quotazioni utilizzabili per la particella o il comune, la categoria non ha una tipologia OMI o la quotazione è ambigua.</td></tr>
                         </tbody>
                     </table>
                 </div>
@@ -115,12 +117,12 @@
 
                 <h3>Come si arriva alla stima</h3>
                 <ol>
-                    <li><strong>Zona.</strong> La posizione della particella sulla mappa catastale viene confrontata con le zone OMI del comune. Se la particella non è sulla mappa, la zona non si individua e non c'è stima.</li>
+                    <li><strong>Zona.</strong> La particella viene confrontata con le zone OMI del comune usando un punto interno alla geometria catastale, quando disponibile. Se non si riesce a individuare la zona esatta, SISTER conserva l'intervallo tra le zone del comune e calcola una stima centrale dalla mediana dei valori centrali pubblicati per quelle zone.</li>
                     <li><strong>Tipologia.</strong> La categoria catastale viene associata a una tipologia OMI (tabella sotto). Le categorie senza una tipologia corrispondente non vengono valutate.</li>
                     <li><strong>Quotazione.</strong> Tra le quotazioni della tipologia si usa quella che OMI indica come <em>prevalente</em>; se manca l'indicazione, l'unica in stato <em>NORMALE</em>. Se resta un dubbio la riga resta senza stima: SISTER non sceglie a caso.</li>
-                    <li><strong>Calcolo.</strong> Si moltiplica la <strong>superficie catastale totale</strong> dell'unità per il prezzo minimo e per il prezzo massimo al metro quadro.</li>
+                    <li><strong>Calcolo.</strong> L'intervallo è <code>superficie in m² × prezzo OMI minimo/massimo al m²</code>; la stima centrale è il punto medio della fascia della zona esatta. Se la zona non è determinata, il valore centrale usa la mediana dei punti medi delle fasce effettive delle zone comunali, mentre l'intervallo conserva minimo e massimo comunali. Si usa prima la superficie catastale; in sua assenza, la consistenza in m². Per le categorie A con consistenza in vani, SISTER stima una superficie proxy con <code>vani × (superficie media catastale nazionale della categoria ÷ vani medi nazionali della categoria)</code>, usando le Statistiche Catastali 2012. Il proxy è indicato nella nota della riga e non diventa superficie catastale.</li>
                 </ol>
-                <p><strong>Esempio.</strong> Un'unità di {{ example_omi.area }} m² in una zona con quotazione {{ example_omi.low }}–{{ example_omi.high }} al m²: {{ example_omi.area }} × {{ example_omi.low }} = {{ example_omi.value_low }} e {{ example_omi.area }} × {{ example_omi.high }} = {{ example_omi.value_high }}, quindi <strong>{{ example_omi.value_low }} – {{ example_omi.value_high }}</strong>. (I prezzi dell'esempio sono inventati: servono solo a mostrare l'aritmetica.)</p>
+                <p><strong>Esempio.</strong> Un'unità di {{ example_omi.area }} m² in una zona con quotazione {{ example_omi.low }}–{{ example_omi.high }} al m²: l'intervallo è {{ example_omi.value_low }}–{{ example_omi.value_high }}; la stima centrale è {{ example_omi.area }} × {{ example_omi.mid }} al m² = <strong>{{ example_omi.value_mid }}</strong>. (I prezzi dell'esempio sono inventati: servono solo a mostrare l'aritmetica.)</p>
 
                 <h3>Da categoria catastale a tipologia OMI</h3>
                 <div class="table-responsive">
@@ -154,13 +156,22 @@
                 <p class="text-muted small mb-0">Alcune tabelle derivate da OMI riportano righe con nomi di colture (seminativo, vigneto, uliveto…). Non risultano prezzi di terreni (le quotazioni OMI ufficiali non le contengono) e SISTER non le usa.</p>
             </div>
 
+            {# ── Fonti esterne inserite dall'utente ─────────── #}
+            <div class="gl-section" id="fonti-esterne">
+                <h2><i class="fas fa-arrow-up-right-from-square me-2"></i>Valutazioni da fonti esterne</h2>
+                <p>Nella scheda di una visura per soggetto puoi inserire manualmente il valore trovato su <strong>Immobiliare.it</strong>, <strong>idealista</strong> o un'altra fonte. Puoi indicare un importo singolo o un intervallo, la data di rilevazione e il link all'annuncio. Le stime e la preferenza restano associate al tuo account e al singolo bene.</p>
+                <p>Per i fabbricati puoi anche salvare un intervallo personalizzato che sostituisce la fascia OMI del singolo bene in un totale separato. La fascia e il totale OMI originali restano visibili; per salvare un importo singolo lascia vuoto il campo del massimo.</p>
+                <p>Per ogni bene puoi scegliere la fonte preferita tra quelle disponibili e OMI. La scelta alimenta la stima patrimoniale per quota e diritto; il valore OMI ufficiale rimane separato nella propria colonna e nel riquadro del patrimonio.</p>
+                <p class="small text-muted mb-0">SISTER non apre né controlla gli annunci: i valori esterni sono inseriti da te, possono essere prezzi richiesti e non sono perizie. Salva la data e il link per mantenere visibile la provenienza. I valori esterni dei terreni sono mostrati, ma non sono ancora attribuiti nella stima dei diritti.</p>
+            </div>
+
             {# ── Come leggere la pagina ─────────────────────── #}
             <div class="gl-section" id="lettura">
                 <h2><i class="fas fa-table me-2"></i>Come leggere la pagina</h2>
                 <ul>
                     <li><strong>Colonne nelle tabelle.</strong> «Valore catastale» compare nelle tabelle di fabbricati e terreni; «Stima OMI indicativa» solo nelle tabelle di fabbricati. Una colonna compare in tutte le tabelle dello stesso tipo se almeno una riga del documento ha un valore; le righe senza valore ne indicano il motivo.</li>
                     <li><strong>Suggerimento sulla cella.</strong> Passando il mouse su un valore (o su «Non disponibile») si vede il calcolo o il motivo: formula usata, tipologia, stato di conservazione, semestre OMI, zona, prezzi al m².</li>
-                    <li><strong>Riquadri a destra.</strong> «Valore catastale (base IMU)» somma i valori di fabbricati e terreni. «Valore OMI fabbricati» somma gli intervalli delle sole unità valutate e indica quante sono su quante.</li>
+                    <li><strong>Riquadri del patrimonio.</strong> «Valore catastale (base IMU)» e «Valore OMI fabbricati» si riferiscono all'intera unità; il riepilogo OMI aggiunge una stima centrale basata sui valori della zona. Nella scheda del soggetto, «Valutazione patrimoniale per quota e diritto» usa per ogni fabbricato la fonte preferita (OMI o stima esterna inserita dall'utente).</li>
                 </ul>
                 <h3>Perché una riga è «Non disponibile»</h3>
                 <div class="table-responsive">
@@ -170,15 +181,15 @@
                             <tr><td>Rendita catastale assente</td><td>La visura non riporta la rendita: nessun valore catastale.</td></tr>
                             <tr><td>Categoria catastale senza moltiplicatore IMU</td><td>Gruppo E o F, o categoria non riconosciuta.</td></tr>
                             <tr><td>Reddito dominicale assente</td><td>Terreno senza reddito dominicale in visura.</td></tr>
-                            <tr><td>Superficie catastale assente</td><td>Senza superficie non si può calcolare la stima OMI.</td></tr>
+                            <tr><td>Superficie catastale assente</td><td>Se manca la superficie e la consistenza non è in m² né in vani per una categoria A supportata, manca una superficie utilizzabile anche come proxy per l'OMI.</td></tr>
                             <tr><td>Categoria catastale senza una tipologia OMI corrispondente</td><td>Vedi la tabella «Categorie senza stima OMI».</td></tr>
                             <tr><td>Tipologia OMI non quotata in questa zona</td><td>La zona non ha una quotazione per quella tipologia.</td></tr>
                             <tr><td>Stato di conservazione OMI non determinabile in modo univoco</td><td>Più quotazioni possibili e nessuna indicata come prevalente.</td></tr>
                             <tr><td>Database OMI non disponibile</td><td>Il database OMI non risponde: la stima manca temporaneamente, il valore catastale no.</td></tr>
-                            <tr><td>Stima OMI non disponibile per zona o categoria catastale</td><td>La particella non è sulla mappa catastale locale o la sua zona OMI non è stata individuata.</td></tr>
+                            <tr><td>Stima OMI non disponibile per zona o categoria catastale</td><td>Non ci sono geometrie catastali né quotazioni comunali utilizzabili, oppure non esistono quotazioni per la tipologia catastale.</td></tr>
                             <tr><td>Nessuna quotazione OMI disponibile per il comune</td><td>Il database OMI non contiene quotazioni per il comune: non c'è nemmeno un intervallo comunale.</td></tr>
                             <tr><td>Nessun terreno / fabbricato in visura</td><td>La visura non elenca immobili di quel tipo: non è un dato mancante, non c'è nulla da sommare. «Non disponibile» significa invece che gli immobili ci sono ma manca il dato (rendita, superficie, quota).</td></tr>
-                            <tr><td>Non stimabile: …</td><td>Per un diritto (usufrutto, nuda proprietà) o per il totale: i beni ci sono ma nessuno è stimabile; il motivo segue (es. «Non quotata da OMI (3)», «Durata determinata»). Con zona della particella ignota si usa l'intervallo OMI comunale (minimo e massimo tra tutte le zone del comune).</td></tr>
+                            <tr><td>Non stimabile: …</td><td>Per un diritto (usufrutto, nuda proprietà) o per il totale: i beni ci sono ma nessuno è stimabile; il motivo segue (es. «Non quotata da OMI (3)», «Durata determinata»). Con zona della particella ignota si usa l'intervallo OMI comunale e la mediana dei punti medi delle quotazioni delle zone.</td></tr>
                             <tr><td>Nessuno / Nessuna intestata al soggetto</td><td>Il soggetto non ha quel diritto su nessun bene della visura (l'usufrutto può essere di altre persone).</td></tr>
                         </tbody>
                     </table>
@@ -190,11 +201,12 @@
                 <h2><i class="fas fa-triangle-exclamation me-2"></i>Limiti e avvertenze</h2>
                 <ul>
                     <li><strong>Non sono perizie.</strong> Né il valore catastale né la stima OMI sostituiscono una valutazione di un tecnico abilitato.</li>
-                    <li><strong>Quote di proprietà non applicate.</strong> Ogni valore è riferito all'intera unità, non alla quota di cui il soggetto è titolare, né al tipo di diritto (proprietà, usufrutto, nuda proprietà…).</li>
-                    <li><strong>Superficie catastale come approssimazione.</strong> La stima OMI usa la superficie catastale totale, che non coincide con la superficie commerciale né con la lorda o netta a cui si riferisce la quotazione.</li>
+                    <li><strong>Valori per unità e per diritto.</strong> I riquadri catastali e OMI restano riferiti all'intera unità. La scheda del soggetto mostra a parte le stime attribuibili a quote e diritti, usando la fonte preferita per ogni fabbricato; non tutti i diritti sono stimabili con i dati della visura.</li>
+                    <li><strong>Enfiteusi.</strong> La stima attribuibile è il valore pieno della fonte preferita meno l'importo di affrancazione per l'intero bene, applicando poi la quota. Se il dato non è presente, SISTER propone un importo modificabile pari a 15 × reddito catastale annuo: reddito dominicale per i terreni o rendita catastale per i fabbricati, usati solo come proxy del canone contrattuale. Il valore modificato si salva nel tuo account. È un'indicazione da verificare sul titolo e sul regime applicabile, non il calcolo ufficiale dell'affrancazione; se manca anche la base catastale o il valore pieno, il diritto resta non stimabile.</li>
+                    <li><strong>Superficie stimata come proxy.</strong> Se manca la superficie catastale, la consistenza in m² è usata direttamente come proxy. Per i vani delle categorie A è stimata come <code>vani × (superficie media catastale nazionale per categoria ÷ vani medi nazionali per categoria)</code>, da Statistiche Catastali 2012. È una stima grossolana per il solo calcolo OMI: non sostituisce la superficie catastale, non alimenta il riquadro «Superficie catastale · quota» e non coincide necessariamente con la superficie commerciale né con la superficie lorda/netta della quotazione.</li>
                     <li><strong>Intervalli, non prezzi.</strong> Le quotazioni OMI sono medie di zona per immobili in stato ordinario: piano, esposizione, condizioni reali, pertinenze e vincoli non sono considerati. Il semestre della quotazione usata è indicato nel suggerimento della cella.</li>
                     <li><strong>Norma fiscale.</strong> Rivalutazioni e moltiplicatori sono quelli della normativa IMU; se cambiano, i valori catastali vanno aggiornati nel codice.</li>
-                    <li><strong>Zona dalla mappa.</strong> La zona OMI dipende dalla posizione della particella sulla mappa catastale locale: se la geometria manca o è imprecisa, la stima non compare.</li>
+                    <li><strong>Zona dalla mappa.</strong> La zona OMI dipende dalla geometria catastale e dalle zone pubblicate. Se manca una corrispondenza puntuale, il riepilogo conserva un intervallo comunale e una stima centrale basata sui valori OMI effettivi delle zone, senza attribuire arbitrariamente una zona alla particella.</li>
                 </ul>
             </div>
 
@@ -204,8 +216,10 @@
                 <ul>
                     <li><strong>Visura catastale</strong> (XML): categoria, rendita, redditi dominicale e agrario, superficie catastale.</li>
                     <li><strong>Quotazioni OMI</strong>: Agenzia delle Entrate, Osservatorio del Mercato Immobiliare, banca dati delle quotazioni immobiliari (semestrali), importate nel database locale <code>omi</code>.</li>
+                    <li><strong>Proxy vani → m²</strong>: Agenzia delle Entrate, <a href="https://www1.agenziaentrate.gov.it/mt/osservatorio/Tabelle%20statistiche/archivio/StatisticheCatastali2012_29102013.pdf" target="_blank" rel="noopener noreferrer">Statistiche Catastali 2012</a>, tabelle 12 e 13 (categorie A residenziali) e tabella 22 (A/10).</li>
                     <li><strong>Mappa catastale locale</strong>: per posizionare la particella e individuarne la zona OMI.</li>
                     <li><strong>Normativa</strong>: art. 13, commi 4 e 5, D.L. 6 dicembre 2011, n. 201, convertito dalla L. 22 dicembre 2011, n. 214.</li>
+                    <li><strong>Enfiteusi</strong>: <a href="https://def.finanze.it/DocTribFrontend/getContent.do?id=%7B9FA2A30A-0208-4787-B71A-91F9A25DE714%7D" target="_blank" rel="noopener noreferrer">Agenzia delle Entrate, guida all'art. 47 TUR</a>; <a href="https://www.normattiva.it/atto/caricaDettaglioAtto?atto.codiceRedazionale=066U0607&amp;atto.dataPubblicazioneGazzetta=1966-08-06&amp;bloccoAggiornamentoBreadCrumb=true&amp;classica=true&amp;tipoDettaglio=vigente" target="_blank" rel="noopener noreferrer">L. 607/1966</a>; <a href="https://www.normattiva.it/atto/caricaDettaglioAtto?atto.codiceRedazionale=070U1138&amp;atto.dataPubblicazioneGazzetta=1971-01-15&amp;bloccoAggiornamentoBreadCrumb=true&amp;tipoDettaglio=singolavigenza" target="_blank" rel="noopener noreferrer">L. 1138/1970</a>.</li>
                 </ul>
                 <p class="text-muted small mb-0">Documentazione tecnica per sviluppatori: <code>docs/valuation.md</code>.</p>
             </div>

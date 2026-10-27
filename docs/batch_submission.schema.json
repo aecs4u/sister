@@ -2238,6 +2238,14 @@
                       "null"
                     ]
                   },
+                  "tipo_richiesta": {
+                    "type": [
+                      "string",
+                      "number",
+                      "boolean",
+                      "null"
+                    ]
+                  },
                   "restrizione_foglio": {
                     "type": [
                       "string",
@@ -2430,6 +2438,14 @@
                       "null"
                     ]
                   },
+                  "tipo_richiesta": {
+                    "type": [
+                      "string",
+                      "number",
+                      "boolean",
+                      "null"
+                    ]
+                  },
                   "vista": {
                     "type": [
                       "string",
@@ -2479,6 +2495,14 @@
                     ]
                   },
                   "tipo_catasto": {
+                    "type": [
+                      "string",
+                      "number",
+                      "boolean",
+                      "null"
+                    ]
+                  },
+                  "tipo_richiesta": {
                     "type": [
                       "string",
                       "number",

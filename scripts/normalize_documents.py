@@ -40,6 +40,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from sqlalchemy import text  # noqa: E402
 
 from cleanup_extracted_xml import backup, delete_tree  # noqa: E402
+from sister.document_scope import subject_search_scope  # noqa: E402
 from sister.utils import (  # noqa: E402
     _descriptive_filename,
     _p7m_payload,
@@ -224,7 +225,7 @@ async def update_database(plan: dict, commit: bool) -> dict[str, int]:
             r.filename: r
             for r in (
                 await conn.execute(
-                    text("SELECT id, file_name AS filename, request_id AS response_id FROM document WHERE file_name = ANY(:n)"),
+                    text("SELECT id, file_name AS filename, request_id AS response_id, document_type FROM document WHERE file_name = ANY(:n)"),
                     {"n": sorted(wanted)},
                 )
             ).all()
@@ -247,10 +248,25 @@ async def update_database(plan: dict, commit: bool) -> dict[str, int]:
             row = rows.get(entry["old"])
             if row is None:
                 continue
-            await conn.execute(  # the database keeps the file name only: the directory is configuration
-                text("UPDATE document SET file_name = :f WHERE id = :id"),
-                {"f": entry["new"], "id": row.id},
-            )
+            if row.document_type == "visura_soggetto" or entry["new"].casefold().startswith("vs_"):
+                scope = subject_search_scope(entry["new"])
+                await conn.execute(
+                    text(
+                        "UPDATE document SET file_name = :f, subject_search_scope = :scope, "
+                        "subject_search_province = :province WHERE id = :id"
+                    ),
+                    {
+                        "f": entry["new"],
+                        "scope": scope["search_scope"] if scope["search_scope"] != "unknown" else None,
+                        "province": scope["search_province"] or None,
+                        "id": row.id,
+                    },
+                )
+            else:
+                await conn.execute(
+                    text("UPDATE document SET file_name = :f WHERE id = :id"),
+                    {"f": entry["new"], "id": row.id},
+                )
             counts["_renamed"] += 1
         await (transaction.commit() if commit else transaction.rollback())
     await engine.dispose()

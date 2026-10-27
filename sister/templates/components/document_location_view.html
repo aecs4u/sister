@@ -1,4 +1,6 @@
-{% macro _chip(d) %}
+{% from "_doc_macros.html" import document_favorite_button %}
+
+{% macro _chip(d, favorites_enabled=True) %}
 {% set dt = d.document_type or '' %}
 {% if dt == 'visura_storica' %}{% set cls = 'chip-sto' %}{% set ic = 'fa-clock-rotate-left' %}
 {% elif dt == 'visura_fabbricati' %}{% set cls = 'chip-fab' %}{% set ic = 'fa-building' %}
@@ -10,7 +12,8 @@
 {% elif dt == 'elenco_immobili' %}{% set cls = 'chip-eln' %}{% set ic = 'fa-list' %}
 {% else %}{% set cls = 'chip-other' %}{% set ic = 'fa-file' %}
 {% endif %}
-{% set label = (d.oggetto or d.filename or ('Doc ' ~ d.id)) | truncate(40, True, '…') %}
+{% set full_label = d.display_name or d.oggetto or d.filename or ('Doc ' ~ d.id) %}
+{% set label = full_label | truncate(40, True, '…') %}
 {% if d.document_type == 'visura_soggetto' and d.vat %}
 {% set document_url = '/companies/' ~ d.vat %}
 {% elif d.document_type == 'visura_soggetto' and d.cf %}
@@ -18,36 +21,47 @@
 {% else %}
 {% set document_url = '/documents/' ~ d.id %}
 {% endif %}
-<a href="{{ document_url }}" class="tree-doc-chip {{ cls }}" title="{{ d.oggetto or d.filename or '' }}">
-    <i class="fas {{ ic }} fa-xs"></i>{{ label }}{% if d.n_files and d.n_files > 1 %} <span class="opacity-60 ms-1">+{{ d.n_files - 1 }}</span>{% endif %}
-</a>
+<div class="tree-doc-entry d-flex align-items-start gap-1" data-favorite-item data-document-id="{{ d.id }}" data-is-favorite="{{ 'true' if d.is_favorite else 'false' }}">
+    {{ document_favorite_button(d, favorites_enabled) }}
+    <a href="{{ document_url }}" class="tree-doc-chip {{ cls }}" title="{{ full_label }}">
+        <i class="fas {{ ic }} fa-xs"></i>{{ label }}{% if d.n_files and d.n_files > 1 %} <span class="opacity-60 ms-1">+{{ d.n_files - 1 }}</span>{% endif %}
+    </a>
+</div>
 {% endmacro %}
 
-{% macro _doc_leaf(d) %}
+{% macro _doc_leaf(d, favorites_enabled=True) %}
 <li>
-    {{ _chip(d) }}
+    {{ _chip(d, favorites_enabled) }}
     {% if d.owner_docs %}
     <ul class="tree-list">
-        {% for od in d.owner_docs %}<li>{{ _chip(od) }}</li>{% endfor %}
+        {% for od in d.owner_docs %}<li>{{ _chip(od, favorites_enabled) }}</li>{% endfor %}
     </ul>
     {% endif %}
 </li>
 {% endmacro %}
 
-{% macro location_view(prop_map) %}
+{% macro location_view(prop_map, favorites_enabled=True) %}
 <div class="documents-location-view">
-{% if not prop_map.immobili and not prop_map.soggetti %}
+{% if not prop_map.immobili and not prop_map.soggetti and not prop_map.altri %}
 <div class="alert alert-info"><i class="fas fa-circle-info me-2"></i>Nessun documento indicizzato.</div>
 {% else %}
 <div class="prov-jump no-print">
+    {% if prop_map.immobili %}
     <a href="#immobili" class="btn btn-sm btn-outline-success">
         <i class="fas fa-house me-1"></i>Immobili
         <span class="badge bg-success ms-1 badge-count">{{ prop_map.immobili | sum(attribute='total_docs') }}</span>
     </a>
+    {% endif %}
     {% if prop_map.soggetti %}
     <a href="#soggetti" class="btn btn-sm btn-outline-info">
         <i class="fas fa-user-group me-1"></i>Soggetti
         <span class="badge bg-info ms-1 badge-count">{{ prop_map.soggetti | length }}</span>
+    </a>
+    {% endif %}
+    {% if prop_map.altri %}
+    <a href="#altri-documenti" class="btn btn-sm btn-outline-secondary">
+        <i class="fas fa-file-lines me-1"></i>Altri documenti
+        <span class="badge bg-secondary ms-1 badge-count">{{ prop_map.altri | length }}</span>
     </a>
     {% endif %}
     <div class="ms-auto d-flex gap-2 align-items-center">
@@ -60,6 +74,7 @@
     </div>
 </div>
 
+{% if prop_map.immobili %}
 {% set imm_total = prop_map.immobili | sum(attribute='total_docs') %}
 <div class="tree-province" id="immobili">
     <div class="tree-prov-hdr" data-bs-toggle="collapse" data-bs-target="#immobili-body"
@@ -115,10 +130,10 @@
                                     {% if sub.subalterno is not none %}
                                     <li>
                                         <div class="tree-item-row"><span class="tree-sub-label fw-semibold">Sub&nbsp;{{ sub.subalterno }}</span></div>
-                                        <ul class="tree-list">{% for d in sub.docs %}{{ _doc_leaf(d) }}{% endfor %}</ul>
+                                        <ul class="tree-list">{% for d in sub.docs %}{{ _doc_leaf(d, favorites_enabled) }}{% endfor %}</ul>
                                     </li>
                                     {% else %}
-                                    {% for d in sub.docs %}{{ _doc_leaf(d) }}{% endfor %}
+                                    {% for d in sub.docs %}{{ _doc_leaf(d, favorites_enabled) }}{% endfor %}
                                     {% endif %}
                                     {% endfor %}
                                 </ul>
@@ -135,6 +150,7 @@
         </div>
     </div>
 </div>
+{% endif %}
 
 {% if prop_map.soggetti %}
 <div class="tree-province" id="soggetti">
@@ -158,9 +174,26 @@
                 <span class="text-muted small ms-2">{{ sg.docs | length }} doc</span>
                 <i class="fas fa-chevron-down chevron-icon small ms-auto"></i>
             </div>
-            <div class="collapse" id="{{ sg_id }}"><ul class="tree-list">{% for d in sg.docs %}{{ _doc_leaf(d) }}{% endfor %}</ul></div>
+            <div class="collapse" id="{{ sg_id }}"><ul class="tree-list">{% for d in sg.docs %}{{ _doc_leaf(d, favorites_enabled) }}{% endfor %}</ul></div>
         </div>
         {% endfor %}
+    </div>
+</div>
+{% endif %}
+
+{% if prop_map.altri %}
+<div class="tree-province" id="altri-documenti">
+    <div class="tree-prov-hdr" data-bs-toggle="collapse" data-bs-target="#altri-documenti-body"
+         aria-expanded="true" aria-controls="altri-documenti-body" style="background:#6c757d">
+        <i class="fas fa-file-lines"></i>
+        <span class="fw-bold fs-6 flex-grow-1">Altri documenti</span>
+        <span class="badge bg-light text-dark badge-count">{{ prop_map.altri | length }} doc</span>
+        <i class="fas fa-chevron-down chevron-icon small ms-2"></i>
+    </div>
+    <div class="collapse show tree-fog-body" id="altri-documenti-body">
+        <ul class="tree-list">
+            {% for d in prop_map.altri %}{{ _doc_leaf(d, favorites_enabled) }}{% endfor %}
+        </ul>
     </div>
 </div>
 {% endif %}

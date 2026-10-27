@@ -1,0 +1,232 @@
+{#
+  Visura/inspection page with the cadastral parcel map added. One template for every document kind: the view passes
+  `land_map_parent` (the theme template to extend) and `land_map_slot` (where that layout puts the map), see
+  `web._LAND_MAP_LAYOUTS`. Parents without a given block simply ignore the override.
+#}
+{% extends land_map_parent %}
+{% from "components/cadastral_assets.html" import cadastral_asset_kpis, cadastral_table_scripts, cadastral_asset_enrichment_data, cadastral_asset_enrichment_scripts %}
+{% from "land_registry/components/document_parcel_map.html" import document_parcel_map_assets, document_parcel_map_scripts, document_parcel_map %}
+{% set subject_documents = subject_documents|default([], true) %}
+{% set subject_fiscal_code = subject_fiscal_code|default('') %}
+{% set subject_route_prefix = subject_route_prefix|default('/persons') %}
+{% set subject_document_id = subject_document_id|default(none) %}
+{% set subject_portfolio = subject_portfolio|default(none) %}
+{% set subject_map_labels = {
+    'description_unmapped': 'Le particelle senza geometria catastale sono mostrate con un indicatore approssimativo riferito al comune; usa “Adatta tutte le particelle” per vederle insieme.'
+} %}
+{# the subject's saved soggetto query (web._subject_query_profile), when there is one: its elenco immobili completes the groups of the
+   visura layout (web._subject_tree_with_elenco); here its coverage summary and the parcels something is archived for #}
+{% set subject_hub = subject_hub|default(none) %}
+
+{# The subject's visure as a bullet list (the theme's subject_document_nav is a row of buttons), shown at the page bottom.
+   Each entry carries what the page's "Documento" card showed, so that card is not repeated for the visura on screen. #}
+{% macro subject_visure_list(documents, fiscal_code, route_prefix, current_document_id, portfolio=none) -%}
+<nav class="container-fluid py-3 no-print" aria-label="Visure di questo soggetto">
+    <div class="card border-0 shadow-sm">
+        <div class="card-body">
+            <h2 class="h6 mb-2"><i class="fas fa-id-card me-2" aria-hidden="true"></i>Visure per {{ fiscal_code }}</h2>
+            <ul class="mb-0">
+                {% for subject_doc in documents %}
+                <li class="mb-2">
+                    {% if subject_doc.id == current_document_id %}
+                    <strong aria-current="page">{{ subject_doc.title }}{% if subject_doc.date %} · {{ subject_doc.date }}{% endif %}</strong>
+                    <span class="badge text-bg-primary ms-1">in visualizzazione</span>
+                    {% else %}
+                    <a href="{{ route_prefix }}/{{ fiscal_code }}?document={{ subject_doc.id }}">{{ subject_doc.title }}{% if subject_doc.date %} · {{ subject_doc.date }}{% endif %}</a>
+                    {% endif %}
+                    <ul class="list-unstyled small text-muted mb-0 mt-1">
+                        {% if subject_doc.tipo_catasto %}<li><strong>Tipo Catasto:</strong> {{ subject_doc.tipo_catasto }}</li>{% endif %}
+                        {% if subject_doc.scope %}<li><strong>Ambito:</strong> {{ subject_doc.scope }}</li>{% endif %}
+                        {% if subject_doc.situazione_al %}<li><strong>Situazione al:</strong> {{ subject_doc.situazione_al }}</li>{% endif %}
+                        {% if subject_doc.protocollo %}<li><strong>Protocollo:</strong> {{ subject_doc.protocollo }}{% if subject_doc.protocollo_anno %} / {{ subject_doc.protocollo_anno }}{% endif %}</li>{% endif %}
+                        <li><strong>ID Doc:</strong> <code>{{ subject_doc.id }}</code></li>
+                    </ul>
+                    {% if portfolio and subject_doc.id == current_document_id %}
+                    <div class="d-flex flex-wrap align-items-center gap-2 small mt-1" role="status">
+                        <span class="fw-semibold"><i class="fas fa-user-group me-1" aria-hidden="true"></i>Visura per Soggetto</span>
+                        <span class="badge bg-info-subtle text-info border border-info-subtle">{{ portfolio.scope_label }}</span>
+                        <span class="badge bg-primary-subtle text-primary border border-primary-subtle">Tipo Catasto {{ portfolio.tipo_catasto }}</span>
+                        {% if portfolio.aggregated %}
+                        <span class="text-muted">Elenco aggregato dalle visure provinciali disponibili: {{ portfolio.provinces|join(', ') }}.</span>
+                        {% endif %}
+                    </div>
+                    {% endif %}
+                </li>
+                {% endfor %}
+            </ul>
+        </div>
+    </div>
+</nav>
+{%- endmacro %}
+
+{% macro subject_portfolio_summary(portfolio) -%}
+<div class="container-fluid pt-3">
+    <div class="alert alert-info d-flex flex-wrap align-items-center gap-2 py-2 mb-0" role="status">
+        <strong><i class="fas fa-user-group me-1" aria-hidden="true"></i>Visura per Soggetto</strong>
+        <span class="badge bg-info-subtle text-info border border-info-subtle">{{ portfolio.scope_label }}</span>
+        <span class="badge bg-primary-subtle text-primary border border-primary-subtle">Tipo Catasto {{ portfolio.tipo_catasto }}</span>
+        {% if portfolio.aggregated %}
+        <span class="small text-muted">Elenco aggregato dalle visure provinciali disponibili: {{ portfolio.provinces|join(', ') }}.</span>
+        {% endif %}
+    </div>
+</div>
+{%- endmacro %}
+
+{% macro manual_property_valuation_panel(kpis) -%}
+{% if manual_valuation_enabled and kpis and kpis.manual_valuation_assets %}
+<section class="card border-0 shadow-sm mb-4" aria-labelledby="manual-property-valuations-heading" data-manual-property-valuations-root>
+    <div class="card-body">
+        <h2 class="h5" id="manual-property-valuations-heading"><i class="fas fa-hand-holding-dollar text-success me-2" aria-hidden="true"></i>Valori personalizzati, stime esterne e affrancazione</h2>
+        <p class="small text-muted">Puoi personalizzare la fascia OMI per singolo fabbricato, inserire valori rilevati su portali immobiliari e scegliere la fonte preferita per ciascun bene. Per l'enfiteusi puoi correggere e salvare l'importo di affrancazione stimato. Le modifiche sono private del tuo account e indicative; la fascia OMI originale resta visibile separatamente.</p>
+        <div class="alert alert-danger py-2 small" role="alert" data-manual-valuation-error hidden></div>
+        <div class="row g-3" data-manual-property-valuation-items></div>
+    </div>
+</section>
+<script type="application/json" nonce="{{ csp_nonce }}" data-manual-property-valuations>{{ kpis.manual_valuation_assets|tojson }}</script>
+{% endif %}
+{%- endmacro %}
+
+{% macro central_omi_summary(kpis) -%}
+{% if kpis and kpis.asset_value_central %}
+<section class="card border-0 shadow-sm mt-3" aria-labelledby="central-omi-heading">
+    <div class="card-body py-3">
+        <h2 class="h6 mb-1" id="central-omi-heading">Stima centrale dalle quotazioni OMI di zona</h2>
+        <div class="fs-5 fw-semibold">{{ kpis.asset_value_central }}</div>
+        <p class="small text-muted mb-0">{{ kpis.asset_value_central_note }}</p>
+    </div>
+</section>
+{% endif %}
+{%- endmacro %}
+
+{% macro adjusted_omi_summary(kpis) -%}
+{% if manual_valuation_enabled and kpis and kpis.asset_value_adjusted %}
+<section class="card border-0 shadow-sm mt-3" aria-labelledby="adjusted-omi-heading">
+    <div class="card-body py-3">
+        <h2 class="h6 mb-1" id="adjusted-omi-heading">Valore fabbricati con intervalli personalizzati</h2>
+        <div class="fs-5 fw-semibold">{{ kpis.asset_value_adjusted }}</div>
+        <p class="small text-muted mb-2">{{ kpis.asset_value_adjusted_note }}</p>
+        <a class="small" href="#manual-property-valuations-heading">Modifica gli intervalli per fabbricato</a>
+    </div>
+</section>
+{% endif %}
+{%- endmacro %}
+
+{# Patrimonio KPI cards: in the main section, just above the stat cards (the soggetto layout's `before_stats` hook). #}
+{% set kpis_in_main = land_map_parent == 'catasto/visura_soggetto_archive.html' %}
+{% set preferred_assessment_labels = {'attributedOmi': 'Stima attribuibile · fonte preferita'} if land_registry_kpis and land_registry_kpis.owner_assessment.preferred_source_used else {} %}
+{% block before_stats %}
+{% if kpis_in_main and land_registry_kpis %}
+<div class="document-land-map-kpis-main mb-4">
+    {{ cadastral_asset_kpis(land_registry_kpis,
+        omi_valuation_url='/valuation#stima-omi',
+        cadastral_valuation_url='/valuation#valore-catastale') }}
+    {{ central_omi_summary(land_registry_kpis) }}
+    {{ adjusted_omi_summary(land_registry_kpis) }}
+</div>
+{% endif %}
+{% endblock %}
+
+{% block extra_css %}
+{{ super() }}
+{{ document_parcel_map_assets(land_registry_map, include_layout=land_map_slot == 'sidecar' and land_registry_kpis) }}
+<link rel="stylesheet" href="/static/css/pages/document_visura.css?v=20261027b">
+{% endblock %}
+
+{# Layouts that end in a single `content` block get the map after it ... #}
+{% block content %}
+{% if land_map_slot == 'sidecar' and (land_registry_map or land_registry_kpis) %}
+<div class="document-land-map-layout">
+    <div class="document-land-map-content">
+        {% if subject_portfolio and not subject_documents %}{{ subject_portfolio_summary(subject_portfolio) }}{% endif %}
+        {{ super() }}
+        {% if land_map_parent == 'catasto/visura_soggetto_archive.html' %}{{ manual_property_valuation_panel(land_registry_kpis) }}{% endif %}
+        {% if subject_documents %}{{ subject_visure_list(subject_documents, subject_fiscal_code, subject_route_prefix, subject_document_id, subject_portfolio) }}{% endif %}
+        {% if land_registry_kpis or land_registry_history %}
+        {{ cadastral_asset_enrichment_data(land_registry_kpis, land_registry_history, {
+            'ownerAssessmentTarget': '.document-land-map-content .persona-header',
+            'visuraTablesSelector': '.document-land-map-content .imm-tables',
+            'documentUrlTemplate': '/documents/{id}',
+            'omiValuationUrl': '/omi/valuation',
+            'labels': preferred_assessment_labels
+        }, nonce=csp_nonce) }}
+        {% if manual_valuation_enabled and land_registry_kpis %}
+        <script type="application/json" nonce="{{ csp_nonce }}" data-land-map-omi-options>{{ land_registry_kpis.omi_options_by_comune|default({}, true)|tojson }}</script>
+        {% endif %}
+        {% endif %}
+    </div>
+    <aside class="document-land-map-aside" aria-label="{{ 'Indicatori e mappa delle particelle del soggetto' if land_registry_map else 'Indicatori del patrimonio catastale' }}">
+        {% if not kpis_in_main %}
+        {{ cadastral_asset_kpis(land_registry_kpis,
+            omi_valuation_url='/valuation#stima-omi',
+            cadastral_valuation_url='/valuation#valore-catastale') }}
+        {{ central_omi_summary(land_registry_kpis) }}
+        {{ adjusted_omi_summary(land_registry_kpis) }}
+        {% endif %}
+        {{ document_parcel_map(land_registry_map, labels=subject_map_labels) }}
+    </aside>
+</div>
+{% else %}
+{% if subject_portfolio and not subject_documents %}{{ subject_portfolio_summary(subject_portfolio) }}{% endif %}
+{{ super() }}
+{% if land_map_parent == 'catasto/visura_soggetto_archive.html' %}{{ manual_property_valuation_panel(land_registry_kpis) }}{% endif %}
+{% if land_map_slot == 'content' %}
+<div class="container-fluid py-3">
+    {{ document_parcel_map(land_registry_map, labels=subject_map_labels) }}
+</div>
+{% endif %}
+{% if subject_documents %}{{ subject_visure_list(subject_documents, subject_fiscal_code, subject_route_prefix, subject_document_id, subject_portfolio) }}{% endif %}
+{% endif %}
+{% endblock %}
+
+{# ... layouts built on visura_base put it in their own `after_query` slot. #}
+{% block after_query %}
+{{ super() }}
+{% if land_map_slot == 'after_query' %}
+{{ document_parcel_map(land_registry_map, labels=subject_map_labels) }}
+{% endif %}
+{% endblock %}
+
+{% block extra_js %}
+{{ super() }}
+{{ cadastral_table_scripts() }}
+{{ document_parcel_map_scripts(land_registry_map, nonce=csp_nonce) }}
+{# PDF export: the page's own print layout rendered by headless Chromium (/documents/<id>/pdf). #}
+{# PDF of the page, always offered: a subject page exports itself (visura + elenco groups, selected visura kept), others their document #}
+{% if doc and doc.query_only or subject_fiscal_code %}
+{% set pdf_url = subject_route_prefix ~ '/' ~ subject_fiscal_code ~ '/pdf' ~ (('?document=' ~ subject_document_id) if subject_document_id else '') %}
+{% elif doc and doc.id %}
+{% set pdf_url = '/documents/' ~ doc.id ~ '/pdf' %}
+{% else %}
+{% set pdf_url = '' %}
+{% endif %}
+{% if pdf_url %}
+<script nonce="{{ csp_nonce }}">
+(function () {
+    if (document.querySelector('[data-document-pdf]')) return;
+    var printButton = document.querySelector('button[onclick="window.print()"], button[data-aecs4u-print]');
+    var link = document.createElement('a');
+    link.className = printButton ? printButton.className : 'btn btn-outline-light';
+    link.href = {{ pdf_url|tojson }};
+    link.dataset.documentPdf = 'true';
+    link.title = 'Scarica la pagina in PDF (A4 orizzontale)';
+    link.innerHTML = '<i class="fas fa-file-pdf me-2" aria-hidden="true"></i>PDF';
+    if (printButton) { printButton.before(link); return; }
+    // without a print button the link still goes next to the hero's other actions
+    var host = document.querySelector('.page-hero .d-flex .btn');
+    if (host) host.before(link);
+    else (document.querySelector('.page-hero') || document.body).appendChild(link);
+})();
+</script>
+{% endif %}
+{% if land_map_parent == 'catasto/visura_soggetto_archive.html' %}
+<script src="/static/js/visura_global_filter.js?v=20261027a" defer></script>
+<script src="/static/js/document_visura.js?v=20261027a" defer></script>
+{% if land_registry_kpis or land_registry_history %}
+{{ cadastral_asset_enrichment_scripts() }}
+{% endif %}
+{% if manual_valuation_enabled %}
+<script src="/static/js/manual_property_valuations.js?v=20261109b" defer></script>
+<script src="/static/js/property_omi_selections.js?v=20261112a" defer></script>
+{% endif %}
+{% endif %}
+{% endblock %}

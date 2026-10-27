@@ -11,7 +11,10 @@
 
 {% block extra_css %}
 {{ super() }}
-{{ data_table_assets() }}
+{# self-hosted Tabulator (the theme's data_table_assets() loads it from a CDN, which the CSP blocks) #}
+<link rel="stylesheet" href="/static/vendor/tabulator-6.3.1/css/tabulator_bootstrap5.min.css">
+<link rel="stylesheet" href="/static/aecs4u-theme/css/data-table.css{{ theme_asset_v|default('') }}">
+<script src="/static/vendor/tabulator-6.3.1/js/tabulator.min.js"></script>
 <link rel="stylesheet" href="/static/css/pages/result_detail.css?v=20261009a">
 {{ document_parcel_map_assets(result.land_registry_map if result else none) }}
 {% endblock %}
@@ -44,8 +47,13 @@
     <div class="row g-3">
       <div class="col-6">{{ param_label('Provincia', result.provincia or '-') }}</div>
       <div class="col-6">{{ param_label('Comune', result.comune or '-') }}</div>
+      {# subject queries (soggetto, persona giuridica) store the codice fiscale / P.IVA in the particella column #}
+      {% if not result.foglio and result.particella and (result.particella|string)|length in (11, 16) %}
+      <div class="col-12">{{ param_label('Codice fiscale / P.IVA', result.particella) }}</div>
+      {% else %}
       <div class="col-6">{{ param_label('Foglio / Particella', (result.foglio or '-') ~ ' / ' ~ (result.particella or '-')) }}</div>
       <div class="col-6">{{ param_label('Sezione / Subalterno', (result.sezione or '-') ~ ' / ' ~ (result.subalterno or '-')) }}</div>
+      {% endif %}
     </div>
     {% if result.error %}
     <div class="alert alert-danger mt-3 mb-0">
@@ -245,6 +253,7 @@
       </div>
     </div>
     <div class="card-body p-0">
+      <div id="props-summary" class="mb-3 d-none"></div>
       <div id="tabulator-db-properties"></div>
     </div>
   </div>
@@ -401,8 +410,8 @@
         paginationSizeSelector: [10, 25, 50, 100],
         movableColumns: true,
         placeholder: "No data",
+        // no maxHeight: pagination already bounds the rows, and an inner scrollbar hides most of a 25-row page
         height: "auto",
-        maxHeight: "500px",
     };
 
     // Minimum column width fitted to header title length.
@@ -594,6 +603,58 @@
         var tabProps = new Tabulator(el, Object.assign({}, commonOpts, {data: data, columns: cols}));
         window._tabProps = tabProps;
 
+        // Summary above a long table: totals and clickable groups (comune, categoria, tipo) that filter the table below.
+        (function() {
+            var host = document.getElementById("props-summary");
+            if (!host || data.length < 15) return;
+            function num(v) { var m = (v == null ? "" : String(v)).replace(/[^0-9,]/g, ""); return m ? (parseFloat(m.replace(",", ".")) || 0) : 0; }
+            function tally(field) {
+                var t = {};
+                data.forEach(function(r) { var k = r[field] || "—"; (t[k] = t[k] || {n: 0, income: 0}); t[k].n++; t[k].income += num(r.income); });
+                return Object.keys(t).map(function(k) { return {key: k, n: t[k].n, income: t[k].income}; }).sort(function(a, b) { return b.n - a.n; });
+            }
+            var total = data.reduce(function(a, r) { return a + num(r.income); }, 0);
+            var dominical = data.reduce(function(a, r) { return a + num(r.dominical_income); }, 0);
+            function euro(v) { return "€ " + v.toLocaleString("it-IT", {maximumFractionDigits: 2}); }
+            var head = document.createElement("div");
+            head.className = "d-flex flex-wrap align-items-center gap-2 mb-2";
+            var title = document.createElement("strong");
+            title.textContent = data.length + " immobili" + (total > 0 ? " · rendita fabbricati " + euro(total) : "") +
+                (dominical > 0 ? " · reddito dominicale terreni " + euro(dominical) : "");
+            var all = document.createElement("button");
+            all.type = "button"; all.className = "btn btn-sm btn-outline-secondary d-none"; all.textContent = "Mostra tutto";
+            head.appendChild(title); head.appendChild(all); host.appendChild(head);
+            var chips = [];
+            function apply(field, key, btn) {
+                tabProps.setFilter(field, "=", key === "—" ? "" : key);
+                chips.forEach(function(c) { c.classList.remove("active"); });
+                btn.classList.add("active"); all.classList.remove("d-none");
+            }
+            [["Comune", "municipality", 14], ["Categoria", "category", 12], ["Tipo", "property_type", 4]].forEach(function(g) {
+                var rows = tally(g[1]);
+                if (rows.length < 2) return;
+                var line = document.createElement("div");
+                line.className = "d-flex flex-wrap align-items-center gap-1 mb-1";
+                var label = document.createElement("span");
+                label.className = "text-muted small me-1"; label.textContent = g[0] + " (" + rows.length + "):";
+                line.appendChild(label);
+                rows.slice(0, g[2]).forEach(function(r) {
+                    var b = document.createElement("button");
+                    b.type = "button"; b.className = "btn btn-sm btn-outline-primary py-0";
+                    var name = r.key === "building" ? "Fabbricati" : r.key === "land" ? "Terreni" : r.key;
+                    b.textContent = name + " · " + r.n;
+                    b.addEventListener("click", function() { apply(g[1], r.key, b); });
+                    chips.push(b); line.appendChild(b);
+                });
+                if (rows.length > g[2]) { var more = document.createElement("span"); more.className = "text-muted small"; more.textContent = "+" + (rows.length - g[2]) + " altri (filtra dalla colonna)"; line.appendChild(more); }
+                host.appendChild(line);
+            });
+            all.addEventListener("click", function() {
+                tabProps.clearFilter(true); chips.forEach(function(c) { c.classList.remove("active"); }); all.classList.add("d-none");
+            });
+            host.classList.remove("d-none");
+        })();
+
         if (hasSubject) {
             var _propXRow = null;
             var _propChip  = document.getElementById('prop-filter-chip');
@@ -662,9 +723,15 @@
         var _ownersLabel = document.getElementById('owners-filter-label');
         var _ownersClear = document.getElementById('owners-filter-clear');
 
+        // the properties grid only has the subject column for multi-subject results, and may still be building
+        function propsHasSubjectFilter() {
+            var t = window._tabProps;
+            return !!(t && t.initialized && t.getColumn("subject_fiscal_code"));
+        }
+
         function clearPropXFilter() {
             if (_ownerXRow) { try { _ownerXRow.getElement().classList.remove('table-active'); } catch(e){} _ownerXRow = null; }
-            if (window._tabProps) window._tabProps.setHeaderFilterValue("subject_fiscal_code", "");
+            if (propsHasSubjectFilter()) window._tabProps.setHeaderFilterValue("subject_fiscal_code", "");
             if (_ownersChip) _ownersChip.classList.add('d-none');
         }
         if (_ownersClear) _ownersClear.addEventListener('click', clearPropXFilter);
@@ -720,7 +787,7 @@
             if (!cumulate) {
                 tabOwners.on("rowClick", function(e, row) {
                     var fc = row.getData().fiscal_code;
-                    if (!fc || !window._tabProps) return;
+                    if (!fc || !propsHasSubjectFilter()) return;
                     if (_ownerXRow === row) { clearPropXFilter(); return; }
                     clearPropXFilter();
                     _ownerXRow = row;

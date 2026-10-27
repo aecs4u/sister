@@ -58,6 +58,12 @@ def test_parse_ubicazione_and_classamento():
         "address": "VIA EL ALAMEIN n. 2 Piano T-1",
     }
     assert rp.parse_ubicazione("VIA ROMA 1") == {"address": "VIA ROMA 1"}
+    assert rp.parse_ubicazione("PISOGNE(BS) Sez: A") == {
+        "municipality": "PISOGNE",
+        "province": "BS",
+        "section": "A",
+        "address": "",
+    }
     assert rp.parse_classamento("Zona 1 Cat.A/4") == {"census_zone": "1", "category": "A/4"}
     assert rp.parse_classamento("") == {}
 

@@ -4,6 +4,8 @@ import asyncio
 import functools
 import inspect
 import logging
+import os
+import time
 from contextlib import suppress
 from datetime import datetime
 from typing import Optional
@@ -52,9 +54,16 @@ from .utils import (
     run_visura_persona_giuridica,
     run_visura_soggetto,
     run_visura_storica,
+    _on_live_sister_page,
+    dump_error_page,
 )
 
 logger = logging.getLogger("sister")
+
+# seconds during which a successful session check is trusted (0 = check before every request)
+SESSION_RECHECK_SECONDS = float(os.getenv("SISTER_SESSION_RECHECK_SECONDS", "120"))
+# the service never logs in by itself in CDP mode (see docs/portal_session.md); set true to let aecs4u-auth try to log in again
+AUTO_RELOGIN = os.getenv("SISTER_AUTO_RELOGIN", "false").strip().lower() in ("1", "true", "yes", "si")
 
 _GENERIC_DISPATCHERS = {
     "indirizzo": run_ricerca_indirizzo,
@@ -212,6 +221,7 @@ class BrowserManager:
         self.last_login_time = None
         self._session_origin = None
         self._page_lock = asyncio.Lock()
+        self._session_checked_at: Optional[float] = None
 
     @property
     def authenticated(self) -> bool:
@@ -325,9 +335,43 @@ class BrowserManager:
         await self._auth.stop_keepalive()
 
     async def _ensure_authenticated(self):
+        # The package check opens SceltaServizio on every request, so the next query always starts from that page. Within
+        # SESSION_RECHECK_SECONDS of the last good check, on a live SISTER page, it is skipped: the keep-alive keeps the
+        # session warm and an expired one still fails the query (and is checked again, since the page is then a dead one).
+        page = self.auth_page
+        if (
+            SESSION_RECHECK_SECONDS > 0
+            and self._session_checked_at is not None
+            and time.monotonic() - self._session_checked_at < SESSION_RECHECK_SECONDS
+            and page is not None
+            and _on_live_sister_page(page.url)
+        ):
+            return
+        if self.is_cdp and not AUTO_RELOGIN:
+            # The package would answer a failed check with a "recovery" navigation and then a full CIE login in the user's
+            # tab, which waits for a phone approval nobody expects and blocks the worker. Check only, never log in.
+            session = getattr(self._auth, "_session", None)
+            valid = False
+            if session is not None and session.service:
+                from aecs4u_auth.browser.services import get_service
+
+                # check_session only looks for the province menu of the CURRENT page, which result pages do not have, and the
+                # package's keep-alive uses the same test to mark a healthy session invalid. A miss is therefore answered
+                # with the package's recovery (go back to the Visure page, look again), never with a login
+                if session.is_valid:
+                    valid = await get_service(session.service).check_session(session.page)
+                if not valid:
+                    valid = await self._auth._try_recovery()
+            if not valid:
+                self._session_checked_at = None
+                raise AuthenticationError("Sessione SISTER scaduta o non valida: serve un nuovo accesso (scripts/ade_login.py)")
+            self.last_login_time = datetime.now()
+            self._session_checked_at = time.monotonic()
+            return
         try:
             await self._auth.ensure_authenticated()
             self.last_login_time = datetime.now()
+            self._session_checked_at = time.monotonic()
         except Exception as e:
             logger.error("Errore nella re-autenticazione: %s", e)
             raise AuthenticationError(f"Re-authentication failed: {e}") from e
@@ -445,6 +489,7 @@ class BrowserManager:
                 data=result,
             )
         except Exception as e:
+            await dump_error_page(self.auth_page, request.request_id, str(e))
             return VisuraResponse(
                 request_id=request.request_id,
                 success=False,

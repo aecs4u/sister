@@ -63,6 +63,12 @@ def _f(portal, param, kind="text", help="", choices=None, handled=False, page=1)
 _RICHIEDENTE = _f("richiedente", "richiedente", help="Richiesta effettuata per conto di (default: ADE_USERNAME)")
 _MOTIVO = _f("motivoText", "motivo", help="Motivazione della richiesta (default: Esplorazione)")
 _TIPO_CATASTO = _f("tipoCatasto", "tipo_catasto", "select", "T = Terreni, F = Fabbricati, E = entrambi", handled=True)
+# "Tipo richiesta" of the subject forms (radio A = Attualità, S = Storica); set by utils._select_tipo_richiesta, which fails when
+# Storica is asked for and the form has no such control (a silent Attualità would be a wrong answer)
+_TIPO_RICHIESTA = _f(
+    "tipo_richiesta", "tipo_richiesta", "radio", "attualita | storica (default: attualita)",
+    {"attualita": "A", "storica": "S"}, handled=True,
+)
 _COMUNE_CAT = _f("comuneCat", "comune", "select", "Comune", handled=True)
 _COMUNE_DENOM = _f("denomComune", "comune", "select", "Comune", handled=True)
 _SEZIONE = _f(
@@ -112,6 +118,7 @@ _BASE_FORMS: dict[str, QueryForm] = {
         "soggetto",
         (
             _TIPO_CATASTO,
+            _TIPO_RICHIESTA,
             _RESTRIZIONE_FOGLIO,
             _SEZIONE_AUTO,
             _SEZIONE_URBANA,
@@ -722,6 +729,7 @@ _NO_FORM = (
             ("codice_fiscale", "text", "Codice fiscale / Partita IVA"),
             ("azienda", "checkbox", "Search as a legal entity using its tax code / VAT number"),
             ("tipo_catasto", "select", "T = Terreni, F = Fabbricati, E = both"),
+            ("tipo_richiesta", "select", "attualita | storica (default: attualita)"),
             ("vista", "select", "analitica | sintetica"),
         ),
         ("codice_fiscale",),
@@ -735,6 +743,7 @@ _NO_FORM = (
             ("provincia", "text", _PROVINCIA_HELP),
             ("codice_fiscale", "text", "Codice fiscale / partita IVA"),
             ("tipo_catasto", "select", "T = Terreni, F = Fabbricati, E = both"),
+            ("tipo_richiesta", "select", "attualita | storica (default: attualita)"),
             ("con_intestati", "checkbox", "Also read the owners of each property"),
             ("azienda", "checkbox", "The identifier is a partita IVA (persona giuridica)"),
         ),

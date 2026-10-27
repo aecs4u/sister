@@ -89,7 +89,7 @@ istat.municipalities ◄── cadastral_unit ◄── request ──► reques
 | `mortgage_inspection_units` + `_properties` | `mortgage_inspection_property` |
 | `cadastral_map_geometry_cache` | `parcel_geometry_cache` keyed by `(feature_type, comune_id, section, sheet, parcel)`; `lookup_key` was the concatenation of those columns |
 | `document_xml_nodes`, `_attributes` | `sister_archive.document_xml_node`, `_attribute` |
-| 28 `enum_*` tables + trigger | `CHECK`s for closed sets; lookup tables for `request_type`, `document_type`, `cadastral_category`, `land_quality`, `activity_action`, mortgage vocabularies |
+| 28 `enum_*` tables + trigger | `CHECK`s for closed sets; lookup tables for `request_type` (display label and description, with `request_type_tag` categories), `document_type`, `cadastral_category`, `land_quality`, `activity_action`, mortgage vocabularies |
 | `sister_owner_index`, `sister_property_index` (matviews), 13 views | not rebuilt; 7 flat views (below) |
 
 Read views: `v_cadastral_unit`, `v_property`, `v_result_owner`, `v_property_owner` (one row per pair and link scope),

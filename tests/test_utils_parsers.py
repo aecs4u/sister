@@ -437,3 +437,31 @@ def test_a_company_subject_visura_is_named_after_its_partita_iva_not_its_first_p
 
     assert parsed["tipo"] == "visura_soggetto" and parsed["identificativo"] == "00110110822"
     assert utils._descriptive_filename(parsed, requested_at="2026-10-22") == "vs_att_00110110822_PA_CE"
+
+
+def test_province_elenco_reads_the_province_table():
+    from sister.utils import _province_elenco
+
+    rows = [
+        {"Provincia": "MILANO", "Fabbricati": "2", "Terreni": "0", "Comuni": "lista", "omonimonazionale": "MI#MILANO   "},
+        {"Provincia": "PALERMO", "Fabbricati": "74", "Terreni": "4", "Comuni": "lista", "omonimonazionale": "PA#PALERMO  "},
+        {"Provincia": "", "Fabbricati": "", "Terreni": ""},
+    ]
+    assert _province_elenco(rows) == [
+        {"provincia": "MILANO", "codice": "MI", "fabbricati": 2, "terreni": 0},
+        {"provincia": "PALERMO", "codice": "PA", "fabbricati": 74, "terreni": 4},
+    ]
+    assert _province_elenco([]) == []
+
+
+def test_live_sister_page_is_only_the_logged_in_area():
+    live = "https://sister3.agenziaentrate.gov.it/Visure/vpf/SceltaVisuraNazionalePF.do"
+    assert utils._on_live_sister_page(live)
+    for dead in (
+        "https://sister3.agenziaentrate.gov.it/Visure/login.jsp",
+        "https://sister3.agenziaentrate.gov.it/Servizi/sessione_scaduta.jsp",
+        "https://iampe.agenziaentrate.gov.it/sam/UI/Logout?realm=/agenziaentrate",
+        "about:blank",
+        "",
+    ):
+        assert not utils._on_live_sister_page(dead)

@@ -5,7 +5,10 @@
 
 {% block extra_css %}
 {{ super() }}
-{{ data_table_assets() }}
+{# self-hosted Tabulator (the theme's data_table_assets() loads it from a CDN, which the CSP blocks) #}
+<link rel="stylesheet" href="/static/vendor/tabulator-6.3.1/css/tabulator_bootstrap5.min.css">
+<link rel="stylesheet" href="/static/aecs4u-theme/css/data-table.css{{ theme_asset_v|default('') }}">
+<script src="/static/vendor/tabulator-6.3.1/js/tabulator.min.js"></script>
 {% endblock %}
 
 {# The nested response renderer is local because it handles arbitrary workflow

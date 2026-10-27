@@ -84,7 +84,9 @@ def valuation_page_context() -> dict[str, Any]:
             "area": omi_area,
             "low": _eur(omi_low),
             "high": _eur(omi_high),
+            "mid": _eur((omi_low + omi_high) / 2),
             "value_low": _eur(omi_area * omi_low),
             "value_high": _eur(omi_area * omi_high),
+            "value_mid": _eur(omi_area * (omi_low + omi_high) / 2),
         },
     }

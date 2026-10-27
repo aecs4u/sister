@@ -367,3 +367,19 @@ def test_cli_batch_schema_command():
 
     result = CliRunner().invoke(app, ["query", "batch-schema"])
     assert result.exit_code == 0 and json.loads(result.output)["title"] == "SISTER batch submission"
+
+
+def test_resume_does_not_resend_a_final_no_match_answer(tmp_path):
+    journal = tmp_path / batch.JOURNAL_NAME
+    spec = three()
+
+    def wait(rid):
+        return {"status": "error", "error": "NESSUNA CORRISPONDENZA TROVATA"} if rid == "r2" else {"status": "completed"}
+
+    run(FakeClient(wait=wait), spec, journal=journal, wait=True, retries=0)
+
+    second = FakeClient()
+    report = run(second, spec, journal=journal, resume=True, wait=True)
+    assert second.submits == []  # SISTER's answer does not change: nothing is sent again, not even the "failed" row
+    assert [e["status"] for e in report.entries] == ["completed", "error", "completed"]
+    assert "NESSUNA CORRISPONDENZA" in report.entries[1]["error"]

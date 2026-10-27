@@ -11,17 +11,27 @@ Two different figures are produced, and the page must not blur them:
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import logging
 import re
 import unicodedata
+import unicodedata
 from datetime import date, datetime
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from fractions import Fraction
 from typing import Any
 
 from . import omi_quotes
 from .cadastral_values import building_cadastral_value, building_multiplier, land_cadastral_value, normalize_category
-from .result_parsers import clean_quota, clean_right_description, parse_right_period
+from .result_parsers import (
+    birth_date_from_codice_fiscale,
+    clean_quota,
+    clean_right_description,
+    correct_century,
+    parse_right_period,
+    parse_xml_nominativo,
+)
 
 logger = logging.getLogger("sister")
 
@@ -111,15 +121,14 @@ def _right_kind(description: Any, code: Any) -> str:
         return "bare"
     if "usufrutto" in text or (not text and str(code or "").strip().zfill(2) == "02"):
         return "usufruct"
+    if "enfiteus" in text or "enfiteut" in text or (not text and str(code or "").strip().zfill(2) == "05"):
+        return "enfiteusi"
     # "proprieta per l'area" (01T) is the landowner of a surface right: the building belongs to the superficiario
     if "proprieta" in text and not any(term in text for term in ("superficiar", "separata", "concedente", "per l area")):
         return "full"
     if not text and str(code or "").strip().zfill(2) == "01":
         return "full"
     return "other"
-
-
-_BIRTH_DATE = re.compile(r"\b(\d{2}/\d{2}/\d{4})\b")
 
 
 def _age_on(birth: date | None, as_of: date | None) -> int | None:
@@ -145,18 +154,28 @@ def _owner_right(owner: dict[str, Any], as_of: date | None, as_of_text: str) -> 
         right_dates and as_of and (right_end := _date_value(right_dates[-1])) and right_end > as_of
     ) or bool(re.search(r"\b(?:temporane[oa]|a termine)\b", description, flags=re.IGNORECASE))
     nominative = str(owner.get("Nominativo") or "")
-    birth = _BIRTH_DATE.search(nominative)
+    parsed_nominative = parse_xml_nominativo(nominative)
     code = str(right.get("CodiceDiritto") or "").strip().upper()
+    owner_cf = str(owner.get("CF") or owner.get("CodiceFiscale") or "").strip().upper()
+    birth_date_text = correct_century(parsed_nominative.get("birth_date", ""), owner_cf, as_of)
+    if not birth_date_text:
+        birth_date_text = birth_date_from_codice_fiscale(
+            owner_cf, as_of, partial=parsed_nominative.get("birth_date_partial", "")
+        ) or ""
     return {
         "kind": _right_kind(description, code),
         "label": description or "Diritto non specificato",
         "quota": quota,
         "share": _share_fraction(quota),
         "fixed_term": fixed_term,
+        # Optional contract/authority input; the SISTER visura does not ordinarily carry this amount.
+        "affrancation_value": _assessment_amount(
+            right.get("ImportoAffrancazione", right.get("affrancation_value"))
+        ),
         # usufrutto con diritto di accrescimento (08A): the usufruct lasts until the last of the holders dies
         "accrual": code.endswith("A") or "accrescimento" in description.casefold(),
-        "name": " ".join((nominative[: birth.start()] if birth else nominative.split(";")[0]).split()),
-        "age": _age_on(_date_value(birth.group(1)) if birth else None, as_of),
+        "name": parsed_nominative.get("name") or " ".join(nominative.split(";")[0].split()),
+        "age": _age_on(_date_value(birth_date_text), as_of),
     }
 
 
@@ -254,8 +273,459 @@ def _assessment_decimal(value: Any) -> Decimal | None:
     return number if number.is_finite() and number >= 0 else None
 
 
+def _assessment_amount(value: Any) -> Decimal | None:
+    """Parse an explicitly supplied redemption amount, including Italian decimal notation."""
+    if isinstance(value, dict):
+        value = value.get("_text")
+    if value is None:
+        return None
+    text = str(value).strip().replace("€", "").replace(" ", "")
+    if not text:
+        return None
+    if "," in text:
+        if "." in text and text.rfind(",") < text.rfind("."):
+            text = text.replace(",", "")
+        else:
+            text = text.replace(".", "").replace(",", ".")
+    elif text.count(".") > 1 or ("." in text and len(text.rsplit(".", 1)[1]) == 3):
+        text = text.replace(".", "")
+    return _assessment_decimal(text)
+
+
+def _infer_affrancation_amount(asset: dict[str, Any]) -> Decimal | None:
+    """Estimate 15 annual cadastral-income units as a visible proxy for the missing canon."""
+    income_key = "building_income" if asset.get("table_kind") == "buildings" else "dominical_income"
+    annual_income = _assessment_decimal(asset.get(income_key))
+    if annual_income is None or annual_income <= 0:
+        return None
+    return (annual_income * Decimal(15)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+
+def _affrancation_amount(right: dict[str, Any], asset: dict[str, Any]) -> Decimal | None:
+    """Resolve an account override, a supplied amount, or the cadastral-income proxy."""
+    override = _assessment_amount(asset.get("affrancation_amount_override"))
+    if override is not None:
+        return override
+    supplied = _assessment_amount(right.get("affrancation_value"))
+    return supplied if supplied is not None else _infer_affrancation_amount(asset)
+
+
+def _asset_identity(
+    *,
+    cadastre_type: str,
+    municipality_code: Any,
+    municipality: Any,
+    province: Any,
+    section: Any,
+    sheet: Any,
+    parcel: Any,
+    subunit: Any = "",
+) -> dict[str, str] | None:
+    """Build a stable cadastral identity for one property row and its user-entered valuations."""
+    def clean(value: Any) -> str:
+        if isinstance(value, dict):
+            value = value.get("_text") or value.get("value")
+        elif isinstance(value, list):
+            value = value[0] if value else ""
+            if isinstance(value, dict):
+                value = value.get("_text") or value.get("value")
+        text = str(value or "").strip()
+        return re.sub(r"\s+", " ", text)
+
+    identity = {
+        "cadastre_type": cadastre_type,
+        "municipality_code": clean(municipality_code).upper(),
+        "municipality": clean(municipality),
+        "province": clean(province).upper(),
+        "section": clean(section).upper(),
+        "sheet": clean(sheet).upper(),
+        "parcel": clean(parcel).upper(),
+        "subunit": clean(subunit).upper(),
+    }
+    if (
+        not (identity["municipality_code"] or identity["municipality"])
+        or not identity["sheet"]
+        or not identity["parcel"]
+    ):
+        return None
+
+    def token(value: str) -> str:
+        normalized = unicodedata.normalize("NFKD", value.casefold())
+        ascii_value = "".join(char for char in normalized if not unicodedata.combining(char))
+        return re.sub(r"[^a-z0-9]", "", ascii_value)
+
+    key_fields = (
+        identity["cadastre_type"], identity["municipality_code"] or token(identity["municipality"]),
+        "" if identity["municipality_code"] else token(identity["province"]),
+        token(identity["section"]), token(identity["sheet"]),
+        token(identity["parcel"]), token(identity["subunit"]),
+    )
+    identity["asset_key"] = hashlib.sha256("|".join(key_fields).encode("utf-8")).hexdigest()
+    return identity
+
+
+def _preferred_valuation_estimates(
+    table_estimates: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Return row estimates selected by each user's source preference for the owner-right calculation."""
+    preferred = []
+    for group in table_estimates:
+        preferred_group = {"buildings": [], "lands": []}
+        for kind in ("buildings", "lands"):
+            for estimate in group.get(kind, []):
+                selected = dict(estimate)
+                source = estimate.get("preferred_source")
+                if source == "omi":
+                    pass  # value_min/value_max already carry the official OMI range for building rows.
+                elif source:
+                    provider_value = next(
+                        (value for value in estimate.get("manual_valuations", []) if value.get("provider") == source),
+                        None,
+                    )
+                    if provider_value and kind == "buildings":
+                        selected["value_min"] = provider_value.get("value_min")
+                        selected["value_max"] = provider_value.get("value_max") or provider_value.get("value_min")
+                        selected["range"] = provider_value.get("range", "")
+                        selected["note"] = provider_value.get("note", "")
+                    else:
+                        selected["value_min"] = selected["value_max"] = None
+                else:
+                    selected["value_min"] = selected["value_max"] = None
+                preferred_group[kind].append(selected)
+        preferred.append(preferred_group)
+    return preferred
+
+
+_MANUAL_PROVIDER_LABELS = {
+    "immobiliare": "Immobiliare.it",
+    "idealista": "idealista",
+    "other": "Altro",
+}
+
+
+def apply_user_manual_valuations(
+    kpis: dict[str, Any],
+    saved_values: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    """Add a user's provider valuations and preferred-source display to a subject KPI result."""
+    table_estimates = kpis.get("table_estimates") or []
+    kpis.pop("asset_value_adjusted", None)
+    kpis.pop("asset_value_adjusted_note", None)
+    adjusted_value_min = Decimal(0)
+    adjusted_value_max = Decimal(0)
+    adjusted_units = 0
+    overridden_units = 0
+    for group in table_estimates:
+        for kind in ("buildings", "lands"):
+            for estimate in group.get(kind, []):
+                identity = estimate.get("asset_identity") or {}
+                asset_key = identity.get("asset_key")
+                saved = saved_values.get(asset_key, {}) if asset_key else {}
+                base_min = _assessment_decimal(estimate.get("value_min"))
+                base_max = _assessment_decimal(estimate.get("value_max"))
+                if kind == "buildings" and base_min is not None and base_max is not None and base_max >= base_min:
+                    override = saved.get("omi_override") or {}
+                    override_min = _assessment_decimal(override.get("value_min"))
+                    override_max = _assessment_decimal(override.get("value_max")) or override_min
+                    has_override = (
+                        override_min is not None
+                        and override_min > 0
+                        and override_max is not None
+                        and override_max >= override_min
+                    )
+                    estimate["omi_override"] = ({
+                        "value_min": format(override_min, ".2f"),
+                        "value_max": (
+                            format(override_max, ".2f") if override.get("value_max") is not None else ""
+                        ),
+                        "range": (
+                            _format_value_range(override_min, override_max)
+                            if override_min != override_max else _format_currency_it(override_min)
+                        ),
+                        "is_override": True,
+                    } if has_override else None)
+                    adjusted_value_min += override_min if has_override else base_min
+                    adjusted_value_max += override_max if has_override else base_max
+                    adjusted_units += 1
+                    if has_override:
+                        overridden_units += 1
+                else:
+                    estimate["omi_override"] = None
+                manual_valuations = []
+                for row in saved.get("valuations", []):
+                    provider = str(row.get("provider") or "")
+                    if provider not in _MANUAL_PROVIDER_LABELS:
+                        continue
+                    low = _assessment_decimal(row.get("value_min"))
+                    high = _assessment_decimal(row.get("value_max"))
+                    if low is None:
+                        continue
+                    high = high if high is not None else low
+                    label = _MANUAL_PROVIDER_LABELS[provider]
+                    manual_valuations.append({
+                        "provider": provider,
+                        "provider_label": label,
+                        "value_min": str(low),
+                        "value_max": str(high),
+                        "range": _format_value_range(low, high) if low != high else _format_currency_it(low),
+                        "source_date": str(row.get("source_date") or ""),
+                        "source_url": str(row.get("source_url") or ""),
+                        "notes": str(row.get("notes") or ""),
+                        "note": (
+                            f"Valore inserito manualmente da {label}"
+                            + (f" il {row['source_date']}" if row.get("source_date") else "")
+                            + ". Non verificato da SISTER."
+                        ),
+                    })
+                estimate["manual_valuations"] = manual_valuations
+                omi_available = (
+                    kind == "buildings"
+                    and _assessment_decimal(estimate.get("value_min")) is not None
+                    and _assessment_decimal(estimate.get("value_max")) is not None
+                )
+                available_sources = {item["provider"] for item in manual_valuations}
+                saved_preference = saved.get("preferred_source")
+                if saved_preference == "omi" and omi_available:
+                    preferred_source = "omi"
+                elif saved_preference in available_sources:
+                    preferred_source = saved_preference
+                elif omi_available:
+                    preferred_source = "omi"
+                else:
+                    preferred_source = next(
+                        (
+                            provider
+                            for provider in ("immobiliare", "idealista", "other")
+                            if provider in available_sources
+                        ),
+                        "",
+                    )
+                estimate["preferred_source"] = preferred_source
+                selected = next((item for item in manual_valuations if item["provider"] == preferred_source), None)
+                if preferred_source == "omi" and omi_available:
+                    selected = {
+                        "provider": "omi",
+                        "provider_label": "OMI",
+                        "value_min": float(estimate["value_min"]),
+                        "value_max": float(estimate["value_max"]),
+                        "range": estimate.get("range") or "",
+                    }
+                estimate["preferred_valuation"] = selected
+
+    if overridden_units:
+        kpis["asset_value_adjusted"] = (
+            _format_value_range(adjusted_value_min, adjusted_value_max)
+            if adjusted_value_min != adjusted_value_max else _format_currency_it(adjusted_value_min)
+        )
+        kpis["asset_value_adjusted_note"] = (
+            f"Totale indicativo su {adjusted_units} righe di fabbricato stimabili: intervallo personalizzato applicato "
+            f"a {overridden_units}; per le altre resta la fascia OMI originale. "
+            "La fascia OMI originale rimane invariata nel riquadro principale."
+        )
+
+    assessment_assets = kpis.pop("_assessment_assets", [])
+    age = kpis.pop("_subject_age", None)
+    for asset in assessment_assets:
+        estimate = table_estimates[asset["group_index"]][asset["table_kind"]][asset["row_index"]]
+        asset_key = (estimate.get("asset_identity") or {}).get("asset_key")
+        saved_amount = saved_values.get(asset_key, {}).get("affrancation_amount") if asset_key else None
+        if saved_amount is not None:
+            asset["affrancation_amount_override"] = saved_amount
+    has_manual_preference = any(
+        estimate.get("preferred_source") not in ("", "omi")
+        for group in table_estimates
+        for estimate in group.get("buildings", [])
+    )
+    if assessment_assets:
+        kpis["owner_assessment"] = _owner_assessment(
+            assessment_assets,
+            _preferred_valuation_estimates(table_estimates),
+            age,
+        )
+    if has_manual_preference:
+        assessment = kpis.get("owner_assessment") or {}
+        assessment["preferred_source_used"] = True
+        for tile in assessment.get("tiles", []):
+            if tile.get("label") == "Totale diritti stimati OMI":
+                tile["label"] = "Totale diritti stimati · fonte preferita"
+                tile["hint"] = (
+                    "Somma delle stime attribuibili calcolate usando per ogni fabbricato la fonte selezionata."
+                )
+            elif tile.get("label") == "Piena proprietà · quota" and "Stima OMI" in tile.get("hint", ""):
+                tile["hint"] = "Stima con la fonte preferita per il fabbricato attribuito al soggetto."
+            elif tile.get("label") == "Usufrutto · quota" and "Stima OMI" in tile.get("hint", ""):
+                tile["hint"] = "Stima con la fonte preferita, ripartita in base all'età del titolare."
+            elif tile.get("label") == "Nuda proprietà · quota" and "Valore pieno" in tile.get("hint", ""):
+                tile["hint"] = (
+                    "Valore con la fonte preferita meno quello dell'usufrutto, in base all'età degli usufruttuari."
+                )
+            elif tile.get("label") == "Enfiteusi · quota" and "Stima OMI attribuibile" in tile.get("hint", ""):
+                tile["hint"] = (
+                    "Stima attribuibile con la fonte preferita: valore pieno del bene meno l'importo di affrancazione "
+                    "indicato o stimato per l'intero bene, poi × quota. La stima automatica è modificabile."
+                )
+        assessment["method_note"] = (
+            "La stima per quota e diritto usa, per ciascun fabbricato, la fonte selezionata dall'utente: "
+            "quotazione OMI "
+            "oppure valore inserito manualmente da un portale esterno. I valori esterni non sono verificati da SISTER "
+            "e possono essere prezzi richiesti, non prezzi di compravendita. Per l'enfiteusi l'importo di affrancazione "
+            "può essere inserito o stimato come 15 × reddito catastale annuo, usato solo come proxy modificabile del "
+            "canone effettivo. I terreni restano esclusi dalla stima di mercato per diritto. "
+            "Valori indicativi, non perizia."
+        )
+    kpis["manual_valuation_assets"] = _manual_valuation_assets(table_estimates, assessment_assets, saved_values)
+    return kpis
+
+
+def _manual_affrancation_amounts(
+    table_estimates: list[dict[str, Any]],
+    assessment_assets: list[dict[str, Any]],
+    saved_values: dict[str, dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    """Prepare one editable whole-property affrancazione amount per enfiteusi asset."""
+    by_key: dict[str, dict[str, Any]] = {}
+    for asset in assessment_assets:
+        right = next((item for item in (asset.get("rights") or []) if item.get("kind") == "enfiteusi"), None)
+        if right is None:
+            continue
+        estimate = table_estimates[asset["group_index"]][asset["table_kind"]][asset["row_index"]]
+        asset_key = (estimate.get("asset_identity") or {}).get("asset_key")
+        if not asset_key:
+            continue
+        details = by_key.setdefault(
+            asset_key,
+            {"kind": asset["table_kind"], "annual_income": Decimal(0), "supplied_amount": None},
+        )
+        income_field = "building_income" if asset["table_kind"] == "buildings" else "dominical_income"
+        annual_income = _assessment_decimal(asset.get(income_field))
+        if annual_income is not None:
+            details["annual_income"] += annual_income
+        supplied_amount = _assessment_amount(right.get("affrancation_value"))
+        if details["supplied_amount"] is None and supplied_amount is not None:
+            details["supplied_amount"] = supplied_amount
+
+    result: dict[str, dict[str, Any]] = {}
+    for asset_key, details in by_key.items():
+        annual_income = details["annual_income"]
+        inferred = (
+            (annual_income * Decimal(15)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+            if annual_income > 0 else None
+        )
+        automatic = details["supplied_amount"] if details["supplied_amount"] is not None else inferred
+        saved = _assessment_amount(saved_values.get(asset_key, {}).get("affrancation_amount"))
+        amount = saved if saved is not None else automatic
+        income_name = "rendita catastale" if details["kind"] == "buildings" else "reddito dominicale"
+        if details["supplied_amount"] is not None:
+            basis_note = "Importo già presente nei dati acquisiti; puoi modificarlo e salvarlo."
+        elif inferred is not None:
+            basis_note = (
+                f"Stima automatica: 15 × {income_name} annuo ({_format_currency_it(annual_income, decimals=2)}) "
+                f"= {_format_currency_it(inferred, decimals=2)}. Il reddito catastale è usato solo come proxy del "
+                "canone effettivo."
+            )
+        else:
+            basis_note = (
+                f"Nessun {income_name} disponibile per la stima automatica; inserisci un importo ricavato dal titolo "
+                "o da una fonte attendibile."
+            )
+        source_note = "Importo personalizzato salvato nel tuo account." if saved is not None else (
+            "Importo presente nei dati acquisiti." if details["supplied_amount"] is not None else
+            "Stima automatica indicativa." if inferred is not None else "Importo non disponibile."
+        )
+        result[asset_key] = {
+            "amount": format(amount, ".2f") if amount is not None else "",
+            "automatic_amount": format(automatic, ".2f") if automatic is not None else "",
+            "is_override": saved is not None,
+            "source_note": source_note,
+            "basis_note": basis_note,
+        }
+    return result
+
+
+def _manual_valuation_assets(
+    table_estimates: list[dict[str, Any]],
+    assessment_assets: list[dict[str, Any]] | None = None,
+    saved_values: dict[str, dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
+    """One compact, deduplicated UI item per cadastral property, merging multiple land classamenti."""
+    by_key: dict[str, dict[str, Any]] = {}
+    for group_index, group in enumerate(table_estimates):
+        for kind in ("buildings", "lands"):
+            for row_index, estimate in enumerate(group.get(kind, [])):
+                identity = estimate.get("asset_identity") or {}
+                asset_key = identity.get("asset_key")
+                if not asset_key:
+                    continue
+                item = by_key.get(asset_key)
+                if item is None:
+                    item = {
+                        "asset_key": asset_key,
+                        "identity": {key: value for key, value in identity.items() if key != "asset_key"},
+                        "kind": kind,
+                        "omi_available": kind == "buildings" and bool(estimate.get("range")),
+                        "omi_range": estimate.get("range") or "",
+                        "omi_central": (
+                            _format_currency_it(estimate["value_estimate"])
+                            if kind == "buildings" and estimate.get("value_estimate") is not None else ""
+                        ),
+                        "omi_zone": estimate.get("omi_zona") or "",
+                        "omi_base_min": str(estimate.get("value_min") or "") if kind == "buildings" else "",
+                        "omi_base_max": str(estimate.get("value_max") or "") if kind == "buildings" else "",
+                        "omi_override": estimate.get("omi_override"),
+                        "valuations": estimate.get("manual_valuations", []),
+                        "preferred_source": estimate.get("preferred_source") or "",
+                        "preferred_range": (estimate.get("preferred_valuation") or {}).get("range", ""),
+                        "preferred_label": (estimate.get("preferred_valuation") or {}).get("provider_label", ""),
+                        "table_rows": [],
+                    }
+                    by_key[asset_key] = item
+                else:
+                    item["omi_available"] = item["omi_available"] or (
+                        kind == "buildings" and bool(estimate.get("range"))
+                    )
+                    if not item["omi_range"] and estimate.get("range"):
+                        item["omi_range"] = estimate["range"]
+                    if not item["omi_central"] and estimate.get("value_estimate") is not None:
+                        item["omi_central"] = _format_currency_it(estimate["value_estimate"])
+                    if not item["omi_zone"] and estimate.get("omi_zona"):
+                        item["omi_zone"] = estimate["omi_zona"]
+                    if not item["omi_base_min"] and kind == "buildings" and estimate.get("value_min") is not None:
+                        item["omi_base_min"] = str(estimate["value_min"])
+                    if not item["omi_base_max"] and kind == "buildings" and estimate.get("value_max") is not None:
+                        item["omi_base_max"] = str(estimate["value_max"])
+                    if not item["omi_override"] and estimate.get("omi_override"):
+                        item["omi_override"] = estimate["omi_override"]
+                    if not item["valuations"] and estimate.get("manual_valuations"):
+                        item["valuations"] = estimate["manual_valuations"]
+                    if not item["preferred_source"] and estimate.get("preferred_source"):
+                        item["preferred_source"] = estimate["preferred_source"]
+                    if not item["preferred_range"] and (estimate.get("preferred_valuation") or {}).get("range"):
+                        item["preferred_range"] = estimate["preferred_valuation"]["range"]
+                    if (
+                        not item["preferred_label"]
+                        and (estimate.get("preferred_valuation") or {}).get("provider_label")
+                    ):
+                        item["preferred_label"] = estimate["preferred_valuation"]["provider_label"]
+                item["table_rows"].append({"group_index": group_index, "kind": kind, "row_index": row_index})
+    affrancation = _manual_affrancation_amounts(table_estimates, assessment_assets or [], saved_values or {})
+    for asset_key, item in by_key.items():
+        if asset_key in affrancation:
+            item["affrancation"] = affrancation[asset_key]
+    return list(by_key.values())
+
+
+def _enfiteusi_residual_range(
+    full_value_low: Decimal, full_value_high: Decimal, redemption_amount: Decimal, share: Decimal
+) -> tuple[Decimal, Decimal]:
+    """Estimate the enfiteuta's share as max(0, full value - effective affrancazione amount)."""
+    return (
+        max(Decimal(0), full_value_low - redemption_amount) * share,
+        max(Decimal(0), full_value_high - redemption_amount) * share,
+    )
+
+
 def _format_value_range(low: Decimal, high: Decimal) -> str:
-    return f"{_format_currency_it(float(low))} – {_format_currency_it(float(high))}"
+    return f"{_format_currency_it(low)} – {_format_currency_it(high)}"
 
 
 NO_LANDS = "Nessun terreno in visura"
@@ -324,7 +794,8 @@ def _assessment_tiles(assessment: dict[str, Any]) -> list[dict[str, Any]]:
         "economico del diritto."
     )
     tiles = [
-        ("Totale diritti stimati OMI", assessment["omi_total"], "Somma delle stime OMI attribuibili ai diritti del soggetto."),
+        ("Totale diritti stimati OMI", assessment["omi_total"],
+         "Somma delle stime OMI attribuibili calcolate; gli elementi non stimabili restano indicati nella tabella."),
         ("Piena proprietà · quota", (by_kind.get("full") or {}).get("value") or "Nessuna intestata al soggetto",
          "Il soggetto non ha piena proprietà su alcun bene della visura." if "full" not in by_kind else
          "Stima OMI della piena proprietà del soggetto."),
@@ -334,13 +805,29 @@ def _assessment_tiles(assessment: dict[str, Any]) -> list[dict[str, Any]]:
         ("Nuda proprietà · quota", (by_kind.get("bare") or {}).get("value") or "Nessuna intestata al soggetto",
          "Il soggetto non è nudo proprietario di alcun bene della visura." if "bare" not in by_kind else
          "Valore pieno meno il valore dell'usufrutto, calcolato sull'età degli usufruttuari."),
+        ("Enfiteusi · quota", (by_kind.get("enfiteusi") or {}).get("value") or "Nessuna intestata al soggetto",
+         "Stima attribuibile: valore pieno del bene meno importo di affrancazione indicato o stimato per l'intero bene, "
+         "poi × quota." if "enfiteusi" in by_kind else "Il soggetto non risulta enfiteuta di alcun bene della visura."),
         ("Valore catastale · quota", assessment["cadastral_share"], "Base imponibile IMU × quota dichiarata. " + quota_note),
         ("Superficie catastale · quota", assessment["area_share"], "Superficie catastale × quota dichiarata. " + quota_note),
         ("Rendita fabbricati · quota", assessment["building_income_share"], "Rendita catastale dei fabbricati × quota. " + quota_note),
         ("Reddito dominicale · quota", assessment["dominical_income_share"], "Reddito dominicale dei terreni × quota. " + quota_note),
         ("Reddito agrario · quota", assessment["agricultural_income_share"], "Reddito agrario dei terreni × quota. " + quota_note),
     ]
-    return [{"label": label, "value": value, "hint": hint, "missing": is_missing_value(value)} for label, value, hint in tiles]
+    affrancation_links = {
+        "Totale diritti stimati OMI": assessment.get("omi_missing_affrancation_asset_keys", []),
+        "Enfiteusi · quota": (by_kind.get("enfiteusi") or {}).get("missing_affrancation_asset_keys", []),
+    }
+    return [
+        {
+            "label": label,
+            "value": value,
+            "hint": hint,
+            "missing": is_missing_value(value),
+            "affrancation_asset_keys": affrancation_links.get(label, []),
+        }
+        for label, value, hint in tiles
+    ]
 
 
 def _owner_assessment(
@@ -370,6 +857,7 @@ def _owner_assessment(
     has_buildings = any(asset["table_kind"] == "buildings" for asset in assets)
     has_lands = any(asset["table_kind"] == "lands" for asset in assets)
     omi_missing_reasons: dict[tuple[int, str, int], str] = {}
+    omi_missing_affrancation_asset_keys: set[str] = set()
 
     for asset in assets:
         asset_key = (asset["group_index"], asset["table_kind"], asset["row_index"])
@@ -378,6 +866,7 @@ def _owner_assessment(
             unmatched_assets.add(asset_key)
             continue
         estimate = table_estimates[asset["group_index"]][asset["table_kind"]][asset["row_index"]]
+        asset_anchor_key = (estimate.get("asset_identity") or {}).get("asset_key")
         estimate_low = _assessment_decimal(estimate.get("value_min"))
         estimate_high = _assessment_decimal(estimate.get("value_max"))
         cadastral_value = _assessment_decimal(asset.get("cadastral_value"))
@@ -388,7 +877,8 @@ def _owner_assessment(
             bucket_key = kind if kind != "other" else f"other:{right['label'].casefold()}"
             bucket = accumulators.setdefault(bucket_key, {
                 "kind": kind,
-                "label": {"full": "Piena proprietà", "usufruct": "Usufrutto", "bare": "Nuda proprietà"}.get(
+                "label": {"full": "Piena proprietà", "usufruct": "Usufrutto", "bare": "Nuda proprietà",
+                          "enfiteusi": "Enfiteusi"}.get(
                     kind, clean_right_description(right["label"])),
                 "assets": set(),
                 "shares": set(),
@@ -397,6 +887,7 @@ def _owner_assessment(
                 "valued_assets": set(),
                 "missing_value_assets": set(),
                 "missing_reasons": {},
+                "missing_affrancation_asset_keys": set(),
             })
             bucket["assets"].add(asset_key)
             bucket["shares"].add(_quota_label(right))
@@ -423,6 +914,7 @@ def _owner_assessment(
                 agricultural_income_share += agricultural_income * share
                 agricultural_income_share_seen = True
 
+            affrancation_value = _affrancation_amount(right, asset) if kind == "enfiteusi" else None
             factor_reason = ""
             if kind == "full":
                 factor = Decimal(1)
@@ -447,19 +939,47 @@ def _owner_assessment(
                 for holder in right.get("usufructuaries") or []:
                     holders[holder.get("name") or "Usufruttuario"] = (holder.get("age"), _usufruct_factor(holder.get("age")))
                     accrual_used = accrual_used or bool(holder.get("accrual"))
+            elif kind == "enfiteusi":
+                factor = Decimal(1)
+                if affrancation_value is None:
+                    factor, factor_reason = None, "Importo di affrancazione non disponibile"
             else:
                 factor = None
             if factor is None or estimate_low is None or estimate_high is None:
                 bucket["missing_value_assets"].add(asset_key)
+                reasons = []
+                if kind == "enfiteusi" and affrancation_value is None:
+                    reasons.append("Importo di affrancazione non disponibile")
+                    if asset_anchor_key:
+                        bucket["missing_affrancation_asset_keys"].add(asset_anchor_key)
                 if estimate_low is None or estimate_high is None:
-                    reason = estimate.get("missing") or "Stima OMI non disponibile"
+                    omi_reason = (
+                        "Valore di mercato del terreno non disponibile: OMI non pubblica quotazioni per i terreni"
+                        if asset["table_kind"] == "lands"
+                        else estimate.get("missing") or "Stima OMI non disponibile"
+                    )
+                    reasons.append(omi_reason)
+                    if asset["table_kind"] == "buildings":
+                        omi_missing_reasons[asset_key] = omi_reason
+                if not reasons:
+                    reasons.append(factor_reason or "Coefficiente non disponibile")
+                reason = "; ".join(reasons)
+                if kind == "enfiteusi" and asset["table_kind"] == "buildings":
                     omi_missing_reasons[asset_key] = reason
-                else:
-                    reason = factor_reason or "Coefficiente non disponibile"
+                    if "Importo di affrancazione non disponibile" in reason and asset_anchor_key:
+                        omi_missing_affrancation_asset_keys.add(asset_anchor_key)
                 bucket["missing_reasons"][asset_key] = reason
                 continue
-            attributed_low = estimate_low * share * factor
-            attributed_high = estimate_high * share * factor
+            if kind == "enfiteusi":
+                attributed_low, attributed_high = _enfiteusi_residual_range(
+                    estimate_low,
+                    estimate_high,
+                    affrancation_value,
+                    share,
+                )
+            else:
+                attributed_low = estimate_low * share * factor
+                attributed_high = estimate_high * share * factor
             bucket["value_low"] += attributed_low
             bucket["value_high"] += attributed_high
             bucket["valued_assets"].add(asset_key)
@@ -468,7 +988,7 @@ def _owner_assessment(
             omi_total_seen = True
 
     rights_summary = []
-    order = {"full": 0, "usufruct": 1, "bare": 2, "other": 3}
+    order = {"full": 0, "usufruct": 1, "bare": 2, "enfiteusi": 3, "other": 4}
     for bucket in sorted(accumulators.values(), key=lambda item: (order.get(item["kind"], 3), item["label"].casefold())):
         low, high = bucket["value_low"], bucket["value_high"]
         if bucket["valued_assets"]:
@@ -488,6 +1008,7 @@ def _owner_assessment(
             "value": value,
             "valued_assets": len(bucket["valued_assets"]),
             "unvalued_assets": len(bucket["missing_value_assets"]),
+            "missing_affrancation_asset_keys": sorted(bucket["missing_affrancation_asset_keys"]),
         })
 
     limited_rights_present = any(bucket["kind"] in ("usufruct", "bare") for bucket in accumulators.values())
@@ -528,6 +1049,7 @@ def _owner_assessment(
         "has_rights": bool(rights_summary),
         "rights": rights_summary,
         "omi_total": omi_total,
+        "omi_missing_affrancation_asset_keys": sorted(omi_missing_affrancation_asset_keys),
         "cadastral_share": (
             _format_currency_it(float(cadastral_share)) if cadastral_share_seen
             else quota_problem if (has_buildings or has_lands) else NOT_AVAILABLE
@@ -558,8 +1080,12 @@ def _owner_assessment(
             "si applica il prospetto fiscale 2026 al 2,5% in base all'età; se la visura indica una durata specifica "
             "il valore del diritto non è stimato. Il valore catastale in quota è la base imponibile moltiplicata per "
             "la quota dichiarata, non il valore economico del diritto. Rendite e redditi catastali sono inoltre "
-            "ponderati per quota e non rappresentano redditi effettivi. Valori indicativi, non perizia; i terreni "
-            "non hanno quotazioni OMI."
+            "ponderati per quota e non rappresentano redditi effettivi. Per l'enfiteusi si stima max(0, valore OMI "
+            "della piena proprietà − importo di affrancazione indicato o stimato per l'intero bene) × quota. Se manca "
+            "un importo esplicito, la stima automatica usa 15 × reddito catastale annuo come proxy modificabile del "
+            "canone effettivo; non è un calcolo ufficiale e può non corrispondere al regime applicabile al titolo. "
+            "La formula è indicativa e non sostituisce il calcolo fiscale dell'affrancazione. Valori non "
+            "peritali; i terreni non hanno quotazioni OMI."
         ),
         "source_url": _USUFRUCT_SOURCE,
     }
@@ -590,6 +1116,74 @@ def _number(value: Any) -> float | None:
     return result if result >= 0 else None
 
 
+def _consistency_area_m2(value: Any) -> float | None:
+    """Use an explicitly measured m² consistency only as an OMI area proxy.
+
+    Subject-search results can provide a consistency such as ``19 m2`` without the cadastral surface. Other
+    consistencies are handled separately by the disclosed statistical fallback below.
+    """
+    measurement = _first(value)
+    if measurement:
+        raw_value = measurement.get("Valore") or measurement.get("_text")
+        unit = measurement.get("Unita") or measurement.get("unit") or ""
+    else:
+        raw_value = value
+        match = re.fullmatch(r"\s*([\d.,]+)\s*(m(?:2|²)|mq)\s*", str(value or ""), re.IGNORECASE)
+        if not match:
+            return None
+        raw_value, unit = match.groups()
+    normalized_unit = str(unit).strip().casefold().replace("²", "2").replace(" ", "")
+    if normalized_unit not in {"m2", "mq"}:
+        return None
+    area = _number(raw_value)
+    return area if area is not None and area > 0 else None
+
+
+# National means from Agenzia delle Entrate, Statistiche Catastali 2012, tables 12 and 13 (A/10: table 22).
+# Each pair is (mean cadastral surface in m² per unit, mean cadastral rooms per unit). Their ratio is
+# a deliberately coarse m²-per-vano fallback; it is used for indicative OMI only, never as cadastral surface.
+_NATIONAL_CATEGORY_MEANS_2012: dict[str, tuple[float, float]] = {
+    "A1": (292.0, 11.1),
+    "A2": (126.0, 5.9),
+    "A3": (110.0, 5.3),
+    "A4": (95.0, 4.4),
+    "A5": (58.0, 2.4),
+    "A6": (70.0, 2.6),
+    "A7": (185.0, 7.8),
+    "A8": (479.0, 15.8),
+    "A9": (635.0, 21.2),
+    "A10": (134.1, 5.6),
+    "A11": (63.0, 3.0),
+}
+
+
+def _consistency_area_vani(value: Any, category: Any) -> tuple[float, float, float] | None:
+    """Estimate OMI area from explicit cadastral rooms and a national category mean.
+
+    Returns (estimated m², rooms, m²/vano). This is not a cadastral surface and is intentionally limited to
+    residential/office categories for which the official statistical publication reports both measures.
+    """
+    measurement = _first(value)
+    if measurement:
+        raw_value = measurement.get("Valore") or measurement.get("_text")
+        unit = measurement.get("Unita") or measurement.get("unit") or ""
+    else:
+        match = re.fullmatch(r"\s*([\d.,]+)\s*vani?(?:\s+catastali)?\s*", str(value or ""), re.IGNORECASE)
+        if not match:
+            return None
+        raw_value, unit = match.groups()
+    if not str(unit).strip().casefold().startswith("van"):
+        return None
+    rooms = _number(raw_value)
+    means = _NATIONAL_CATEGORY_MEANS_2012.get(normalize_category(category))
+    if rooms is None or rooms <= 0 or means is None:
+        return None
+    mean_area, mean_rooms = means
+    square_metres_per_room = mean_area / mean_rooms
+    estimated_area = rooms * square_metres_per_room
+    return estimated_area, rooms, square_metres_per_room
+
+
 def _format_number_it(value: float, *, decimals: int = 2) -> str:
     rendered = f"{value:,.{decimals}f}"
     whole, _, fraction = rendered.partition(".")
@@ -598,7 +1192,7 @@ def _format_number_it(value: float, *, decimals: int = 2) -> str:
     return f"{whole},{fraction}" if fraction else whole
 
 
-def _format_currency_it(value: float, *, decimals: int = 0) -> str:
+def _format_currency_it(value: float | Decimal, *, decimals: int = 0) -> str:
     rendered = f"{value:,.{decimals}f}"
     whole, _, fraction = rendered.partition(".")
     whole = whole.replace(",", ".")
@@ -678,8 +1272,34 @@ async def _run_bounded(requests: dict[Any, Any], *, limit: int = 10, timeout: fl
     return results
 
 
+def _parcel_zone_point(feature: dict[str, Any] | None, marker: dict[str, Any]) -> tuple[float, float, str] | None:
+    """Prefer a point inside the cadastral parcel; a centroid can fall outside concave parcels."""
+    if feature and isinstance(feature.get("geometry"), dict):
+        try:
+            from shapely.geometry import shape
+
+            point = shape(feature["geometry"]).representative_point()
+            latitude, longitude = float(point.y), float(point.x)
+            if -90 <= latitude <= 90 and -180 <= longitude <= 180:
+                return latitude, longitude, "punto interno alla particella"
+        except Exception:  # An unavailable or invalid polygon falls back to the stored parcel centroid.
+            pass
+    try:
+        latitude = float(marker["latitude"])
+        longitude = float(marker["longitude"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    if not (-90 <= latitude <= 90 and -180 <= longitude <= 180):
+        return None
+    return latitude, longitude, "centroide catastale"
+
+
 async def subject_land_registry_kpis(
-    xml_parsed: dict[str, Any], map_lookup: dict[str, Any] | None
+    xml_parsed: dict[str, Any],
+    map_lookup: dict[str, Any] | None,
+    *,
+    include_assessment_context: bool = False,
+    selection_user_id: str | None = None,
 ) -> dict[str, Any] | None:
     """Sum subject-visura areas and OMI ranges for mapped and unmapped building units."""
     subject = next(
@@ -692,6 +1312,8 @@ async def subject_land_registry_kpis(
     buildings: list[dict[str, Any]] = []
     building_area = 0.0
     building_area_units = 0
+    building_area_proxy = 0.0
+    building_area_proxy_units = 0
     building_units = 0
     building_income = 0.0
     building_income_units = 0
@@ -735,13 +1357,50 @@ async def subject_land_registry_kpis(
             identifier = _first(
                 _first(property_row.get("DatiIdentificativi")).get("IdentificativoDefinitivo")
             )
+            asset_identity = _asset_identity(
+                cadastre_type="F",
+                municipality_code=identifier.get("CodiceComune") or municipality_code,
+                municipality=identifier.get("Comune") or group_name,
+                province=identifier.get("Provincia") or province,
+                section=identifier.get("SezUrbana") or group.get("Sezione"),
+                sheet=identifier.get("Foglio"),
+                parcel=identifier.get("ParticellaNum") or identifier.get("Particella"),
+                subunit=identifier.get("Subalterno"),
+            )
             classamento = _first(property_row.get("DatiClassamentoF"))
             surface = _first(property_row.get("SuperficieF"))
             area = _number(surface.get("Totale"))
+            consistency_area = _consistency_area_m2(classamento.get("Consistenza")) if area is None else None
+            vani_area_details = (
+                _consistency_area_vani(classamento.get("Consistenza"), classamento.get("Categoria"))
+                if area is None and consistency_area is None else None
+            )
+            vani_area = vani_area_details[0] if vani_area_details else None
+            omi_area = area if area is not None else (
+                consistency_area if consistency_area is not None else vani_area
+            )
+            omi_area_source = (
+                "superficie catastale" if area is not None else
+                "consistenza catastale in m² usata come proxy" if consistency_area is not None else
+                "superficie stimata dalla consistenza in vani con media nazionale per categoria (2012)"
+                if vani_area_details else ""
+            )
+            omi_area_formula = (
+                f"{_format_number_it(vani_area_details[1])} vani × "
+                f"{_format_number_it(vani_area_details[2])} m²/vano ≈ {_format_number_it(vani_area)} m²"
+                if vani_area_details else
+                f"{_format_number_it(consistency_area)} m² di consistenza (proxy)"
+                if consistency_area is not None else
+                f"{_format_number_it(area)} m² di superficie catastale" if area is not None else ""
+            )
             income = _number(classamento.get("RenditaEuro"))
             if area is not None:
                 building_area += area
                 building_area_units += 1
+            elif omi_area is not None:
+                # Fill missing visura surfaces with the cadastral-consistency proxy already used for OMI.
+                building_area_proxy += omi_area
+                building_area_proxy_units += 1
             if income is not None:
                 building_income += income
                 building_income_units += 1
@@ -761,11 +1420,24 @@ async def subject_land_registry_kpis(
                 cadastral_value, cadastral_note = "", "Categoria catastale senza moltiplicatore IMU (gruppo E/F o assente)."
             else:
                 cadastral_value, cadastral_note = "", "Rendita catastale nulla."
+            omi_note = _initial_omi_note(classamento.get("Categoria"), area)
+            normalized_category = normalize_category(classamento.get("Categoria"))
+            if (consistency_area is not None or vani_area is not None) and omi_quotes.OMI_TYPOLOGY_BY_CATEGORY.get(normalized_category):
+                omi_note = (
+                    "Stima OMI non disponibile senza zona o quotazioni; disponibile una superficie proxy dalla consistenza catastale."
+                )
             table_estimates[group_index]["buildings"].append({
                 "range": "",
                 "value_min": None,
                 "value_max": None,
-                "note": _initial_omi_note(classamento.get("Categoria"), area),
+                "value_estimate": None,
+                "note": omi_note,
+                "omi_area_formula": omi_area_formula,
+                "actual_size_sqm": omi_area,
+                "actual_size_default_sqm": omi_area,
+                "actual_size_is_override": False,
+                "actual_size_source": omi_area_source,
+                "actual_size_default_source": omi_area_source,
                 "cadastral_value": cadastral_value,
                 "cadastral_note": cadastral_note,
                 "category": normalize_category(classamento.get("Categoria")),
@@ -773,6 +1445,8 @@ async def subject_land_registry_kpis(
                 # no parcel geometry is available to resolve the property's exact zone.
                 "omi_comune": code,
                 "omi_zona": "",
+                "omi_tipologia": "",
+                "asset_identity": asset_identity,
             })
             owner_assessment_assets.append({
                 "group_index": group_index,
@@ -792,11 +1466,27 @@ async def subject_land_registry_kpis(
                 "parcel": str(identifier.get("ParticellaNum") or identifier.get("Particella") or "").strip().upper(),
                 "category": classamento.get("Categoria") or "",
                 "area": area,
+                "omi_area": omi_area,
+                "omi_area_source": omi_area_source,
+                "omi_area_formula": omi_area_formula,
                 "group_index": group_index,
                 "table_row_index": table_row_index,
+                "asset_key": (asset_identity or {}).get("asset_key"),
             })
 
         for property_row in _items(group.get("ImmobileTerreniS")):
+            identifier = _first(
+                _first(property_row.get("DatiIdentificativi")).get("IdentificativoDefinitivo")
+            )
+            asset_identity = _asset_identity(
+                cadastre_type="T",
+                municipality_code=identifier.get("CodiceComune") or municipality_code,
+                municipality=identifier.get("Comune") or group_name,
+                province=identifier.get("Provincia") or province,
+                section=identifier.get("Sezione") or identifier.get("SezUrbana") or group.get("Sezione"),
+                sheet=identifier.get("Foglio"),
+                parcel=identifier.get("ParticellaNum") or identifier.get("Particella"),
+            )
             classamento = _first(property_row.get("DatiClassamentoT"))
             for row in _items(classamento.get("ClassamentoT")) or [{}]:
                 area = _number(row.get("SuperficieMQ"))
@@ -812,6 +1502,7 @@ async def subject_land_registry_kpis(
                     "cadastral_note": (
                         _land_value_note(land_value) if land_value else "Reddito dominicale assente."
                     ),
+                    "asset_identity": asset_identity,
                 })
                 owner_assessment_assets.append({
                     "group_index": group_index,
@@ -833,6 +1524,36 @@ async def subject_land_registry_kpis(
                     agricultural_income += agricultural
                     agricultural_income_rows += 1
 
+    saved_actual_sizes: dict[str, Decimal] = {}
+    if selection_user_id and buildings:
+        try:
+            from .database import get_user_property_actual_sizes
+
+            saved_actual_sizes = await get_user_property_actual_sizes(
+                selection_user_id, [building.get("asset_key") for building in buildings]
+            )
+        except Exception as exc:  # Editable sizes are optional; the cadastral default still works.
+            logger.warning("Saved property sizes unavailable: %s", type(exc).__name__)
+
+    for building in buildings:
+        row_estimate = table_estimates[building["group_index"]]["buildings"][building["table_row_index"]]
+        default_size = building.get("omi_area")
+        default_source = building.get("omi_area_source") or ""
+        saved_size = saved_actual_sizes.get(building.get("asset_key") or "")
+        if saved_size is not None:
+            effective_size = float(saved_size)
+            building["omi_area"] = effective_size
+            building["omi_area_source"] = "dimensione inserita dall'utente"
+            building["omi_area_formula"] = f"{_format_number_it(effective_size)} m² inseriti dall'utente"
+            row_estimate["actual_size_source"] = "dimensione inserita dall'utente"
+            row_estimate["actual_size_is_override"] = True
+            row_estimate["omi_area_formula"] = building["omi_area_formula"]
+        else:
+            effective_size = default_size
+        row_estimate["actual_size_sqm"] = effective_size
+        row_estimate["actual_size_default_sqm"] = default_size
+        row_estimate["actual_size_default_source"] = default_source
+
     land_rows = sum(len(group["lands"]) for group in table_estimates)
 
     def building_figure(value: str | None) -> str:
@@ -844,14 +1565,37 @@ async def subject_land_registry_kpis(
     def land_note(count: int, what: str) -> str:
         return f"{count} classamenti con {what}" if land_rows else "La visura non elenca terreni"
 
+    building_area_total = building_area + building_area_proxy
+    building_area_available_units = building_area_units + building_area_proxy_units
+    if building_area_proxy_units:
+        building_area_figure = f"≈ {_format_number_it(building_area_total)} m²"
+    elif building_area_units:
+        building_area_figure = f"{_format_number_it(building_area)} m²"
+    else:
+        building_area_figure = None
+
+    if building_units:
+        building_area_note = f"{building_area_units} di {building_units} unità con superficie in visura"
+        if building_area_proxy_units:
+            missing_without_estimate = building_units - building_area_available_units
+            building_area_note += (
+                f" · Stima indicativa per {building_area_proxy_units} unità senza superficie: "
+                f"{_format_number_it(building_area_proxy)} m² stimati dai dati di consistenza catastale."
+            )
+            if missing_without_estimate:
+                building_area_note += f" Dati insufficienti per stimare altre {missing_without_estimate} unità."
+            building_area_note += " Il valore stimato deve essere aggiornato con i valori effettivi riportati in visura."
+        elif building_area_units < building_units:
+            building_area_note += f" · Dati insufficienti per stimare le altre {building_units - building_area_units} unità."
+    else:
+        building_area_note = "La visura non elenca fabbricati"
+
     kpis: dict[str, Any] = {
         "distinct_comuni": len(distinct_municipalities),
         "building_rows": building_units,
         "land_rows": land_rows,
-        "building_area": building_figure(f"{_format_number_it(building_area)} m²" if building_area_units else None),
-        "building_area_note": (
-            f"{building_area_units} di {building_units} unità con superficie in visura" if building_units else "La visura non elenca fabbricati"
-        ),
+        "building_area": building_figure(building_area_figure),
+        "building_area_note": building_area_note,
         "grounds_area": land_figure(f"{_format_number_it(grounds_area)} m²" if grounds_area_rows else None),
         "grounds_area_note": land_note(grounds_area_rows, "superficie in visura"),
         "building_income": building_figure(
@@ -894,18 +1638,32 @@ async def subject_land_registry_kpis(
         "table_estimates": table_estimates,
         "owner_assessment": _owner_assessment(owner_assessment_assets, table_estimates, subject_age),
     }
+    if include_assessment_context:
+        kpis["_assessment_assets"] = owner_assessment_assets
+        kpis["_subject_age"] = subject_age
     if buildings and not isinstance(map_lookup, dict):
         kpis["asset_value_note"] = (
             "Stima OMI non eseguita: senza la mappa catastale locale non si può individuare la zona OMI delle "
             "particelle. Il valore catastale non ne dipende."
         )
-    if not buildings or not isinstance(map_lookup, dict):
+    if not buildings:
         return kpis
 
-    # Markers are existing cadastral-map centroids, so OMI zone matching uses
-    # the same parcel geometry and shared land-registry zone lookup as its dossier.
+    saved_selections: dict[str, dict[str, Any]] = {}
+    if selection_user_id:
+        try:
+            from .database import get_user_property_omi_selections
+
+            saved_selections = await get_user_property_omi_selections(
+                selection_user_id, [building.get("asset_key") for building in buildings]
+            )
+        except Exception as exc:  # Saved choices are optional; the automatic estimate remains available.
+            logger.warning("Saved OMI selections unavailable: %s", type(exc).__name__)
+
+    # Resolve OMI zones against the parcel itself when its cadastral polygon is available.
     markers_by_parcel: dict[tuple[str, str, str], list[dict[str, Any]]] = {}
-    for marker in map_lookup.get("parcel_markers") or []:
+    features_by_parcel: dict[tuple[str, str, str], list[dict[str, Any]]] = {}
+    for marker in (map_lookup or {}).get("parcel_markers") or []:
         if not isinstance(marker, dict):
             continue
         key = (
@@ -915,6 +1673,17 @@ async def subject_land_registry_kpis(
         )
         if all(key):
             markers_by_parcel.setdefault(key, []).append(marker)
+    for feature in (map_lookup or {}).get("parcel_features") or []:
+        if not isinstance(feature, dict):
+            continue
+        properties = feature.get("properties") or {}
+        key = (
+            str(properties.get("municipality_code") or "").strip().upper(),
+            str(properties.get("sheet") or "").strip().upper(),
+            str(properties.get("parcel") or "").strip().upper(),
+        )
+        if all(key):
+            features_by_parcel.setdefault(key, []).append(feature)
 
     mapped_buildings = []
     for building in buildings:
@@ -922,56 +1691,63 @@ async def subject_land_registry_kpis(
             continue
         key = (building["municipality_code"], building["sheet"], building["parcel"])
         candidates = markers_by_parcel.get(key, [])
+        feature_candidates = features_by_parcel.get(key, [])
         section = building["section"]
         if section:
-            section_matches = [
+            marker_matches = [
                 marker for marker in candidates
                 if str(marker.get("section") or "").strip().upper() == section
             ]
-            marker = section_matches[0] if len(section_matches) == 1 else (
-                candidates[0] if not section_matches and len(candidates) == 1 else None
+            feature_matches = [
+                feature for feature in feature_candidates
+                if str((feature.get("properties") or {}).get("section") or "").strip().upper() == section
+            ]
+            marker = marker_matches[0] if len(marker_matches) == 1 else (
+                candidates[0] if not marker_matches and len(candidates) == 1 else None
+            )
+            feature = feature_matches[0] if len(feature_matches) == 1 else (
+                feature_candidates[0] if not feature_matches and len(feature_candidates) == 1 else None
             )
         else:
             marker = candidates[0] if len(candidates) == 1 else None
-        if marker and marker.get("latitude") is not None and marker.get("longitude") is not None:
-            mapped_buildings.append((building, marker))
+            feature = feature_candidates[0] if len(feature_candidates) == 1 else None
+        if marker or feature:
+            mapped_buildings.append((building, marker or {}, feature))
+    stats_service = None
     try:
         from land_registry import stats_service
     except ImportError:
         logger.debug("Shared land_registry package is unavailable for subject OMI KPIs")
-        return kpis
 
     zone_keys = {}
-    for building, marker in mapped_buildings:
-        try:
-            latitude = float(marker["latitude"])
-            longitude = float(marker["longitude"])
-        except (TypeError, ValueError):
+    zone_point_methods = {}
+    for building, marker, feature in mapped_buildings:
+        point = _parcel_zone_point(feature, marker)
+        if point is None:
             continue
-        if not (-90 <= latitude <= 90 and -180 <= longitude <= 180):
-            continue
+        latitude, longitude, point_method = point
         province = building["province"] or str(marker.get("province") or "").strip()
         key = (building["municipality_code"], province, latitude, longitude)
         parcel_key = (
             building["municipality_code"], building["section"], building["sheet"], building["parcel"]
         )
         zone_keys[parcel_key] = key
+        zone_point_methods[parcel_key] = point_method
     unique_zones = set(zone_keys.values())
     zone_requests = {
         key: (lambda key=key: stats_service.aget_omi_zone_at_point(
             key[1], key[2], key[3], cadastral_code=key[0]
         ))
         for key in unique_zones
-        if key[1]
+        if key[1] and stats_service is not None
     }
     zone_results = await _run_bounded(
         zone_requests,
         timeout=8,
     )
 
-    quote_requests = {}
     parcel_zones = {}
-    for building, _marker in mapped_buildings:
+    for building, _marker, _feature in mapped_buildings:
         parcel_key = (
             building["municipality_code"], building["section"], building["sheet"], building["parcel"]
         )
@@ -980,32 +1756,43 @@ async def subject_land_registry_kpis(
             continue
         zone = str(zone).strip().upper()
         parcel_zones[parcel_key] = zone
+    quote_requests = {}
+    selected_zones: dict[str, str] = {}
+    for building in buildings:
+        asset_key = building.get("asset_key")
+        saved = saved_selections.get(asset_key, {})
+        parcel_key = (
+            building["municipality_code"], building["section"], building["sheet"], building["parcel"]
+        )
+        zone = str(saved.get("zone_code") or parcel_zones.get(parcel_key) or "").strip().upper()
+        selected_zones[asset_key or ""] = zone
         row_estimate = table_estimates[building["group_index"]]["buildings"][building["table_row_index"]]
         row_estimate["omi_comune"] = building["municipality_code"]
         row_estimate["omi_zona"] = zone
-        if building.get("area") and building.get("category"):
+        row_estimate["omi_zone_point_method"] = zone_point_methods.get(parcel_key, "")
+        row_estimate["omi_zone_selected"] = bool(
+            saved.get("zone_code") and str(saved.get("zone_code")).strip().upper() != parcel_zones.get(parcel_key)
+        )
+        row_estimate["omi_typology_selected"] = False
+        row_estimate["omi_tipologia"] = str(saved.get("typology_code") or "")
+        if zone and building.get("municipality_code"):
             quote_key = (building["municipality_code"], zone)
             if quote_key not in quote_requests:
                 quote_requests[quote_key] = lambda quote_key=quote_key: omi_quotes.omi_zone_quotes(*quote_key)
 
-    # If some buildings have no parcel centroid (or no OMI-zone match), still give them a useful, honest range:
-    # select the category quote in each OMI zone of their municipality and span the lowest to highest values.
+    # Municipality data supplies the no-zone range and the selectable OMI zones and typologies.
     fallback_buildings = []
-    fallback_comuni = set()
+    comune_codes = {building["municipality_code"] for building in buildings if building.get("municipality_code")}
     for building in buildings:
-        parcel_key = (
-            building["municipality_code"], building["section"], building["sheet"], building["parcel"]
-        )
-        if parcel_key in parcel_zones:
+        if selected_zones.get(building.get("asset_key") or ""):
             continue
-        if not (building.get("municipality_code") and building.get("area") and building.get("category")):
+        if not (building.get("municipality_code") and building.get("omi_area") and building.get("category")):
             continue
         fallback_buildings.append(building)
-        fallback_comuni.add(building["municipality_code"])
 
     municipality_quote_requests = {
         code: (lambda code=code: _comune_quotes_payload(code))
-        for code in fallback_comuni
+        for code in comune_codes
     }
     exact_quotes_task = asyncio.create_task(_run_bounded(quote_requests, timeout=8))
     municipality_quotes_task = asyncio.create_task(
@@ -1013,47 +1800,161 @@ async def subject_land_registry_kpis(
     )
     quotes_by_zone, quotes_by_comune = await asyncio.gather(exact_quotes_task, municipality_quotes_task)
 
+    options_by_comune: dict[str, dict[str, Any]] = {}
+    for code in comune_codes:
+        payload = quotes_by_comune.get(code)
+        all_quotes = payload.get("quotes", []) if isinstance(payload, dict) else []
+        zones_by_code: dict[str, list[dict[str, Any]]] = {}
+        for quote in all_quotes:
+            zone_code = str(quote.get("zona") or "").strip().upper()
+            if zone_code:
+                zones_by_code.setdefault(zone_code, []).append(quote)
+        for (quote_comune, zone_code), zone_quotes in quotes_by_zone.items():
+            if quote_comune == code and zone_quotes is not None:
+                zones_by_code.setdefault(zone_code, zone_quotes)
+        typologies_by_zone: dict[str, list[dict[str, Any]]] = {}
+        for zone_code, zone_quotes in zones_by_code.items():
+            labels_by_code: dict[int, str] = {}
+            for quote in zone_quotes:
+                try:
+                    typology = int(quote.get("cod_tipologia"))
+                except (TypeError, ValueError):
+                    continue
+                labels_by_code.setdefault(
+                    typology,
+                    str(quote.get("tipologia") or omi_quotes.OMI_TYPOLOGY_LABELS.get(typology) or f"Tipologia {typology}"),
+                )
+            typologies_by_zone[zone_code] = [
+                {"code": typology, "label": label}
+                for typology, label in sorted(labels_by_code.items(), key=lambda item: (item[1].casefold(), item[0]))
+            ]
+
+        defaults_by_category: dict[str, dict[str, int]] = {}
+        categories = {building.get("category") for building in buildings if building["municipality_code"] == code}
+        for category in categories:
+            if not category:
+                continue
+            normalized = normalize_category(category)
+            defaults: dict[str, int] = {}
+            for zone_code, zone_quotes in zones_by_code.items():
+                selected, _reason = omi_quotes.select_quote(zone_quotes, category)
+                if selected is not None:
+                    try:
+                        defaults[zone_code] = int(selected["cod_tipologia"])
+                        continue
+                    except (KeyError, TypeError, ValueError):
+                        pass
+                for candidate in omi_quotes.OMI_TYPOLOGY_BY_CATEGORY.get(normalized, ()):
+                    if any(str(row.get("cod_tipologia")) == str(candidate) for row in zone_quotes):
+                        defaults[zone_code] = candidate
+                        break
+            if all_quotes:
+                quote_range, _reason = omi_quotes.select_quote_range_across_zones(all_quotes, category)
+                if quote_range and quote_range.get("cod_tipologia"):
+                    defaults[""] = int(quote_range["cod_tipologia"])
+                else:
+                    for candidate in omi_quotes.OMI_TYPOLOGY_BY_CATEGORY.get(normalized, ()):
+                        if any(str(row.get("cod_tipologia")) == str(candidate) for row in all_quotes):
+                            defaults[""] = candidate
+                            break
+            defaults_by_category[normalized] = defaults
+
+        # Retain an automatically mapped or previously selected zone even if this OMI release has no rows for it.
+        known_zones = set(zones_by_code)
+        for building in buildings:
+            if building["municipality_code"] != code:
+                continue
+            zone = selected_zones.get(building.get("asset_key") or "")
+            if zone and zone not in known_zones:
+                known_zones.add(zone)
+                zones_by_code.setdefault(zone, [])
+                typologies_by_zone.setdefault(zone, [])
+        options_by_comune[code] = {
+            "zones": [{"code": zone, "label": zone} for zone in sorted(known_zones)],
+            "typologies_by_zone": typologies_by_zone,
+            "defaults_by_category": defaults_by_category,
+        }
+    kpis["omi_options_by_comune"] = options_by_comune
+
+    # Show the category-based best guess even when surface data or a usable quote is absent.
+    for building in buildings:
+        row_estimate = table_estimates[building["group_index"]]["buildings"][building["table_row_index"]]
+        zone = selected_zones.get(building.get("asset_key") or "") or ""
+        category_defaults = (
+            options_by_comune.get(building["municipality_code"], {})
+            .get("defaults_by_category", {})
+            .get(normalize_category(building.get("category")), {})
+        )
+        saved_typology = saved_selections.get(building.get("asset_key"), {}).get("typology_code")
+        default_typology = category_defaults.get(zone, category_defaults.get(""))
+        row_estimate["omi_tipologia_default"] = str(default_typology or "")
+        row_estimate["omi_tipologia"] = str(saved_typology or default_typology or "")
+        # A saved code can equal the current category guess. Still show that persisted value in the selector,
+        # instead of making it look like the user's choice was discarded after the page reloads.
+        row_estimate["omi_typology_selected"] = saved_typology is not None
+
     value_min = 0.0
     value_max = 0.0
+    value_estimate = 0.0
     valued_units = 0
     exact_zone_units = 0
     municipality_range_units = 0
-    for building, _marker in mapped_buildings:
+    for building in buildings:
         row_estimate = table_estimates[building["group_index"]]["buildings"][building["table_row_index"]]
         if not building.get("category"):
             row_estimate["note"] = "Categoria catastale assente."
             continue
-        if not building.get("area"):
+        if not building.get("omi_area"):
             row_estimate["note"] = "Superficie catastale assente."
             continue
         parcel_key = (
             building["municipality_code"], building["section"], building["sheet"], building["parcel"]
         )
-        zone = parcel_zones.get(parcel_key)
+        zone = selected_zones.get(building.get("asset_key") or "")
         if not zone:
             continue
         quotes = quotes_by_zone.get((building["municipality_code"], zone))
         if quotes is None:
             row_estimate["note"] = "Database OMI non disponibile."
             continue
-        quote, reason = omi_quotes.select_quote(quotes, building["category"])
+        raw_typology = saved_selections.get(building.get("asset_key"), {}).get("typology_code")
+        try:
+            typology_code = int(raw_typology) if raw_typology is not None else None
+        except (TypeError, ValueError):
+            typology_code = None
+        quote, reason = omi_quotes.select_quote(quotes, building["category"], typology_code=typology_code)
+        if quote is not None:
+            row_estimate["omi_tipologia"] = str(quote.get("cod_tipologia") or row_estimate.get("omi_tipologia") or "")
         if quote is None:
             row_estimate["note"] = reason
             continue
         try:
-            low = building["area"] * float(quote["prezzo_min"])
-            high = building["area"] * float(quote["prezzo_max"])
+            price_min = float(quote["prezzo_min"])
+            price_max = float(quote["prezzo_max"])
+            price_mid = (price_min + price_max) / 2
+            low = building["omi_area"] * price_min
+            high = building["omi_area"] * price_max
+            estimate = building["omi_area"] * price_mid
         except (KeyError, TypeError, ValueError):
             continue
-        if low < 0 or high < low:
+        if low < 0 or high < low or estimate < low or estimate > high:
             continue
         value_min += low
         value_max += high
+        value_estimate += estimate
         row_estimate["value_min"] = low
         row_estimate["value_max"] = high
+        row_estimate["value_estimate"] = estimate
         valued_units += 1
         exact_zone_units += 1
         surface = {"L": "lorda", "N": "netta"}.get(quote.get("superficie"), "")
+        area_formula = building.get("omi_area_formula") or f"{_format_number_it(building['omi_area'])} m²"
+        value_formula = (
+            f"{area_formula} × € {_format_number_it(price_min)}–"
+            f"€ {_format_number_it(price_max)}/m² = "
+            f"{_format_currency_it(low)}–{_format_currency_it(high)}"
+        )
+        central_formula = f"punto medio della quotazione: {area_formula} × € {_format_number_it(price_mid)}/m² = {_format_currency_it(estimate)}"
         row_estimate["range"] = f"{_format_currency_it(low)} – {_format_currency_it(high)}"
         row_estimate["note"] = " · ".join(part for part in (
             "Stima OMI indicativa",
@@ -1061,9 +1962,12 @@ async def subject_land_registry_kpis(
             str(quote.get("stato_conservazione") or "").capitalize(),
             str(quote.get("periodo") or ""),
             f"zona {zone}",
-            f"€ {_format_number_it(float(quote['prezzo_min']))}–{_format_number_it(float(quote['prezzo_max']))} al m²"
+            f"€ {_format_number_it(price_min)}–{_format_number_it(price_max)} al m²"
             + (f" di superficie {surface}" if surface else ""),
-            "calcolata sulla superficie catastale; non è una perizia",
+            f"Formula: {value_formula}",
+            central_formula,
+            row_estimate.get("omi_zone_point_method"),
+            f"calcolata su {building['omi_area_source']}; non è una perizia",
         ) if part)
 
     for building in fallback_buildings:
@@ -1075,27 +1979,52 @@ async def subject_land_registry_kpis(
         all_quotes = payload.get("quotes")
         if not isinstance(all_quotes, list):
             all_quotes = []
-        quote_range, reason = omi_quotes.select_quote_range_across_zones(all_quotes, building["category"])
+        raw_typology = saved_selections.get(building.get("asset_key"), {}).get("typology_code")
+        try:
+            typology_code = int(raw_typology) if raw_typology is not None else None
+        except (TypeError, ValueError):
+            typology_code = None
+        quote_range, reason = omi_quotes.select_quote_range_across_zones(
+            all_quotes, building["category"], typology_code=typology_code
+        )
         if quote_range is None:
             row_estimate["note"] = reason
             continue
-        low = building["area"] * quote_range["prezzo_min"]
-        high = building["area"] * quote_range["prezzo_max"]
+        if quote_range.get("cod_tipologia"):
+            row_estimate["omi_tipologia"] = str(quote_range["cod_tipologia"])
+        low = building["omi_area"] * quote_range["prezzo_min"]
+        high = building["omi_area"] * quote_range["prezzo_max"]
+        estimate = building["omi_area"] * quote_range["prezzo_mid"]
         value_min += low
         value_max += high
+        value_estimate += estimate
         row_estimate["value_min"] = low
         row_estimate["value_max"] = high
+        row_estimate["value_estimate"] = estimate
         valued_units += 1
         municipality_range_units += 1
         row_estimate["range"] = f"{_format_currency_it(low)} – {_format_currency_it(high)}"
+        area_formula = building.get("omi_area_formula") or f"{_format_number_it(building['omi_area'])} m²"
         row_estimate["note"] = (
             "Intervallo OMI comunale: zona della particella non determinata; "
             f"minimo e massimo della tipologia catastale tra {quote_range['zone_count']} zone OMI disponibili. "
-            "Stima sulla superficie catastale, non è una perizia."
+            f"Formula: {area_formula} × "
+            f"€ {_format_number_it(quote_range['prezzo_min'])}–€ {_format_number_it(quote_range['prezzo_max'])}/m² = "
+            f"{_format_currency_it(low)}–{_format_currency_it(high)}. Stima centrale basata sulla mediana dei "
+            f"punti medi delle quotazioni effettive delle zone: {area_formula} × "
+            f"€ {_format_number_it(quote_range['prezzo_mid'])}/m² = {_format_currency_it(estimate)}. "
+            f"Stima su {building['omi_area_source']}; non è una perizia."
         )
 
     if valued_units:
         kpis["asset_value"] = f"{_format_currency_it(value_min)} – {_format_currency_it(value_max)}"
+        kpis["asset_value_central"] = _format_currency_it(value_estimate)
+        kpis["asset_value_central_note"] = (
+            "Valore centrale indicativo, non pubblicato da OMI come importo singolo: somma dei punti medi delle fasce "
+            "delle zone individuate; per gli immobili senza zona puntuale, mediana dei punti medi delle quotazioni "
+            "effettive delle zone comunali. "
+            "La fascia OMI complessiva resta nel riquadro Valore OMI fabbricati."
+        )
     _label_missing_estimates(table_estimates)
     unvalued_reasons = _reason_summary({
         (group_index, row_index): estimate["missing"]
@@ -1108,7 +2037,16 @@ async def subject_land_registry_kpis(
         f"({exact_zone_units} con zona puntuale, {municipality_range_units} con intervallo comunale su tutte le zone OMI); "
         + (f"non stimati: {unvalued_reasons}; " if unvalued_reasons else "")
         + "terreni esclusi perché OMI non pubblica quotazioni per i terreni, quote di proprietà non applicate. "
-        "Superficie catastale usata come proxy: non equivale necessariamente alla superficie commerciale."
+        "La stima usa la superficie catastale quando disponibile; se manca, usa la consistenza in m² come proxy o, per i vani "
+        "delle categorie A, stima la superficie moltiplicando i vani per il fattore medio nazionale della categoria (Statistiche "
+        "Catastali 2012). La superficie stimata è solo un proxy OMI: non sostituisce la superficie catastale e non viene usata "
+        "per il calcolo della superficie catastale in quota. La stima centrale somma il punto medio della fascia OMI "
+        "della zona individuata; quando la zona non è determinata, usa la mediana dei punti medi delle fasce OMI "
+        "effettive del comune. La fascia min–max resta visibile per rappresentare l'incertezza. La stima OMI non "
+        "equivale necessariamente alla superficie commerciale."
     )
     kpis["owner_assessment"] = _owner_assessment(owner_assessment_assets, table_estimates, subject_age)
+    if include_assessment_context:
+        kpis["_assessment_assets"] = owner_assessment_assets
+        kpis["_subject_age"] = subject_age
     return kpis

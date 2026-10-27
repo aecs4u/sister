@@ -208,6 +208,8 @@ CREATE TABLE sister_next.document (
     liquidation_units integer,
     historical_total_area_sqm numeric,
     historical_excluded_area_sqm numeric,
+    subject_search_scope text,
+    subject_search_province text,
     CONSTRAINT ck_document_file_name CHECK (file_name !~ '/')
 );
 CREATE INDEX ix_document_request ON sister_next.document (request_id);

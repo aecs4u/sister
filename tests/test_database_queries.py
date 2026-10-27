@@ -47,6 +47,84 @@ async def _age_response(request_id: str, seconds: int) -> None:
         await session.commit()
 
 
+@pytest.mark.asyncio
+async def test_get_comune_centroids_falls_back_to_istat_coordinates(monkeypatch):
+    class Result:
+        def all(self):
+            return [("D209", 42.069241, 14.667807)]
+
+    class Session:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_exc):
+            return None
+
+        async def execute(self, statement, params):
+            self.statement = statement
+            self.params = params
+            return Result()
+
+    session = Session()
+    monkeypatch.setattr(database, "_get_session_factory", lambda: lambda: session)
+
+    centroids = await database.get_comune_centroids(["D209"])
+
+    assert centroids == {"D209": (42.069241, 14.667807)}
+    sql = str(session.statement).lower()
+    assert "left join parcel_geometry_cache" in sql
+    assert "m.ci_latitude" in sql
+    assert "m.ci_longitude" in sql
+    assert session.params == {"codes": ["D209"]}
+
+
+@pytest.mark.asyncio
+async def test_find_parcel_request_records_groups_requests_by_parcel(monkeypatch):
+    captured = {}
+
+    async def parcel_rows(sql, keys):
+        captured["sql"] = sql
+        captured["keys"] = list(keys)
+        return [
+            (
+                "req-map",
+                "mappa",
+                datetime(2026, 10, 1, tzinfo=timezone.utc),
+                datetime(2026, 10, 1, 0, 5, tzinfo=timezone.utc),
+                True,
+                1,
+                123,
+                "RA",
+                "103",
+                "1714",
+            ),
+            (
+                "req-inspection",
+                "ispezioni",
+                datetime(2026, 10, 2, tzinfo=timezone.utc),
+                None,
+                None,
+                None,
+                123,
+                "RA",
+                "103",
+                "1714",
+            ),
+        ]
+
+    monkeypatch.setattr(database, "_parcel_key_rows", parcel_rows)
+    key = (123, "RA", "103", "1714")
+
+    found = await database.find_parcel_request_records({key})
+
+    assert captured["keys"] == [key]
+    assert "join request r on r.cadastral_unit_id = cu.id" in captured["sql"].lower()
+    assert "'ispezioni_cart'" in captured["sql"]
+    assert [item["request_id"] for item in found[key]] == ["req-map", "req-inspection"]
+    assert found[key][0]["total_results"] == 1
+    assert found[key][1]["success"] is None
+
+
 # ---------------------------------------------------------------------------
 # Cache key and cache lookup
 # ---------------------------------------------------------------------------

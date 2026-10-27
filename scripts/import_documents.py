@@ -27,6 +27,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from sister.db_models import Document, DocumentContent
+from sister.document_scope import subject_search_scope
 from sister.reference import clean, ensure_lookup, get_or_create_cadastral_unit
 from sister.result_parsers import parse_it_date
 from sister.utils import _document_key, _parse_visura_pdf, _parse_visura_xml
@@ -73,6 +74,10 @@ def file_kind(path: Path) -> str:
 
 def guess_type(filename: str) -> str:
     name = filename.lower()
+    if name.endswith(".dat"):
+        return "elenco_immobili"
+    if name.startswith("el_sub_"):
+        return "elenco_subalterni"
     if name.startswith("punti_fiduciali_"):
         return "fiduciali"
     for prefix, document_type in (
@@ -201,7 +206,10 @@ async def import_documents(files: list[Path], paired_xml: dict[str, Path]) -> di
 
             parsed = parsed or {}
             xml_content = read_xml_content(parse_path if parse_path != path else path, parsed)
-            document_type = parsed.get("tipo") or guess_type(path.name)
+            filename_type = guess_type(path.name)
+            document_type = parsed.get("tipo") or filename_type
+            if filename_type in {"elenco_subalterni", "elenco_immobili"}:
+                document_type = filename_type
             row = by_filename.get(path.name)
 
             if row is None:
@@ -219,8 +227,15 @@ async def import_documents(files: list[Path], paired_xml: dict[str, Path]) -> di
                 row.file_size = path.stat().st_size
                 if not row.file_format:
                     row.file_format = kind
-                if not row.document_type:
+                if not row.document_type or filename_type in {"elenco_subalterni", "elenco_immobili"}:
                     row.document_type = await ensure_lookup(session, "document_type", document_type)
+
+            if document_type == "visura_soggetto":
+                scope = subject_search_scope(path.name, request_province=parsed.get("provincia"))
+                row.subject_search_scope = (
+                    scope["search_scope"] if scope["search_scope"] != "unknown" else None
+                )
+                row.subject_search_province = scope["search_province"] or None
 
             if parsed and (xml_content or any(parsed.get(key) for key in ("foglio", "particella"))):
                 if row.cadastral_unit_id is None or not row.view_subtype:

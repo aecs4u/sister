@@ -1,0 +1,28 @@
+{#
+  Query-only subject page: no visura is stored, so the catasto/entity.html layout has nothing to show. Same hub
+  components as the visura page, on the saved soggetto query alone.
+#}
+{% extends "_base.html" %}
+{% from "components/subject_hub.html" import summary, parcels %}
+{% block page_title %}{{ profile.name or profile.code }}{% endblock %}
+
+{% block content %}
+<div class="container-fluid pt-4">
+  <nav aria-label="breadcrumb" class="mb-3">
+    <ol class="breadcrumb mb-0">
+      <li class="breadcrumb-item"><a href="/">Dashboard</a></li>
+      <li class="breadcrumb-item"><a href="{{ route_prefix }}/">{{ 'Aziende' if is_company else 'Persone' }}</a></li>
+      <li class="breadcrumb-item active" aria-current="page">{{ profile.code }}</li>
+    </ol>
+  </nav>
+  <div class="d-flex align-items-center gap-3">
+    <span class="text-primary fs-3" aria-hidden="true"><i class="fas {{ 'fa-building' if is_company else 'fa-user' }}"></i></span>
+    <div>
+      <h1 class="h3 mb-0">{{ profile.name or profile.code }}</h1>
+      <code class="user-select-all">{{ profile.code }}</code>
+    </div>
+  </div>
+</div>
+{{ summary(profile, route_prefix) }}
+{{ parcels(profile) }}
+{% endblock %}

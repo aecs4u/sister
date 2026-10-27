@@ -4,18 +4,53 @@ How the subject-visura page (`/documents/<id>` for a `VisuraSoggetto*` document)
 user-facing explanation see the `/valuation` page (`sister/templates/valuation.html`); its tables and worked examples are
 generated from the code described here, so the two cannot disagree.
 
-## Two figures, never blended
+## Measures kept distinct
 
-| | Valore catastale | Stima OMI indicativa |
-|---|---|---|
-| Meaning | IMU tax base from rendita / reddito dominicale | Indicative market range from official OMI quotes |
-| Applies to | fabbricati and terreni | fabbricati of some categories only |
-| Inputs | the visura alone | visura + parcel position (map) + OMI database |
-| Nature | fiscal convention | order of magnitude, **not an appraisal** |
-| Module | `sister/cadastral_values.py` | `sister/omi_quotes.py` |
+| | Valore catastale | Stima OMI indicativa | Fascia OMI personalizzata | Valutazione esterna inserita dall'utente |
+|---|---|---|---|
+| Meaning | IMU tax base from rendita / reddito dominicale | Official OMI range plus an indicative central estimate from its midpoint (or municipal zone medians when the exact zone is unknown) | User-transcribed estimate from a listing portal |
+| Applies to | fabbricati and terreni | fabbricati of some categories only | buildings with an OMI range | any cadastral asset with a stable identifier |
+| Inputs | the visura alone | visura + parcel position (map) + OMI database | user-entered minimum and maximum per building | provider, amount or range, optional date and URL |
+| Nature | fiscal convention | order of magnitude, **not an appraisal** | personal adjustment; does not alter the published OMI band | unverified; may be an asking price, **not an appraisal** |
+| Module | `sister/cadastral_values.py` | `sister/omi_quotes.py` | `sister/land_registry_kpis.py` + per-user PostgreSQL table | `sister/land_registry_kpis.py` + per-user PostgreSQL tables |
 
-Both are computed per table row and summed into the KPI cards by `sister/land_registry_kpis.py`
-(`subject_land_registry_kpis`). Ownership shares and the type of right are **not** applied anywhere.
+The cadastral and official OMI values are computed per table row and summed into the KPI cards by
+`sister/land_registry_kpis.py` (`subject_land_registry_kpis`). Each OMI row keeps the official minimum/maximum range and
+also calculates a central estimate, which OMI does not publish as a single amount, from the midpoint of that zone's
+published price band. If the parcel's exact zone cannot
+be resolved, the reported range spans the available municipality zones and its central estimate uses the median of the
+published quote midpoints across those zones. When a parcel polygon is available, zone lookup uses a point inside that
+polygon; otherwise it uses the stored cadastral centroid. This gives a representative figure without hiding the official
+range or assigning an unknown parcel to a guessed zone. The asset cards remain whole-asset totals. When a user has
+saved OMI adjustments, a separate personalized total substitutes those per-building ranges while retaining the original
+OMI total. A separate owner assessment attributes building
+market ranges by the subject's current right and declared share. Each signed-in user can add estimates from Immobiliare.it,
+idealista, or another source, and select a preferred source per cadastral asset. The selected source feeds the separate
+owner-right estimate where a full market value is available; the OMI range remains visible as its own official figure.
+The cadastral share there is still a tax-base figure, not an economic valuation of the right.
+
+## Valutazioni esterne inserite dall'utente
+
+On a subject page, a signed-in user can add or update one estimate per provider and cadastral asset. The amount can be a
+single figure or a minimum/maximum range; date, listing URL, and notes are optional. Entries and source preferences are
+scoped to the user's stable auth identity and stored in `manual_property_valuation` and
+`property_valuation_preference`. The database schema advances in Alembic revision
+`20261106_manual_property_valuations`.
+
+For buildings with an OMI range, the same panel allows a user to save a property-specific minimum and maximum in
+`property_omi_override` (revision `20261109_property_omi_overrides`). A separate portfolio total substitutes those
+values for the selected buildings and keeps the original OMI total and ranges visible. Leaving the maximum blank saves
+a single amount. Clearing the adjustment restores the OMI values in the personalized total.
+
+The preferred source is selected per asset. OMI is the default when it has an estimate; otherwise the first available
+manual source is shown until the user chooses another. A selected manual estimate is used in the owner-right estimate
+for that property, including the enfiteusi formula when an affrancazione amount is supplied or automatically estimated.
+It does not replace or alter the official OMI column or the whole-portfolio OMI card. Manual estimates entered for land
+are shown in the external-source panel, but land is not yet included in the owner-right market estimate.
+
+SISTER stores the values entered by the user and does not fetch listing pages or verify their contents. Keep the source
+provider, date, and URL with the amount: listing prices may be asking prices, stale, duplicated, or refer to different
+surface/condition assumptions than the cadastral record.
 
 ## Proprietà per l'area (01T) e proprietà superficiaria (01S)
 
@@ -52,6 +87,34 @@ la ripartizione dei diritti.
 Per impostare una stima specifica bisogna chiarire se serve un valore di mercato (acquisto/vendita) o un valore fiscale,
 se il diritto è a termine o senza scadenza e quali limiti o costi risultano dal titolo e dalla convenzione.
 
+### Enfiteusi (dominio utile)
+
+For the subject-level assessment, SISTER estimates the emphyteuta's right only when both the property's selected full-value
+range (OMI or a manually entered external source) and an affrancazione amount (supplied or estimated) are available:
+
+```text
+right range = [max(0, selected-source minimum - affrancazione amount for the whole asset),
+               max(0, selected-source maximum - affrancazione amount for the whole asset)] × declared share
+```
+
+The optional whole-asset amount is read from `DirittiReali.ImportoAffrancazione` (or the normalized
+`DirittiReali.affrancation_value`). Since normal SISTER visure do not supply it, the page offers an editable initial
+estimate of `15 × annual cadastral income`: `reddito dominicale` for land and `rendita catastale` for buildings are used
+only as proxies for the contractual annual canon. The proxy is not the legal amount due and may differ materially under
+the title, the date and the applicable special regime. Each user's correction is saved in
+`property_affrancation_amount` (Alembic revision `20261108_property_affrancation_amounts`); clearing the correction
+restores the automatic estimate. OMI has no land quotes;
+although the user can record an external estimate for a land parcel, the current owner-right calculation does not use
+those land entries. No arrears or transaction costs are deducted.
+
+Keep this indicative market allocation separate from the tax calculation. For registration-tax purposes, article 47
+of the TUR defines the enfiteuta's value as full-property value less the amount due for affrancazione; for certain
+taxable transfers or creations the base is 20 times the annual canon or, if greater, the value of the right. The amount
+due depends on the title and applicable special regime; the page's 15-times proxy is a visible starting estimate, not a
+universal legal calculation.
+See the [Agenzia delle Entrate guide to article 47](https://def.finanze.it/DocTribFrontend/getContent.do?id=%7B9FA2A30A-0208-4787-B71A-91F9A25DE714%7D)
+and [Law 607/1966](https://www.normattiva.it/atto/caricaDettaglioAtto?atto.codiceRedazionale=066U0607&atto.dataPubblicazioneGazzetta=1966-08-06&bloccoAggiornamentoBreadCrumb=true&classica=true&tipoDettaglio=vigente).
+
 ### Valutazione fiscale
 
 Le regole dipendono dal tributo e dall'atto: successione, donazione, imposta di registro e base IMU non sono intercambiabili.
@@ -66,12 +129,13 @@ Di conseguenza, formule basate solo sugli anni residui e su un tasso non vanno p
 Per un calcolo fiscale occorre identificare il diritto esatto risultante dal titolo e applicare la disciplina vigente per
 quel tributo e per quell'atto.
 
-### Limite attuale di SISTER
+### Limiti attuali di SISTER
 
-Le KPI di questa pagina continuano a sommare i valori catastali e le stime OMI per riga, senza applicare la quota di
-titolarità né ripartire il valore tra `01T` e `01S`, usufrutto e nuda proprietà. Sono valori riferiti agli immobili censiti,
-non una stima della ricchezza attribuibile al singolo soggetto. La visura, da sola, inoltre non contiene tutti i termini
-contrattuali necessari per stimare questi diritti.
+The asset KPI cards still sum whole-asset cadastral values and official OMI ranges. The separate owner assessment applies
+declared shares to the cadastral base and allocates building estimates from the per-asset selected source by current full
+ownership, usufruct, bare ownership, and enfiteusi. It does not estimate `01T`/`01S` or other rights. The visura alone does
+not contain all the contractual terms needed for rights valuation; in particular it normally lacks the enfiteusi annual
+canon and final affrancazione amount, so the automatic cadastral-income proxy must be reviewed against the title.
 
 ## Valore catastale (`cadastral_values.py`)
 
@@ -103,16 +167,20 @@ Gotchas learned on the real data:
 - Match the visura's comune code with **`cod_comune_amm`** (`G273` for Palermo). `cod_comune_catastale` is OMI's own code
   (`U1AA`) and does not match.
 - Zone rows can be duplicated (section `''` vs `' '`), hence `SELECT DISTINCT`.
-- Only `idx_omi_ref_zone_geo (regione, provincia, comune, anno, semestre, zona)` exists, so a lookup by `cod_comune_amm`
-  scans the zone table (about 0,5 s). Results are cached for `OMI_CACHE_DAYS` (30 days, 512 entries, memory only) and lookups run concurrently, bounded.
+- `idx_omi_ref_zone_comune_period_zone`, `idx_omi_ref_zone_comune_catastale`, and `idx_omi_ref_zone_comune_istat`
+  support lookup by each accepted comune key. Without the alternate-key indexes, PostgreSQL can choose a full scan for
+  the overview's `OR` filter. The quote SQL selects the newest semester before joining the fact table, avoiding the full
+  historical join. Keep these indexes on the `omi` database; `scripts/omi_quote_index.sql` installs them concurrently.
+  Results are cached for `OMI_CACHE_DAYS` (30 days, 512 entries, memory only) and lookups run concurrently, bounded.
 - **OMI has no land typologies**: the latest semester contains only building types (codes 1, 5-10 and 13-22).
   `zornade.zornade_zone_omi` in `aecs4u-stats` has "Seminativo/Uliveto/Vigneto" rows, but they are not land prices (Barolo's
   "Vigneto" is its residential quote), so terreni get no OMI estimate. Do not use those rows.
 
 Connection: `OMI_POSTGRES_DSN`, else the database of `STATS_POSTGRES_DSN` / `CADASTRAL_POSTGRES_DSN` replaced by `omi`
 (`omi_dsn()`); asyncpg, one short-lived connection per lookup. Failure handling: per-call timeout 8 s, connect 3 s,
-`omi_zone_quotes` returns `None` (not `[]`) when the database cannot be queried and backs off 60 s, so the row says
-"Database OMI non disponibile" instead of pretending the zone has no quote. There is no fallback to the older
+`omi_zone_quotes` returns `None` (not `[]`) when the database cannot be queried and backs off 60 s for that comune/zone
+only, so one slow lookup does not suppress unrelated quotes. A failure row says "Database OMI non disponibile"
+instead of pretending the zone has no quote. There is no fallback to the older
 `stats_service` quote path.
 
 Pipeline per building unit (`subject_land_registry_kpis`):
@@ -123,7 +191,23 @@ Pipeline per building unit (`subject_land_registry_kpis`):
 3. `select_quote(quotes, categoria)` maps the category to typology codes (`OMI_TYPOLOGY_BY_CATEGORY`) and picks one
    quote: the one flagged prevalent (`stato_prevalente == "P"`), else the single `NORMALE`, else nothing. Ambiguity is
    reported, never guessed.
-4. Estimate = `superficie catastale totale x prezzo_min` ... `x prezzo_max`; per-unit ranges are summed for the card.
+4. Estimate = `area in m² x prezzo_min` ... `x prezzo_max`. The area source is, in order: cadastral surface; explicitly
+   recorded consistency in m²; or, for categories A with consistency in vani, `vani x (national mean cadastral surface
+   per unit in that category / national mean vani per unit in that category)`. The last source is a coarse statistical
+   proxy derived from Agenzia delle Entrate, Statistiche Catastali 2012, tables 12 and 13. It is shown in each row's
+   formula note and does not enter the owner's cadastral area share. The `Superficie fabbricati` KPI fills missing
+   surfaces from available cadastral consistency data, including this proxy, marks the combined total as approximate,
+   and states how many unit surfaces are measured versus estimated. The note tells the reader to update the estimate
+   with the actual values in the visura. Per-unit
+   value ranges are summed for the card.
+
+For the national fallback, the code stores the 2012 table means as `(mean surface m², mean rooms)` pairs by category and
+uses their ratio as `m²/vano`. The factor is category-specific (for example, A/2 is `126 / 5.9 = 21.36 m²/vano` and
+A/3 is `110 / 5.3 = 20.75 m²/vano`). See Agenzia delle Entrate,
+[Statistiche Catastali 2012](https://www1.agenziaentrate.gov.it/mt/osservatorio/Tabelle%20statistiche/archivio/StatisticheCatastali2012_29102013.pdf),
+tables 12 and 13 (A/10 uses table 22). The Agenzia's historical estimation method used local category-level averages where sample coverage
+allowed; SISTER does not have those local factors, so its national proxy is more approximate. The estimated area remains
+an estimated input, not a measured cadastral surface.
 
 Category to typology (`OMI_TYPOLOGY_BY_CATEGORY`), following the Agenzia delle Entrate's correspondence
 ([Manuale OMI 2025, allegati, Tabella 1](https://www.agenziaentrate.gov.it/portale/documents/20143/265514/Manuale_OMI_ALLEGATI_2025_03_20.pdf/e5d8121b-0cb5-2e80-32db-fe6ddf3186ff?t=1742814287718)):
@@ -155,11 +239,24 @@ and structured offices.
 ## How the numbers reach the page
 
 `web._render_doc_from_db` builds `land_registry_kpis` for soggetto documents and passes it to
-`catasto/land_map.html`, which:
+`catasto/entity.html`, which:
 
 - renders the KPI cards ("Valore OMI fabbricati", "Valore catastale (base IMU)") with a link to `/valuation`;
 - embeds `table_estimates` as JSON (`data-land-map-omi-estimates`) and appends the columns client-side to the theme's
   tables (this page does not own the `buildings_table` / `lands_table` macros in `aecs4u-theme`).
+- loads per-user external estimates and preferred sources for the listed cadastral identities, then shows the input and
+  source-selection panel. Preferences also select the value range used by the owner-right assessment; the OMI table
+  remains unchanged.
+
+### Persisted calculation results
+
+The full subject KPI result (cadastral values, OMI ranges, per-row estimates, ownership-right allocations and summary
+tiles) is stored in PostgreSQL in `calculation_snapshot`. A snapshot is scoped to its source document or saved subject
+request and viewer, and records a fingerprint of the parsed visura plus map inputs, the calculation version and the
+calculation time. The page reuses a matching result for up to 12 hours; changed visura/map inputs or a new calculation
+version force a refresh. The time limit also refreshes OMI-derived figures as the quote source changes. Updating a
+user's manual valuation or preferred source invalidates that user's snapshots so the next page view recomputes the
+ownership allocation with the new choice. The latest snapshot is retained per scope/viewer/calculation.
 
 **Row alignment contract.** `table_estimates[group]["buildings"]` has one entry per `ImmobileFabbricatiS`;
 `["lands"]` has one entry per `ClassamentoT`, plus one empty entry for a terreno without any (the theme draws an empty

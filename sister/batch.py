@@ -44,6 +44,9 @@ COMPLETED = "completed"
 ERROR = "error"  # the portal/service failed the request (retried ``retries`` times)
 NEEDS_HUMAN = "needs_human"  # a CAPTCHA nobody solved: a human action, never retried
 TIMEOUT = "timeout"  # still running when polling stopped; resume polls it again
+# SISTER's own answer to a search: the subject does not exist. It comes back as an error, but a repeat gets the same
+# answer, so ``--resume`` does not send it again (a changed query is still a new request).
+FINAL_ERRORS = ("NESSUNA CORRISPONDENZA", "Superato il limite massimo")
 INVALID = "invalid"
 DUPLICATE = "duplicate"
 DISABLED = "disabled"
@@ -473,6 +476,12 @@ class BatchRunner:
                 self.emit("skip", item, status=status, resumed=True)
                 return {
                     **self._entry(item, status),
+                    **{k: prior[k] for k in ("request_ids", "result_file") if k in prior},
+                }
+            if status == ERROR and any(marker in str(prior.get("error", "")) for marker in FINAL_ERRORS):
+                self.emit("skip", item, status=status, resumed=True)
+                return {
+                    **self._entry(item, status, error=prior.get("error", "")),
                     **{k: prior[k] for k in ("request_ids", "result_file") if k in prior},
                 }
             if status in (QUEUED, TIMEOUT) and prior.get("request_ids"):

@@ -25,6 +25,7 @@ from sqlmodel import select
 
 from .db_models import IstatMunicipality
 from .provinces import province_code
+from .request_types import request_type_info
 from .result_parsers import parse_it_date, parse_share, squeeze
 
 logger = logging.getLogger("sister")
@@ -92,6 +93,24 @@ async def ensure_lookup(session: AsyncSession, table: str, code: Any, descriptio
     value = clean(code)
     if value is None:
         return None
+    if table == "request_type":
+        info = request_type_info(value)
+        await session.execute(
+            text(
+                "INSERT INTO request_type (code, label, description) VALUES (:c, :label, :description) "
+                "ON CONFLICT (code) DO UPDATE SET label = EXCLUDED.label, description = EXCLUDED.description"
+            ),
+            {"c": value, "label": info.label, "description": info.description},
+        )
+        for tag in info.tags:
+            await session.execute(
+                text(
+                    "INSERT INTO request_type_tag (request_type, tag) VALUES (:c, :tag) "
+                    "ON CONFLICT (request_type, tag) DO NOTHING"
+                ),
+                {"c": value, "tag": tag},
+            )
+        return value
     description_column = LOOKUP_TABLES[table]
     if description_column and clean(description):
         await session.execute(

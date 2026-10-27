@@ -14,6 +14,7 @@ import asyncio
 import logging
 import os
 import time
+from statistics import median
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
@@ -27,7 +28,7 @@ _FAILURE_BACKOFF_SECONDS = 60.0
 
 # comune (cadastral/administrative code), zone -> (stored at, quotes of the latest published semester)
 _cache: dict[tuple[str, str], tuple[float, list[dict[str, Any]]]] = {}
-_retry_at = 0.0
+_retry_at: dict[tuple[str, str], float] = {}
 
 # Cadastral category -> OMI typology codes in order of preference.
 #
@@ -73,19 +74,41 @@ OMI_TYPOLOGY_LABELS: dict[int, str] = {
 }
 
 _QUOTES_SQL = """
+WITH latest AS (
+    SELECT anno, semestre
+    FROM public.omi_ref_zone
+    WHERE (cod_comune_amm = $1 OR cod_comune_catastale = $1
+           OR ($3::float8 IS NOT NULL AND cod_comune_istat = $3::float8))
+      AND UPPER(zona) = $2
+    ORDER BY anno DESC, semestre DESC
+    LIMIT 1
+)
 SELECT DISTINCT z.anno, z.semestre, z.zona, v.cod_tipologia, v.tipologia, v.stato_conservazione,
        v.stato_prevalente, v.prezzo_min, v.prezzo_max, v.superficie_nl_compravendita
 FROM public.omi_ref_zone AS z
 JOIN public.omi_fact_quotazioni_valori AS v ON v.zona_id = z.zona_id
-WHERE z.cod_comune_amm = $1 AND UPPER(z.zona) = $2
+JOIN latest AS latest ON latest.anno = z.anno AND latest.semestre = z.semestre
+WHERE (z.cod_comune_amm = $1 OR z.cod_comune_catastale = $1
+       OR ($3::float8 IS NOT NULL AND z.cod_comune_istat = $3::float8))
+  AND UPPER(z.zona) = $2
 """
 
 _COMUNE_QUOTES_SQL = """
+WITH latest AS (
+    SELECT anno, semestre
+    FROM public.omi_ref_zone
+    WHERE (cod_comune_amm = $1 OR cod_comune_catastale = $1
+           OR ($2::float8 IS NOT NULL AND cod_comune_istat = $2::float8))
+    ORDER BY anno DESC, semestre DESC
+    LIMIT 1
+)
 SELECT DISTINCT z.anno, z.semestre, z.zona, v.cod_tipologia, v.tipologia, v.stato_conservazione,
        v.stato_prevalente, v.prezzo_min, v.prezzo_max, v.superficie_nl_compravendita
 FROM public.omi_ref_zone AS z
 JOIN public.omi_fact_quotazioni_valori AS v ON v.zona_id = z.zona_id
-WHERE z.cod_comune_amm = $1
+JOIN latest AS latest ON latest.anno = z.anno AND latest.semestre = z.semestre
+WHERE (z.cod_comune_amm = $1 OR z.cod_comune_catastale = $1
+       OR ($2::float8 IS NOT NULL AND z.cod_comune_istat = $2::float8))
 """
 
 
@@ -134,14 +157,21 @@ def _latest_period(rows: list[Any]) -> list[dict[str, Any]]:
     return quotes
 
 
-async def _fetch_quotes(key: tuple[str, str], sql: str, args: tuple[str, ...], timeout: float) -> list[dict[str, Any]] | None:
+def _istat_code_parameter(code: str) -> int | None:
+    """Numeric code parameter for the OMI ISTAT key (stored as float8 in the imported OMI reference table)."""
+    return int(code) if code.isascii() and code.isdigit() and 5 <= len(code) <= 6 else None
+
+
+async def _fetch_quotes(
+    key: tuple[str, str], sql: str, args: tuple[Any, ...], timeout: float
+) -> list[dict[str, Any]] | None:
     """Cached query of the ``omi`` database; ``None`` when it cannot be queried (see :func:`omi_zone_quotes`)."""
-    global _retry_at
     dsn = omi_dsn()
-    if not dsn or time.monotonic() < _retry_at:
+    now = time.monotonic()
+    if not dsn or now < _retry_at.get(key, 0.0):
         return None
     cached = _cache.get(key)
-    if cached and time.monotonic() - cached[0] < cache_ttl_seconds():
+    if cached and now - cached[0] < cache_ttl_seconds():
         return cached[1]
     try:
         import asyncpg
@@ -160,9 +190,12 @@ async def _fetch_quotes(key: tuple[str, str], sql: str, args: tuple[str, ...], t
         finally:
             await connection.close()
     except Exception as exc:  # The estimate is optional: never break the document page.
-        _retry_at = time.monotonic() + _FAILURE_BACKOFF_SECONDS
+        _retry_at[key] = time.monotonic() + _FAILURE_BACKOFF_SECONDS
+        if len(_retry_at) > _CACHE_MAX_ENTRIES:
+            _retry_at.pop(next(iter(_retry_at)))
         logger.warning("OMI database lookup failed (%s): %s", key, type(exc).__name__)
         return None
+    _retry_at.pop(key, None)
     quotes = _latest_period(rows)
     if len(_cache) >= _CACHE_MAX_ENTRIES:
         _cache.pop(next(iter(_cache)))
@@ -173,30 +206,35 @@ async def _fetch_quotes(key: tuple[str, str], sql: str, args: tuple[str, ...], t
 async def omi_zone_quotes(comune_code: str, zone: str, *, timeout: float = 8.0) -> list[dict[str, Any]] | None:
     """Quotes of the latest published semester for one OMI zone.
 
+    ``comune_code`` may be the OMI administrative code, cadastral code or ISTAT code.
     ``[]`` means the database was queried and knows no such zone; ``None`` means it could not be queried (not
     configured, unreachable, too slow) so the caller can tell "no quote" from "no data source".
     """
     code, zona = str(comune_code or "").strip().upper(), str(zone or "").strip().upper()
     if not (code and zona):
         return None
-    return await _fetch_quotes((code, zona), _QUOTES_SQL, (code, zona), timeout)
+    return await _fetch_quotes(
+        (code, zona), _QUOTES_SQL, (code, zona, _istat_code_parameter(code)), timeout
+    )
 
 
 async def omi_comune_quotes(comune_code: str, *, timeout: float = 8.0) -> list[dict[str, Any]] | None:
-    """Quotes of the latest published semester for every OMI zone of a comune (same row shape as the zone lookup)."""
+    """Latest quotes for every zone, addressed by OMI administrative, cadastral or ISTAT comune code."""
     code = str(comune_code or "").strip().upper()
     if not code:
         return None
-    return await _fetch_quotes((code, "*"), _COMUNE_QUOTES_SQL, (code,), timeout)
+    return await _fetch_quotes((code, "*"), _COMUNE_QUOTES_SQL, (code, _istat_code_parameter(code)), timeout)
 
 
-def select_quote(quotes: list[dict[str, Any]], category: Any) -> tuple[dict[str, Any] | None, str]:
+def select_quote(
+    quotes: list[dict[str, Any]], category: Any, *, typology_code: int | None = None
+) -> tuple[dict[str, Any] | None, str]:
     """Pick the one OMI quote that stands for a cadastral category, or explain why there is none.
 
     Among the quotes of a typology the one OMI flags as prevalent is used; without a flag, the single "NORMALE" one.
     Anything still ambiguous is left unvalued instead of guessed.
     """
-    candidates = OMI_TYPOLOGY_BY_CATEGORY.get(normalize_category(category))
+    candidates = (typology_code,) if typology_code is not None else OMI_TYPOLOGY_BY_CATEGORY.get(normalize_category(category))
     if not candidates:
         return None, "Categoria catastale senza una tipologia OMI corrispondente."
     ambiguous = False
@@ -219,14 +257,15 @@ def select_quote(quotes: list[dict[str, Any]], category: Any) -> tuple[dict[str,
 
 
 def select_quote_range_across_zones(
-    quotes: list[dict[str, Any]], category: Any
+    quotes: list[dict[str, Any]], category: Any, *, typology_code: int | None = None
 ) -> tuple[dict[str, float | int] | None, str]:
     """Return a municipality-wide OMI range when a parcel's exact zone is unknown.
 
     The lower bound is the lowest selected quote minimum across zones; the upper bound is the highest selected
-    quote maximum. This preserves the uncertainty instead of assigning an arbitrary zone to an unmapped parcel.
+    quote maximum. A representative price is the median of the per-zone quote midpoints, so an unmapped parcel does not
+    get a central estimate formed from the two municipality-wide extremes.
     """
-    if not OMI_TYPOLOGY_BY_CATEGORY.get(normalize_category(category)):
+    if typology_code is None and not OMI_TYPOLOGY_BY_CATEGORY.get(normalize_category(category)):
         return None, "Categoria catastale senza una tipologia OMI corrispondente."
     if not quotes:
         return None, "Nessuna quotazione OMI disponibile per il comune."
@@ -238,8 +277,10 @@ def select_quote_range_across_zones(
             quotes_by_zone.setdefault(zone, []).append(quote)
 
     ranges = []
+    midpoints = []
+    selected_codes: list[int] = []
     for zone, zone_quotes in quotes_by_zone.items():
-        selected, _reason = select_quote(zone_quotes, category)
+        selected, _reason = select_quote(zone_quotes, category, typology_code=typology_code)
         if selected is None:
             continue
         try:
@@ -249,11 +290,26 @@ def select_quote_range_across_zones(
             continue
         if low >= 0 and high >= low:
             ranges.append((low, high))
+            midpoints.append((low + high) / 2)
+            try:
+                selected_codes.append(int(selected["cod_tipologia"]))
+            except (KeyError, TypeError, ValueError):
+                pass
 
     if not ranges:
         return None, "Tipologia OMI non quotata nelle zone disponibili del comune."
+    counts = {code: selected_codes.count(code) for code in set(selected_codes)}
+    category_order = OMI_TYPOLOGY_BY_CATEGORY.get(normalize_category(category), ())
+    chosen_code = min(
+        counts,
+        key=lambda code: (-counts[code], category_order.index(code) if code in category_order else len(category_order), code),
+    ) if counts else typology_code
     return {
         "prezzo_min": min(low for low, _high in ranges),
         "prezzo_max": max(high for _low, high in ranges),
+        # A parcel with no exact zone still gets a representative price based on the published
+        # zone bands, rather than the midpoint of two municipality-wide extremes.
+        "prezzo_mid": median(midpoints),
         "zone_count": len(ranges),
+        "cod_tipologia": chosen_code,
     }, ""

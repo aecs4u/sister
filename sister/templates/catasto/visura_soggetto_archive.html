@@ -1,0 +1,350 @@
+{#
+  Local copy of aecs4u-theme's catasto/visura_soggetto.html (theme 1.6.2) with two differences, for the SISTER subject page:
+  * the "Documento" card exists only without `subject_documents`; with them (the /persons and /companies pages) its
+    fields belong to the matching entry of the visure list at the bottom of the page (catasto/entity.html);
+  * a `before_stats` block above the stat cards, where entity.html puts the patrimonio KPI cards.
+  * the fabbricati table keeps the source consistency alongside entity.html's editable effective-size column.
+  Everything else is the theme's, so re-sync this file when the theme template changes (or move both hooks upstream).
+#}
+{% extends base_template|default("base.html") %}
+{% from "components/timeline.html" import timeline_css, timeline_js, render_timeline %}
+{% from "components/nested.html" import complete_data_section %}
+{% from "components/kpi_card.html" import stat_card %}
+{% from "components/hero.html" import hero_section %}
+{% from "components/table_filter.html" import table_filter_csv_js %}
+{% from "components/catasto.html" import assets as catasto_assets, tipo_catasto_badge, situazione_al,
+    categoria_badge, lands_table, liquidazione_row %}
+{% from "components/subject_hub.html" import summary as hub_summary, documented_parcels as hub_group_documents %}
+
+{% macro buildings_table(properties, eyebrow=None, count=None) -%}
+{%- if properties %}
+{%- set _label = eyebrow if eyebrow else _('Buildings (Catasto Fabbricati)') %}
+<div class="mb-1 small text-muted fw-semibold">
+  {{ _label }}
+  {%- if count is not none %} <span class="badge bg-secondary">{{ count }}</span>
+  {%- elif properties|length %} <span class="badge bg-secondary">{{ properties|length }}</span>{%- endif %}
+</div>
+<div class="cat-table-wrap mb-3">
+  <table class="cat-compact-table">
+    <thead>
+      <tr>
+        <th>{{ _('Address') }}</th>
+        <th>{{ _('Municipality') }}</th>
+        <th>{{ _('Fog.') }}</th>
+        <th>{{ _('Part.') }}</th>
+        <th>{{ _('Sub.') }}</th>
+        <th>{{ _('Zone') }}</th>
+        <th>{{ _('Cat.') }}</th>
+        <th>{{ _('Class') }}</th>
+        <th>{{ _('Consistency') }}</th>
+        <th>{{ _('Income') }}</th>
+        <th>{{ _('Partita') }}</th>
+      </tr>
+    </thead>
+    <tbody>
+      {%- for p in properties %}
+      <tr>
+        <td>{{ p.address or '—' }}</td>
+        <td>{{ p.municipality or p.cl_province or '—' }}</td>
+        <td class="font-monospace">{{ p.sheet or '—' }}</td>
+        <td class="font-monospace">{{ p.parcel or '—' }}</td>
+        <td class="font-monospace">{{ p.subunit or '—' }}</td>
+        <td>{{ p.census_zone or '—' }}</td>
+        <td>{{ categoria_badge(p.category) }}</td>
+        <td>{{ p.cadastral_class or '—' }}</td>
+        <td>{{ p.consistency or '—' }}</td>
+        <td class="text-nowrap">{{ p.income or '—' }}</td>
+        <td class="font-monospace small text-muted">{{ p.partita or '—' }}</td>
+      </tr>
+      {%- endfor %}
+    </tbody>
+  </table>
+</div>
+{%- endif -%}
+{%- endmacro %}
+
+{% set _v = doc.xml_parsed.VisuraSoggettoAttuale or doc.xml_parsed.VisuraSoggettoStorica or doc.xml_parsed.VisuraSoggettoSintetica or doc.xml_parsed.VisuraSoggetto or {} %}
+{% set _t = _v.TitoloVisura or {} %}
+{% set _dr = _v.DatiRichiesta or {} %}
+{% set _title = (_t.Titolo or '')|lower %}
+{% set _is_historical = 'storic' in _title or doc.xml_parsed.VisuraSoggettoStorica %}
+{% set _is_synthetic = 'sintetic' in _title or doc.xml_parsed.VisuraSoggettoSintetica %}
+{% set _variant_label = 'Sintetica' if _is_synthetic else ('Storica' if _is_historical else 'Attuale') %}
+{% set _subject_container = _dr.SoggettoIndividuato or {} %}
+{% set _sogg = _subject_container.SoggettoPF or _subject_container.SoggettoPNF or _v.SoggettoPF or _v.SoggettoPNF or {} %}
+{# no visura stored: the page is the archive of the subject's saved soggetto query (web._render_query_only_subject) #}
+{% set _query_only = doc.query_only|default(false) %}
+
+{% block page_title %}
+    Visura Soggetto{% if not _query_only %} {{ _variant_label }}{% endif %} — {{ _sogg.Cognome or doc.oggetto or 'Soggetto' }} {{ _sogg.Nome or '' }}
+{% endblock %}
+
+{% block extra_css %}
+{{ super() }}
+{{ catasto_assets() }}
+{{ timeline_css() }}
+<link rel="stylesheet" href="{{ static_url_path|default('/static/aecs4u-theme') }}/css/visura.css{{ theme_asset_v|default('') }}">
+{% endblock %}
+
+{% block content %}
+{# ── Hero ───────────────────────────────────────────────────────────────── #}
+{% set _hero_title = (_sogg.Cognome ~ ' ' ~ (_sogg.Nome or ''))|trim if _sogg.Cognome else (doc.oggetto or ('Visura Soggetto ' ~ _variant_label)) %}
+{% call hero_section(_hero_title, 'fa-building' if _query_only and subject_route_prefix == '/companies' else 'fa-user', documents_url|default('/documents'), 'Documenti',
+                     breadcrumb_parent='Documenti', breadcrumb_current='Visura Soggetto',
+                     extra_class='page-hero-soggetto') %}
+{% if _query_only %}
+Visura soggetto — elenco immobili dalla ricerca per soggetto{% if doc.tipo_catasto %} — Catasto {{ doc.tipo_catasto }}{% endif %}{% if doc.queried_at %} — {{ doc.queried_at }}{% endif %}
+{% else %}
+Visura soggetto {{ _variant_label|lower }}
+{% if _t.TipoCatasto or _dr.TipoCatasto %} — {{ _t.TipoCatasto or _dr.TipoCatasto }}{% endif %}
+{% if _dr.Provincia or doc.provincia %} — {{ _dr.Provincia or doc.provincia }}{% endif %}
+{% endif %}
+{% endcall %}
+
+<div class="container-fluid">
+
+    {# ── Soggetto + doc info ─────────────────────────────────────────────── #}
+    <div class="row mb-4">
+        <div class="{{ 'col-12' if subject_documents or _query_only else 'col-lg-8 mb-3 mb-lg-0' }}">
+            <div class="card persona-header h-100">
+                <div class="card-body">
+                    <h5 class="card-title">
+                        <i class="fas fa-user text-info me-2"></i>Soggetto Individuato
+                    </h5>
+                    <div class="row g-3">
+                        <div class="{{ 'col-md-6' if _query_only else 'col-md-5' }}">
+                            <span class="detail-label">{{ 'Denominazione' if _query_only and subject_route_prefix == '/companies' else 'Nominativo' }}</span>
+                            <div class="fs-5 fw-bold">{{ _sogg.Cognome or '-' }} {{ _sogg.Nome or '' }}</div>
+                            <div class="font-monospace text-muted small">{{ _sogg.CodiceFiscale or '-' }}</div>
+                        </div>
+                        {% if _query_only %}
+                        <div class="col-md-6">
+                            <span class="detail-label">{{ 'Partita IVA' if subject_route_prefix == '/companies' else 'Codice fiscale' }}</span>
+                            <div class="font-monospace">{{ _sogg.CodiceFiscale or '-' }}</div>
+                            <div class="text-muted small">Nessuna visura per soggetto archiviata: i dati vengono dalla ricerca (elenco immobili) e dai documenti delle particelle.</div>
+                        </div>
+                        {% else %}
+                        <div class="col-md-4">
+                            <span class="detail-label">Nascita</span>
+                            <div>{{ _sogg.DataNascita or '-' }}</div>
+                            <div class="text-muted small">{{ _sogg.ComuneNascita or '' }}{% if _sogg.Provincia %} ({{ _sogg.Provincia }}){% endif %}</div>
+                        </div>
+                        <div class="col-md-3">
+                            <span class="detail-label">Sesso</span>
+                            <div>{{ _sogg.Sesso or '-' }}</div>
+                            <span class="detail-label mt-2 d-block">Protocollo</span>
+                            <div class="small">{{ _dr.Protocollo or '-' }} / {{ _dr.Anno or '-' }}</div>
+                        </div>
+                        {% endif %}
+                    </div>
+                </div>
+            </div>
+        </div>
+        {% if not subject_documents and not _query_only %}
+        <div class="col-lg-4">
+            <div class="card persona-header h-100">
+                <div class="card-body">
+                    <h5 class="card-title"><i class="fas fa-info-circle text-info me-2"></i>Documento</h5>
+                    <ul class="list-unstyled mb-0 small">
+                        <li class="mb-2"><strong>Tipo Catasto:</strong>
+                            {{ tipo_catasto_badge(_t.TipoCatasto or _dr.TipoCatasto or '') }}
+                        </li>
+                        <li class="mb-2"><strong>Provincia:</strong> {{ _dr.Provincia or doc.provincia or '-' }}</li>
+                        <li class="mb-2"><strong>Situazione al:</strong> {{ situazione_al(_t.SituazioneAl) }}</li>
+                        <li class="mb-2"><strong>Protocollo:</strong> {{ _dr.Protocollo or '-' }} / {{ _dr.Anno or '-' }}</li>
+                        {% if doc.id %}<li><strong>ID Doc:</strong> <code>{{ doc.id }}</code></li>{% endif %}
+                    </ul>
+                </div>
+            </div>
+        </div>
+        {% endif %}
+    </div>
+
+    {% block before_stats %}{% endblock %}
+
+    {# ── Stat summary ────────────────────────────────────────────────────── #}
+    {% set _gruppi = _v.GruppoUnitaImmobiliari %}
+    {# with the saved search the archive summary (immobili, particelle, coverage, what is missing) replaces the stat cards #}
+    {% if subject_hub %}{{ hub_summary(subject_hub, subject_route_prefix, true) }}{% endif %}
+    {% if _gruppi %}
+    {% set _gruppi_list = _gruppi if _gruppi is sequence and _gruppi is not string and _gruppi is not mapping else [_gruppi] %}
+    {% set ns = namespace(total_imm=0, total_ter=0, n_comuni=_gruppi_list|length) %}
+    {% for g in _gruppi_list %}
+        {% set _imm = g.ImmobileFabbricatiS %}
+        {% if _imm %}
+            {% set _imm_list = _imm if _imm is sequence and _imm is not string and _imm is not mapping else [_imm] %}
+            {% set ns.total_imm = ns.total_imm + _imm_list|length %}
+        {% endif %}
+        {% set _ter = g.ImmobileTerreniS %}
+        {% if _ter %}
+            {% set _ter_list = _ter if _ter is sequence and _ter is not string and _ter is not mapping else [_ter] %}
+            {% set ns.total_ter = ns.total_ter + _ter_list|length %}
+        {% endif %}
+    {% endfor %}
+    {% if not subject_hub %}
+    <div class="row g-4 mb-4">
+        <div class="col-md-4 col-6">{{ stat_card("Gruppi Comuni", ns.n_comuni, icon="fa-city", color="info") }}</div>
+        <div class="col-md-2 col-6">{{ stat_card("Fabbricati", ns.total_imm, icon="fa-building", color="warning") }}</div>
+        <div class="col-md-2 col-6">{{ stat_card("Terreni", ns.total_ter, icon="fa-seedling", color="success") }}</div>
+        <div class="col-md-4 col-12">{{ stat_card("Tipo Catasto", _dr.TipoCatasto or '-', icon="fa-database", color="primary") }}</div>
+    </div>
+    {% endif %}
+    {% endif %}
+
+    {# ── Immobili + titolarità per gruppo ────────────────────────────────── #}
+    {% if _gruppi %}
+    {# one folded accordion (<details>) per group: comune + catasto type in the summary, tables and ownership timeline inside #}
+    <div class="visura-groups">
+    {% for g in _gruppi_list %}
+    {% set _imm = g.ImmobileFabbricatiS %}
+    {% set _imm_list = _imm if _imm is sequence and _imm is not string and _imm is not mapping else ([_imm] if _imm else []) %}
+    {% set _ter = g.ImmobileTerreniS %}
+    {% set _ter_list = _ter if _ter is sequence and _ter is not string and _ter is not mapping else ([_ter] if _ter else []) %}
+
+    {# Compute whether this group has IntestazioneGruppo mutations #}
+    {% set _ig = g.IntestazioneGruppo or {} %}
+    {% set _ig_mutazioni_raw = _ig.MutazioneSoggettiva if _ig else none %}
+    {% set _ig_mutazioni = _ig_mutazioni_raw if _ig_mutazioni_raw is sequence and _ig_mutazioni_raw is not string and _ig_mutazioni_raw is not mapping else ([_ig_mutazioni_raw] if _ig_mutazioni_raw else []) %}
+
+    {# the sheets (fogli) of the group, in numeric order, for the header #}
+    {% set _sh = namespace(seen=[], items=[]) %}
+    {% for _rows in [_imm_list, _ter_list] %}{% for _r in _rows %}
+        {% set _idd = (_r.DatiIdentificativi or {}).IdentificativoDefinitivo or {} %}
+        {% set _idd = _idd if _idd is mapping else (_idd[0] if _idd else {}) %}
+        {% set _fg = (_idd.Foglio or '')|string|trim %}
+        {% if _fg and _fg not in _sh.seen %}
+            {% set _sh.seen = _sh.seen + [_fg] %}
+            {% set _sh.items = _sh.items + [{'k': _fg.zfill(6), 'f': _fg}] %}
+        {% endif %}
+    {% endfor %}{% endfor %}
+    {% set _sheet_list = _sh.items|sort(attribute='k')|map(attribute='f')|list %}
+
+    <details class="visura-group"{% if _gruppi_list|length == 1 %} open{% endif %}>
+    <summary class="visura-group-summary">
+    <h2 class="h5 mb-0">
+        <i class="fas fa-map-marker-alt me-1 text-info"></i>
+        {{ g.Descrizione or g.CodiceComune or ('Gruppo ' ~ loop.index) }}
+        {% if g.CodiceComune and g.Descrizione %}<span class="small text-muted font-monospace ms-1" title="Codice catastale del comune">{{ g.CodiceComune }}</span>{% endif %}
+        <span class="badge bg-secondary ms-2">{{ g.TipoCatasto or '' }}</span>
+        <span class="badge bg-light text-dark border ms-1">{{ _imm_list|length + _ter_list|length }} immobili</span>
+        {% if _sheet_list %}<span class="badge bg-light text-dark border ms-1" title="Fogli: {{ _sheet_list|join(', ') }}">Fg {{ _sheet_list[:6]|join(', ') }}{% if _sheet_list|length > 6 %} +{{ _sheet_list|length - 6 }}{% endif %}</span>{% endif %}
+        {% if g.Sezione %}<span class="badge bg-light text-dark border ms-1">Sez. {{ g.Sezione }}</span>{% endif %}
+        {% if g.FonteElenco and g.TitolaritaElenco and (g.TitolaritaElenco.Diritto or g.TitolaritaElenco.Quota) %}<span class="badge bg-info-subtle text-info-emphasis border border-info-subtle ms-1" title="Diritto e quota del soggetto, dalla ricerca">{{ g.TitolaritaElenco.Diritto }}{% if g.TitolaritaElenco.Quota %} {{ g.TitolaritaElenco.Quota }}{% endif %}</span>{% endif %}
+        {% if g.FonteElenco %}<span class="badge bg-warning-subtle text-warning-emphasis border border-warning-subtle ms-1" title="Immobili della ricerca per soggetto non presenti in una visura archiviata">da elenco</span>{% endif %}
+    </h2>
+    </summary>
+    <div class="visura-group-body">
+
+    {# ── Fabbricati / Terreni (theme: buildings_table, lands_table) ───────── #}
+    {% set _b = namespace(rows=[], lands=[]) %}
+    {% for imm in _imm_list %}
+        {% set _id_def = (imm.DatiIdentificativi or {}).IdentificativoDefinitivo or {} %}
+        {% set _addr = (imm.DatiIndirizzo or {}).IndirizzoImm or imm.IndirizzoImm %}
+        {% set _cls = imm.DatiClassamentoF or {} %}
+        {% set _cls = _cls if _cls is mapping else (_cls[0] if _cls else {}) %}
+        {% set _cons = _cls.Consistenza if _cls.Consistenza is mapping else {} %}
+        {% set _sup = imm.SuperficieF or {} %}
+        {% set _b.rows = _b.rows + [{
+            'address': _addr if _addr is string else (_addr._text if _addr is mapping else ''),
+            'municipality': g.Descrizione or _id_def.Comune,
+            'sheet': _id_def.Foglio, 'parcel': _id_def.ParticellaNum, 'subunit': _id_def.Subalterno,
+            'census_zone': _cls.ZonaCensuaria,
+            'category': ((_cls.Categoria or '')|string|replace(':', '')|trim),
+            'cadastral_class': _cls.Classe,
+            'consistency': ((_cons.Valore ~ ' ' ~ (_cons.Unita or ''))|trim) if _cons.Valore else ((_sup.Totale ~ ' MQ') if _sup.Totale else ''),
+            'income': ('€ ' ~ _cls.RenditaEuro) if _cls.RenditaEuro else '',
+            'partita': _id_def.Partita,
+        }] %}
+    {% endfor %}
+    {% for imm in _ter_list %}
+        {% set _id_def = (imm.DatiIdentificativi or {}).IdentificativoDefinitivo or {} %}
+        {% set _ct = (imm.DatiClassamentoT or {}).ClassamentoT or {} %}
+        {% set _ct_list = _ct if _ct is sequence and _ct is not string and _ct is not mapping else ([_ct] if _ct else [{}]) %}
+        {% for c in _ct_list %}
+        {% set _b.lands = _b.lands + [{
+            'municipality': g.Descrizione or _id_def.Comune,
+            'sheet': _id_def.Foglio, 'parcel': _id_def.ParticellaNum,
+            'quality': c.Qualita, 'cadastral_class': c.Classe,
+            'area': (c.SuperficieMQ ~ ' MQ') if c.SuperficieMQ else '',
+            'dominical_income': c.RedditoDominicaleEuro, 'agricultural_income': c.RedditoAgrarioEuro,
+            'partita': _id_def.Partita,
+        }] %}
+        {% endfor %}
+    {% endfor %}
+    <div class="imm-tables mb-3">
+        {{ buildings_table(_b.rows) }}
+        {{ lands_table(_b.lands) }}
+    </div>
+    {% if g.FonteElenco %}
+    <p class="small text-muted mb-4"><i class="fas fa-circle-info me-1" aria-hidden="true"></i>Immobili dall'elenco della ricerca per soggetto: la titolarità, lo storico e i dati di classamento completi arrivano da una visura per soggetto o dalle visure delle singole particelle.</p>
+    {% endif %}
+
+    {# ── IntestazioneGruppo — ownership timeline ───────────────────────── #}
+    {% if g.FonteElenco %}
+    {# ownership from the saved search: a line, not a timeline (the group's IntestazioneGruppo only feeds the valuation) #}
+    {% if g.TitolaritaElenco and (g.TitolaritaElenco.Diritto or g.TitolaritaElenco.Quota) %}
+    <p class="small mb-4"><i class="fas fa-user-check me-1 text-info" aria-hidden="true"></i><strong>Titolarità dalla ricerca:</strong>
+        {{ g.TitolaritaElenco.Diritto or 'diritto non indicato' }}{% if g.TitolaritaElenco.Quota %} · quota {{ g.TitolaritaElenco.Quota }}{% endif %}</p>
+    {% endif %}
+    {% elif _ig_mutazioni %}
+    <div class="card border-0 shadow-sm mb-4">
+        <div class="card-header bg-transparent border-bottom py-2 px-3">
+            <h3 class="h6 mb-0 text-muted">
+                <i class="fas fa-history me-2"></i>Titolarità
+                <span class="badge bg-info ms-2" style="font-size:.65rem">{{ _ig_mutazioni|length }} mutazioni</span>
+            </h3>
+        </div>
+        <div class="card-body py-3 px-3">
+            {{ render_timeline(_ig_mutazioni, situazione_al=_t.SituazioneAl or '',
+                               color='#17a2b8', badge_class='bg-info') }}
+        </div>
+    </div>
+    {% elif _ig and not _ig_mutazioni %}
+    {#
+       IntestazioneGruppo exists but has no MutazioneSoggettiva (schema v1 maxOccurs=1 bug
+       may have caused a single item to be stored as a dict rather than a list).
+       Nothing to show — silently skip.
+    #}
+    {% endif %}
+    {% if subject_hub %}{{ hub_group_documents(subject_hub, g) }}{% endif %}
+    </div>
+    </details>
+
+    {% endfor %}
+    </div>
+    {% endif %}
+
+    {# ── No data ─────────────────────────────────────────────────────────── #}
+    {# not for the archive of a saved query: its properties are listed below the card, not in a visura #}
+    {% if not _gruppi and not _query_only %}
+    <div class="card border-0">
+        <div class="card-body text-center py-5">
+            <i class="fas fa-building fa-3x text-muted mb-3 d-block"></i>
+            <h5 class="text-muted">Nessun immobile trovato</h5>
+            <p class="text-muted small">Il documento non contiene dati di gruppi unità immobiliari.</p>
+        </div>
+    </div>
+    {% endif %}
+
+    {# ── Liquidazione (theme) ────────────────────────────────────────────── #}
+    {{ liquidazione_row(_v.DatiLiquidazione or {}) }}
+
+    {# ── Dati completi (exhaustive dump) ─────────────────────────────────── #}
+    {% if not _query_only %}
+    {{ complete_data_section(doc.xml_parsed, accent='#17a2b8') }}
+
+    <div class="d-flex gap-2 justify-content-center mt-4 mb-4 no-print">
+        <a href="{{ documents_url|default('/documents') }}" class="btn btn-outline-secondary">
+            <i class="fas fa-arrow-left me-2"></i>Documenti
+        </a>
+    </div>
+    {% endif %}
+
+</div>
+{% endblock %}
+
+{% block extra_js %}
+{{ super() }}
+{{ timeline_js(csp_nonce) }}
+{{ table_filter_csv_js('.imm-tables .cat-compact-table', csp_nonce) }}
+{% endblock %}

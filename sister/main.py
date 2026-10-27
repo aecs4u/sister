@@ -653,6 +653,30 @@ try:
             PrefixLoader({"land_registry": FileSystemLoader(land_registry_templates)}),
             template_env.loader,
         ])
+        # The installed land_registry (0.1.4) still places a parcel without outline at the map centre, which shows
+        # a Palermo parcel in Milan, and has no marker clustering. Until a release carries both, SISTER serves its
+        # copy of the two files (sister/static/land_registry/, from ../land-registry) at the package's URLs;
+        # these routes come first, so they win over the package's static mount.
+        from fastapi.responses import FileResponse
+
+        def _land_registry_override(name: str, media_type: str):
+            path = _static_dir / "land_registry" / name
+
+            async def serve():
+                return FileResponse(path, media_type=media_type, headers={"Cache-Control": "no-cache"})
+
+            return serve
+
+        for override_name, override_type in (
+            ("document_parcel_map.js", "text/javascript"),
+            ("document_parcel_map.css", "text/css"),
+        ):
+            app.add_api_route(
+                f"/land-registry/static/{override_name}",
+                _land_registry_override(override_name, override_type),
+                methods=["GET"],
+                include_in_schema=False,
+            )
         install_land_registry_consumer(app, prefix="/land-registry")
     except ImportError as e:
         logger.warning("land_registry consumer non disponibile: %s", e)
@@ -825,7 +849,7 @@ async def _richiedi_generic(
     provincia: str,
     force: bool = False,
     comune: Optional[str] = None,
-    tipo_catasto: str = "T",
+    tipo_catasto: Optional[str] = None,
     service: VisuraService = Depends(get_visura_service),
     _: None = Depends(require_api_key_dependency),
 ):
@@ -848,6 +872,8 @@ async def _richiedi_generic(
         if key not in {"provincia", "force", "reuse_previous", "comune", "tipo_catasto"} and value != ""
     }
     internal = {"ispezioni-cartacee": "ispezioni_cart"}.get(name, name.replace("-", "_"))
+    # a subject search covers Fabbricati and Terreni ("E"); it used to fall back to "T" and listed only the Terreni
+    tipo_catasto = (tipo_catasto or ("E" if internal in {"soggetto_immobili", "soggetto_documento"} else "T")).upper()
     return await richiedi_generic_sister(
         search_type=internal,
         provincia=provincia,

@@ -49,6 +49,17 @@ def test_building_value_accepts_floats_and_rounds_to_cents():
     assert building_cadastral_value(0.01, "C01").value == Decimal("0.58")  # 0.01 x 1.05 x 55 = 0.5775, rounded half up
 
 
+@pytest.mark.parametrize(
+    "rendita, expected_base",
+    [("650,74", "650.74"), ("1.234,56", "1234.56"), ("1,234.56", "1234.56")],
+)
+def test_building_value_accepts_localized_rendita(rendita, expected_base):
+    value = building_cadastral_value(rendita, "A/2")
+
+    assert value.base == Decimal(expected_base)
+    assert value.value == (Decimal(expected_base) * Decimal("1.05") * Decimal(160)).quantize(Decimal("0.01"))
+
+
 @pytest.mark.parametrize("rendita, category", [(None, "A02"), (0, "A02"), (-5, "A02"), ("abc", "A02"), (100, "F01"),
                                                (100, None), (float("nan"), "A02"), (True, "A02")])
 def test_building_value_is_none_when_an_input_is_unusable(rendita, category):

@@ -77,8 +77,20 @@ def building_multiplier(category: Any) -> int | None:
 def _decimal(value: Any) -> Decimal | None:
     if value is None or isinstance(value, bool):
         return None
+    text = str(value).strip().replace("\u00a0", "").replace(" ", "")
+    if "," in text:
+        # Catasto amounts are commonly written in Italian format (1.234,56).
+        # Also accept conventional English grouping (1,234.56) for callers that
+        # provide it explicitly.
+        if "." in text and text.rfind(",") < text.rfind("."):
+            text = text.replace(",", "")
+        else:
+            text = text.replace(".", "").replace(",", ".")
+    elif text.count(".") > 1:
+        # Multiple periods are unambiguous Italian thousands separators.
+        text = text.replace(".", "")
     try:
-        number = value if isinstance(value, Decimal) else Decimal(str(value))
+        number = value if isinstance(value, Decimal) else Decimal(text)
     except Exception:  # noqa: BLE001 - any unparsable input simply has no value
         return None
     return number if number.is_finite() and number > 0 else None

@@ -1,6 +1,7 @@
 {% extends "_base.html" %}
 {% from "components/related_links.html" import related_pages %}
-{% from "_doc_macros.html" import jump_chips, query_section, query_subsection, doc_table, doc_macros_js %}
+{% from "_doc_macros.html" import query_section, query_subsection, doc_table, doc_macros_js, documents_favorites_js %}
+{% from "components/documents_category_navigation.html" import document_category_navigation %}
 {% from "components/document_location_view.html" import location_view %}
 {% from "components/document_files_view.html" import files_view %}
 
@@ -9,7 +10,7 @@
 {% block extra_css %}
 {{ super() }}
 <link rel="stylesheet" href="/static/css/doc_sections.css?v=20261009a">
-<link rel="stylesheet" href="/static/css/pages/documents_index.css?v=20261021b">
+<link rel="stylesheet" href="/static/css/pages/documents_index.css?v=20261025a">
 <link rel="stylesheet" href="/static/css/pages/documents_map.css?v=20261009a">
 {% endblock %}
 
@@ -57,6 +58,12 @@
 <div id="export-toast-container" style="position:fixed;top:1.2rem;right:1.2rem;z-index:9999;min-width:320px"></div>
 
 <main class="container-fluid documents-hub py-3">
+    <div class="d-flex justify-content-end mb-2 no-print">
+        <button type="button" class="btn btn-sm btn-outline-danger" data-favorites-filter aria-pressed="false">
+            <i class="far fa-heart me-1" aria-hidden="true"></i>
+            <span data-favorites-filter-label>Solo preferiti</span>
+        </button>
+    </div>
     <ul class="nav nav-tabs documents-view-tabs mb-3" id="documents-view-tabs" role="tablist" aria-label="Viste documenti">
         <li class="nav-item" role="presentation">
             <button class="nav-link {{ 'active' if active_view == 'categories' else '' }}" id="documents-tab-categories"
@@ -73,7 +80,7 @@
                     aria-controls="documents-pane-location" aria-selected="{{ 'true' if active_view == 'location' else 'false' }}"
                     data-documents-view="location">
                 <i class="fas fa-diagram-project me-1"></i>Per ubicazione
-                <span class="badge text-bg-secondary ms-1">{{ (prop_map.immobili | length) + (prop_map.soggetti | length) }}</span>
+                <span class="badge text-bg-secondary ms-1">{{ total }}</span>
             </button>
         </li>
         <li class="nav-item" role="presentation">
@@ -81,8 +88,8 @@
                     type="button" role="tab" data-bs-toggle="tab" data-bs-target="#documents-pane-files"
                     aria-controls="documents-pane-files" aria-selected="{{ 'true' if active_view == 'files' else 'false' }}"
                     data-documents-view="files">
-                <i class="fas fa-hard-drive me-1"></i>File system
-                <span class="badge text-bg-secondary ms-1">{{ fs_n_files }}</span>
+                <i class="fas fa-file-lines me-1"></i>Per file
+                <span class="badge text-bg-secondary ms-1">{{ total }}</span>
             </button>
         </li>
     </ul>
@@ -90,20 +97,21 @@
     <div class="tab-content" id="documents-tab-panes">
         <section class="tab-pane fade {{ 'show active' if active_view == 'categories' else '' }}" id="documents-pane-categories"
                  role="tabpanel" aria-labelledby="documents-tab-categories" tabindex="0">
+            {{ document_category_navigation(tree) }}
             {% if not tree %}
-            <div class="alert alert-info"><i class="fas fa-circle-info me-2"></i>Nessun documento indicizzato. Usa la scheda File system per esplorare la cartella dei report.</div>
+            <div class="alert alert-info"><i class="fas fa-circle-info me-2"></i>Nessun documento indicizzato.</div>
             {% else %}
-            <div class="d-flex justify-content-end gap-2 mb-3 no-print">
-                <button type="button" data-click="toggleActiveDocuments" data-args='[true]' class="btn btn-sm btn-outline-secondary"><i class="fas fa-angles-down me-1"></i>Espandi</button>
-                <button type="button" data-click="toggleActiveDocuments" data-args='[false]' class="btn btn-sm btn-outline-secondary"><i class="fas fa-angles-up me-1"></i>Riduci</button>
-            </div>
-            {{ jump_chips(tree) }}
             {% for g in tree %}
             {% call query_section(g) %}
-                {% if g.docs %}{{ doc_table(g.key, g.docs, g.color, '/documents', is_soggetto=g.is_soggetto) }}{% endif %}
+                {% if g.docs %}{{ doc_table(g.key, g.docs, g.color, '/documents', is_soggetto=g.is_soggetto, favorites_enabled=favorites_enabled) }}{% endif %}
+                {% if not g.docs and not g.children and g.empty_message %}
+                <div class="alert alert-light border mb-0" role="status">
+                    <i class="fas fa-circle-info me-2" aria-hidden="true"></i>{{ g.empty_message }}
+                </div>
+                {% endif %}
                 {% for sg in g.children %}
                 {% call query_subsection(sg) %}
-                    {{ doc_table(sg.key, sg.docs, sg.color, '/documents', is_soggetto=sg.is_soggetto) }}
+                    {{ doc_table(sg.key, sg.docs, sg.color, '/documents', is_soggetto=sg.is_soggetto, favorites_enabled=favorites_enabled) }}
                 {% endcall %}
                 {% endfor %}
             {% endcall %}
@@ -113,12 +121,12 @@
 
         <section class="tab-pane fade {{ 'show active' if active_view == 'location' else '' }}" id="documents-pane-location"
                  role="tabpanel" aria-labelledby="documents-tab-location" tabindex="0">
-            {{ location_view(prop_map) }}
+            {{ location_view(prop_map, favorites_enabled) }}
         </section>
 
         <section class="tab-pane fade {{ 'show active' if active_view == 'files' else '' }}" id="documents-pane-files"
                  role="tabpanel" aria-labelledby="documents-tab-files" tabindex="0">
-            {{ files_view(entries, breadcrumbs, current_path, n_dirs, fs_n_files, total_size) }}
+            {{ files_view(files, favorites_enabled) }}
         </section>
     </div>
 
@@ -134,6 +142,7 @@
 {% block extra_js %}
 {{ super() }}
 {{ doc_macros_js(csp_nonce) }}
+{{ documents_favorites_js(csp_nonce) }}
 <script nonce="{{ csp_nonce }}">
 function toggleActiveDocuments(expand) {
     var pane = document.querySelector('#documents-tab-panes .tab-pane.active');
@@ -207,7 +216,6 @@ function showExportToast(type, html) {
 }
 
 (function () {
-    var documentsFilePath = {{ current_path|tojson }};
     var restoringHistory = false;
 
     function selectedView() {
@@ -232,10 +240,7 @@ function showExportToast(type, html) {
             }
             var view = trigger.dataset.documentsView;
             var url = new URL(window.location.href);
-            if (view !== 'files') url.pathname = '/documents';
-            else if (documentsFilePath) {
-                url.pathname = '/documents/' + documentsFilePath.split('/').map(encodeURIComponent).join('/');
-            } else url.pathname = '/documents';
+            url.pathname = '/documents';
             url.searchParams.delete('view');
             if (view === 'location') url.searchParams.set('view', 'map');
             if (view === 'files') url.searchParams.set('view', 'files');

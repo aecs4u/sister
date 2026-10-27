@@ -189,16 +189,25 @@ def parse_period(value: Any) -> tuple[str, str]:
 
 
 def parse_ubicazione(value: Any) -> dict[str, str]:
-    """``RAVENNA(RA) VIA EL ALAMEIN n. 2 Piano T-1`` → municipality, province, address."""
+    """``RAVENNA(RA) VIA EL ALAMEIN n. 2 Piano T-1`` → municipality, province, address.
+
+    Terreni of comuni with sezioni read ``PISOGNE(BS) Sez: A``: the sezione goes to ``section``, not the address.
+    """
     text = squeeze(value)
     match = re.match(r"^(?P<comune>.+?)\s*\((?P<prov>[A-Za-z]{2})\)\s*(?P<address>.*)$", text)
     if not match:
         return {"address": text} if text else {}
-    return {
+    address = match.group("address").strip()
+    out = {
         "municipality": match.group("comune").strip(),
         "province": match.group("prov").upper(),
-        "address": match.group("address").strip(),
     }
+    section = re.match(r"^Sez(?:ione)?\.?:?\s*(?P<section>\S+)\s*(?P<rest>.*)$", address, flags=re.IGNORECASE)
+    if section:
+        out["section"] = section.group("section")
+        address = section.group("rest").strip()
+    out["address"] = address
+    return out
 
 
 def parse_classamento(value: Any) -> dict[str, str]:
@@ -638,9 +647,9 @@ def parse_consistency(value: Any) -> tuple[Decimal | None, str | None]:
     found = _PLAIN_NUMBER.search(text)
     number = Decimal(found.group(0).replace(",", ".")) if found else None
     lowered = text.lower()
-    if "vani" in lowered:
+    if re.search(r"\bvan[io]\b", lowered):
         unit = "VANI"
-    elif re.search(r"m\s*2|mq", lowered):
+    elif re.search(r"m\s*(?:2|²)|mq", lowered):
         unit = "MQ"
     elif re.search(r"mc|m\s*3", lowered):
         unit = "MC"

@@ -5,6 +5,7 @@ import logging
 import os
 import re
 import time
+import weakref
 from datetime import datetime
 
 from aecs4u_auth.browser import PageLogger as _BasePageLogger
@@ -18,6 +19,82 @@ from .query_forms import get_query_form
 log = logging.getLogger("sister.utils")
 
 
+FAST_PAGE_LOG = os.getenv("SISTER_PAGE_LOG_FAST", "true").strip().lower() in ("1", "true", "yes", "si")
+# after a click the new document has already committed, so waiting for its "load" is enough; "networkidle" adds 500 ms of silence
+FAST_NAV = os.getenv("SISTER_FAST_NAV", "false").strip().lower() in ("1", "true", "yes", "si")
+
+
+# seconds a click / fill / check may wait for its element before the row fails (Playwright's own default is 30)
+ACTION_TIMEOUT_MS = int(float(os.getenv("SISTER_ACTION_TIMEOUT_SECONDS", "15")) * 1000)
+CACHE_STATIC = os.getenv("SISTER_CACHE_STATIC", "false").strip().lower() in ("1", "true", "yes", "si")
+_STATIC_URL = re.compile(r"^https://sister3\.agenziaentrate\.gov\.it/.*\.(?:css|js|png|jpe?g|gif|svg|ico|woff2?|ttf|eot)(?:\?.*)?$", re.I)
+_STATIC_CACHE: dict[str, tuple[int, dict, bytes]] = {}
+_STATIC_ROUTED: "weakref.WeakSet[Page]" = weakref.WeakSet()
+_HOP_HEADERS = {"content-encoding", "content-length", "transfer-encoding", "connection"}
+
+
+async def _serve_static(route) -> None:
+    """Answer a style sheet, script, image or font from memory after its first download.
+
+    One search loads 7 pages and each of them fetched ~40 identical files (≈400 kB): the pages are not cached by the portal's
+    headers. The files are the same for the whole session, so they are kept for the life of the service.
+    """
+    url = route.request.url
+    hit = _STATIC_CACHE.get(url)
+    if hit is not None:
+        status, headers, body = hit
+        await route.fulfill(status=status, headers=headers, body=body)
+        return
+    response = await route.fetch()
+    body = await response.body()
+    headers = {k: v for k, v in response.headers.items() if k.lower() not in _HOP_HEADERS}
+    if response.status == 200 and len(body) < 3_000_000:
+        _STATIC_CACHE[url] = (response.status, headers, body)
+    await route.fulfill(status=response.status, headers=headers, body=body)
+
+
+async def _cache_static_assets(page: Page) -> None:
+    """Install the in-memory cache of the portal's static files on this tab (once)."""
+    if not CACHE_STATIC or page in _STATIC_ROUTED:
+        return
+    await page.route(_STATIC_URL, _serve_static)
+    _STATIC_ROUTED.add(page)
+
+
+async def dump_error_page(page: Page, request_id: str, error: str) -> None:
+    """Keep the page a failed search was looking at (HTML only), so the cause can be read later: logs/errors/<id>.html."""
+    try:
+        if page is None or page.is_closed():
+            return
+        folder = os.path.join("logs", "errors")
+        os.makedirs(folder, exist_ok=True)
+        html = await asyncio.wait_for(page.content(), timeout=5)
+        safe = re.sub(r"[^\w\-]", "_", request_id)
+        with open(os.path.join(folder, f"{safe}.html"), "w", encoding="utf-8") as handle:
+            handle.write(f"<!-- URL: {page.url} -->\n<!-- Error: {error[:300]!r} -->\n\n{html}")
+    except Exception as exc:  # noqa: BLE001 (diagnostics must never turn a failed row into a second failure)
+        log.debug("Pagina di errore non salvata: %s", exc)
+
+
+async def _click_nav(page: Page, locator, timeout: int = 60000) -> None:
+    """Click something that opens another page and return only when that page has loaded.
+
+    ``click()`` returns once the click is dispatched and a load-state wait right after it returns at once on the page that is
+    being left, so the next step read the OLD page (or started a second navigation on top of the first). Waiting for the
+    navigation itself is the one reliable "next page is here". A click that does not navigate within ``timeout`` fails the row,
+    as it should: the portal did not answer.
+    """
+    async with page.expect_navigation(wait_until="networkidle" if not FAST_NAV else "load", timeout=timeout):
+        # the click itself waits for the navigation it starts, and that wait uses the click's own timeout (the page default,
+        # 15 s since ACTION_TIMEOUT_MS): a company with hundreds of properties needs the portal longer than that
+        await locator.click(timeout=timeout)
+
+
+async def _settle(page: Page, timeout: int = 30000) -> None:
+    """Wait for the page that a click or a submit has just opened."""
+    await page.wait_for_load_state("load" if FAST_NAV else "networkidle", timeout=timeout)
+
+
 class PageLogger(_BasePageLogger):
     """Extended PageLogger that saves screenshots and collects page visit metadata."""
 
@@ -26,6 +103,12 @@ class PageLogger(_BasePageLogger):
         self.page_visits: list[dict] = []
 
     async def log(self, page: Page, step_name: str) -> None:
+        if FAST_PAGE_LOG:
+            # bulk runs: the page_visit rows (step, url, time) are kept, the HTML dump and the screenshot (~0.5-1 s each,
+            # five per query) are not; SISTER_PAGE_LOG_FAST=false brings them back for debugging a flow
+            self.step += 1
+            await self._record(page, step_name, None)
+            return
         await super().log(page, step_name)
         screenshot_url = None
         try:
@@ -42,6 +125,9 @@ class PageLogger(_BasePageLogger):
         except Exception as e:
             log.debug("Screenshot save failed: %s", e)
 
+        await self._record(page, step_name, screenshot_url)
+
+    async def _record(self, page: Page, step_name: str, screenshot_url: str | None) -> None:
         # Collect page metadata — only extract form elements on form_compilato steps
         try:
             if page and not page.is_closed():
@@ -359,12 +445,14 @@ async def _rank_option_matches(page, selector, search_text):
         text = (await option.inner_text()).strip()
         if not value or not text:
             continue
-        value, text = str(value).strip(), str(text).strip()
+        # The value is returned as the portal wrote it (NAZIONALE is " NAZIONALE-IT", with a leading space, and
+        # select_option needs exactly that); only the comparisons use the trimmed form.
+        value, text = str(value), str(text).strip()
         # A suppressed cadastral record must never be selected, even when its label is an exact match.
         if "soppress" in f"{value} {text}".lower():
             continue
 
-        text_upper, value_upper = text.upper(), value.upper()
+        text_upper, value_upper = text.upper(), value.strip().upper()
         if requested_upper == value_upper or requested_upper == text_upper:
             log.debug("Exact option match: '%s' -> '%s'", text, value)
             return value, []
@@ -600,7 +688,7 @@ async def _wait_for_captcha(page, timeout: int = 120):
 
 
 # What SISTER shows after "Inoltra" (checked against the saved pages in logs/pages: 381 accepted, 1 rejected):
-#   accepted -> page "Attesa": ``Codice di Richiesta: C00075022026`` + ``Richiesta inoltrata: Verificare i risultati ...``
+#   accepted -> page "Attesa": ``Codice di Richiesta: C<request-id>`` + ``Richiesta inoltrata: Verificare i risultati ...``
 #   The "Codice di Richiesta" is the same for every request of an account/year (it is not a request id): the id of a
 #   request is the ``id_richiesta`` of its row in "Richieste", which the download step reads.
 #   rejected -> the "Tipo di visura" form again, ``Digitare correttamente il codice di sicurezza``, CAPTCHA still there
@@ -1110,8 +1198,7 @@ async def run_visura(
     except Exception as e:
         raise Exception(f"Errore selezione provincia '{provincia_value}': {e}")
 
-    await page.locator("input[type='submit'][value='Applica']").click()
-    await page.wait_for_load_state("networkidle", timeout=30000)
+    await _click_nav(page, page.locator("input[type='submit'][value='Applica']"), 30000)
     await page_logger.log(page, "provincia_applicata")
 
     # STEP 2: Ricerca per immobili
@@ -1680,6 +1767,9 @@ async def _download_richieste_documents(
             elif file_format == "PDF":
                 parsed = _parse_visura_pdf(temp_path)
 
+            if file_ext == ".dat":
+                parsed = {"tipo": "elenco_immobili"}
+
             canonical_stem = _descriptive_filename(
                 parsed or {}, oggetto=oggetto, request_id=id_richiesta, requested_at=richiesta_del
             )
@@ -1832,7 +1922,7 @@ def _descriptive_filename(parsed: dict, *, oggetto: str = "", request_id: str = 
     """Return the canonical SISTER basename for a downloaded document.
 
     Property example: ``vi_sto_PA_FG134_PT122_SUB21``
-    Subject example: ``vs_sin_FRSLSE77B54E730C_RA_CE``: the queried province (and the comune code when the query
+    Subject example: ``vs_sin_<cf>_RA_CE``: the queried province (and the comune code when the query
     was limited to one) separates the results of different offices for the same person. The cadastre is always
     named: ``CE`` both (the default when the document does not say), ``CF`` buildings, ``CT`` land. A
     storica/sintetica visura whose "situazione al" date is not the request date adds it (``..._CE_al2022-06-04``).
@@ -2534,6 +2624,7 @@ async def _save_documents_to_db(documents: list[dict]) -> None:
 
     from .database import _get_session_factory, is_db_writable
     from .db_models import Document, DocumentContent
+    from .document_scope import subject_search_scope
     from .reference import clean, ensure_lookup, get_or_create_cadastral_unit
     from .result_parsers import parse_it_date, parse_it_datetime
 
@@ -2594,6 +2685,11 @@ async def _save_documents_to_db(documents: list[dict]) -> None:
                     continue
 
             xml_content = parsed.get("xml_content")
+            search_scope = (
+                subject_search_scope(file_name, request_province=parsed.get("provincia"))
+                if doc_type == "visura_soggetto"
+                else None
+            )
             unit_id = None
             if xml_content or foglio or particella:
                 unit_id = await get_or_create_cadastral_unit(
@@ -2616,6 +2712,12 @@ async def _save_documents_to_db(documents: list[dict]) -> None:
                 cadastral_unit_id=unit_id,
                 view_subtype=clean(parsed.get("visura_subtype")),
                 reference_date=reference_date,
+                subject_search_scope=(
+                    search_scope["search_scope"]
+                    if search_scope and search_scope["search_scope"] != "unknown"
+                    else None
+                ),
+                subject_search_province=(search_scope["search_province"] or None) if search_scope else None,
             )
             session.add(row)
             await session.flush()  # get row.id before creating children
@@ -2778,14 +2880,10 @@ async def _search_soggetto(
         prov_label,
     )
 
-    # STEP 1-2: Cambia Ufficio → NAZIONALE (or the given province)
-    await _set_office(page, page_logger, provincia)
-
-    # STEP 3: Click "Persona fisica" in the left menu
+    # STEP 1-3: Cambia Ufficio → NAZIONALE (or the given province) and the "Persona fisica" form; the office already
+    # applied by the previous query is kept and the form is reached from the left menu of the current page
     log.info("Navigando a Persona fisica...")
-    await page.get_by_role("link", name="Persona fisica").click()
-    await page.wait_for_load_state("networkidle", timeout=30000)
-    await page_logger.log(page, "persona_fisica")
+    await _open_search_form(page, page_logger, provincia, "Persona fisica")
 
     # STEP 4: Select tipo catasto
     log.info("Tipo catasto: [cyan]%s[/cyan]", tipo_catasto)
@@ -2831,6 +2929,7 @@ async def _search_soggetto(
             await motivo_field.fill(motivo)
 
     await _apply_form_fields(page)
+    await _select_tipo_richiesta(page)
 
     # STEP 6: Submit search
     await page_logger.log(page, "form_compilato")
@@ -2838,12 +2937,20 @@ async def _search_soggetto(
     ricerca_btn = page.locator("input[name='ricerca'][value='Ricerca']")
     if await ricerca_btn.count() == 0:
         ricerca_btn = page.locator("input[type='submit'][value='Ricerca']")
-    await ricerca_btn.click()
-    await page.wait_for_load_state("networkidle", timeout=60000)
+    await _click_nav(page, ricerca_btn)
     await page_logger.log(page, "risultati_soggetto")
 
     # STEP 7: Check for errors
     page_text = await page.inner_text("body")
+    if "Codice Fiscale non valido" in page_text:
+        # SISTER asks "si vuole continuare ugualmente?": a wrong check digit never matches a subject, so do not confirm
+        log.warning("Codice fiscale non valido secondo SISTER: %s", codice_fiscale)
+        return {
+            "soggetto": codice_fiscale,
+            "immobili": [],
+            "total_results": 0,
+            "error": f"{NO_MATCH_ERROR} (codice fiscale non valido secondo SISTER)",
+        }
     if "NESSUNA CORRISPONDENZA TROVATA" in page_text:
         elapsed = time.time() - time0
         log.warning("Nessuna corrispondenza trovata (%.1fs)", elapsed)
@@ -2950,14 +3057,9 @@ async def run_visura_persona_giuridica(
         prov_label,
     )
 
-    # STEP 1-2: Cambia Ufficio → NAZIONALE (or the given province)
-    await _set_office(page, page_logger, provincia)
-
-    # STEP 3: Click "Persona giuridica" in the left menu
+    # STEP 1-3: Cambia Ufficio → NAZIONALE (or the given province) and the "Persona giuridica" form (see _search_soggetto)
     log.info("Navigando a Persona giuridica...")
-    await page.get_by_role("link", name="Persona giuridica").click()
-    await page.wait_for_load_state("networkidle", timeout=30000)
-    await page_logger.log(page, "persona_giuridica")
+    await _open_search_form(page, page_logger, provincia, "Persona giuridica")
 
     # STEP 4: Select tipo catasto
     try:
@@ -3010,6 +3112,7 @@ async def run_visura_persona_giuridica(
             await motivo_field.fill(motivo)
 
     await _apply_form_fields(page)
+    await _select_tipo_richiesta(page)
 
     # STEP 6: Submit
     await page_logger.log(page, "form_compilato")
@@ -3085,8 +3188,7 @@ async def run_elenco_immobili(
         raise Exception(f"Provincia '{provincia}' non trovata")
 
     await page.locator("select[name='listacom']").select_option(provincia_value)
-    await page.locator("input[type='submit'][value='Applica']").click()
-    await page.wait_for_load_state("networkidle", timeout=30000)
+    await _click_nav(page, page.locator("input[type='submit'][value='Applica']"), 30000)
     await page_logger.log(page, "provincia_applicata")
 
     # STEP 2: Click "Elenco immobili" in the left menu
@@ -3241,12 +3343,70 @@ async def _set_office(page, page_logger, office=None, navigate=True) -> str:
         raise Exception(f"Provincia '{office}' non trovata" if office else "Opzione NAZIONALE non trovata")
     await page.locator("select[name='listacom']").select_option(value)
     label = await page.locator("select[name='listacom']").evaluate("el => el.options[el.selectedIndex].text")
-    await page.locator("input[type='submit'][value='Applica']").click()
-    await page.wait_for_load_state("networkidle", timeout=30000)
+    _OFFICE_APPLIED.pop(page, None)  # unknown until the portal has accepted and shown it
+    await _click_nav(page, page.locator("input[type='submit'][value='Applica']"), 30000)
     await page_logger.log(page, "provincia_applicata")
     await _verify_office(page, label)
+    _OFFICE_APPLIED[page] = wanted.strip().upper()
     log.info("Ufficio: [cyan]%s[/cyan] (%s)", label.strip(), "nazionale" if not office else "provinciale")
     return label.strip()
+
+
+# The office SISTER applied to this tab. It stays on the server for the whole session and the left menu is on every page of
+# a flow, so the next query of the same level starts from the page it is on instead of going back to SceltaServizio.
+_OFFICE_APPLIED: "weakref.WeakKeyDictionary[Page, str]" = weakref.WeakKeyDictionary()
+_DEAD_PAGE_MARKERS = ("login.jsp", "sessione_scaduta", "Logout", "about:blank")
+
+
+def _on_live_sister_page(url: str) -> bool:
+    """The tab shows a page of the logged-in SISTER area (not the login, the expired-session or an empty page)."""
+    return "sister3.agenziaentrate.gov.it" in url and not any(marker in url for marker in _DEAD_PAGE_MARKERS)
+
+
+async def _open_search_form(page, page_logger, office, menu_link: str) -> None:
+    """Open the search form of a left-menu service (``Persona fisica``, ``Persona giuridica``).
+
+    When the wanted office is already applied and the tab is on a live SISTER page, the menu link is clicked right where
+    the previous query ended: one page load. Otherwise (first query, other office, expired or reloaded session, form not
+    shown) it starts from the beginning: SceltaServizio → Cambia Ufficio → menu link.
+    """
+    await _cache_static_assets(page)
+    page.set_default_timeout(ACTION_TIMEOUT_MS)  # a form that has not answered in this time will not: fail and retry the row later
+    wanted = (office or "NAZIONALE").strip().upper()
+    link = page.get_by_role("link", name=menu_link)
+    if _OFFICE_APPLIED.get(page) == wanted and _on_live_sister_page(page.url) and await link.count() > 0:
+        try:
+            await link.first.click()
+            # Wait for the form itself. A load-state wait returns at once on the page that is being left (the click only starts
+            # the navigation), and counting the select right then found none: the full path was started on top of the
+            # navigation still in flight and the tab ended on SceltaServizio (about one search in six, 2026-10-26).
+            await page.locator("select[name='tipoCatasto']").first.wait_for(state="attached", timeout=ACTION_TIMEOUT_MS)
+            await _settle(page, 30000)
+            await page_logger.log(page, menu_link.lower().replace(" ", "_"))
+            log.debug("Modulo '%s' aperto dal menu (ufficio %s gia' applicato)", menu_link, wanted)
+            return
+        except Exception as exc:
+            log.debug("Menu '%s' non utilizzabile (%s): riparto da Scelta Servizio", menu_link, exc)
+        _OFFICE_APPLIED.pop(page, None)
+    # already on SceltaServizio (the session check lands there): apply the office without loading the page a second time
+    on_scelta = "SceltaServizio.do" in page.url and await page.locator("select[name='listacom'] option").count() > 1
+    for attempt in (1, 2):
+        try:
+            await _set_office(page, page_logger, office, navigate=not on_scelta)
+            await _click_nav(page, page.get_by_role("link", name=menu_link), ACTION_TIMEOUT_MS)
+            await page.locator("select[name='tipoCatasto']").first.wait_for(state="attached", timeout=ACTION_TIMEOUT_MS)
+            break
+        except Exception as exc:
+            # Seen on 1 search in 3 on 2026-10-26: after "Applica" the portal answers with SceltaServizio again and the menu link
+            # never opens the form. The same steps repeated from a fresh SceltaServizio work, so one more try is made here (about
+            # 15 s) instead of failing the row and redoing the whole search later.
+            if attempt == 2:
+                raise
+            log.warning("Modulo '%s' non aperto (%s): secondo tentativo da Scelta Servizio", menu_link, str(exc).split("\n")[0][:120])
+            _OFFICE_APPLIED.pop(page, None)
+            on_scelta = False
+    await _settle(page, 30000)
+    await page_logger.log(page, menu_link.lower().replace(" ", "_"))
 
 
 async def _navigate_select_province_and_click(page, page_logger, provincia, menu_link_name):
@@ -3366,6 +3526,28 @@ async def _apply_form_fields(page, page_no: int = 1) -> None:
                 await _set_control(page, by_param[mode_param], mode_value)
                 chosen[mode_param] = mode_value
         await _set_control(page, fld, value)
+
+
+_TIPO_RICHIESTA_VALUES = {"attualita": "A", "attualità": "A", "a": "A", "storica": "S", "s": "S"}
+
+
+async def _select_tipo_richiesta(page, value=None) -> None:
+    """Choose "Tipo richiesta" (Attualità / Storica) of a subject search form.
+
+    ``value`` comes from the request (``tipo_richiesta`` form field). Without one the portal's own default (Attualità) stays.
+    A value the form cannot take raises: answering with Attualità when Storica was asked for would be a wrong result.
+    """
+    value = value if value not in (None, "") else current_form_fields().get("tipo_richiesta")
+    if value in (None, ""):
+        return
+    raw = _TIPO_RICHIESTA_VALUES.get(str(value).strip().lower())
+    if raw is None:
+        raise Exception(f"Tipo richiesta '{value}' non valido (attualita | storica)")
+    radio = page.locator(f"input[type='radio'][name='tipo_richiesta'][value='{raw}']")
+    if await radio.count() == 0:
+        raise Exception(f"Tipo richiesta '{value}' non disponibile in questo modulo (nessun controllo 'Tipo richiesta')")
+    await radio.first.check()
+    log.info("Tipo richiesta: [cyan]%s[/cyan]", "Storica" if raw == "S" else "Attualità")
 
 
 async def _fill_richiedente_motivo(page, motivo="Esplorazione", per_conto_di=None, sezione_urbana=None):
@@ -4644,8 +4826,7 @@ async def run_visura_immobile(
 
     log.info("Provincia: [cyan]%s[/cyan]", provincia_value)
     await page.locator("select[name='listacom']").select_option(provincia_value)
-    await page.locator("input[type='submit'][value='Applica']").click()
-    await page.wait_for_load_state("networkidle", timeout=30000)
+    await _click_nav(page, page.locator("input[type='submit'][value='Applica']"), 30000)
     await page_logger.log(page, "provincia_applicata")
 
     # STEP 2: Ricerca per immobili
@@ -4880,6 +5061,9 @@ async def run_visura_storica(
 
 _SOGGETTO_STORICA_VALUES = {"analitica": "0", "sintetica": "5"}
 _PROVINCE_RADIOS = "input[type='radio'][name='omonimonazionale'], input[type='radio'][property='omonimonazionale']"
+NO_MATCH_ERROR = "NESSUNA CORRISPONDENZA TROVATA"
+# why the last search of a tab found no subject (SISTER's own answer, kept to report it as it is)
+_SEARCH_ERROR: "weakref.WeakKeyDictionary[Page, str]" = weakref.WeakKeyDictionary()
 
 
 async def _open_soggetto_province_page(page, identifier, tipo_catasto, provincia, azienda=False) -> bool:
@@ -4893,13 +5077,21 @@ async def _open_soggetto_province_page(page, identifier, tipo_catasto, provincia
     else:
         found = await _search_soggetto(page, identifier, tipo_catasto=tipo_catasto, provincia=provincia)
     if found.get("error"):
+        _SEARCH_ERROR[page] = found["error"]
         return False
     # SceltaOmonimi rejects the submit ("Selezionare un Omonimo") unless one homonym is selected
     omonimo = page.locator("input[type='radio'][name='omonimoSelezionato']")
     if await omonimo.count() > 0:
         await omonimo.first.check()
-    await page.locator("input[name='visura'][value='Ricerca']").click()
-    await page.wait_for_load_state("networkidle", timeout=60000)
+    ricerca = page.locator("input[name='visura'][value='Ricerca']")
+    if await ricerca.count() == 0:
+        if await page.locator("input[name='immobili'][value='Immobili']").count() > 0:
+            return True  # no homonym step for this subject: the province table is already shown
+        # neither page: say what is there instead of waiting 30 s for a button that never comes
+        text = re.sub(r"\s+", " ", await page.inner_text("body"))
+        text = text.split("Dati della ricerca")[-1].strip()[:1200]
+        raise Exception(f"Pagina inattesa dopo la ricerca ({page.url}): {text}")
+    await _click_nav(page, ricerca)
     return True
 
 
@@ -5007,6 +5199,29 @@ async def _extract_owners(page) -> list[dict]:
     return owners
 
 
+def _province_elenco(rows: list) -> list[dict]:
+    """The "Elenco Province" table (provincia, fabbricati, terreni) of a subject, with the province code of its radio."""
+
+    def count(value) -> int:
+        digits = re.sub(r"\D", "", str(value or ""))
+        return int(digits) if digits else 0
+
+    elenco = []
+    for row in rows:
+        if not isinstance(row, dict) or not row.get("Provincia"):
+            continue
+        codice, _, _ = str(row.get("omonimonazionale") or "").partition("#")
+        elenco.append(
+            {
+                "provincia": str(row["Provincia"]).strip(),
+                "codice": codice.strip(),
+                "fabbricati": count(row.get("Fabbricati")),
+                "terreni": count(row.get("Terreni")),
+            }
+        )
+    return elenco
+
+
 async def run_soggetto_immobili(
     page, codice_fiscale, tipo_catasto="E", provincia=None, con_intestati=False, azienda=False
 ):
@@ -5025,12 +5240,12 @@ async def run_soggetto_immobili(
     time0 = time.time()
     page_logger = PageLogger("soggetto_immobili")
     immobili: list[dict] = []
+    province_elenco: list[dict] = []
     index = 0
     n_province = None
 
-    async def open_list(idx):
-        if not await _open_soggetto_province_page(page, codice_fiscale, tipo_catasto, provincia, azienda=azienda):
-            return None
+    async def pick_province(idx):
+        """On the "Elenco Province" page: select province ``idx`` and open its Immobili list."""
         radios_prov = page.locator(_PROVINCE_RADIOS)
         count = await radios_prov.count()
         label, nome = "-", ""
@@ -5038,18 +5253,36 @@ async def run_soggetto_immobili(
             pick = radios_prov.nth(min(idx, count - 1))
             await pick.check()
             label, _, nome = (await pick.get_attribute("value") or "").partition("#")
-        await page.locator("input[name='immobili'][value='Immobili']").click()
-        await page.wait_for_load_state("networkidle", timeout=60000)
+        await _click_nav(page, page.locator("input[name='immobili'][value='Immobili']"))
         return (label, nome.strip()), max(count, 1)
 
+    async def open_list(idx, from_list=False):
+        """Open the Immobili list of province ``idx``.
+
+        ``from_list``: the tab is on the Immobili list of the previous province, so *Indietro* returns to the province
+        table (one page load) and the search is not repeated. Anything unexpected falls back to the full search.
+        """
+        if from_list:
+            back = page.locator("input[type='submit'][name='indietro']")
+            if await back.count() > 0:
+                await _click_nav(page, back.first)
+                if await page.locator(_PROVINCE_RADIOS).count() > 0:
+                    return await pick_province(idx)
+        if not await _open_soggetto_province_page(page, codice_fiscale, tipo_catasto, provincia, azienda=azienda):
+            return None
+        if not province_elenco:
+            province_elenco.extend(_province_elenco(_extract_result_tables(await page.content())))
+        return await pick_province(idx)
+
     while True:
-        opened = await open_list(index)
+        opened = await open_list(index, from_list=index > 0)
         if opened is None:
             return {
                 "soggetto": codice_fiscale,
+                "province": [],
                 "immobili": [],
                 "total_results": 0,
-                "error": "NESSUNA CORRISPONDENZA TROVATA",
+                "error": _SEARCH_ERROR.pop(page, NO_MATCH_ERROR),
                 "page_visits": page_logger.page_visits,
             }
         (label, provincia_nome), count = opened
@@ -5081,13 +5314,11 @@ async def run_soggetto_immobili(
                     button = page.locator("input[name='intestati'][value='Intestati']")
                     if await button.count() == 0:
                         continue  # e.g. bene comune non censibile
-                    await button.click()
-                    await page.wait_for_load_state("networkidle", timeout=60000)
+                    await _click_nav(page, button)
                     row["intestati"] = await _extract_owners(page)
                     back = page.locator("input[type='submit'][name='indietro']")
                     if await back.count() > 0:
-                        await back.first.click()
-                        await page.wait_for_load_state("networkidle", timeout=60000)
+                        await _click_nav(page, back.first)
                     if await page.locator(list_radios).count() == 0:
                         await open_list(index)
                 except Exception as e:
@@ -5103,6 +5334,7 @@ async def run_soggetto_immobili(
     log.info("[green]Immobili soggetto[/green] %s: %d in %.1fs", codice_fiscale, len(immobili), time.time() - time0)
     return {
         "soggetto": codice_fiscale,
+        "province": province_elenco,
         "immobili": immobili,
         "total_results": len(immobili),
         "page_visits": page_logger.page_visits,

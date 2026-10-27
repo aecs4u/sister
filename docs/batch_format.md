@@ -25,7 +25,7 @@ structure (see the end).
     { "id": "ts-9-166",
       "params": { "provincia": "Trieste", "comune": "TRIESTE", "foglio": 9, "particella": 166 },
       "metadata": { "source_files": "vi_att_TS_FG9_PT166.pdf" } },
-    { "command": "soggetto", "params": { "codice_fiscale": "RSSMRA85M01H501Z", "tipo_catasto": null } }
+    { "command": "soggetto", "params": { "codice_fiscale": "CODICE_FISCALE_ESEMPIO", "tipo_catasto": null } }
   ]
 }
 ```
@@ -129,3 +129,9 @@ column that is not a parameter of the row's command is kept as `metadata` (`sour
 Same validation, journal and resume as JSON. Two behaviour changes from the first CSV batch: an invalid row now stops
 the run before anything is sent (it used to be reported while the rest ran; `--skip-invalid` restores that), and the
 exit code is 1 when a row failed.
+
+## Fabbricati e Terreni
+
+`soggetto`, `soggetto-immobili` and `soggetto-documento` search both (`tipo_catasto` `E`) when the row gives none; the other generic queries
+default to `T`. A row that must cover both should still say `"tipo_catasto": "E"`: `scripts/run_in_session.py` writes it into
+`soggetto-immobili` rows when it prunes a plan. A "nessuna corrispondenza" answers only for the type that was searched.

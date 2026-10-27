@@ -13,14 +13,14 @@ import os
 import re
 from dataclasses import dataclass
 from dataclasses import field as dc_field
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Iterable, Optional
 from zoneinfo import ZoneInfo
 
 from dotenv import load_dotenv
-from sqlalchemy import delete, func, inspect, or_, text
+from sqlalchemy import String, and_, cast, delete, distinct, func, inspect, or_, text
 from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import aliased, sessionmaker
@@ -33,22 +33,34 @@ from .db_models import (
     ActivityLog,
     ActivityLogAttribute,
     ActivityLogPayload,
+    CalculationSnapshot,
     CadastralUnit,
     Document,
     DocumentContent,
     DocumentExtraction,
+    DocumentExtractionPayload,
+    DocumentFavorite,
     IstatMunicipality,
+    ManualPropertyValuation,
     MortgageInspection,
     MortgageInspectionParty,
     MortgageInspectionProperty,
     OwnershipRight,
+    PropertyAffrancationAmount,
+    PropertyOmiOverride,
+    PropertyOmiSelection,
     PageVisit,
     PageVisitError,
     PageVisitFormElement,
+    PropertyActualSize,
     Property,
+    PropertyValuationPreference,
     Request,
     RequestPayload,
+    RequestProvince,
     RequestResult,
+    RequestType,
+    RequestTypeTag,
     ResultOwner,
     RightKind,
     Subject,
@@ -66,6 +78,7 @@ from .reference import (
     get_or_create_subject,
     place_name,
 )
+from .request_types import request_type_info
 from .result_parsers import (
     clean_amount,
     format_amount_it,
@@ -97,7 +110,7 @@ DATABASE_SCHEMA = os.getenv("DATABASE_SCHEMA", "sister")
 DATABASE_ISTAT_SCHEMA = os.getenv("DATABASE_ISTAT_SCHEMA", "istat")
 # raw payloads (response JSON, XML tree, extraction JSON) live in their own schema; tests point it at a throwaway one
 DATABASE_ARCHIVE_SCHEMA = os.getenv("DATABASE_ARCHIVE_SCHEMA", "sister_archive")
-DATABASE_REVISION = "20261030_request_jobs_fk"
+DATABASE_REVISION = "20261112_property_actual_size"
 
 # ---------------------------------------------------------------------------
 # Engine and session
@@ -176,7 +189,16 @@ async def init_db() -> None:
             "request_result",
             "property",
             "result_owner",
+            "request_type_tag",
             "document",
+            "document_favorite",
+            "manual_property_valuation",
+            "property_valuation_preference",
+            "property_affrancation_amount",
+            "property_omi_override",
+            "property_omi_selection",
+            "property_actual_size",
+            "calculation_snapshot",
             "document_subject",
             "property_group",
             "building_unit",
@@ -700,6 +722,7 @@ def _property_row(
         place = parse_ubicazione(item["Ubicazione"])
         prop_fields.setdefault("address", place.get("address") or None)
         loc_fields["municipality"] = loc_fields["municipality"] or place.get("municipality", "")
+        loc_fields["section"] = loc_fields["section"] or place.get("section", "")
     if item.get("Classamento"):
         for column_name, value in parse_classamento(item["Classamento"]).items():
             prop_fields.setdefault(column_name, value)
@@ -949,6 +972,8 @@ async def _property_columns(session: AsyncSession, prop: dict[str, Any]) -> dict
         "cadastral_class": normalize_class(prop.get("cadastral_class")),
         "consistency_value": consistency_value,
         "consistency_unit": consistency_unit,
+        "consistency_sqm": consistency_value if consistency_unit == "MQ" else None,
+        "consistency_rooms": consistency_value if consistency_unit == "VANI" else None,
         "census_zone": clean(prop.get("census_zone")),
         "land_quality": quality,
         "area_sqm": area,
@@ -961,7 +986,7 @@ async def _property_columns(session: AsyncSession, prop: dict[str, Any]) -> dict
 
 async def _replace_projection(session: AsyncSession, request_pk: int, tipo_catasto: str, data: Optional[dict]) -> None:
     """Rebuild the structured rows of one response from its JSON (results, properties, owners, document links)."""
-    for table_name in ("result_owner", "property", "request_result"):
+    for table_name in ("result_owner", "property", "request_result", "request_province"):
         await session.execute(text(f"DELETE FROM {table_name} WHERE request_id = :rid"), {"rid": request_pk})  # noqa: S608
     # the request's own unit supplies the province/municipality a row of the list does not carry
     unit = (
@@ -977,7 +1002,34 @@ async def _replace_projection(session: AsyncSession, request_pk: int, tipo_catas
         )
     ).first()
     await _persist_projection(session, request_pk, tipo_catasto, data, unit)
+    await _persist_provinces(session, request_pk, data)
     await _link_documents(session, request_pk, data)
+
+
+async def _persist_provinces(session: AsyncSession, request_pk: int, data: Optional[dict]) -> None:
+    """Write the "Elenco Province" table of a subject search (``data["province"]``): where the subject has assets."""
+    rows = data.get("province") if isinstance(data, dict) else None
+    if not rows:
+        return
+    fiscal_code = str(data.get("soggetto") or "").strip().upper() or None
+    subject_id = None
+    if fiscal_code:
+        subject_id = (await session.execute(select(Subject.id).where(Subject.fiscal_code == fiscal_code))).scalar_one_or_none()
+    for index, row in enumerate((r for r in rows if isinstance(r, dict) and r.get("provincia")), start=1):
+        code = str(row.get("codice") or "").strip().upper()
+        session.add(
+            RequestProvince(
+                request_id=request_pk,
+                province_index=index,
+                subject_id=subject_id,
+                fiscal_code=fiscal_code,
+                province_code=code if re.fullmatch(r"[A-Z]{2}", code) else None,
+                province_name=str(row["provincia"]).strip(),
+                buildings_count=int(row.get("fabbricati") or 0),
+                land_parcels_count=int(row.get("terreni") or 0),
+            )
+        )
+    await session.flush()
 
 
 async def backfill_projections(limit: Optional[int] = None, batch: int = 50) -> dict[str, int]:
@@ -1278,6 +1330,18 @@ def _province_label(code: Optional[str]) -> str:
     return province_name(code) or code or ""
 
 
+def _join_result_values(values: Any, *, province_labels: bool = False) -> str:
+    """Format distinct aggregate values for the result list, including multi-property subject searches."""
+    if values is None:
+        return ""
+    if isinstance(values, str):
+        values = [values]
+    items = sorted({str(value).strip() for value in values if value is not None and str(value).strip()}, key=str.casefold)
+    if province_labels:
+        items = [_province_label(value) for value in items]
+    return " · ".join(dict.fromkeys(items))
+
+
 def _municipality_name(municipality: Optional[IstatMunicipality]) -> Optional[str]:
     """Return the Italian municipality name in the uppercase form used by SISTER results."""
     name = (municipality.italian_name or municipality.name or "").strip() if municipality else ""
@@ -1325,6 +1389,13 @@ async def get_db_properties_for_response(request_id: str) -> list[dict]:
             "category": prop.category,
             "cadastral_class": prop.cadastral_class,
             "consistency": format_consistency(prop.consistency_value, prop.consistency_unit),
+            "consistency_sqm": format_amount_it(prop.consistency_sqm),
+            "consistency_rooms": format_amount_it(prop.consistency_rooms),
+            "consistency_other": (
+                format_consistency(prop.consistency_value, prop.consistency_unit)
+                if prop.consistency_value is not None and prop.consistency_unit not in {"MQ", "VANI", "VANO"}
+                else None
+            ),
             "income": format_amount_it(prop.income_eur),
             "census_zone": prop.census_zone,
             "quality": prop.land_quality,
@@ -1340,6 +1411,9 @@ async def get_db_properties_for_response(request_id: str) -> list[dict]:
             "subject_municipality": _municipality_name(seat),
             "province": (_province_label(comune.province_abbreviation) or None) if comune else None,
             "municipality": _municipality_name(comune),
+            "comune_id": unit.comune_id if unit else None,
+            "municipality_code": (comune.cadastral_code or "").strip().upper() or None if comune else None,
+            "province_code": (comune.province_abbreviation or "").strip().upper() or None if comune else None,
             "sheet": unit.sheet if unit else None,
             "parcel": unit.parcel if unit else None,
             "subunit": unit.subunit if unit else None,
@@ -1397,10 +1471,18 @@ def _format_requested(value: Optional[datetime]) -> Optional[str]:
 def _document_record(doc: Document, unit: Optional[CadastralUnit], comune: Optional[IstatMunicipality], *, request_ref: Optional[str] = None,
                      content: Optional[str] = None) -> dict[str, Any]:
     """One document + its cadastral unit as the dict the document pages and the browse list use."""
+    filename = doc.file_name or ""
+    document_type = doc.document_type
+    if filename.casefold().endswith(".dat"):
+        document_type = "elenco_immobili"
+    elif filename.casefold().startswith("isp_"):
+        document_type = "ispezione_ipotecaria"
+    elif filename.casefold().startswith("el_sub_"):
+        document_type = "elenco_subalterni"
     return {
         "id": doc.id,
         "response_id": request_ref,
-        "document_type": "ispezione_ipotecaria" if (doc.file_name or "").casefold().startswith("isp_") else doc.document_type,
+        "document_type": document_type,
         "file_format": doc.file_format,
         "filename": doc.file_name,
         "file_path": document_file_path(doc.file_name),
@@ -1416,6 +1498,10 @@ def _document_record(doc: Document, unit: Optional[CadastralUnit], comune: Optio
         "tipo_catasto": unit.cadastre_type if unit else None,
         "visura_subtype": doc.view_subtype,
         "situazione_al": format_it_date(doc.reference_date) or None,
+        "protocollo": doc.protocol or None,
+        "protocollo_anno": doc.protocol_year,
+        "subject_search_scope": doc.subject_search_scope,
+        "subject_search_province": doc.subject_search_province,
         "xml_content": content or "",
         "created_at": doc.created_at.isoformat() if doc.created_at else None,
     }
@@ -1555,6 +1641,174 @@ async def get_document_by_id(doc_id: int) -> dict | None:
     return _document_record(doc, unit, comune, request_ref=ref, content=content)
 
 
+def parcel_key(comune_id: Any, section: Any, sheet: Any, parcel: Any) -> tuple[int, str, str, str] | None:
+    """Comparable key of a parcel: comune, sezione and foglio/particella without leading zeros (``0060`` == ``60``)."""
+    if comune_id is None or not str(sheet or "").strip() or not str(parcel or "").strip():
+        return None
+    return (
+        int(comune_id),
+        str(section or "").strip().upper(),
+        str(sheet).strip().lstrip("0") or "0",
+        str(parcel).strip().lstrip("0") or "0",
+    )
+
+
+async def _parcel_key_rows(sql: str, keys: Iterable[tuple[int, str, str, str]]) -> list[Any]:
+    """Run ``sql`` joined to the parcel keys (``k.comune_id/section/sheet/parcel``); no keys, no query."""
+    unique = sorted(set(keys))
+    if not unique:
+        return []
+    params = {
+        "c": [k[0] for k in unique],
+        "s": [k[1] for k in unique],
+        "f": [k[2] for k in unique],
+        "p": [k[3] for k in unique],
+    }
+    stmt = text(
+        "WITH k(comune_id, section, sheet, parcel) AS ("
+        "SELECT * FROM unnest(CAST(:c AS integer[]), CAST(:s AS text[]), CAST(:f AS text[]), CAST(:p AS text[]))) " + sql
+    )
+    async with _get_session_factory()() as session:
+        return list((await session.execute(stmt, params)).all())
+
+
+async def find_parcel_document_ids(keys: Iterable[tuple[int, str, str, str]]) -> dict[tuple, set[int]]:
+    """Document ids (visure, planimetrie, ispezioni, …) stored for each parcel key (matched on the unit's parcel)."""
+    rows = await _parcel_key_rows(
+        "SELECT v.document_id, k.comune_id, k.section, k.sheet, k.parcel FROM v_document_cadastral_unit v "
+        "JOIN k ON v.comune_id = k.comune_id AND upper(coalesce(v.section, '')) = k.section "
+        "AND coalesce(nullif(ltrim(v.sheet, '0'), ''), '0') = k.sheet "
+        "AND coalesce(nullif(ltrim(v.parcel, '0'), ''), '0') = k.parcel",
+        keys,
+    )
+    found: dict[tuple, set[int]] = {}
+    for document_id, comune_id, section, sheet, parcel in rows:
+        found.setdefault((comune_id, section, sheet, parcel), set()).add(int(document_id))
+    return found
+
+
+async def find_parcel_request_records(keys: Iterable[tuple[int, str, str, str]]) -> dict[tuple, list[dict]]:
+    """Completed or pending SISTER requests saved against each parcel key.
+
+    Some useful parcel products, including cadastral inspections and map queries, are stored as
+    request responses rather than as ``Document`` rows. Keep those links alongside the archived
+    files in the subject parcel view.
+    """
+    rows = await _parcel_key_rows(
+        "SELECT r.request_ref, r.request_type, r.created_at, r.responded_at, r.success, r.total_results, "
+        "k.comune_id, k.section, k.sheet, k.parcel "
+        "FROM k JOIN cadastral_unit cu ON cu.comune_id = k.comune_id "
+        "AND upper(coalesce(cu.section, '')) = k.section "
+        "AND coalesce(nullif(ltrim(cu.sheet, '0'), ''), '0') = k.sheet "
+        "AND coalesce(nullif(ltrim(cu.parcel, '0'), ''), '0') = k.parcel "
+        "JOIN request r ON r.cadastral_unit_id = cu.id "
+        "WHERE lower(replace(coalesce(r.request_type, ''), '-', '_')) IN "
+        "('ispezioni', 'ispezioni_cart', 'ispezioni_cartacee', 'mappa', 'export_mappa', 'fiduciali') "
+        "ORDER BY r.created_at DESC",
+        keys,
+    )
+    found: dict[tuple, list[dict]] = {}
+    for request_ref, request_type, created_at, responded_at, success, total_results, comune_id, section, sheet, parcel in rows:
+        key = (comune_id, section, sheet, parcel)
+        found.setdefault(key, []).append(
+            {
+                "request_id": request_ref,
+                "request_type": request_type or "",
+                "requested_at": created_at,
+                "responded_at": responded_at,
+                "success": success,
+                "total_results": total_results,
+            }
+        )
+    return found
+
+
+async def find_parcels_with_geometry(keys: Iterable[tuple[int, str, str, str]]) -> set[tuple]:
+    """Parcel keys that have a cached cadastral geometry (a map can be drawn without downloading anything)."""
+    rows = await _parcel_key_rows(
+        "SELECT DISTINCT k.comune_id, k.section, k.sheet, k.parcel FROM parcel_geometry_cache g "
+        "JOIN k ON g.comune_id = k.comune_id AND upper(coalesce(g.section, '')) = k.section "
+        "AND coalesce(nullif(ltrim(g.sheet, '0'), ''), '0') = k.sheet "
+        "AND coalesce(nullif(ltrim(g.parcel, '0'), ''), '0') = k.parcel",
+        keys,
+    )
+    return {tuple(row) for row in rows}
+
+
+async def get_comune_centroids(cadastral_codes: Iterable[str]) -> dict[str, tuple[float, float]]:
+    """Approximate (latitude, longitude) of comuni for parcels without their own map geometry.
+
+    Prefer the centre of cached cadastral geometries, then fall back to the ISTAT municipality coordinates. These are
+    placement hints for a parcel without an outline, not surveyed parcel positions.
+    """
+    codes = sorted({str(c).strip().upper() for c in cadastral_codes if str(c or "").strip()})
+    if not codes:
+        return {}
+    schema = IstatMunicipality.__table_args__["schema"]
+    stmt = text(
+        "SELECT upper(btrim(m.cadastral_code)), "
+        "COALESCE(avg(ST_Y(ST_Centroid(g.geom))), m.ci_latitude), "
+        "COALESCE(avg(ST_X(ST_Centroid(g.geom))), m.ci_longitude) "
+        f"FROM {schema}.municipalities m "
+        "LEFT JOIN parcel_geometry_cache g ON g.comune_id = m.numeric_code AND g.geom IS NOT NULL "
+        "WHERE upper(btrim(m.cadastral_code)) = ANY(CAST(:codes AS text[])) "
+        "GROUP BY 1, m.ci_latitude, m.ci_longitude "
+        "HAVING COALESCE(avg(ST_Y(ST_Centroid(g.geom))), m.ci_latitude) IS NOT NULL "
+        "AND COALESCE(avg(ST_X(ST_Centroid(g.geom))), m.ci_longitude) IS NOT NULL"
+    )
+    async with _get_session_factory()() as session:
+        rows = (await session.execute(stmt, {"codes": codes})).all()
+    return {code: (float(lat), float(lng)) for code, lat, lng in rows if lat is not None and lng is not None}
+
+
+async def get_subject_name(fiscal_code: str) -> Optional[str]:
+    """Display name stored for a codice fiscale / P.IVA (any query or document that named the subject)."""
+    async with _get_session_factory()() as session:
+        row = (
+            await session.execute(
+                text("SELECT name FROM subject WHERE fiscal_code = :code AND coalesce(name, '') <> '' ORDER BY id DESC LIMIT 1"),
+                {"code": fiscal_code},
+            )
+        ).first()
+    return row[0] if row else None
+
+
+async def find_subject_inspection_document_ids(fiscal_code: str) -> set[int]:
+    """Ids of the ispezioni ipotecarie whose parties include the codice fiscale."""
+    stmt = text(
+        "SELECT DISTINCT de.document_id FROM mortgage_inspection_party p "
+        "JOIN subject s ON s.id = p.subject_id JOIN document_extraction de ON de.id = p.inspection_id "
+        "WHERE s.fiscal_code = :code"
+    )
+    async with _get_session_factory()() as session:
+        return {int(row[0]) for row in (await session.execute(stmt, {"code": fiscal_code})).all()}
+
+
+async def find_subject_query_requests(fiscal_code: str, limit: int = 20) -> list[dict]:
+    """Completed subject queries (``soggetto`` / persona giuridica) for a codice fiscale or P.IVA, newest first."""
+    session_factory = _get_session_factory()
+    async with session_factory() as session:
+        rows = (
+            await session.execute(
+                select(Request)
+                .where(Request.subject_query == fiscal_code, Request.success.is_(True))
+                .where(Request.responded_at.is_not(None))
+                .order_by(Request.responded_at.desc())
+                .limit(limit)
+            )
+        ).scalars()
+        return [
+            {
+                "request_id": req.request_ref,
+                "request_type": req.request_type,
+                "tipo_catasto": req.cadastre_type or "",
+                "total_results": req.total_results,
+                "responded_at": req.responded_at.isoformat() if req.responded_at else None,
+            }
+            for req in rows
+        ]
+
+
 async def get_subject_document_ids(fiscal_code: str) -> set[int]:
     """Return document IDs linked to a queried subject's canonical fiscal code."""
     async with _get_session_factory()() as session:
@@ -1644,6 +1898,7 @@ async def get_document_structured_extraction(doc_id: int) -> dict | None:
         ).scalar_one_or_none()
         if extraction is None:
             return None
+        extraction_payload = await session.get(DocumentExtractionPayload, extraction.id)
         inspection = (
             await session.execute(select(MortgageInspection).where(MortgageInspection.extraction_id == extraction.id))
         ).scalar_one_or_none()
@@ -1796,6 +2051,9 @@ async def get_document_structured_extraction(doc_id: int) -> dict | None:
             "output_path": extraction.output_path,
             "extracted_at": extraction.extracted_at,
             "created_at": extraction.created_at,
+            # The inspection template includes the original Ocular JSON. Keep
+            # the archived payload alongside the normalized extraction data.
+            "structured_data": extraction_payload.structured_data if extraction_payload else {},
         },
         "inspection": inspection_record,
         "title": title_record,
@@ -1832,6 +2090,448 @@ async def get_all_documents(limit: int = 100, offset: int = 0) -> list[dict]:
     async with _get_session_factory()() as session:
         rows = (await session.execute(stmt)).all()
     return [_document_record(doc, unit, comune, request_ref=ref) for doc, unit, comune, _content, ref in rows]
+
+
+async def get_document_favorite_ids(user_id: str) -> set[int]:
+    """Return the document IDs favorited by one authenticated user."""
+    async with _get_session_factory()() as session:
+        result = await session.execute(
+            select(DocumentFavorite.document_id).where(DocumentFavorite.user_id == user_id)
+        )
+        return {int(document_id) for document_id in result.scalars()}
+
+
+async def set_document_favorite(user_id: str, document_id: int, favorite: bool) -> None:
+    """Idempotently add or remove one user's favorite document."""
+    async with _get_session_factory()() as session:
+        if favorite:
+            await session.execute(
+                text(
+                    "INSERT INTO document_favorite (user_id, document_id, created_at) "
+                    "VALUES (:user_id, :document_id, :created_at) ON CONFLICT (user_id, document_id) DO NOTHING"
+                ),
+                {
+                    "user_id": user_id,
+                    "document_id": document_id,
+                    "created_at": datetime.now(timezone.utc),
+                },
+            )
+        else:
+            await session.execute(
+                text("DELETE FROM document_favorite WHERE user_id = :user_id AND document_id = :document_id"),
+                {"user_id": user_id, "document_id": document_id},
+            )
+        await session.commit()
+
+
+async def get_calculation_snapshot(
+    *,
+    scope_type: str,
+    scope_id: str,
+    viewer_key: str,
+    calculation_type: str,
+    input_hash: str,
+    algorithm_version: str,
+    max_age_seconds: int,
+) -> dict[str, Any] | None:
+    """Return a fresh persisted result only when its source fingerprint and algorithm still match."""
+    cutoff = datetime.now(timezone.utc) - timedelta(seconds=max(0, int(max_age_seconds)))
+    async with _get_session_factory()() as session:
+        row = (
+            await session.execute(
+                select(CalculationSnapshot).where(
+                    CalculationSnapshot.scope_type == scope_type,
+                    CalculationSnapshot.scope_id == scope_id,
+                    CalculationSnapshot.viewer_key == viewer_key,
+                    CalculationSnapshot.calculation_type == calculation_type,
+                    CalculationSnapshot.input_hash == input_hash,
+                    CalculationSnapshot.algorithm_version == algorithm_version,
+                    CalculationSnapshot.calculated_at >= cutoff,
+                )
+            )
+        ).scalar_one_or_none()
+    return row.result if row and isinstance(row.result, dict) else None
+
+
+async def set_calculation_snapshot(
+    *,
+    scope_type: str,
+    scope_id: str,
+    viewer_key: str,
+    calculation_type: str,
+    input_hash: str,
+    algorithm_version: str,
+    result: dict[str, Any],
+) -> None:
+    """Persist or replace the latest calculated result for one source, viewer and calculation."""
+    result_json = json.dumps(result, ensure_ascii=False, separators=(",", ":"), default=str)
+    async with _get_session_factory()() as session:
+        await session.execute(
+            text(
+                "INSERT INTO calculation_snapshot "
+                "(scope_type, scope_id, viewer_key, calculation_type, input_hash, algorithm_version, result, calculated_at) "
+                "VALUES (:scope_type, :scope_id, :viewer_key, :calculation_type, :input_hash, :algorithm_version, "
+                "CAST(:result AS jsonb), now()) "
+                "ON CONFLICT (scope_type, scope_id, viewer_key, calculation_type) DO UPDATE SET "
+                "input_hash = EXCLUDED.input_hash, algorithm_version = EXCLUDED.algorithm_version, "
+                "result = EXCLUDED.result, calculated_at = now()"
+            ),
+            {
+                "scope_type": scope_type,
+                "scope_id": scope_id,
+                "viewer_key": viewer_key,
+                "calculation_type": calculation_type,
+                "input_hash": input_hash,
+                "algorithm_version": algorithm_version,
+                "result": result_json,
+            },
+        )
+        await session.commit()
+
+
+async def get_user_manual_property_valuations(user_id: str, asset_keys: Iterable[str]) -> dict[str, dict[str, Any]]:
+    """Load one user's property valuations, source preferences, and saved OMI and affrancazione overrides."""
+    keys = sorted({str(key) for key in asset_keys if re.fullmatch(r"[a-f0-9]{64}", str(key))})
+    if not keys:
+        return {}
+    async with _get_session_factory()() as session:
+        valuations = (
+            await session.execute(
+                select(ManualPropertyValuation)
+                .where(
+                    ManualPropertyValuation.user_id == user_id,
+                    ManualPropertyValuation.asset_key.in_(keys),
+                )
+                .order_by(ManualPropertyValuation.provider)
+            )
+        ).scalars().all()
+        preferences = (
+            await session.execute(
+                select(PropertyValuationPreference)
+                .where(
+                    PropertyValuationPreference.user_id == user_id,
+                    PropertyValuationPreference.asset_key.in_(keys),
+                )
+            )
+        ).scalars().all()
+        affrancation_amounts = (
+            await session.execute(
+                select(PropertyAffrancationAmount).where(
+                    PropertyAffrancationAmount.user_id == user_id,
+                    PropertyAffrancationAmount.asset_key.in_(keys),
+                )
+            )
+        ).scalars().all()
+        omi_overrides = (
+            await session.execute(
+                select(PropertyOmiOverride).where(
+                    PropertyOmiOverride.user_id == user_id,
+                    PropertyOmiOverride.asset_key.in_(keys),
+                )
+            )
+        ).scalars().all()
+        omi_selections = (
+            await session.execute(
+                select(PropertyOmiSelection).where(
+                    PropertyOmiSelection.user_id == user_id,
+                    PropertyOmiSelection.asset_key.in_(keys),
+                )
+            )
+        ).scalars().all()
+    result: dict[str, dict[str, Any]] = {}
+    for row in valuations:
+        result.setdefault(row.asset_key, {"valuations": [], "preferred_source": None})["valuations"].append({
+            "provider": row.provider,
+            "value_min": row.value_min,
+            "value_max": row.value_max,
+            "source_date": row.source_date,
+            "source_url": row.source_url,
+            "notes": row.notes,
+        })
+    for row in preferences:
+        result.setdefault(row.asset_key, {"valuations": [], "preferred_source": None})["preferred_source"] = row.preferred_source
+    for row in affrancation_amounts:
+        result.setdefault(row.asset_key, {"valuations": [], "preferred_source": None})[
+            "affrancation_amount"
+        ] = row.amount
+    for row in omi_overrides:
+        result.setdefault(row.asset_key, {"valuations": [], "preferred_source": None})["omi_override"] = {
+            "value_min": row.value_min,
+            "value_max": row.value_max,
+        }
+    for row in omi_selections:
+        result.setdefault(row.asset_key, {"valuations": [], "preferred_source": None})["omi_selection"] = {
+            "zone_code": row.zone_code,
+            "typology_code": row.typology_code,
+        }
+    return result
+
+
+async def get_user_property_omi_selections(user_id: str, asset_keys: Iterable[str]) -> dict[str, dict[str, Any]]:
+    """Load saved OMI zone and typology choices for one user's cadastral properties."""
+    keys = sorted({str(key) for key in asset_keys if re.fullmatch(r"[a-f0-9]{64}", str(key))})
+    if not keys:
+        return {}
+    async with _get_session_factory()() as session:
+        rows = (
+            await session.execute(
+                select(PropertyOmiSelection).where(
+                    PropertyOmiSelection.user_id == user_id,
+                    PropertyOmiSelection.asset_key.in_(keys),
+                )
+            )
+        ).scalars().all()
+    return {
+        row.asset_key: {"zone_code": row.zone_code, "typology_code": row.typology_code}
+        for row in rows
+    }
+
+
+async def get_user_property_actual_sizes(user_id: str, asset_keys: Iterable[str]) -> dict[str, Decimal]:
+    """Load one user's saved effective size for each cadastral property."""
+    keys = sorted({str(key) for key in asset_keys if re.fullmatch(r"[a-f0-9]{64}", str(key))})
+    if not keys:
+        return {}
+    async with _get_session_factory()() as session:
+        rows = (
+            await session.execute(
+                select(PropertyActualSize).where(
+                    PropertyActualSize.user_id == user_id,
+                    PropertyActualSize.asset_key.in_(keys),
+                )
+            )
+        ).scalars().all()
+    return {row.asset_key: row.actual_size_sqm for row in rows}
+
+
+async def ensure_user_property_omi_selections(
+    user_id: str, defaults: Iterable[dict[str, Any]]
+) -> None:
+    """Persist automatic OMI guesses once, leaving existing user choices intact."""
+    values = []
+    for item in defaults:
+        asset_key = str(item.get("asset_key") or "")
+        if not re.fullmatch(r"[a-f0-9]{64}", asset_key):
+            continue
+        zone_code = str(item.get("zone_code") or "").strip().upper() or None
+        try:
+            typology_code = int(item["typology_code"]) if item.get("typology_code") is not None else None
+        except (TypeError, ValueError):
+            typology_code = None
+        if not zone_code and typology_code is None:
+            continue
+        values.append({
+            "user_id": user_id,
+            "asset_key": asset_key,
+            "zone_code": zone_code,
+            "typology_code": typology_code,
+        })
+    if not values:
+        return
+    async with _get_session_factory()() as session:
+        await session.execute(
+            text(
+                "INSERT INTO property_omi_selection (user_id, asset_key, zone_code, typology_code, updated_at) "
+                "VALUES (:user_id, :asset_key, :zone_code, :typology_code, now()) "
+                "ON CONFLICT (user_id, asset_key) DO NOTHING"
+            ),
+            values,
+        )
+        await session.commit()
+
+
+async def set_user_property_omi_selection(
+    user_id: str, asset_key: str, zone_code: str | None, typology_code: int | None
+) -> None:
+    """Save a user's selected OMI zone and typology and invalidate their cached totals."""
+    async with _get_session_factory()() as session:
+        await session.execute(
+            text(
+                "INSERT INTO property_omi_selection "
+                "(user_id, asset_key, zone_code, typology_code, updated_at) "
+                "VALUES (:user_id, :asset_key, :zone_code, :typology_code, now()) "
+                "ON CONFLICT (user_id, asset_key) DO UPDATE SET "
+                "zone_code = EXCLUDED.zone_code, typology_code = EXCLUDED.typology_code, updated_at = now()"
+            ),
+            {
+                "user_id": user_id,
+                "asset_key": asset_key,
+                "zone_code": zone_code,
+                "typology_code": typology_code,
+            },
+        )
+        await session.execute(
+            text("DELETE FROM calculation_snapshot WHERE viewer_key = :viewer_key"),
+            {"viewer_key": user_id},
+        )
+        await session.commit()
+
+
+async def set_user_property_actual_size(
+    user_id: str, asset_key: str, actual_size_sqm: Decimal | None
+) -> None:
+    """Save a user's effective property size, or clear it to use the cadastral default again."""
+    async with _get_session_factory()() as session:
+        if actual_size_sqm is None:
+            await session.execute(
+                text("DELETE FROM property_actual_size WHERE user_id = :user_id AND asset_key = :asset_key"),
+                {"user_id": user_id, "asset_key": asset_key},
+            )
+        else:
+            await session.execute(
+                text(
+                    "INSERT INTO property_actual_size "
+                    "(user_id, asset_key, actual_size_sqm, updated_at) "
+                    "VALUES (:user_id, :asset_key, :actual_size_sqm, now()) "
+                    "ON CONFLICT (user_id, asset_key) DO UPDATE SET "
+                    "actual_size_sqm = EXCLUDED.actual_size_sqm, updated_at = now()"
+                ),
+                {"user_id": user_id, "asset_key": asset_key, "actual_size_sqm": actual_size_sqm},
+            )
+        await session.execute(
+            text("DELETE FROM calculation_snapshot WHERE viewer_key = :viewer_key"),
+            {"viewer_key": user_id},
+        )
+        await session.commit()
+
+
+async def set_user_manual_property_valuation(
+    user_id: str,
+    asset_key: str,
+    provider: str,
+    value_min: Decimal,
+    value_max: Decimal | None,
+    source_date: date | None,
+    source_url: str | None,
+    notes: str | None,
+) -> None:
+    """Create or replace one user's provider valuation for one cadastral property."""
+    async with _get_session_factory()() as session:
+        await session.execute(
+            text(
+                "INSERT INTO manual_property_valuation "
+                "(user_id, asset_key, provider, value_min, value_max, source_date, source_url, notes, created_at, updated_at) "
+                "VALUES (:user_id, :asset_key, :provider, :value_min, :value_max, :source_date, :source_url, :notes, now(), now()) "
+                "ON CONFLICT (user_id, asset_key, provider) DO UPDATE SET "
+                "value_min = EXCLUDED.value_min, value_max = EXCLUDED.value_max, source_date = EXCLUDED.source_date, "
+                "source_url = EXCLUDED.source_url, notes = EXCLUDED.notes, updated_at = now()"
+            ),
+            {
+                "user_id": user_id,
+                "asset_key": asset_key,
+                "provider": provider,
+                "value_min": value_min,
+                "value_max": value_max,
+                "source_date": source_date,
+                "source_url": source_url,
+                "notes": notes,
+            },
+        )
+        # The final KPI snapshot includes this user's manual values and source choice.
+        await session.execute(
+            text("DELETE FROM calculation_snapshot WHERE viewer_key = :viewer_key"),
+            {"viewer_key": user_id},
+        )
+        await session.commit()
+
+
+async def set_user_property_valuation_preference(user_id: str, asset_key: str, source: str) -> bool:
+    """Set a user's preferred source; return False if an external provider has no saved estimate."""
+    async with _get_session_factory()() as session:
+        if source != "omi":
+            exists = (
+                await session.execute(
+                    select(ManualPropertyValuation.asset_key).where(
+                        ManualPropertyValuation.user_id == user_id,
+                        ManualPropertyValuation.asset_key == asset_key,
+                        ManualPropertyValuation.provider == source,
+                    )
+                )
+            ).scalar_one_or_none()
+            if exists is None:
+                return False
+        await session.execute(
+            text(
+                "INSERT INTO property_valuation_preference (user_id, asset_key, preferred_source, updated_at) "
+                "VALUES (:user_id, :asset_key, :preferred_source, now()) "
+                "ON CONFLICT (user_id, asset_key) DO UPDATE SET "
+                "preferred_source = EXCLUDED.preferred_source, updated_at = now()"
+            ),
+            {"user_id": user_id, "asset_key": asset_key, "preferred_source": source},
+        )
+        # Source preference changes affect the ownership-right allocation as well as the displayed range.
+        await session.execute(
+            text("DELETE FROM calculation_snapshot WHERE viewer_key = :viewer_key"),
+            {"viewer_key": user_id},
+        )
+        await session.commit()
+    return True
+
+
+async def set_user_property_affrancation_amount(
+    user_id: str, asset_key: str, amount: Decimal | None
+) -> None:
+    """Save an account-specific amount, or remove it to restore the automatic estimate."""
+    async with _get_session_factory()() as session:
+        if amount is None:
+            await session.execute(
+                text(
+                    "DELETE FROM property_affrancation_amount "
+                    "WHERE user_id = :user_id AND asset_key = :asset_key"
+                ),
+                {"user_id": user_id, "asset_key": asset_key},
+            )
+        else:
+            await session.execute(
+                text(
+                    "INSERT INTO property_affrancation_amount "
+                    "(user_id, asset_key, amount, updated_at) VALUES (:user_id, :asset_key, :amount, now()) "
+                    "ON CONFLICT (user_id, asset_key) DO UPDATE SET "
+                    "amount = EXCLUDED.amount, updated_at = now()"
+                ),
+                {"user_id": user_id, "asset_key": asset_key, "amount": amount},
+            )
+        await session.execute(
+            text("DELETE FROM calculation_snapshot WHERE viewer_key = :viewer_key"),
+            {"viewer_key": user_id},
+        )
+        await session.commit()
+
+
+async def set_user_property_omi_override(
+    user_id: str,
+    asset_key: str,
+    value_min: Decimal | None,
+    value_max: Decimal | None,
+) -> None:
+    """Save or clear a user's custom OMI range for one cadastral property."""
+    async with _get_session_factory()() as session:
+        if value_min is None:
+            await session.execute(
+                text("DELETE FROM property_omi_override WHERE user_id = :user_id AND asset_key = :asset_key"),
+                {"user_id": user_id, "asset_key": asset_key},
+            )
+        else:
+            await session.execute(
+                text(
+                    "INSERT INTO property_omi_override "
+                    "(user_id, asset_key, value_min, value_max, updated_at) "
+                    "VALUES (:user_id, :asset_key, :value_min, :value_max, now()) "
+                    "ON CONFLICT (user_id, asset_key) DO UPDATE SET "
+                    "value_min = EXCLUDED.value_min, value_max = EXCLUDED.value_max, updated_at = now()"
+                ),
+                {
+                    "user_id": user_id,
+                    "asset_key": asset_key,
+                    "value_min": value_min,
+                    "value_max": value_max,
+                },
+            )
+        await session.execute(
+            text("DELETE FROM calculation_snapshot WHERE viewer_key = :viewer_key"),
+            {"viewer_key": user_id},
+        )
+        await session.commit()
 
 
 # ---------------------------------------------------------------------------
@@ -1907,6 +2607,33 @@ def _single_result_status(success: Optional[bool], error: Optional[str] = None) 
     return "pending"
 
 
+def _request_subject_aggregate(value, *subject_conditions, joins=()):
+    """Aggregate normalized subjects linked through owners or the queried subject's fiscal code."""
+    owner_match = (
+        select(ResultOwner.id)
+        .where(ResultOwner.request_id == Request.id, ResultOwner.subject_id == Subject.id)
+        .correlate(Request, Subject)
+        .exists()
+    )
+    property_match = (
+        select(Property.id)
+        .where(Property.request_id == Request.id, Property.subject_id == Subject.id)
+        .correlate(Request, Subject)
+        .exists()
+    )
+    stmt = select(func.string_agg(distinct(value), " · ")).select_from(Subject)
+    for target, on_clause in joins:
+        stmt = stmt.outerjoin(target, on_clause)
+    return (
+        stmt.where(
+            or_(owner_match, property_match, Subject.fiscal_code == Request.subject_query),
+            *subject_conditions,
+        )
+        .correlate(Request)
+        .scalar_subquery()
+    )
+
+
 async def find_result_rows(
     provincia: Optional[str] = None,
     comune: Optional[str] = None,
@@ -1915,8 +2642,13 @@ async def find_result_rows(
     tipo_catasto: Optional[str] = None,
     source: Optional[str] = None,
     status: Optional[str] = None,
+    request_type: Optional[str] = None,
+    tag: Optional[str] = None,
     limit: int = 50,
     offset: int = 0,
+    fiscal_code: Optional[str] = None,
+    person: Optional[str] = None,
+    company: Optional[str] = None,
 ) -> list[dict]:
     """Search single-query responses and workflow runs for the web results page."""
     if source not in {"single", "workflow"}:
@@ -1932,13 +2664,47 @@ async def find_result_rows(
         owner_count = (
             select(func.count(ResultOwner.id)).where(ResultOwner.request_id == Request.id).correlate(Request).scalar_subquery()
         )
+        subject_fiscal_codes = _request_subject_aggregate(
+            Subject.fiscal_code,
+            Subject.fiscal_code.is_not(None),
+        )
+        birth_municipality = aliased(IstatMunicipality)
+        person_details = _request_subject_aggregate(
+            func.concat_ws(
+                " · ",
+                Subject.name,
+                Subject.fiscal_code,
+                cast(Subject.birth_date, String),
+                func.coalesce(
+                    birth_municipality.italian_name,
+                    birth_municipality.name,
+                    Subject.birth_municipality_text,
+                ),
+                func.coalesce(birth_municipality.province_abbreviation, Subject.birth_province_code),
+                Subject.gender,
+            ),
+            Subject.subject_type == "person",
+            joins=((birth_municipality, Subject.birth_comune_id == birth_municipality.numeric_code),),
+        )
+        company_details = _request_subject_aggregate(
+            func.concat_ws(" · ", Subject.name, Subject.fiscal_code),
+            Subject.subject_type == "legal_entity",
+        )
         stmt = (
             select(
+                Request.id.label("request_pk"),
                 Request.request_ref.label("request_id"),
                 Request.request_type.label("request_type"),
+                RequestType.label.label("request_type_label"),
+                RequestType.description.label("request_type_description"),
+                (
+                    select(func.array_agg(RequestTypeTag.tag))
+                    .where(RequestTypeTag.request_type == Request.request_type)
+                    .correlate(Request)
+                    .scalar_subquery()
+                ).label("request_type_tags"),
                 CadastralUnit.cadastre_type.label("cadastre_type"),
-                IstatMunicipality.province_abbreviation.label("province"),
-                func.upper(func.coalesce(IstatMunicipality.italian_name, IstatMunicipality.name)).label("municipality"),
+                CadastralUnit.comune_id.label("comune_id"),
                 CadastralUnit.sheet.label("sheet"),
                 CadastralUnit.parcel.label("parcel"),
                 CadastralUnit.section.label("section"),
@@ -1947,31 +2713,150 @@ async def find_result_rows(
                 Request.success.label("success"),
                 Request.error.label("error"),
                 Request.responded_at.label("responded_at"),
+                Request.subject_query.label("subject_query"),
                 Request.total_results.label("total_results"),
                 Request.total_intestati.label("total_intestati"),
                 property_count.label("property_count"),
                 owner_count.label("owner_count"),
+                subject_fiscal_codes.label("subject_fiscal_codes"),
+                person_details.label("person_details"),
+                company_details.label("company_details"),
             )
             .select_from(Request)
+            .outerjoin(RequestType, Request.request_type == RequestType.code)
             .outerjoin(CadastralUnit, Request.cadastral_unit_id == CadastralUnit.id)
-            .outerjoin(IstatMunicipality, CadastralUnit.comune_id == IstatMunicipality.numeric_code)
-            .where(*_build_single_where(provincia, comune, foglio, particella, tipo_catasto, status))
+            .where(
+                *_build_single_where(
+                    provincia,
+                    comune,
+                    foglio,
+                    particella,
+                    tipo_catasto,
+                    status,
+                    request_type,
+                    tag,
+                    fiscal_code,
+                    person,
+                    company,
+                )
+            )
             .order_by(Request.created_at.desc())
+            .limit(limit)
+            .offset(offset)
         )
         async with _get_session_factory()() as session:
             rows = (await session.execute(stmt)).mappings().all()
+            request_ids = [row["request_pk"] for row in rows]
+            property_locations: dict[int, dict[str, Any]] = {}
+            provinces_by_request: dict[int, list[str]] = {}
+            if request_ids:
+                property_unit = aliased(CadastralUnit)
+                property_summary_stmt = (
+                    select(
+                        Property.request_id,
+                        func.array_agg(distinct(property_unit.comune_id))
+                        .filter(property_unit.comune_id.is_not(None))
+                        .label("municipality_ids"),
+                        func.array_agg(distinct(property_unit.cadastre_type))
+                        .filter(property_unit.cadastre_type.is_not(None))
+                        .label("types"),
+                        func.array_agg(distinct(property_unit.sheet))
+                        .filter(property_unit.sheet.is_not(None))
+                        .label("sheets"),
+                        func.array_agg(distinct(property_unit.parcel))
+                        .filter(property_unit.parcel.is_not(None))
+                        .label("parcels"),
+                    )
+                    .select_from(Property)
+                    .outerjoin(property_unit, Property.cadastral_unit_id == property_unit.id)
+                    .where(Property.request_id.in_(request_ids))
+                    .group_by(Property.request_id)
+                )
+                property_rows = (await session.execute(property_summary_stmt)).mappings().all()
+                property_locations = {item["request_id"]: dict(item) for item in property_rows}
+                municipality_ids = {
+                    int(comune_id)
+                    for row in rows
+                    for comune_id in (
+                        [row["comune_id"]]
+                        + (property_locations.get(row["request_pk"], {}).get("municipality_ids") or [])
+                    )
+                    if comune_id is not None
+                }
+                municipalities_by_id: dict[int, IstatMunicipality] = {}
+                if municipality_ids:
+                    municipality_rows = (
+                        await session.execute(
+                            select(IstatMunicipality).where(IstatMunicipality.numeric_code.in_(municipality_ids))
+                        )
+                    ).scalars().all()
+                    municipalities_by_id = {int(item.numeric_code): item for item in municipality_rows}
+                province_rows = (
+                    await session.execute(
+                        select(
+                            RequestProvince.request_id,
+                            RequestProvince.province_code,
+                            RequestProvince.province_name,
+                        )
+                        .where(RequestProvince.request_id.in_(request_ids))
+                        .order_by(RequestProvince.province_index)
+                    )
+                ).all()
+                for request_pk, code, name in province_rows:
+                    value = str(code or name or "").strip().upper()
+                    if value:
+                        provinces_by_request.setdefault(request_pk, []).append(value)
         for row in rows:
             success = bool(row["success"]) if row["success"] is not None and row["responded_at"] is not None else None
+            type_info = request_type_info(row["request_type"])
+            fiscal_codes = [
+                value.strip()
+                for value in str(row["subject_fiscal_codes"] or "").split(" · ")
+                if value.strip()
+            ]
+            queried_code = str(row["subject_query"] or "").strip().upper()
+            if re.fullmatch(r"(?:[A-Z0-9]{16}|\d{11})", queried_code) and queried_code not in fiscal_codes:
+                fiscal_codes.append(queried_code)
+            locations = property_locations.get(row["request_pk"], {})
+            asset_municipalities = [
+                municipalities_by_id.get(int(comune_id))
+                for comune_id in (locations.get("municipality_ids") or [])
+                if int(comune_id) in municipalities_by_id
+            ]
+            request_municipality = municipalities_by_id.get(row["comune_id"]) if row["comune_id"] is not None else None
+            province_values = (
+                [item.province_abbreviation for item in asset_municipalities if item.province_abbreviation]
+                or provinces_by_request.get(row["request_pk"])
+                or (
+                    [request_municipality.province_abbreviation]
+                    if request_municipality and request_municipality.province_abbreviation
+                    else []
+                )
+            )
+            municipality_values = (
+                [item.italian_name or item.name for item in asset_municipalities if item.italian_name or item.name]
+                or (
+                    [request_municipality.italian_name or request_municipality.name]
+                    if request_municipality and (request_municipality.italian_name or request_municipality.name)
+                    else []
+                )
+            )
+            sheet_values = locations.get("sheets") or ([row["sheet"]] if row["sheet"] else [])
+            parcel_values = locations.get("parcels") or ([row["parcel"]] if row["parcel"] else [])
+            type_values = locations.get("types") or ([row["cadastre_type"]] if row["cadastre_type"] else [])
             single_rows.append(
                 {
                     "request_id": row["request_id"],
                     "request_type": row["request_type"],
+                    "request_type_label": row["request_type_label"] or type_info.label,
+                    "request_type_description": row["request_type_description"] or type_info.description,
+                    "request_type_tags": list(row["request_type_tags"] or type_info.tags),
                     "source": "single",
-                    "tipo_catasto": row["cadastre_type"] or "",
-                    "provincia": _province_label(row["province"]),
-                    "comune": row["municipality"] or "",
-                    "foglio": row["sheet"] or "",
-                    "particella": row["parcel"] or "",
+                    "tipo_catasto": row["cadastre_type"] or _join_result_values(type_values),
+                    "provincia": _join_result_values(province_values, province_labels=True),
+                    "comune": _join_result_values(municipality_values),
+                    "foglio": _join_result_values(sheet_values),
+                    "particella": _join_result_values(parcel_values),
                     "sezione": row["section"],
                     "subalterno": row["subunit"],
                     "requested_at": row["requested_at"],
@@ -1984,11 +2869,14 @@ async def find_result_rows(
                     "total_intestati": row["total_intestati"],
                     "property_count": row["property_count"] or 0,
                     "owner_count": row["owner_count"] or 0,
+                    "fiscal_code": " · ".join(fiscal_codes),
+                    "person_details": row["person_details"] or "",
+                    "company_details": row["company_details"] or "",
                 }
             )
 
     # workflow_runs no longer live in sister's DB — owned by opendata
-    return single_rows[offset : offset + limit]
+    return single_rows
 
 
 async def _delete_documents(session: AsyncSession, document_ids: list[int]) -> None:
@@ -2084,24 +2972,186 @@ def _build_single_where(
     particella: Optional[str] = None,
     tipo_catasto: Optional[str] = None,
     status: Optional[str] = None,
+    request_type: Optional[str] = None,
+    tag: Optional[str] = None,
+    fiscal_code: Optional[str] = None,
+    person: Optional[str] = None,
+    company: Optional[str] = None,
 ) -> list:
-    """Build portable ORM filters for single-result queries (province by sigla or name, comune by name)."""
+    """Build filters for requests and their linked cadastral subjects."""
     conditions = []
+    property_unit = aliased(CadastralUnit)
+
+    def property_match(*property_conditions):
+        return (
+            select(Property.id)
+            .select_from(Property)
+            .outerjoin(property_unit, Property.cadastral_unit_id == property_unit.id)
+            .where(Property.request_id == Request.id, *property_conditions)
+            .correlate(Request)
+            .exists()
+        )
+
     if provincia:
+        code = province_code(provincia) or str(provincia).strip().upper()
+        name = place_name(provincia) or str(provincia).strip().upper()
+        province_municipality_ids = select(IstatMunicipality.numeric_code).where(
+            func.upper(func.trim(IstatMunicipality.province_abbreviation)) == code
+        )
+        request_unit_matches = (
+            select(Request.id)
+            .join(CadastralUnit, Request.cadastral_unit_id == CadastralUnit.id)
+            .where(CadastralUnit.comune_id.in_(province_municipality_ids))
+        )
+        property_request_matches = (
+            select(Property.request_id)
+            .join(CadastralUnit, Property.cadastral_unit_id == CadastralUnit.id)
+            .where(CadastralUnit.comune_id.in_(province_municipality_ids))
+        )
+        subject_province_matches = select(RequestProvince.request_id).where(
+            or_(
+                func.upper(func.trim(RequestProvince.province_code)) == code,
+                func.upper(func.trim(RequestProvince.province_name)).ilike(f"%{name}%"),
+            )
+        )
         conditions.append(
-            func.upper(IstatMunicipality.province_abbreviation) == (province_code(provincia) or str(provincia).strip().upper())
+            or_(
+                Request.id.in_(request_unit_matches),
+                Request.id.in_(property_request_matches),
+                Request.id.in_(subject_province_matches),
+            )
         )
     if comune:
+        name = place_name(comune) or str(comune).strip().upper()
+        municipality_ids = select(IstatMunicipality.numeric_code).where(
+            or_(
+                func.upper(func.trim(IstatMunicipality.italian_name)) == name,
+                func.upper(func.trim(IstatMunicipality.name)) == name,
+                func.upper(func.trim(IstatMunicipality.other_language_name)) == name,
+            )
+        )
+        request_unit_matches = (
+            select(Request.id)
+            .join(CadastralUnit, Request.cadastral_unit_id == CadastralUnit.id)
+            .where(CadastralUnit.comune_id.in_(municipality_ids))
+        )
+        property_request_matches = (
+            select(Property.request_id)
+            .join(CadastralUnit, Property.cadastral_unit_id == CadastralUnit.id)
+            .where(CadastralUnit.comune_id.in_(municipality_ids))
+        )
         conditions.append(
-            func.upper(func.coalesce(IstatMunicipality.italian_name, IstatMunicipality.name))
-            == (place_name(comune) or str(comune).strip().upper())
+            or_(Request.id.in_(request_unit_matches), Request.id.in_(property_request_matches))
         )
     if foglio:
-        conditions.append(CadastralUnit.sheet == str(foglio))
+        value = str(foglio).strip()
+        conditions.append(or_(CadastralUnit.sheet == value, property_match(property_unit.sheet == value)))
     if particella:
-        conditions.append(CadastralUnit.parcel == str(particella))
+        value = str(particella).strip()
+        conditions.append(or_(CadastralUnit.parcel == value, property_match(property_unit.parcel == value)))
     if tipo_catasto:
-        conditions.append(CadastralUnit.cadastre_type == tipo_catasto)
+        value = str(tipo_catasto).strip().upper()
+        conditions.append(
+            or_(CadastralUnit.cadastre_type == value, property_match(property_unit.cadastre_type == value))
+        )
+    if request_type:
+        conditions.append(Request.request_type == request_type)
+    if tag:
+        conditions.append(
+            select(RequestTypeTag.request_type)
+            .where(RequestTypeTag.request_type == Request.request_type, RequestTypeTag.tag == tag)
+            .exists()
+        )
+
+    def subject_match(*subject_conditions):
+        owner_match = (
+            select(ResultOwner.id)
+            .where(ResultOwner.request_id == Request.id, ResultOwner.subject_id == Subject.id)
+            .correlate(Request, Subject)
+            .exists()
+        )
+        property_match = (
+            select(Property.id)
+            .where(Property.request_id == Request.id, Property.subject_id == Subject.id)
+            .correlate(Request, Subject)
+            .exists()
+        )
+        return (
+            select(Subject.id)
+            .select_from(Subject)
+            .where(
+                or_(
+                    owner_match,
+                    property_match,
+                    Subject.fiscal_code == Request.subject_query,
+                ),
+                *subject_conditions,
+            )
+            .correlate(Request)
+            .exists()
+        )
+
+    def matching_terms(value: str, columns, *, include_birthplace=False):
+        tokens = [token for token in re.split(r"\s+", value.strip()) if token]
+        if not tokens:
+            return None
+        token_conditions = []
+        for token in tokens:
+            pattern = f"%{token}%"
+            alternatives = [column.ilike(pattern) for column in columns]
+            if include_birthplace:
+                municipality_ids = select(IstatMunicipality.numeric_code).where(
+                    or_(
+                        IstatMunicipality.name.ilike(pattern),
+                        IstatMunicipality.italian_name.ilike(pattern),
+                        IstatMunicipality.other_language_name.ilike(pattern),
+                    )
+                )
+                alternatives.append(Subject.birth_comune_id.in_(municipality_ids))
+            token_conditions.append(or_(*alternatives))
+        return and_(*token_conditions)
+
+    if fiscal_code and fiscal_code.strip():
+        # Fiscal codes and VAT numbers are alphanumeric; discard presentation
+        # separators on both sides so partial input also matches formatted values.
+        code = re.sub(r"[^A-Z0-9]", "", fiscal_code.upper())
+        if code:
+            code_pattern = f"%{code}%"
+
+            def normalized_code(column):
+                return func.regexp_replace(
+                    func.upper(func.coalesce(column, "")),
+                    r"[^A-Z0-9]",
+                    "",
+                    "g",
+                )
+
+            conditions.append(
+                or_(
+                    normalized_code(Request.subject_query).ilike(code_pattern),
+                    subject_match(normalized_code(Subject.fiscal_code).ilike(code_pattern)),
+                )
+            )
+    if person and person.strip():
+        person_search = matching_terms(
+            person,
+            (
+                Subject.name,
+                Subject.first_name,
+                Subject.last_name,
+                Subject.gender,
+                cast(Subject.birth_date, String),
+                Subject.birth_municipality_text,
+                Subject.birth_province_code,
+            ),
+            include_birthplace=True,
+        )
+        if person_search is not None:
+            conditions.append(subject_match(Subject.subject_type == "person", person_search))
+    if company and company.strip():
+        company_search = matching_terms(company, (Subject.name, Subject.fiscal_code))
+        if company_search is not None:
+            conditions.append(subject_match(Subject.subject_type == "legal_entity", company_search))
     if status == "completed":
         conditions.append(Request.success.is_(True))
     elif status == "no_match":
@@ -2121,6 +3171,11 @@ async def count_total_result_rows(
     tipo_catasto: Optional[str] = None,
     source: Optional[str] = None,
     status: Optional[str] = None,
+    request_type: Optional[str] = None,
+    tag: Optional[str] = None,
+    fiscal_code: Optional[str] = None,
+    person: Optional[str] = None,
+    company: Optional[str] = None,
 ) -> int:
     """Return total count of result rows matching filters, using SQL COUNT(*)."""
     if source not in {"single", "workflow"}:
@@ -2134,8 +3189,21 @@ async def count_total_result_rows(
         select(func.count())
         .select_from(Request)
         .outerjoin(CadastralUnit, Request.cadastral_unit_id == CadastralUnit.id)
-        .outerjoin(IstatMunicipality, CadastralUnit.comune_id == IstatMunicipality.numeric_code)
-        .where(*_build_single_where(provincia, comune, foglio, particella, tipo_catasto, status))
+        .where(
+            *_build_single_where(
+                provincia,
+                comune,
+                foglio,
+                particella,
+                tipo_catasto,
+                status,
+                request_type,
+                tag,
+                fiscal_code,
+                person,
+                company,
+            )
+        )
     )
     async with _get_session_factory()() as session:
         total = (await session.execute(stmt)).scalar_one()
@@ -2151,6 +3219,11 @@ async def count_result_rows(
     particella: Optional[str] = None,
     tipo_catasto: Optional[str] = None,
     source: Optional[str] = None,
+    request_type: Optional[str] = None,
+    tag: Optional[str] = None,
+    fiscal_code: Optional[str] = None,
+    person: Optional[str] = None,
+    company: Optional[str] = None,
 ) -> dict:
     """Return web result stats including single-query requests and workflows."""
     if source not in {"single", "workflow"}:
@@ -2158,7 +3231,18 @@ async def count_result_rows(
 
     s_total = s_ok = s_fail = s_no_match = s_pending = 0
     if source in (None, "single"):
-        filters = _build_single_where(provincia, comune, foglio, particella, tipo_catasto)
+        filters = _build_single_where(
+            provincia,
+            comune,
+            foglio,
+            particella,
+            tipo_catasto,
+            request_type=request_type,
+            tag=tag,
+            fiscal_code=fiscal_code,
+            person=person,
+            company=company,
+        )
         stmt = (
             select(
                 func.count().label("total"),
@@ -2169,7 +3253,6 @@ async def count_result_rows(
             )
             .select_from(Request)
             .outerjoin(CadastralUnit, Request.cadastral_unit_id == CadastralUnit.id)
-            .outerjoin(IstatMunicipality, CadastralUnit.comune_id == IstatMunicipality.numeric_code)
             .where(*filters)
         )
         async with _get_session_factory()() as session:

@@ -59,6 +59,13 @@ def _apply_table_migrations(engine, schema: str, istat_schema: str) -> None:
     migrations = []
     for name in (
         "20260925_add_sezioni_extraction_jobs.py",
+        "20261101_request_province.py",
+        "20261103_request_type_metadata.py",
+        "20261104_request_type_catalog_refinements.py",
+        "20261106_manual_property_valuations.py",
+        "20261107_calculation_snapshots.py",
+        "20261108_property_affrancation_amounts.py",
+        "20261109_property_omi_overrides.py",
     ):
         path = migration_dir / name
         spec = importlib.util.spec_from_file_location(f"_{path.stem}_migration", path)

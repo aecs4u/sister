@@ -34,6 +34,7 @@ _TYPE_MAP = {
     "vi_att_ter": ("visura_terreni", "T"),
     "vi_sto": ("visura_storica", "F"),
     "elenco_fab": ("elenco_immobili", "F"),
+    "el_sub": ("elenco_subalterni", "F"),
     "planimetria_elab": ("elaborato_planimetrico", "F"),
     "planimetria": ("planimetria", "F"),
     "epa": ("epa", "F"),
@@ -53,8 +54,8 @@ _RE_IMMOBILE = re.compile(
 )
 
 # Soggetto pattern: <tipo>_<COGNOME>_<Nome>_<CF>[_PROV].<ext>
-# e.g. vs_att_FARISELLI_Elisa_FRSLSE77B54E730C.pdf
-#      vs_sin_FARISELLI_Elisa_FRSLSE77B54E730C_RA.pdf
+    # e.g. vs_att_COGNOME_Nome_CF.pdf
+    #      vs_sin_COGNOME_Nome_CF_RA.pdf
 _RE_SOGGETTO = re.compile(
     r"^(?P<tipo>[a-z_]+)"
     r"_(?P<cognome>[A-Z][A-Z0-9]*(?:_[A-Z][A-Z0-9]*)*)"
@@ -82,6 +83,10 @@ def _parse_new_name(new_name: str) -> dict:
         result["document_type"] = "visura"
         result["tipo_catasto"] = ""
         result["oggetto"] = new_name
+
+    if ext == ".dat":
+        result["document_type"] = "elenco_immobili"
+        result["tipo_catasto"] = ""
 
     # Try immobile pattern
     m = _RE_IMMOBILE.match(new_name)
@@ -111,7 +116,7 @@ def _parse_new_name(new_name: str) -> dict:
 
 
 def _re_soggetto_match(stem: str) -> dict | None:
-    """Extract soggetto fields from a stem like vs_att_COGNOME_Nome_CF or vs_att_ALTRAVIA_SERVIZI_SRL_12485671007."""
+    """Extract soggetto fields from a stem like vs_att_COGNOME_Nome_CF."""
     # Try the standard pattern first
     m = _RE_SOGGETTO.match(stem + ".pdf")
     if m:

@@ -14,6 +14,8 @@ START_UVICORN_ARGS=(
     --reload-exclude '*.pyc'
     --reload-exclude '__pycache__'
     --reload-exclude 'logs/*'
+    --reload-exclude 'logs'
+    --reload-exclude 'outputs'
     --reload-exclude '*.log'
     --reload-exclude 'outputs/*'
     --reload-include "*.py"

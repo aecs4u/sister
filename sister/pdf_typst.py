@@ -141,7 +141,16 @@ _LAND_WIDTHS = ["1.2fr", "auto", "auto", "1.6fr", "auto", "auto", "auto", "auto"
 _LAND_ALIGN = ["left"] * 5 + ["right", "right", "right", "left", "right"]
 
 
-def _building_rows(group: dict[str, Any], estimates: list[dict[str, Any]], with_omi: bool) -> list[list[Any]]:
+def _preferred_source_value(estimate: dict[str, Any]) -> str:
+    selected = estimate.get("preferred_valuation") or {}
+    if not selected.get("range"):
+        return "—"
+    return f"{selected.get('provider_label') or 'Fonte scelta'} · {selected['range']}"
+
+
+def _building_rows(
+    group: dict[str, Any], estimates: list[dict[str, Any]], with_omi: bool, with_preferred_source: bool = False
+) -> list[list[Any]]:
     rows = []
     for index, unit in enumerate(_items(group.get("ImmobileFabbricatiS"))):
         ident = _first(_first(unit.get("DatiIdentificativi")).get("IdentificativoDefinitivo"))
@@ -165,13 +174,18 @@ def _building_rows(group: dict[str, Any], estimates: list[dict[str, Any]], with_
         ]
         if with_omi:
             row.append(estimate.get("range") or _missing(estimate.get("missing", "")))
+        if with_preferred_source:
+            row.append(_preferred_source_value(estimate))
         rows.append(row)
     return rows
 
 
-def _land_rows(group: dict[str, Any], estimates: list[dict[str, Any]]) -> list[list[Any]]:
+def _land_rows(
+    group: dict[str, Any], estimates: list[dict[str, Any]], with_preferred_source: bool = False
+) -> list[list[Any]]:
     rows = []
     position = 0
+    seen_preferred_assets: set[str] = set()
     for unit in _items(group.get("ImmobileTerreniS")):
         ident = _first(_first(unit.get("DatiIdentificativi")).get("IdentificativoDefinitivo"))
         for classamento in _items(_first(unit.get("DatiClassamentoT")).get("ClassamentoT")) or [{}]:
@@ -188,6 +202,14 @@ def _land_rows(group: dict[str, Any], estimates: list[dict[str, Any]]) -> list[l
                 _s(ident.get("Partita")) or "—",
                 estimate.get("cadastral_value") or _missing(estimate.get("cadastral_missing", "")),
             ])
+            if with_preferred_source:
+                asset_key = (estimate.get("asset_identity") or {}).get("asset_key")
+                if asset_key and asset_key in seen_preferred_assets:
+                    rows[-1].append("—")
+                else:
+                    rows[-1].append(_preferred_source_value(estimate))
+                    if asset_key:
+                        seen_preferred_assets.add(asset_key)
     return rows
 
 
@@ -210,10 +232,30 @@ def _assessment_items(assessment: dict[str, Any]) -> list[dict[str, Any]]:
         value = right.get("value") or "Non disponibile"
         rows.append([right.get("label") or "Altro diritto", detail,
                      _missing(value) if _is_missing(value) else value])
-    items.append(_table("", ["Diritto", "Beni e quote", "Stima OMI attribuibile"], ["1fr", "3fr", "2fr"],
-                        ["left", "left", "right"], rows))
+    valuation_label = (
+        "Stima attribuibile · fonte preferita"
+        if assessment.get("preferred_source_used")
+        else "Stima OMI attribuibile"
+    )
+    items.append(
+        _table(
+            "",
+            ["Diritto", "Beni e quote", valuation_label],
+            ["1fr", "3fr", "2fr"],
+            ["left", "left", "right"],
+            rows,
+        )
+    )
     notes = [assessment.get("coefficient_note"), assessment.get("method_note")]
     items.append({"kind": "note", "text": " ".join(n for n in notes if n)})
+    if assessment.get("preferred_source_used"):
+        items.append({
+            "kind": "note",
+            "text": (
+                "La fonte preferita selezionata dall'utente sostituisce OMI solo per i beni a cui è associata; "
+                "OMI resta riportato separatamente. Le stime esterne sono inserite manualmente e non verificate da SISTER."
+            ),
+        })
     exclusions = []
     if assessment.get("unmatched_assets"):
         exclusions.append(f"{assessment['unmatched_assets']} elementi senza titolarità associabile al soggetto")
@@ -236,17 +278,30 @@ def _kpi_items(kpis: dict[str, Any]) -> list[dict[str, Any]]:
         return {"label": label, "value": value, "note": note, "missing": _is_missing(value)}
 
     lands = kpis["cadastral_value_lands"] if kpis.get("land_rows") else "nessuno"
+    tiles = [
+        tile("Valore OMI fabbricati", kpis["asset_value"]),
+        tile("Valore catastale (base IMU)", kpis["cadastral_value"],
+             f"Fabbricati {kpis['cadastral_value_buildings']} · Terreni {lands}"),
+        tile("Superficie fabbricati", kpis["building_area"], kpis["building_area_note"]),
+        tile("Superficie terreni", kpis["grounds_area"], kpis["grounds_area_note"]),
+        tile("Rendita fabbricati", kpis["building_income"], kpis["building_income_note"]),
+        tile("Reddito dominicale", kpis["dominical_income"], kpis["dominical_income_note"]),
+        tile("Reddito agrario", kpis["agricultural_income"], kpis["agricultural_income_note"]),
+    ]
+    if kpis.get("asset_value_adjusted"):
+        tiles.append(tile(
+            "Valore fabbricati personalizzato",
+            kpis["asset_value_adjusted"],
+            kpis.get("asset_value_adjusted_note", ""),
+        ))
+    if kpis.get("asset_value_central"):
+        tiles.insert(1, tile(
+            "Stima centrale OMI per zona",
+            kpis["asset_value_central"],
+            kpis.get("asset_value_central_note", ""),
+        ))
     return [
-        {"kind": "tiles", "columns": 4, "tiles": [
-            tile("Valore OMI fabbricati", kpis["asset_value"]),
-            tile("Valore catastale (base IMU)", kpis["cadastral_value"],
-                 f"Fabbricati {kpis['cadastral_value_buildings']} · Terreni {lands}"),
-            tile("Superficie fabbricati", kpis["building_area"], kpis["building_area_note"]),
-            tile("Superficie terreni", kpis["grounds_area"], kpis["grounds_area_note"]),
-            tile("Rendita fabbricati", kpis["building_income"], kpis["building_income_note"]),
-            tile("Reddito dominicale", kpis["dominical_income"], kpis["dominical_income_note"]),
-            tile("Reddito agrario", kpis["agricultural_income"], kpis["agricultural_income_note"]),
-        ]},
+        {"kind": "tiles", "columns": 4, "tiles": tiles},
         {"kind": "note", "text": kpis["asset_value_note"]},
         {"kind": "note", "text": kpis["cadastral_value_note"]},
         {"kind": "note", "text": "Valori catastali annui sommati dalla visura, non redditi effettivi e non ponderati "
@@ -303,7 +358,8 @@ def _centre(feature: dict[str, Any]) -> tuple[float, float] | None:
 
 
 def _map_panels(markers: list[dict[str, Any]], features: list[dict[str, Any]], unmapped: list[dict[str, Any]],
-                sheets: list[dict[str, Any]], width_mm: float = 88.0, max_height_mm: float = 62.0) -> list[dict[str, Any]]:
+                sheets: list[dict[str, Any]], width_mm: float | None = None,
+                max_height_mm: float | None = None) -> list[dict[str, Any]]:
     by_comune: dict[str, dict[str, Any]] = {}
     for feature in features:
         props = feature.get("properties") or {}
@@ -333,6 +389,16 @@ def _map_panels(markers: list[dict[str, Any]], features: list[dict[str, Any]], u
                 panel = by_comune.setdefault(code, {"name": _s(item.get("municipality")), "rings": [], "dots": []})
                 panel["dots"].append((centre[0], centre[1], f"{_s(item.get('sheet'))}/{_s(item.get('parcel'))}"))
                 break
+
+    # The Typst page is A4 landscape with 10 mm margins; its map grid uses a
+    # 6 pt gutter and up to three columns. Scale each sketch to that actual
+    # column width. A single municipality should use the full map area instead
+    # of retaining the old three-column width (88 mm).
+    columns = min(max(len(by_comune), 1), 3)
+    if width_mm is None:
+        width_mm = (277.0 - (columns - 1) * (6 * 25.4 / 72)) / columns
+    if max_height_mm is None:
+        max_height_mm = {1: 86.0, 2: 72.0, 3: 62.0}[columns]
 
     panels = []
     for panel in by_comune.values():
@@ -412,25 +478,84 @@ def subject_context(doc: dict[str, Any], kpis: dict[str, Any] | None, lookup: di
         assessment = kpis.get("owner_assessment") or {}
         sections.append({"title": "Valutazione patrimoniale per quota e diritto", "badges": [], "items": _assessment_items(assessment)})
         sections.append({"title": "Indicatori del patrimonio catastale", "badges": [], "items": _kpi_items(kpis)})
+        manual_lines = []
+        for item in kpis.get("manual_valuation_assets") or []:
+            identity = item.get("identity") or {}
+            property_label = " · ".join(part for part in (
+                "Terreno" if item.get("kind") == "lands" else "Fabbricato",
+                identity.get("municipality"),
+                ("Fg. " + identity["sheet"]) if identity.get("sheet") else "",
+                ("Part. " + identity["parcel"]) if identity.get("parcel") else "",
+                ("Sub. " + identity["subunit"]) if identity.get("subunit") else "",
+            ) if part)
+            for valuation in item.get("valuations") or []:
+                detail = (
+                    f"{property_label}: {valuation.get('provider_label') or valuation.get('provider')} · "
+                    f"{valuation.get('range')}"
+                )
+                if valuation.get("source_date"):
+                    detail += f" · rilevata il {_it_date(valuation['source_date'])}"
+                if valuation.get("source_url"):
+                    detail += f" · {valuation['source_url']}"
+                if valuation.get("notes"):
+                    detail += f" · {valuation['notes']}"
+                manual_lines.append(detail)
+            omi_override = item.get("omi_override")
+            if omi_override:
+                manual_lines.append(
+                    f"{property_label}: fascia OMI personalizzata · {omi_override.get('range')}"
+                )
+        if manual_lines:
+            sections.append({
+                "title": "Valori personalizzati e provenienza delle valutazioni esterne",
+                "badges": [],
+                "items": [{"kind": "note", "text": line} for line in manual_lines],
+            })
 
     groups = [g for g in _items(root.get("GruppoUnitaImmobiliari"))]
     estimates = (kpis or {}).get("table_estimates") or []
     with_omi = any(e.get("range") for group in estimates for e in group.get("buildings", []))
+    with_preferred_building = any(
+        e.get("manual_valuations") for group in estimates for e in group.get("buildings", [])
+    )
+    with_preferred_land = any(
+        e.get("manual_valuations") for group in estimates for e in group.get("lands", [])
+    )
     for index, raw in enumerate(groups):
         group = merge_identifiers(raw)
-        buildings = _building_rows(group, (estimates[index] if index < len(estimates) else {}).get("buildings", []), with_omi)
-        lands = _land_rows(group, (estimates[index] if index < len(estimates) else {}).get("lands", []))
+        building_estimates = (estimates[index] if index < len(estimates) else {}).get("buildings", [])
+        land_estimates = (estimates[index] if index < len(estimates) else {}).get("lands", [])
+        buildings = _building_rows(group, building_estimates, with_omi, with_preferred_building)
+        lands = _land_rows(group, land_estimates, with_preferred_land)
         badges = [f"Catasto {_TIPO_CATASTO.get(_s(group.get('TipoCatasto')), _s(group.get('TipoCatasto')))}".strip(),
                   f"{len(buildings) + len(lands)} immobili"]
         if group.get("Sezione"):
             badges.append(f"Sez. {_s(group['Sezione'])}")
         items: list[dict[str, Any]] = []
         if buildings:
-            items.append(_table("Fabbricati (Catasto Fabbricati)", _BUILDING_HEADER + (["Stima OMI indicativa"] if with_omi else []),
-                                _BUILDING_WIDTHS + (["1.5fr"] if with_omi else []), _BUILDING_ALIGN + (["right"] if with_omi else []),
+            building_header = (
+                _BUILDING_HEADER
+                + (["Stima OMI indicativa"] if with_omi else [])
+                + (["Fonte preferita"] if with_preferred_building else [])
+            )
+            building_widths = (
+                _BUILDING_WIDTHS
+                + (["1.5fr"] if with_omi else [])
+                + (["1.8fr"] if with_preferred_building else [])
+            )
+            building_align = (
+                _BUILDING_ALIGN
+                + (["right"] if with_omi else [])
+                + (["right"] if with_preferred_building else [])
+            )
+            items.append(_table("Fabbricati (Catasto Fabbricati)", building_header,
+                                building_widths, building_align,
                                 buildings))
         if lands:
-            items.append(_table("Terreni (Catasto Terreni)", _LAND_HEADER, _LAND_WIDTHS, _LAND_ALIGN, lands))
+            land_header = _LAND_HEADER + (["Fonte preferita"] if with_preferred_land else [])
+            land_widths = _LAND_WIDTHS + (["1.8fr"] if with_preferred_land else [])
+            land_align = _LAND_ALIGN + (["right"] if with_preferred_land else [])
+            items.append(_table("Terreni (Catasto Terreni)", land_header, land_widths, land_align, lands))
         mutations = _mutations(group, as_of_date)
         if mutations:
             items.append({"kind": "mutations", "title": f"Titolarità · {len(mutations)} {'mutazione' if len(mutations) == 1 else 'mutazioni'}", "items": mutations})

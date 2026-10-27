@@ -1,0 +1,563 @@
+{#
+  Subject hub: what is archived for a person/company, laid out on the saved soggetto query (see
+  `web._subject_query_profile`). Two parts so the visura layout (catasto/entity.html) can put the summary above and the
+  parcel tree below its own content; the standalone page (subject_query_profile.html) shows both.
+#}
+{% from "catasto/visura_story.html" import unit_facts, property_history, ownership_history %}
+
+{% macro doc_chip(d) -%}
+<a class="badge text-bg-light border text-decoration-none fw-normal text-start" href="/documents/{{ d.id }}"
+   title="{{ d.title }}{% if d.date %} · {{ d.date }}{% endif %}">
+  <i class="fas fa-file me-1" aria-hidden="true"></i>{% if d.subunit %}sub {{ d.subunit }} · {% endif %}{{ d.date or d.title|truncate(24, True, '…') }}
+  {% if d.formats %}<span class="text-muted">· {{ d.formats|join('/') }}</span>{% endif %}
+</a>
+{%- endmacro %}
+
+{% macro current_ownership(owners, subject_code='') %}
+{% if owners %}
+<div class="mb-3">
+  <h5 class="h6"><i class="fas fa-users me-1 text-success" aria-hidden="true"></i>Intestatari attuali</h5>
+  <div class="table-responsive">
+    <table class="table table-sm align-middle mb-0">
+      <thead><tr><th>Intestatario</th><th>Codice fiscale</th><th>Diritto</th><th>Quota</th><th>Periodo</th></tr></thead>
+      <tbody>
+        {% for owner in owners %}
+        <tr{% if subject_code and owner.fiscal_code == subject_code %} class="table-primary"{% endif %}>
+          <td>{{ owner.name or '-' }}
+            {% if owner.birth_date or owner.birth_place %}<div class="small text-muted">{% if owner.birth_date %}nato/a il {{ owner.birth_date }}{% endif %}{% if owner.birth_place %} · {{ owner.birth_place }}{% endif %}</div>
+            {% elif owner.registered_office %}<div class="small text-muted">Sede {{ owner.registered_office }}</div>{% endif %}
+          </td>
+          <td class="font-monospace small">{{ owner.fiscal_code or '-' }}</td>
+          <td>{{ owner.right or '-' }}</td>
+          <td>{{ owner.quota or '-' }}</td>
+          <td class="small">{{ owner.period.label or '-' }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+{% endmacro %}
+
+{# Coverage cards + the subject's own visure/ispezioni. `embedded`: inside a visura page, which has its own document nav. #}
+{% macro summary(profile, route_prefix, embedded=false) %}
+{% set t = profile.totals %}
+<section class="container-fluid py-3" aria-label="Riepilogo archivio del soggetto">
+  <div class="card border-0 shadow-sm"><div class="card-body">
+    <div class="d-flex flex-wrap align-items-center gap-2 mb-3">
+      <h2 class="h5 mb-0"><i class="fas fa-folder-tree me-2" aria-hidden="true"></i>Archivio del soggetto</h2>
+      <span class="small text-muted">dalla ricerca per soggetto del {{ profile.responded_at_display or profile.requested_at_display or '-' }} (catasto {{ profile.tipo_catasto or '-' }})</span>
+      <a class="btn btn-outline-primary btn-sm" href="/results/{{ profile.request_id }}"><i class="fas fa-table-list me-1" aria-hidden="true"></i>Risultato completo</a>
+    </div>
+    <div class="row g-3">
+      <div class="col-6 col-md-4 col-xl"><div class="border rounded p-2 h-100"><div class="small text-muted">Immobili</div>
+        <div class="fs-5">{{ t.units }}</div><div class="small text-muted">{{ t.buildings }} fabbricati · {{ t.lands }} terreni</div></div></div>
+      <div class="col-6 col-md-4 col-xl"><div class="border rounded p-2 h-100"><div class="small text-muted">Particelle</div>
+        <div class="fs-5">{{ t.parcels }}</div><div class="small text-muted">{{ profile.provinces|length }} province</div></div></div>
+      <div class="col-6 col-md-4 col-xl"><div class="border rounded p-2 h-100"><div class="small text-muted">Visure immobile</div>
+        <div class="fs-5">{{ t.with_visure }}/{{ t.parcels }}</div><div class="small text-muted">particelle coperte</div></div></div>
+      <div class="col-6 col-md-4 col-xl"><div class="border rounded p-2 h-100"><div class="small text-muted">Planimetrie</div>
+        <div class="fs-5">{{ t.with_planimetrie }}/{{ t.parcels }}</div><div class="small text-muted">particelle coperte</div></div></div>
+      <div class="col-6 col-md-4 col-xl"><div class="border rounded p-2 h-100"><div class="small text-muted">Ispezioni ipotecarie</div>
+        <div class="fs-5">{{ t.with_ispezioni }}/{{ t.parcels }}</div><div class="small text-muted">particelle coperte</div></div></div>
+      <div class="col-6 col-md-4 col-xl"><div class="border rounded p-2 h-100"><div class="small text-muted">Ispezioni catastali</div>
+        <div class="fs-5">{{ t.with_ispezioni_catastali }}/{{ t.parcels }}</div><div class="small text-muted">particelle coperte</div></div></div>
+      <div class="col-6 col-md-4 col-xl"><div class="border rounded p-2 h-100"><div class="small text-muted">Mappe</div>
+        <div class="fs-5">{{ t.with_map }}/{{ t.parcels }}</div><div class="small text-muted">documenti o geometrie in cache</div></div></div>
+    </div>
+
+    {# provinces of the search: what the portal listed per province (fabbricati / terreni) #}
+    {% if profile.provinces %}
+    <div class="d-flex flex-wrap align-items-center gap-2 mt-3" aria-label="Province della ricerca">
+      <span class="small text-muted"><i class="fas fa-map me-1" aria-hidden="true"></i>Province:</span>
+      {% for pr in profile.provinces %}
+      <span class="badge text-bg-light border fw-normal">{{ pr.provincia or '-' }}{% if pr.codice %} ({{ pr.codice }}){% endif %}
+        · {{ pr.fabbricati if pr.fabbricati is not none else '-' }} fabbricati · {{ pr.terreni if pr.terreni is not none else '-' }} terreni</span>
+      {% endfor %}
+    </div>
+    {% endif %}
+
+    {# what is still to request, per kind (parcels of the search with nothing archived) #}
+    {% if profile.missing %}
+    <div class="mt-3">
+      <div class="small text-muted mb-1"><i class="fas fa-list-check me-1" aria-hidden="true"></i>Ancora da richiedere
+        <a class="ms-2" href="/forms">vai alle Query</a></div>
+      {% for m in profile.missing %}
+      <details class="mb-1">
+        <summary class="small">
+          <i class="fas {{ m.icon }} me-1" aria-hidden="true"></i>Senza {{ m.label|lower }}:
+          <strong>{{ m.count }}</strong> {{ 'particella' if m.count == 1 else 'particelle' }}
+        </summary>
+        {% if m.count %}
+        <div class="ms-3 mt-1">
+          {% for g in m.groups %}
+          <div class="small mb-1"><strong>{{ g.municipality }}</strong> <span class="text-muted">({{ g.province }}) · {{ g.total }}</span>:
+            <span class="text-muted">{{ g.parcels|join(', ') }}{% if g.total > g.parcels|length %}, …{% endif %}</span></div>
+          {% endfor %}
+          {% if m.more > 0 %}<div class="small text-muted">+{{ m.more }} altre particelle (elenco completo nel risultato della ricerca).</div>{% endif %}
+        </div>
+        {% endif %}
+      </details>
+      {% endfor %}
+    </div>
+    {% endif %}
+
+    {% if profile.other_queries %}
+    <details class="mt-3">
+      <summary class="small"><i class="fas fa-clock-rotate-left me-1" aria-hidden="true"></i>Altre ricerche per questo soggetto ({{ profile.other_queries|length }})</summary>
+      <ul class="list-unstyled small mb-0 mt-1 ms-3">
+        {% for q in profile.other_queries %}
+        <li><a href="/results/{{ q.request_id }}"><code>{{ q.request_id }}</code></a>
+          · catasto {{ q.tipo_catasto or '-' }} · {{ q.total_results if q.total_results is not none else '-' }} risultati
+          · {{ q.responded_at_display or '-' }}</li>
+        {% endfor %}
+      </ul>
+    </details>
+    {% endif %}
+
+    <div class="row g-4 mt-1">
+      {% if not embedded %}
+      <div class="col-lg-6">
+        <h3 class="h6"><i class="fas fa-id-card me-2" aria-hidden="true"></i>Visure per soggetto ({{ profile.subject_visure|length }})</h3>
+        {% if profile.subject_visure %}
+        <ul class="list-unstyled mb-0">
+          {% for v in profile.subject_visure %}
+          <li class="d-flex flex-wrap align-items-center gap-2 py-1 border-bottom">
+            <a href="{{ route_prefix }}/{{ profile.code }}?document={{ v.id }}">{{ v.title or ('Visura #' ~ v.id) }}</a>
+            {% if v.tipo_catasto %}<span class="badge text-bg-secondary">Catasto {{ v.tipo_catasto }}</span>{% endif %}
+            {% if v.subtype %}<span class="badge text-bg-light border">{{ v.subtype }}</span>{% endif %}
+            <span class="small text-muted">{{ v.date }}{% if v.formats %} · {{ v.formats|join('/') }}{% endif %}</span>
+            <a class="small ms-auto" href="/documents/{{ v.id }}/view" title="Apri il file della visura"><i class="fas fa-file-pdf me-1" aria-hidden="true"></i>file</a>
+          </li>
+          {% endfor %}
+        </ul>
+        {% else %}
+        <p class="text-muted mb-0">Nessuna visura per soggetto archiviata: esiste solo la ricerca. Richiedila dalla pagina <a href="/forms">Query</a>.</p>
+        {% endif %}
+      </div>
+      {% endif %}
+      <div class="{{ 'col-12' if embedded else 'col-lg-6' }}">
+        <h3 class="h6"><i class="fas fa-landmark me-2" aria-hidden="true"></i>Ispezioni ipotecarie del soggetto ({{ profile.subject_inspections|length }})</h3>
+        {% if profile.subject_inspections %}
+        <div class="d-flex flex-wrap gap-2">{% for d in profile.subject_inspections %}{{ doc_chip(d) }}{% endfor %}</div>
+        {% else %}
+        <p class="text-muted mb-0">Nessuna ispezione ipotecaria archiviata in cui compaia questo soggetto.</p>
+        {% endif %}
+      </div>
+    </div>
+  </div></div>
+</section>
+{% endmacro %}
+
+{# Page links of the parcel tree: every parcel of the query is listed, 50 per page. #}
+{% macro pager(profile) %}
+{% set pg = profile.pagination %}
+{% if pg.pages > 1 %}
+<nav aria-label="Pagine delle particelle" class="d-flex flex-wrap align-items-center gap-2 my-3">
+  <span class="small text-muted">Particelle {{ pg.first }}–{{ pg.last }} di {{ pg.total }}</span>
+  <ul class="pagination pagination-sm mb-0 ms-auto">
+    <li class="page-item{% if pg.page <= 1 %} disabled{% endif %}"><a class="page-link" href="?page={{ pg.page - 1 }}{{ pg.query }}#immobili">‹</a></li>
+    {% for n in range(1, pg.pages + 1) %}
+    {% if n == 1 or n == pg.pages or (n - pg.page)|abs <= 2 %}
+    <li class="page-item{% if n == pg.page %} active{% endif %}"><a class="page-link" href="?page={{ n }}{{ pg.query }}#immobili"{% if n == pg.page %} aria-current="page"{% endif %}>{{ n }}</a></li>
+    {% elif (n - pg.page)|abs == 3 %}
+    <li class="page-item disabled"><span class="page-link">…</span></li>
+    {% endif %}
+    {% endfor %}
+    <li class="page-item{% if pg.page >= pg.pages %} disabled{% endif %}"><a class="page-link" href="?page={{ pg.page + 1 }}{{ pg.query }}#immobili">›</a></li>
+  </ul>
+</nav>
+{% endif %}
+{% endmacro %}
+
+{# Province → comune → parcel tree with the units and the documents/maps stored for each parcel. #}
+{% macro parcels(profile) %}
+<section class="container-fluid py-3" id="immobili" aria-label="Immobili per particella">
+  {% if profile.provinces %}
+  <div class="card border-0 shadow-sm mb-3"><div class="card-body">
+    <h2 class="h5 mb-3"><i class="fas fa-map me-2" aria-hidden="true"></i>Province</h2>
+    <div class="table-responsive">
+      <table class="table table-sm table-striped align-middle mb-0">
+        <thead><tr><th>Provincia</th><th>Sigla</th><th class="text-end">Fabbricati</th><th class="text-end">Terreni</th></tr></thead>
+        <tbody>
+          {% for p in profile.provinces %}
+          <tr><td>{{ p.provincia or '-' }}</td><td>{{ p.codice or '-' }}</td>
+            <td class="text-end">{{ p.fabbricati if p.fabbricati is not none else '-' }}</td>
+            <td class="text-end">{{ p.terreni if p.terreni is not none else '-' }}</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div></div>
+  {% endif %}
+
+  <h2 class="h5 mb-3"><i class="fas fa-house me-2" aria-hidden="true"></i>Immobili per particella
+    <span class="small text-muted fw-normal">({{ profile.totals.units }} immobili in {{ profile.totals.parcels }} particelle)</span></h2>
+  {{ pager(profile) }}
+  {# one accordion item per comune; open the first archived parcel so its visura details are immediately visible #}
+  <div class="accordion shadow-sm mb-3" id="hub-comuni">
+  {% set ns = namespace(n=0) %}
+  {% for prov in profile.tree %}
+  {% for comune in prov.municipalities %}
+  {% set ns.n = ns.n + 1 %}
+  {% set cid = 'hub-comune-' ~ ns.n %}
+  <div class="accordion-item">
+    <h3 class="accordion-header" id="{{ cid }}-head">
+      <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#{{ cid }}"
+              aria-expanded="false" aria-controls="{{ cid }}">
+        <strong>{{ comune.name }}</strong>
+        <span class="text-muted ms-1">({{ prov.province }})</span>
+        <span class="badge text-bg-secondary ms-2">{{ comune.total }} particelle</span>
+        {% if comune.total > comune.parcels|length %}<span class="small text-muted ms-2">({{ comune.parcels|length }} in questa pagina)</span>{% endif %}
+      </button>
+    </h3>
+    <div id="{{ cid }}" class="accordion-collapse collapse" aria-labelledby="{{ cid }}-head">
+    <div class="accordion-body p-0">
+      {% for parcel in comune.parcels %}
+      <details class="border-bottom px-3 py-2">
+        <summary class="d-flex flex-wrap align-items-center gap-2">
+          {% if parcel.is_building %}<span class="badge text-bg-primary">Fabbricato</span>{% else %}<span class="badge text-bg-success">Terreno</span>{% endif %}
+          <span class="fw-semibold">{% if parcel.section %}Sez. {{ parcel.section }} · {% endif %}Fg {{ parcel.sheet }} · P.lla {{ parcel.parcel }}</span>
+          <span class="small text-muted">{{ parcel.units|length }} {{ 'unità' if parcel.is_building else 'porzioni' }}</span>
+          {% for kind, label, icon in profile.kinds %}
+            {% set n = parcel.documents[kind]|length %}
+            <span class="badge {{ 'text-bg-success' if n else 'text-bg-light border text-muted' }}" title="{{ label }}"><i class="fas {{ icon }} me-1" aria-hidden="true"></i>{{ n }}</span>
+          {% endfor %}
+          <span class="badge {{ 'text-bg-success' if parcel.has_map or parcel.documents.mappe else 'text-bg-light border text-muted' }}" title="Mappa catastale"><i class="fas fa-map-location-dot me-1" aria-hidden="true"></i>{{ 'mappa' if parcel.has_map or parcel.documents.mappe else 'no mappa' }}</span>
+          <span class="badge {{ 'text-bg-success' if parcel.ownership else 'text-bg-light border text-muted' }}" title="Titolarità completa dalle visure"><i class="fas fa-users me-1" aria-hidden="true"></i>{{ 'titolari' if parcel.ownership else 'no titolari' }}</span>
+        </summary>
+
+        <div class="table-responsive mt-2">
+          <table class="table table-sm align-middle mb-2">
+            <thead><tr><th>Sub</th><th>Titolarità</th><th>Quota</th><th>Indirizzo / Qualità</th><th>Cat. / Classe</th><th>Consistenza / Sup.</th>
+              <th class="text-end">Rendita</th><th class="text-end">R. dom.</th><th class="text-end">R. agr.</th></tr></thead>
+            <tbody>
+              {% for u in parcel.units %}
+              <tr>
+                <td>{{ u.subunit or '-' }}{% if u.enriched_from %} <a href="/documents/{{ u.enriched_from }}" class="text-decoration-none" title="Completato dalla visura: {{ u.enriched_fields|join(', ') }}"><i class="fas fa-circle-plus text-success" aria-label="Completato dalla visura"></i></a>{% endif %}</td><td>{{ u.right_type or '-' }}</td><td>{{ u.ownership_share or '-' }}</td>
+                <td>{% if u.property_type == 'building' %}{{ u.address or '-' }}{% else %}{{ u.quality or '-' }}{% endif %}</td>
+                <td>{% if u.property_type == 'building' %}{{ u.category or '-' }}{% else %}{{ u.cadastral_class or '-' }}{% endif %}</td>
+                <td>{% if u.property_type == 'building' %}{{ u.consistency or '-' }}{% else %}{{ u.area or '-' }}{% endif %}</td>
+                <td class="text-end">{{ u.income or '-' }}</td><td class="text-end">{{ u.dominical_income or '-' }}</td><td class="text-end">{{ u.agricultural_income or '-' }}</td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+
+        {% if parcel.ownership %}
+        <div class="mb-3">
+          <div class="small text-muted mb-1"><i class="fas fa-file-circle-check me-1" aria-hidden="true"></i>Visure per immobile e dati completi</div>
+          {% for o in parcel.ownership %}
+          <div class="border rounded p-3 mb-3">
+            <div class="d-flex flex-wrap align-items-center gap-2 mb-3">
+              <strong>{% if o.subunit %}Sub {{ o.subunit }} · {% endif %}Visura al {{ o.as_of or '-' }}</strong>
+              <a class="btn btn-sm btn-outline-secondary" href="/documents/{{ o.document_id }}"><i class="fas fa-arrow-up-right-from-square me-1" aria-hidden="true"></i>Apri documento</a>
+            </div>
+
+            {% if o.view and o.unit_view %}
+            <h4 class="h6"><i class="fas fa-list-check me-1 text-primary" aria-hidden="true"></i>Situazione catastale</h4>
+            {{ unit_facts(o.view, o.unit_view) }}
+            {{ current_ownership(o.unit_view.current_owners, profile.code) }}
+
+            {% if o.financial %}
+            <div class="alert alert-light border py-2 px-3 mb-3">
+              <div class="fw-semibold"><i class="fas fa-coins me-1 text-warning" aria-hidden="true"></i>Valori e redditi catastali</div>
+              <div class="small mt-1">
+                {% if o.financial.base_value %}{{ o.financial.base_label }}: € {{ o.financial.base_value }}{% endif %}
+                {% if o.financial.other_income %} · Reddito agrario: € {{ o.financial.other_income }}{% endif %}
+                {% if o.financial.cadastral_value %}<br><strong>Valore catastale (base imponibile IMU): {{ o.financial.cadastral_value }}</strong>
+                  <span class="text-muted">· {{ o.financial.formula }}</span>
+                {% else %}<br><strong>{{ o.financial.note }}</strong>{% endif %}
+              </div>
+              {% if o.financial.cadastral_value %}<div class="small text-muted mt-1">{{ o.financial.note }}</div>{% endif %}
+            </div>
+            {% endif %}
+
+            {{ property_history(o.view) }}
+            {{ ownership_history(o.view, color='#0d6efd', badge='bg-primary') }}
+
+            <details class="small mt-2">
+              <summary>Dati della richiesta e della visura</summary>
+              <dl class="row mt-2 mb-0">
+                {% if o.view.header.title %}<dt class="col-sm-3">Visura</dt><dd class="col-sm-9">{{ o.view.header.title }}</dd>{% endif %}
+                {% if o.view.header.view_type %}<dt class="col-sm-3">Tipo</dt><dd class="col-sm-9">{{ o.view.header.view_type }}</dd>{% endif %}
+                {% if o.view.header.service %}<dt class="col-sm-3">Servizio</dt><dd class="col-sm-9">{{ o.view.header.service }}</dd>{% endif %}
+                {% if o.view.header.provenance %}<dt class="col-sm-3">Provenienza</dt><dd class="col-sm-9">{{ o.view.header.provenance }}</dd>{% endif %}
+                {% if o.view.request %}
+                  {% for key, value in o.view.request.items() if value and key != 'identifier' %}
+                  <dt class="col-sm-3">Richiesta · {{ key }}</dt><dd class="col-sm-9">{{ value }}</dd>
+                  {% endfor %}
+                {% endif %}
+                {% if o.view.liquidation %}
+                  {% for key, value in o.view.liquidation.items() if value %}
+                  <dt class="col-sm-3">Liquidazione · {{ key }}</dt><dd class="col-sm-9">{{ value }}</dd>
+                  {% endfor %}
+                {% endif %}
+              </dl>
+            </details>
+            {% endif %}
+          </div>
+          {% endfor %}
+        </div>
+        {% endif %}
+
+        {% set parcel_requests = parcel.requests|default({}, true) %}
+        {% set archived = parcel.documents.values()|map('length')|sum + (parcel_requests.values()|map('length')|sum) + (1 if parcel.has_map else 0) %}
+        {% if not archived %}
+        <p class="small text-muted mb-2">Nessun documento archiviato per questa particella.</p>
+        {% if parcel.is_building and parcel.map_query %}<a class="btn btn-sm btn-outline-secondary mb-2" href="/3d?q={{ parcel.map_query|urlencode }}"><i class="fas fa-cube me-1" aria-hidden="true"></i>Vista 3D</a>{% endif %}
+        {% else %}
+        <div class="row g-2 pb-2">
+          {% for kind, label, icon in profile.kinds %}
+          <div class="col-md-6 col-xl-3">
+            <div class="small text-muted mb-1"><i class="fas {{ icon }} me-1" aria-hidden="true"></i>{{ label }}</div>
+            <div class="d-flex flex-wrap gap-1">
+              {% for d in parcel.documents.get(kind, []) %}{{ doc_chip(d) }}{% endfor %}
+              {% for item in parcel_requests.get(kind, []) %}
+              <a class="badge text-bg-light border text-decoration-none fw-normal text-start" href="/results/{{ item.request_id }}"
+                 title="{{ item.label }}{% if item.date %} · {{ item.date }}{% endif %}{% if item.total_results is not none %} · {{ item.total_results }} risultati{% endif %}">
+                <i class="fas fa-arrow-up-right-from-square me-1" aria-hidden="true"></i>{{ item.label }}{% if item.date %} · {{ item.date }}{% endif %}
+                {% if item.total_results is not none %}<span class="text-muted">· {{ item.total_results }} risultati</span>{% endif %}
+              </a>
+              {% endfor %}
+              {% if kind == 'mappe' and parcel.has_map %}<span class="badge text-bg-success fw-normal" title="Geometria catastale della particella in cache locale"><i class="fas fa-draw-polygon me-1" aria-hidden="true"></i>geometria in cache</span>{% endif %}
+              {% if not parcel.documents.get(kind, []) and not parcel_requests.get(kind, []) and not (kind == 'mappe' and parcel.has_map) %}<span class="small text-muted">non archiviata</span>{% endif %}
+            </div>
+          </div>
+          {% endfor %}
+          {% if parcel.other_units_documents %}
+          <div class="col-12 small text-muted">+{{ parcel.other_units_documents }} documenti di altre unità della stessa particella (non intestate a questo soggetto).</div>
+          {% endif %}
+          {% if parcel.documents.altri %}
+          <div class="col-12"><div class="small text-muted mb-1"><i class="fas fa-folder-open me-1" aria-hidden="true"></i>Altri documenti</div>
+            <div class="d-flex flex-wrap gap-1">{% for d in parcel.documents.altri %}{{ doc_chip(d) }}{% endfor %}</div></div>
+          {% endif %}
+          <div class="col-12 d-flex flex-wrap gap-2">
+            {% if parcel.map_document_id %}<a class="btn btn-sm btn-outline-secondary" href="/documents/{{ parcel.map_document_id }}"><i class="fas fa-map-location-dot me-1" aria-hidden="true"></i>Mappa dalla visura</a>{% endif %}
+            {% if parcel.is_building and parcel.map_query %}<a class="btn btn-sm btn-outline-secondary" href="/3d?q={{ parcel.map_query|urlencode }}"><i class="fas fa-cube me-1" aria-hidden="true"></i>Vista 3D</a>{% endif %}
+          </div>
+        </div>
+        {% endif %}
+      </details>
+      {% endfor %}
+    </div>
+    </div>
+  </div>
+  {% endfor %}
+  {% endfor %}
+  </div>
+  {% if not profile.tree %}<p class="text-muted">Nessun immobile nella ricerca.</p>{% endif %}
+  {{ pager(profile) }}
+
+</section>
+{% endmacro %}
+
+{# Full cadastral sheets: each parcel keeps its saved query data, Visura details, ownership and related documents together. #}
+{% macro documented_parcels(profile, group=none) %}
+{% if profile.documented_tree %}
+{% if group %}
+<div class="hub-group-parcels mt-3" role="group" aria-label="Dettagli catastali e documenti delle particelle">
+{% else %}
+<section class="container-fluid py-3" id="schede-particelle" aria-label="Schede catastali per particella">
+  <h2 class="h5 mb-3"><i class="fas fa-folder-open me-2" aria-hidden="true"></i>Schede catastali per particella
+    <span class="small text-muted fw-normal">(dati catastali, titolarità, valori fiscali, storia e documenti)</span></h2>
+  {# one folded accordion item per comune: the parcels (and their documents) open on demand #}
+  <div class="accordion shadow-sm mb-3" id="hub-comuni">
+{% endif %}
+  {% set ns = namespace(n=0, visura_municipality_open=false, visura_parcel_open=false) %}
+  {% for prov in profile.documented_tree %}
+  {% for comune in prov.municipalities %}
+  {% set ns.n = ns.n + 1 %}
+  {% set cid = 'hub-comune-' ~ ns.n %}
+  {% set has_visura = comune.parcels|selectattr('ownership')|list|length > 0 %}
+  {% set comune_open = ns.n == 1 or (has_visura and not ns.visura_municipality_open) %}
+  {% if has_visura and not ns.visura_municipality_open %}{% set ns.visura_municipality_open = true %}{% endif %}
+  {% if not group %}
+  <div class="accordion-item">
+    <h3 class="accordion-header" id="{{ cid }}-head">
+      <button class="accordion-button{% if not comune_open %} collapsed{% endif %}" type="button" data-bs-toggle="collapse" data-bs-target="#{{ cid }}"
+              aria-expanded="{{ 'true' if comune_open else 'false' }}" aria-controls="{{ cid }}">
+        <strong>{{ comune.name }}</strong>
+        <span class="text-muted ms-1">({{ prov.province }})</span>
+        <span class="badge text-bg-secondary ms-2">{{ comune.total }} particelle</span>
+        {% if comune.total > comune.parcels|length %}<span class="small text-muted ms-2">({{ comune.parcels|length }} in questa pagina)</span>{% endif %}
+      </button>
+    </h3>
+    <div id="{{ cid }}" class="accordion-collapse collapse{% if comune_open %} show{% endif %}" aria-labelledby="{{ cid }}-head">
+    <div class="accordion-body p-0">
+  {% endif %}
+      {% for parcel in comune.parcels %}
+      {% set parcel_matches = namespace(found=not group) %}
+      {% if group %}
+        {% set rows_raw = group.ImmobileFabbricatiS if parcel.is_building else group.ImmobileTerreniS %}
+        {% set rows = rows_raw if rows_raw is sequence and rows_raw is not string and rows_raw is not mapping else ([rows_raw] if rows_raw else []) %}
+        {% for row in rows %}
+          {% set data_ids = row.DatiIdentificativi or {} %}
+          {% set data_ids = data_ids if data_ids is mapping else (data_ids[0] if data_ids else {}) %}
+          {% set row_id = data_ids.IdentificativoDefinitivo or {} %}
+          {% set row_id = row_id if row_id is mapping else (row_id[0] if row_id else {}) %}
+          {% set row_municipality = row_id.CodiceComune or group.CodiceComune or '' %}
+          {% set row_province = row_id.Provincia or group.Provincia or '' %}
+          {% set row_section = row_id.SezUrbana or row_id.Sezione or group.Sezione or '' %}
+          {% set row_parcel = row_id.ParticellaNum or row_id.Particella or '' %}
+          {% set row_subunit = row_id.Subalterno or '' %}
+          {% set subunits = parcel.units|selectattr('subunit')|map(attribute='subunit')|map('int')|list %}
+          {% set subunit_matches = not row_subunit or (row_subunit|string|int) in subunits %}
+          {% set municipality_matches = (row_municipality and parcel.municipality_code and row_municipality|string|upper == parcel.municipality_code|string|upper) or (not row_municipality and (row_id.Comune or group.Descrizione or '')|upper == comune.name|upper) %}
+          {% set province_matches = not row_province or not parcel.province_code or row_province|string|upper == parcel.province_code|string|upper %}
+          {% set section_matches = not row_section or row_section|string|upper == parcel.section|string|upper %}
+          {% if municipality_matches and province_matches and section_matches and subunit_matches and row_id.Foglio|string|int == parcel.sheet|string|int and row_parcel|string|int == parcel.parcel|string|int %}
+            {% set parcel_matches.found = true %}
+          {% endif %}
+        {% endfor %}
+      {% endif %}
+      {% if parcel_matches.found %}
+      {% set parcel_open = parcel.ownership and not ns.visura_parcel_open %}
+      {% if parcel_open %}{% set ns.visura_parcel_open = true %}{% endif %}
+      <details class="border-bottom px-3 py-2"{% if parcel_open %} open{% endif %}>
+        <summary class="d-flex flex-wrap align-items-center gap-2">
+          {% if parcel.is_building %}<span class="badge text-bg-primary">Fabbricato</span>{% else %}<span class="badge text-bg-success">Terreno</span>{% endif %}
+          <span class="fw-semibold">{% if parcel.section %}Sez. {{ parcel.section }} · {% endif %}Fg {{ parcel.sheet }} · P.lla {{ parcel.parcel }}</span>
+          <span class="small text-muted">{{ parcel.units|length }} {{ 'unità' if parcel.is_building else 'porzioni' }}</span>
+          {% for kind, label, icon in profile.kinds %}
+            {% set n = parcel.documents[kind]|length %}
+            <span class="badge {{ 'text-bg-success' if n else 'text-bg-light border text-muted' }}" title="{{ label }}"><i class="fas {{ icon }} me-1" aria-hidden="true"></i>{{ n }}</span>
+          {% endfor %}
+          <span class="badge {{ 'text-bg-success' if parcel.has_map or parcel.documents.mappe else 'text-bg-light border text-muted' }}" title="Mappa catastale"><i class="fas fa-map-location-dot me-1" aria-hidden="true"></i>{{ 'mappa' if parcel.has_map or parcel.documents.mappe else 'no mappa' }}</span>
+          <span class="badge {{ 'text-bg-success' if parcel.ownership else 'text-bg-light border text-muted' }}" title="Titolarità completa dalle visure"><i class="fas fa-users me-1" aria-hidden="true"></i>{{ 'titolari' if parcel.ownership else 'no titolari' }}</span>
+        </summary>
+
+        <div class="table-responsive mt-2">
+          <table class="table table-sm align-middle mb-2">
+            <thead><tr><th>Sub</th><th>Titolarità</th><th>Quota</th><th>Indirizzo / Qualità</th><th>Cat. / Classe</th><th>Consistenza / Sup.</th>
+              <th class="text-end">Rendita</th><th class="text-end">R. dom.</th><th class="text-end">R. agr.</th></tr></thead>
+            <tbody>
+              {% for u in parcel.units %}
+              <tr>
+                <td>{{ u.subunit or '-' }}{% if u.enriched_from %} <a href="/documents/{{ u.enriched_from }}" class="text-decoration-none" title="Completato dalla visura: {{ u.enriched_fields|join(', ') }}"><i class="fas fa-circle-plus text-success" aria-label="Completato dalla visura"></i></a>{% endif %}</td><td>{{ u.right_type or '-' }}</td><td>{{ u.ownership_share or '-' }}</td>
+                <td>{% if u.property_type == 'building' %}{{ u.address or '-' }}{% else %}{{ u.quality or '-' }}{% endif %}</td>
+                <td>{% if u.property_type == 'building' %}{{ u.category or '-' }}{% else %}{{ u.cadastral_class or '-' }}{% endif %}</td>
+                <td>{% if u.property_type == 'building' %}{{ u.consistency or '-' }}{% else %}{{ u.area or '-' }}{% endif %}</td>
+                <td class="text-end">{{ u.income or '-' }}</td><td class="text-end">{{ u.dominical_income or '-' }}</td><td class="text-end">{{ u.agricultural_income or '-' }}</td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+
+        {% if parcel.ownership %}
+        <div class="mb-3">
+          <div class="small text-muted mb-1"><i class="fas fa-file-circle-check me-1" aria-hidden="true"></i>Visure per immobile e dati completi</div>
+          {% for o in parcel.ownership %}
+          <div class="border rounded p-3 mb-3">
+            <div class="d-flex flex-wrap align-items-center gap-2 mb-3">
+              <strong>{% if o.subunit %}Sub {{ o.subunit }} · {% endif %}Visura al {{ o.as_of or '-' }}</strong>
+              <a class="btn btn-sm btn-outline-secondary" href="/documents/{{ o.document_id }}"><i class="fas fa-arrow-up-right-from-square me-1" aria-hidden="true"></i>Apri documento</a>
+            </div>
+
+            {% if o.view and o.unit_view %}
+            <h4 class="h6"><i class="fas fa-list-check me-1 text-primary" aria-hidden="true"></i>Situazione catastale</h4>
+            {{ unit_facts(o.view, o.unit_view) }}
+            {{ current_ownership(o.unit_view.current_owners, profile.code) }}
+
+            {% if o.financial %}
+            <div class="alert alert-light border py-2 px-3 mb-3">
+              <div class="fw-semibold"><i class="fas fa-coins me-1 text-warning" aria-hidden="true"></i>Valori e redditi catastali</div>
+              <div class="small mt-1">
+                {% if o.financial.base_value %}{{ o.financial.base_label }}: € {{ o.financial.base_value }}{% endif %}
+                {% if o.financial.other_income %} · Reddito agrario: € {{ o.financial.other_income }}{% endif %}
+                {% if o.financial.cadastral_value %}<br><strong>Valore catastale (base imponibile IMU): {{ o.financial.cadastral_value }}</strong>
+                  <span class="text-muted">· {{ o.financial.formula }}</span>
+                {% else %}<br><strong>{{ o.financial.note }}</strong>{% endif %}
+              </div>
+              {% if o.financial.cadastral_value %}<div class="small text-muted mt-1">{{ o.financial.note }}</div>{% endif %}
+            </div>
+            {% endif %}
+
+            {{ property_history(o.view) }}
+            {{ ownership_history(o.view, color='#0d6efd', badge='bg-primary') }}
+
+            <details class="small mt-2">
+              <summary>Dati della richiesta e della visura</summary>
+              <dl class="row mt-2 mb-0">
+                {% if o.view.header.title %}<dt class="col-sm-3">Visura</dt><dd class="col-sm-9">{{ o.view.header.title }}</dd>{% endif %}
+                {% if o.view.header.view_type %}<dt class="col-sm-3">Tipo</dt><dd class="col-sm-9">{{ o.view.header.view_type }}</dd>{% endif %}
+                {% if o.view.header.service %}<dt class="col-sm-3">Servizio</dt><dd class="col-sm-9">{{ o.view.header.service }}</dd>{% endif %}
+                {% if o.view.header.provenance %}<dt class="col-sm-3">Provenienza</dt><dd class="col-sm-9">{{ o.view.header.provenance }}</dd>{% endif %}
+                {% if o.view.request %}
+                  {% for key, value in o.view.request.items() if value and key != 'identifier' %}
+                  <dt class="col-sm-3">Richiesta · {{ key }}</dt><dd class="col-sm-9">{{ value }}</dd>
+                  {% endfor %}
+                {% endif %}
+                {% if o.view.liquidation %}
+                  {% for key, value in o.view.liquidation.items() if value %}
+                  <dt class="col-sm-3">Liquidazione · {{ key }}</dt><dd class="col-sm-9">{{ value }}</dd>
+                  {% endfor %}
+                {% endif %}
+              </dl>
+            </details>
+            {% endif %}
+          </div>
+          {% endfor %}
+        </div>
+        {% endif %}
+
+        {% set parcel_requests = parcel.requests|default({}, true) %}
+        {% set archived = parcel.documents.values()|map('length')|sum + (parcel_requests.values()|map('length')|sum) + (1 if parcel.has_map else 0) %}
+        {% if not archived %}
+        <p class="small text-muted mb-2">Nessun documento archiviato per questa particella.</p>
+        {% if parcel.is_building and parcel.map_query %}<a class="btn btn-sm btn-outline-secondary mb-2" href="/3d?q={{ parcel.map_query|urlencode }}"><i class="fas fa-cube me-1" aria-hidden="true"></i>Vista 3D</a>{% endif %}
+        {% else %}
+        <div class="row g-2 pb-2">
+          {% for kind, label, icon in profile.kinds %}
+          <div class="col-md-6 col-xl-3">
+            <div class="small text-muted mb-1"><i class="fas {{ icon }} me-1" aria-hidden="true"></i>{{ label }}</div>
+            <div class="d-flex flex-wrap gap-1">
+              {% for d in parcel.documents.get(kind, []) %}{{ doc_chip(d) }}{% endfor %}
+              {% for item in parcel_requests.get(kind, []) %}
+              <a class="badge text-bg-light border text-decoration-none fw-normal text-start" href="/results/{{ item.request_id }}"
+                 title="{{ item.label }}{% if item.date %} · {{ item.date }}{% endif %}{% if item.total_results is not none %} · {{ item.total_results }} risultati{% endif %}">
+                <i class="fas fa-arrow-up-right-from-square me-1" aria-hidden="true"></i>{{ item.label }}{% if item.date %} · {{ item.date }}{% endif %}
+                {% if item.total_results is not none %}<span class="text-muted">· {{ item.total_results }} risultati</span>{% endif %}
+              </a>
+              {% endfor %}
+              {% if kind == 'mappe' and parcel.has_map %}<span class="badge text-bg-success fw-normal" title="Geometria catastale della particella in cache locale"><i class="fas fa-draw-polygon me-1" aria-hidden="true"></i>geometria in cache</span>{% endif %}
+              {% if not parcel.documents.get(kind, []) and not parcel_requests.get(kind, []) and not (kind == 'mappe' and parcel.has_map) %}<span class="small text-muted">non archiviata</span>{% endif %}
+            </div>
+          </div>
+          {% endfor %}
+          {% if parcel.other_units_documents %}
+          <div class="col-12 small text-muted">+{{ parcel.other_units_documents }} documenti di altre unità della stessa particella (non intestate a questo soggetto).</div>
+          {% endif %}
+          {% if parcel.documents.altri %}
+          <div class="col-12"><div class="small text-muted mb-1"><i class="fas fa-folder-open me-1" aria-hidden="true"></i>Altri documenti</div>
+            <div class="d-flex flex-wrap gap-1">{% for d in parcel.documents.altri %}{{ doc_chip(d) }}{% endfor %}</div></div>
+          {% endif %}
+          <div class="col-12 d-flex flex-wrap gap-2">
+            {% if parcel.map_document_id %}<a class="btn btn-sm btn-outline-secondary" href="/documents/{{ parcel.map_document_id }}"><i class="fas fa-map-location-dot me-1" aria-hidden="true"></i>Mappa dalla visura</a>{% endif %}
+            {% if parcel.is_building and parcel.map_query %}<a class="btn btn-sm btn-outline-secondary" href="/3d?q={{ parcel.map_query|urlencode }}"><i class="fas fa-cube me-1" aria-hidden="true"></i>Vista 3D</a>{% endif %}
+          </div>
+        </div>
+        {% endif %}
+      </details>
+      {% endif %}
+      {% endfor %}
+  {% if not group %}
+    </div>
+    </div>
+  </div>
+  {% endif %}
+  {% endfor %}
+  {% endfor %}
+{% if not group %}
+  </div>
+  {% if not profile.tree %}<p class="text-muted">Nessun immobile nella ricerca.</p>{% endif %}
+
+</section>
+{% else %}
+</div>
+{% endif %}
+{% endif %}
+{% endmacro %}

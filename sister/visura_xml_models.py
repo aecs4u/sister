@@ -58,6 +58,8 @@ class BuildingUnit(SQLModel, table=True):
     cadastral_income_eur: Optional[Decimal] = Field(default=None)
     consistency_value: Optional[Decimal] = Field(default=None)
     consistency_unit: Optional[str] = Field(default=None)
+    consistency_sqm: Optional[Decimal] = Field(default=None)
+    consistency_rooms: Optional[Decimal] = Field(default=None)
     total_area_sqm: Optional[Decimal] = Field(default=None)
     excluded_area_sqm: Optional[Decimal] = Field(default=None)
     planimetria_filed_on: Optional[date] = Field(default=None)

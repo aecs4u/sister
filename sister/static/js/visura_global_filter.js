@@ -59,9 +59,25 @@
         filterBar.appendChild(count);
         filterBar.appendChild(exportButton);
 
+        var groups = Array.prototype.slice.call(document.querySelectorAll('details.visura-group'));
+        if (groups.length > 1) {
+            [['Apri tutti', true, 'fa-angles-down'], ['Chiudi tutti', false, 'fa-angles-up']].forEach(function (entry) {
+                var button = document.createElement('button');
+                button.type = 'button';
+                button.className = 'btn btn-sm btn-outline-secondary';
+                button.innerHTML = '<i class="fas ' + entry[2] + ' me-1" aria-hidden="true"></i>' + entry[0];
+                button.addEventListener('click', function () {
+                    groups.forEach(function (group) { if (!group.hidden) group.open = entry[1]; });
+                });
+                filterBar.insertBefore(button, exportButton);
+            });
+        }
+
+        var firstGroups = document.querySelector('.visura-groups');
         var firstTables = document.querySelector('.imm-tables');
         var firstHeading = firstTables && firstTables.previousElementSibling;
-        if (firstHeading && /^H[1-6]$/.test(firstHeading.tagName)) firstHeading.before(filterBar);
+        if (firstGroups) firstGroups.before(filterBar);
+        else if (firstHeading && /^H[1-6]$/.test(firstHeading.tagName)) firstHeading.before(filterBar);
         else if (firstTables) firstTables.before(filterBar);
 
         var rows = tables.reduce(function (all, table) {
@@ -133,6 +149,26 @@
                 if (matches) visible += 1;
             });
             count.textContent = visible + ' di ' + rows.length + ' righe';
+            syncGroups(query);
+        }
+
+        // A filter opens the groups that have matching rows and hides the others; clearing it restores what was open.
+        function syncGroups(query) {
+            groups.forEach(function (group) {
+                var tableRows = group.querySelectorAll('.imm-tables tbody tr');
+                var matching = Array.prototype.some.call(tableRows, function (row) { return row.style.display !== 'none'; });
+                if (query) {
+                    if (group.dataset.openBefore === undefined) group.dataset.openBefore = group.open ? '1' : '0';
+                    group.hidden = tableRows.length > 0 && !matching;
+                    if (matching) group.open = true;
+                } else {
+                    if (group.dataset.openBefore !== undefined) {
+                        group.open = group.dataset.openBefore === '1';
+                        delete group.dataset.openBefore;
+                    }
+                    group.hidden = false;
+                }
+            });
         }
 
         input.addEventListener('input', applyFilter);

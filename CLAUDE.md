@@ -61,7 +61,7 @@ uv run python -m pytest
 # CLI
 uv run sister health
 uv run sister query search -P Roma -C ROMA -F 100 -p 50 --wait
-uv run sister query soggetto --cf RSSMRI85E28H501E --wait
+uv run sister query soggetto --cf CF_DI_ESEMPIO --wait
 uv run sister query workflow --preset due-diligence -P Roma -C ROMA -F 100 -p 50
 uv run sister db init
 # Fill the structured tables from data already stored (responses JSON, XML documents); idempotent, writes to the app schema
@@ -102,6 +102,28 @@ uv run sister-mcp
   it expires after about 30 minutes and is lost when Chrome restarts. Details: `docs/portal_session.md`.
 - uvicorn runs with `--reload` over every `*.py` (also `scripts/`, `tests/`): editing Python while a batch/crawler
   runs restarts the service and drops the request in flight. A restart does **not** log out (CDP mode).
+- **A SISTER session lasts ~30 minutes from the login, whatever the activity** (measured 2026-10-26: 29.6, 29.8 and 30.4 min;
+  the keep-alive does not extend it). Run bulk work with `scripts/run_in_session.py --batch <dir> ...` right after the login:
+  it checks the browser, starts the service, drops answered rows and wrong codici fiscali from the plans, proves the session with
+  one real search, runs `query batch --resume` until `--minutes` (26) after the login or the first expired-session answer,
+  interrupts cleanly and stops the service. `scripts/batch_progress.py <dir>...` shows the progress bar.
+- **The service never logs in by itself** (`SISTER_AUTO_RELOGIN=false`, `browser._ensure_authenticated`). aecs4u-auth's keep-alive
+  marks a healthy session invalid whenever its province-menu test runs on a result page, and its answer to that was a recovery and then
+  a CIE login in the user's tab, waiting for a phone approval nobody expected and blocking the worker. The check now tries the
+  recovery navigation (back to the Visure page) and otherwise fails with "Sessione SISTER scaduta o non valida".
+- `query batch --resume` does not resend a row whose answer was SISTER's own "NESSUNA CORRISPONDENZA" (`batch.FINAL_ERRORS`);
+  a codice fiscale with a wrong check character (`sister/fiscal_code.py`) is answered by SISTER with a confirmation page and
+  is reported the same way, never confirmed. A failed search keeps its page in `logs/errors/<request id>.html`.
+- **A subject search must cover Fabbricati and Terreni (`tipo_catasto=E`).** The generic route `/visura/{search_type}` used to default to `T`,
+  so every `soggetto-immobili` of 2026-10-26/27 (335 subjects) listed only Terreni and a "nessuna corrispondenza" was not final (a subject with
+  fabbricati only got it). Now `E` is the default for `soggetto-immobili`/`soggetto-documento`; `run_in_session.answered_codes` ignores answers
+  with another `cadastre_type`, and `prune_plan` writes `tipo_catasto: E` into the plan rows. `run_in_session.py` shows a live bar
+  (all plans, SISTER session time left, rows still possible; `batch_progress.Dashboard`).
+- **"Tipo richiesta" (Attualità / Storica)** of the subject forms is `tipo_richiesta` (`attualita`|`storica`, default the portal's Attualità), set by
+  `utils._select_tipo_richiesta`, which raises if the form lacks the control; `scripts/build_batch_from_list.py --tipo-richiesta storica` puts it in a plan.
+- Speed: the time of a search is SISTER's own answer (~1.2 s per page, 4-6 pages). Measured 2026-10-26: no gain from blocking/caching
+  static files (`SISTER_CACHE_STATIC`, off) nor from waiting for `load` instead of `networkidle` (`SISTER_FAST_NAV`, off: more errors);
+  `SISTER_PAGE_LOG_FAST` (on) skips the HTML/screenshot of every step, `SISTER_ACTION_TIMEOUT_SECONDS` (15) shortens a failing row.
 - Operational endpoints need `X-API-Key` when `API_KEY` is set (CLI: `VISURA_API_KEY`).
 - Web UI routes (including `/`, `/profile`) **fail closed** (`sister/web.py::_require_auth`): browsers are redirected to `/auth/login?next=…`,
   other clients get 401. Only an explicit `REQUIRE_AUTHENTICATION=false` (dev) lets anonymous requests through; `.env` is `true`
@@ -133,6 +155,24 @@ uv run sister-mcp
 - Logins: `LOCAL_USERS_FILE` (in `.env`) points at `local_users.sister.txt` — hashed, mode 600, git-ignored (`local_users*.txt`). Regenerate or add users with `scripts/hash_local_password.py <user>`; plain entries still work but log a warning.
 - Static files: SISTER's own `/static` assets revalidate via ETag (no long cache); only versioned `aecs4u-theme` assets are immutable.
   Presentation formatting (dates, money, enum labels) lives in `sister/display.py` as Jinja filters.
+- **`/persons/<cf>` and `/companies/<piva>` are one "Visura Soggetto" page** (`catasto/entity.html` → local `catasto/visura_soggetto_archive.html`,
+  groups per comune with the Fabbricati/Terreni tables). The saved soggetto query (*elenco immobili*, `web._subject_query_profile`) is the
+  top-level source: `web._subject_tree_with_elenco` adds its units as groups ("da elenco", one per comune and F/T) to whatever a stored
+  visura lists, and the visura wins for the units it has (classamento, owners, ownership timelines, KPIs/OMI are computed on the
+  visura's own tree). Mappe: the map shows every parcel of the elenco; visure, planimetrie, ispezioni and owners per parcel are the
+  "Documenti per particella" section (`subject_hub.documented_parcels`, only parcels with something archived). Without a visura the
+  page is the elenco alone (`_render_query_only_subject`). Elenco groups are split like a visura's, by comune, F/T and the subject's
+  right and share, and carry a synthetic `IntestazioneGruppo`, so the valuation (valore catastale, quota/diritto) runs on them
+  (OMI estimates need parcel positions: only for the visura's own buildings). The groups are `<details>` accordions
+  (`visura_global_filter.js` opens/hides them with the filter). The archive summary (`subject_hub.summary`: coverage cards, provinces,
+  what is still to request, other searches) replaces the theme's stat cards. `/persons|/companies/<code>/pdf[?document=]` is the PDF of
+  that very page (`as_pdf` in `_web_subject_profile`), the PDF button is always injected by `catasto/entity.html`.
+- **Parcel map** (`land_registry` `document_parcel_map.js`): the installed package (0.1.4, root-owned) lacks the no-outline fix and
+  marker clustering, so `main.py` serves SISTER's copy from `sister/static/land_registry/` at the package URLs; the source is
+  `../land-registry` (copy it over after editing; drop the override when a release has both). The hub map looks every parcel up in
+  chunks in a background task (`web._hub_parcel_map`, first chunk 40 parcels, each finished chunk is published at once and served as increments
+  `?after=N` by long poll; the script draws them as they arrive, `applyData`), data at `/<persons|companies>/<code>/parcel-map.json?k=<key>` (rebuilt from the saved search when the key is gone, e.g. after a restart). View and layers sit in the URL
+  (`?map=lat,lng,zoom&layers=l-sheets,…`).
 - **Shared templates live in `aecs4u-theme`** (`catasto/forms|results|ispezione_ipotecaria|omi_valuation|visura_*.html` (`omi_valuation` = `/omi/valuation`, built from `components/omi_zone_overview.html`), `components/{hero,nested,timeline,
   table_filter,kpi_card,related_links}.html`); they extend `base_template`, which `main.py` sets to SISTER's `_base.html` (sidebar). Sister
   keeps only SISTER-specific pages. Edit those in `../aecs4u-theme`, then bump the theme in `uv.lock`; SISTER's `display.py` filters are
@@ -178,6 +218,14 @@ saved portal forms in `tests/fixtures/portal_forms/`.
   never the same codice fiscale twice per run; a CAPTCHA nobody solves ends as `needs_human` with `documents_pending`.
   A request is `requested` only when the portal says so (`_confirm_request_submitted`: page "Attesa" + "Richiesta inoltrata"; the
   CAPTCHA field disappearing is not proof): otherwise it is `unconfirmed` with a reason, listed in `documents_unconfirmed`.
+- **Few page visits per query** (`utils._open_search_form`, `_OFFICE_APPLIED`): the applied office is remembered per tab and the
+  left menu (`Persona fisica` / `Persona giuridica`) is on every page of a flow, so a query starts from the page the previous one
+  ended on (menu link → form → *Ricerca* → [omonimo] → *Immobili*), not from SceltaServizio + Cambia Ufficio. A different office,
+  a dead page (`login.jsp`, `sessione_scaduta`) or a form that does not show falls back to the full path. A subject with several
+  provinces goes *Indietro* to the province table for the next one (`run_soggetto_immobili`, `open_list(from_list=True)`) instead of
+  repeating the whole search. A `no match` answer costs two loads. The per-request session check of `aecs4u-auth` opens SceltaServizio,
+  so `browser._ensure_authenticated` trusts a good check for `SISTER_SESSION_RECHECK_SECONDS` (120, 0 = every request) while the tab is on a
+  live SISTER page. Measured 2026-10-26: 4-7 s for a no-match, ~7 s with properties (was 11 s / 13-22 s). Verify changes with a real run.
 - `save_response` projects the JSON into the tables via `database._project_response`: owners are tied to *their* property
   through `result_id` (the owner↔property views join on it), composite cells are split with `result_parsers`, terreni use the
   portal's `ha/are/ca` and `Reddito dominicale/agrario` columns, each row keeps its own catasto. Downloaded XML also fills the

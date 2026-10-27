@@ -24,8 +24,8 @@
    ─────────────────────────────────────────────────────────────────────────── #}
 
 {# ── Jump chips: quick-anchor bar to top-level groups ─────────────────────── #}
-{% macro jump_chips(groups) %}
-<div class="d-flex flex-wrap gap-2 mb-4 no-print dossier-jump-chips">
+{% macro jump_chips(groups, margin_class='mb-4') %}
+<div class="d-flex flex-wrap gap-2 {{ margin_class }} no-print dossier-jump-chips">
     {% for g in groups %}
     <a href="#q-{{ g.key }}" class="btn btn-sm btn-outline-{{ g.color }}">
         <i class="fas {{ g.icon }} me-1"></i>{{ g.label }}
@@ -227,6 +227,16 @@
 </div>
 {% endmacro %}
 
+{% macro document_favorite_button(d, enabled=True) %}
+<button type="button" class="btn btn-sm btn-link p-1 document-favorite-toggle {{ 'text-danger' if d.is_favorite else 'text-secondary' }}"
+        data-favorite-id="{{ d.id }}" aria-pressed="{{ 'true' if d.is_favorite else 'false' }}"
+        aria-label="{{ 'Rimuovi dai preferiti' if d.is_favorite else 'Aggiungi ai preferiti' }}"
+        title="{{ 'Rimuovi dai preferiti' if d.is_favorite else 'Aggiungi ai preferiti' }}"
+        {% if not enabled %}disabled title="Accedi per salvare i preferiti"{% endif %}>
+    <i class="{{ 'fas' if d.is_favorite else 'far' }} fa-heart" aria-hidden="true"></i>
+</button>
+{% endmacro %}
+
 {% macro document_href(d, prefix='/documents') -%}
 {% set subject_code = d.cf or d.vat or d.fiscal_code %}
 {% if prefix == '/documents' and subject_code and subject_code|length == 11 %}/companies/{{ subject_code }}
@@ -237,9 +247,9 @@
 {# Documents table. `docs` = list of logical documents; links use `prefix`
    (/documents or /dossiers). `show_location` toggles the Ubicazione
    column (hidden inside a property dossier where it is redundant).
-   `is_soggetto` replaces Ubicazione/Dati Catastali/Catasto with CF/VAT columns. #}
+   `is_soggetto` replaces Ubicazione/Dati Catastali/Catasto with subject identity and search-scope columns. #}
 {% set _doc_table_seq = namespace(n=0) %}
-{% macro doc_table(table_id, docs, color, prefix='/documents', show_location=True, is_soggetto=False) %}
+{% macro doc_table(table_id, docs, color, prefix='/documents', show_location=True, is_soggetto=False, favorites_enabled=True) %}
 {% set _doc_table_seq.n = _doc_table_seq.n + 1 %}
 <div class="table-responsive">
     <table class="table table-hover table-sm mb-0 doc-table" id="doc-table-{{ table_id }}-{{ _doc_table_seq.n }}">
@@ -251,6 +261,8 @@
                 {% if is_soggetto %}
                 <th>Codice Fiscale</th>
                 <th>Partita IVA</th>
+                <th>Ambito</th>
+                <th>Tipo Catasto</th>
                 <th>Data Riferimento</th>
                 {% else %}
                 {% if show_location %}<th>Ubicazione</th>{% endif %}
@@ -266,14 +278,15 @@
         </thead>
         <tbody>
             {% for d in docs %}
-            <tr>
+            <tr data-favorite-item data-document-id="{{ d.id }}" data-is-favorite="{{ 'true' if d.is_favorite else 'false' }}">
                 <td>
-                    {% if d.viewable %}
-                    <a href="{{ document_href(d, prefix) }}" class="fw-semibold text-decoration-none">{{ d.oggetto or d.filename or ('Doc ' ~ d.id) }}</a>
+                    {% set display_name = d.display_name or d.oggetto or d.filename or ('Doc ' ~ d.id) %}
+                    {% if d.viewable or d.cadastral_display_name %}
+                    <a href="{{ document_href(d, prefix) }}" class="fw-bold text-decoration-none">{{ display_name }}</a>
                     {% else %}
-                    <span class="fw-semibold">{{ d.oggetto or d.filename or ('Doc ' ~ d.id) }}</span>
+                    <span class="fw-bold">{{ display_name }}</span>
                     {% endif %}
-                    {% if d.oggetto and d.filename and d.oggetto != d.filename %}
+                    {% if not d.cadastral_display_name and d.oggetto and d.filename and d.oggetto != d.filename %}
                     <br><small class="text-muted font-monospace">{{ d.filename }}</small>
                     {% endif %}
                     {% if d.related_immobile_docs %}
@@ -294,6 +307,7 @@
                 <td>
                     {%- set sub = d.visura_subtype or '' -%}
                     {%- if sub == 'attuale' %}<span class="badge bg-success-subtle text-success border border-success-subtle">attuale</span>
+                    {%- elif sub == 'analitica' %}<span class="badge bg-secondary-subtle text-secondary border border-secondary-subtle">analitica</span>
                     {%- elif sub == 'storica' %}<span class="badge bg-secondary-subtle text-secondary border border-secondary-subtle">storica</span>
                     {%- elif sub == 'storica_analitica' %}<span class="badge bg-secondary-subtle text-secondary border border-secondary-subtle">st. analitica</span>
                     {%- elif sub == 'storica_sintetica' %}<span class="badge bg-secondary-subtle text-secondary border border-secondary-subtle">st. sintetica</span>
@@ -305,6 +319,17 @@
                 {% if is_soggetto %}
                 <td class="font-monospace small">{{ d.cf or '' }}</td>
                 <td class="font-monospace small">{{ d.vat or '' }}</td>
+                <td data-sort-value="{{ d.search_scope_label or 'Non specificato' }}">
+                    {% if d.search_scope == 'nationwide' %}<span class="badge bg-info-subtle text-info border border-info-subtle">{{ d.search_scope_label }}</span>
+                    {% elif d.search_scope == 'provincial' %}<span class="badge bg-primary-subtle text-primary border border-primary-subtle">{{ d.search_scope_label }}</span>
+                    {% else %}<span class="text-muted">{{ d.search_scope_label or 'Non specificato' }}</span>{% endif %}
+                </td>
+                <td data-sort-value="{{ d.tipo_catasto or '' }}">
+                    {% if d.tipo_catasto == 'E' %}<span class="badge bg-info">E</span>
+                    {% elif d.tipo_catasto == 'F' %}<span class="badge bg-success">F</span>
+                    {% elif d.tipo_catasto == 'T' %}<span class="badge bg-warning text-dark">T</span>
+                    {% else %}<span class="text-muted">-</span>{% endif %}
+                </td>
                 <td class="text-muted small">{{ d.situazione_al or '-' }}</td>
                 {% else %}
                 {% if show_location %}
@@ -335,6 +360,7 @@
                 <td class="text-muted small">{{ d.created_display or '-' }}</td>
                 <td class="text-end no-print">
                     <div class="btn-group doc-actions" role="group">
+                        {{ document_favorite_button(d, favorites_enabled) }}
                         {% if d.viewable %}
                         <a href="{{ document_href(d, prefix) }}" class="btn btn-outline-{{ color }}" title="{{ 'Apri ispezione ipotecaria' if d.document_type == 'ispezione_ipotecaria' else 'Apri visura' }}"><i class="fas fa-eye"></i></a>
                         {% endif %}
@@ -348,7 +374,78 @@
 </div>
 {% endmacro %}
 
-{# Shared filter + CSV-export JS for all .doc-table elements (call once per page). #}
+{% macro documents_favorites_js(nonce='') %}
+<script nonce="{{ nonce }}">
+(function () {
+    var filterButton = document.querySelector('[data-favorites-filter]');
+    if (!filterButton) return;
+
+    function updateButton(button, favorite) {
+        var icon = button.querySelector('i');
+        button.classList.toggle('text-danger', favorite);
+        button.classList.toggle('text-secondary', !favorite);
+        button.setAttribute('aria-pressed', favorite ? 'true' : 'false');
+        var label = favorite ? 'Rimuovi dai preferiti' : 'Aggiungi ai preferiti';
+        button.setAttribute('aria-label', label);
+        button.title = label;
+        if (icon) icon.className = (favorite ? 'fas' : 'far') + ' fa-heart';
+    }
+
+    function applyFilter() {
+        var onlyFavorites = filterButton.getAttribute('aria-pressed') === 'true';
+        document.querySelectorAll('[data-favorite-item]').forEach(function (item) {
+            item.hidden = onlyFavorites && item.dataset.isFavorite !== 'true';
+        });
+        filterButton.classList.toggle('active', onlyFavorites);
+        var icon = filterButton.querySelector('i');
+        if (icon) icon.className = (onlyFavorites ? 'fas' : 'far') + ' fa-heart me-1';
+        var label = filterButton.querySelector('[data-favorites-filter-label]');
+        if (label) label.textContent = onlyFavorites ? 'Mostra tutti' : 'Solo preferiti';
+    }
+
+    filterButton.addEventListener('click', function () {
+        filterButton.setAttribute(
+            'aria-pressed',
+            filterButton.getAttribute('aria-pressed') === 'true' ? 'false' : 'true'
+        );
+        applyFilter();
+    });
+
+    document.addEventListener('click', function (event) {
+        var button = event.target.closest('.document-favorite-toggle');
+        if (!button || button.disabled) return;
+        var documentId = button.dataset.favoriteId;
+        var favorite = button.getAttribute('aria-pressed') !== 'true';
+        button.disabled = true;
+        fetch('/documents/' + encodeURIComponent(documentId) + '/favorite', {
+            method: 'PUT',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({favorite: favorite})
+        }).then(function (response) {
+            if (!response.ok) throw new Error('HTTP ' + response.status);
+            return response.json();
+        }).then(function (result) {
+            document.querySelectorAll('.document-favorite-toggle').forEach(function (peer) {
+                if (peer.dataset.favoriteId !== String(documentId)) return;
+                updateButton(peer, result.favorite === true);
+                peer.disabled = false;
+            });
+            document.querySelectorAll('[data-favorite-item]').forEach(function (item) {
+                if (item.dataset.documentId === String(documentId)) {
+                    item.dataset.isFavorite = result.favorite ? 'true' : 'false';
+                }
+            });
+            applyFilter();
+        }).catch(function (error) {
+            button.disabled = false;
+            window.alert('Impossibile aggiornare i preferiti (' + error.message + ').');
+        });
+    });
+})();
+</script>
+{% endmacro %}
+
+{# Shared filter, sorting, and CSV-export JS for document tables (call once per page). #}
 {% macro doc_macros_js(nonce='') %}
 <script nonce="{{ nonce }}">
 function toggleAllSections(expand) {
@@ -359,9 +456,31 @@ function toggleAllSections(expand) {
 }
 
 (function () {
-    function parseItalianDate(s) {
-        var m = s.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
-        return m ? new Date(+m[3], +m[2] - 1, +m[1]) : null;
+    function parseDate(s) {
+        var italian = s.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+        if (italian) return new Date(+italian[3], +italian[2] - 1, +italian[1]).getTime();
+        var iso = s.match(/^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}):(\d{2})(?::(\d{2}))?)?$/);
+        if (iso) return new Date(+iso[1], +iso[2] - 1, +iso[3], +(iso[4] || 0), +(iso[5] || 0), +(iso[6] || 0)).getTime();
+        return null;
+    }
+
+    function parseNumber(s) {
+        var value = s.trim().replace(/[€$]/g, '').replace(/\s*(?:m²|m2|mq|vani|unità)$/i, '').trim();
+        if (!value || !/^-?[\d.,]+$/.test(value)) return null;
+        if (/^-?\d{1,3}(?:\.\d{3})+(?:,\d+)?$/.test(value)) {
+            value = value.replace(/\./g, '').replace(',', '.');
+        } else if (value.indexOf(',') >= 0 && value.indexOf('.') < 0) {
+            value = value.replace(',', '.');
+        }
+        var number = Number(value);
+        return Number.isFinite(number) ? number : null;
+    }
+
+    function cellValue(cell) {
+        if (!cell) return '';
+        return cell.dataset.sortValue !== undefined
+            ? cell.dataset.sortValue
+            : cell.textContent.trim().replace(/\s+/g, ' ');
     }
 
     function makeSortable(tbl) {
@@ -370,31 +489,52 @@ function toggleAllSections(expand) {
             if (th.classList.contains('no-print')) return;
             th.classList.add('th-sortable');
             th.dataset.sortDir = '';
-            th.addEventListener('click', function () {
+            th.tabIndex = 0;
+            th.setAttribute('aria-sort', 'none');
+            function sortColumn() {
                 var asc = th.dataset.sortDir !== 'asc';
                 ths.forEach(function (t) {
                     t.dataset.sortDir = '';
+                    t.setAttribute('aria-sort', 'none');
                     var ic = t.querySelector('.sort-icon');
                     if (ic) ic.textContent = '';
                 });
                 th.dataset.sortDir = asc ? 'asc' : 'desc';
+                th.setAttribute('aria-sort', asc ? 'ascending' : 'descending');
                 var icon = th.querySelector('.sort-icon');
-                if (!icon) { icon = document.createElement('span'); icon.className = 'sort-icon ms-1'; th.appendChild(icon); }
+                if (!icon) {
+                    icon = document.createElement('span');
+                    icon.className = 'sort-icon ms-1';
+                    icon.setAttribute('aria-hidden', 'true');
+                    th.appendChild(icon);
+                }
                 icon.textContent = asc ? ' ↑' : ' ↓';
                 var tbody = tbl.querySelector('tbody');
                 var rows = Array.from(tbody.querySelectorAll('tr')).filter(function (r) { return r.style.display !== 'none'; });
                 var hidden = Array.from(tbody.querySelectorAll('tr')).filter(function (r) { return r.style.display === 'none'; });
+                var collator = new Intl.Collator('it', {numeric: true, sensitivity: 'base'});
+                rows = rows.map(function (row, order) { return {row: row, order: order}; });
                 rows.sort(function (a, b) {
-                    var ca = ((a.querySelectorAll('td')[idx] || {}).textContent || '').trim().replace(/\s+/g, ' ');
-                    var cb = ((b.querySelectorAll('td')[idx] || {}).textContent || '').trim().replace(/\s+/g, ' ');
-                    var da = parseItalianDate(ca), db = parseItalianDate(cb);
-                    if (da && db) return asc ? da - db : db - da;
-                    var na = parseFloat(ca), nb = parseFloat(cb);
-                    if (!isNaN(na) && !isNaN(nb) && ca !== '' && cb !== '') return asc ? na - nb : nb - na;
-                    return asc ? ca.localeCompare(cb, 'it') : cb.localeCompare(ca, 'it');
+                    var ca = cellValue(a.row.querySelectorAll('td')[idx]);
+                    var cb = cellValue(b.row.querySelectorAll('td')[idx]);
+                    var da = parseDate(ca), db = parseDate(cb);
+                    var comparison;
+                    if (da !== null && db !== null) comparison = da - db;
+                    else {
+                        var na = parseNumber(ca), nb = parseNumber(cb);
+                        comparison = na !== null && nb !== null ? na - nb : collator.compare(ca, cb);
+                    }
+                    return (asc ? comparison : -comparison) || a.order - b.order;
                 });
-                rows.forEach(function (r) { tbody.appendChild(r); });
+                rows.forEach(function (item) { tbody.appendChild(item.row); });
                 hidden.forEach(function (r) { tbody.appendChild(r); });
+            }
+            th.addEventListener('click', sortColumn);
+            th.addEventListener('keydown', function (event) {
+                if (event.key === 'Enter' || event.key === ' ') {
+                    event.preventDefault();
+                    sortColumn();
+                }
             });
         });
     }
@@ -426,8 +566,8 @@ function toggleAllSections(expand) {
         tbl.closest('.table-responsive').before(bar);
     }
 
-    document.querySelectorAll('.doc-table').forEach(function (tbl) {
-        addFilter(tbl);
+    document.querySelectorAll('.doc-table, .files-table').forEach(function (tbl) {
+        if (tbl.classList.contains('doc-table')) addFilter(tbl);
         makeSortable(tbl);
     });
 })();

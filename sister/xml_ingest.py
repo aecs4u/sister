@@ -220,7 +220,7 @@ def parse_visura_xml(content: str | bytes) -> dict[str, Any] | None:
 _PLANIMETRIA_DATE = re.compile(r"presentazione\s+(\d{2}/\d{2}/\d{4})")
 _PLANIMETRIA_PROTOCOL = re.compile(r"prot\.\s*n\.\s*(\S+)")
 _MUTATION_STATUS = {"attuale", "predecessore"}
-_CONSISTENCY_UNITS = {"VANI", "MQ", "MC"}
+_CONSISTENCY_UNITS = {"VANI", "VANO", "MQ", "MC"}
 
 
 def _decimal(value: Any) -> Decimal | None:
@@ -369,6 +369,8 @@ async def _write_building(
     filed = _PLANIMETRIA_DATE.search(planimetria)
     protocol = _PLANIMETRIA_PROTOCOL.search(planimetria)
     unit_of_measure = (cons.get("Unita") or "").strip().upper()
+    consistency_value = _decimal(cons.get("Valore"))
+    consistency_unit = unit_of_measure if unit_of_measure in _CONSISTENCY_UNITS else None
     row = BuildingUnit(
         document_id=document_id,
         property_group_id=group_id,
@@ -381,8 +383,10 @@ async def _write_building(
         category=category,
         cadastral_class=normalize_class(c.get("Classe")),
         cadastral_income_eur=_decimal(c.get("RenditaEuro")),
-        consistency_value=_decimal(cons.get("Valore")),
-        consistency_unit=unit_of_measure if unit_of_measure in _CONSISTENCY_UNITS else None,
+        consistency_value=consistency_value,
+        consistency_unit=consistency_unit,
+        consistency_sqm=consistency_value if consistency_unit == "MQ" else None,
+        consistency_rooms=consistency_value if consistency_unit in {"VANI", "VANO"} else None,
         total_area_sqm=_decimal(surface.get("Totale")),
         excluded_area_sqm=_decimal(surface.get("TotaleE")),
         planimetria_filed_on=parse_it_date(filed.group(1)) if filed else None,
@@ -509,6 +513,14 @@ async def ingest_visura_xml(session, document_id: int, content: str | bytes | No
     document = await session.get(Document, document_id)
     if document is not None:
         header, request, liquidation = parsed["header"], parsed["request"], parsed["liquidation"]
+        if kind.startswith("soggetto"):
+            from .document_scope import subject_search_scope
+
+            scope = subject_search_scope(document.file_name, request_province=request.get("Provincia"))
+            document.subject_search_scope = (
+                scope["search_scope"] if scope["search_scope"] != "unknown" else None
+            )
+            document.subject_search_province = scope["search_province"] or None
         document.title = header.get("Titolo") or document.title
         document.registry_view_type = header.get("TipoVisura") or document.registry_view_type
         document.service_type = header.get("TipoServizio") or document.service_type
@@ -618,7 +630,11 @@ async def backfill_documents(force: bool = False, limit: int | None = None, batc
     session_factory = _get_session_factory()
     stats = {"documents": 0, "not_visura": 0, "failed": 0, "units": 0, "parcels": 0, "owners": 0}
     archive = f'"{DATABASE_ARCHIVE_SCHEMA}"'
-    query = f"SELECT c.document_id FROM {archive}.document_content c WHERE c.content <> ''"  # noqa: S608 (quoted schema name)
+    # map archives (``mappa_*.zip.p7m``) keep zip bytes as their content: not XML, nothing to read
+    query = (
+        f"SELECT c.document_id FROM {archive}.document_content c "  # noqa: S608 (quoted schema name)
+        "WHERE c.content <> '' AND ltrim(c.content) LIKE '<%'"
+    )
     if not force:
         query += (
             " AND NOT EXISTS (SELECT 1 FROM building_unit x WHERE x.document_id = c.document_id)"

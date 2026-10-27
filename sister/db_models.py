@@ -93,6 +93,19 @@ class RequestType(SQLModel, table=True):
     __tablename__ = "request_type"
 
     code: str = Field(primary_key=True)
+    label: str
+    description: str
+
+
+class RequestTypeTag(SQLModel, table=True):
+    __tablename__ = "request_type_tag"
+    __table_args__ = (
+        sa.ForeignKeyConstraint(["request_type"], ["request_type.code"], ondelete="CASCADE"),
+        sa.Index("ix_request_type_tag_tag", "tag"),
+    )
+
+    request_type: str = Field(primary_key=True)
+    tag: str = Field(primary_key=True)
 
 
 class DocumentType(SQLModel, table=True):
@@ -140,6 +153,22 @@ class Request(SQLModel, table=True):
     subject_query: Optional[str] = Field(default=None)
 
 
+class RequestProvince(SQLModel, table=True):
+    """One row of the "Elenco Province" table SISTER shows for a subject search (provinces where it has assets)."""
+
+    __tablename__ = "request_province"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    request_id: int = Field(foreign_key="request.id")
+    province_index: int
+    subject_id: Optional[int] = Field(default=None, foreign_key="subject.id")
+    fiscal_code: Optional[str] = Field(default=None)
+    province_code: Optional[str] = Field(default=None)
+    province_name: str
+    buildings_count: int = Field(default=0)
+    land_parcels_count: int = Field(default=0)
+
+
 class RequestResult(SQLModel, table=True):
     __tablename__ = "request_result"
 
@@ -164,6 +193,8 @@ class Property(SQLModel, table=True):
     cadastral_class: Optional[str] = Field(default=None)
     consistency_value: Optional[Decimal] = Field(default=None)
     consistency_unit: Optional[str] = Field(default=None)
+    consistency_sqm: Optional[Decimal] = Field(default=None)
+    consistency_rooms: Optional[Decimal] = Field(default=None)
     census_zone: Optional[str] = Field(default=None)
     land_quality: Optional[str] = Field(default=None, foreign_key="land_quality.code")
     area_sqm: Optional[Decimal] = Field(default=None)
@@ -212,6 +243,169 @@ class Document(SQLModel, table=True):
     liquidation_units: Optional[int] = Field(default=None)
     historical_total_area_sqm: Optional[Decimal] = Field(default=None)
     historical_excluded_area_sqm: Optional[Decimal] = Field(default=None)
+    subject_search_scope: Optional[str] = Field(default=None)
+    subject_search_province: Optional[str] = Field(default=None)
+
+
+class DocumentFavorite(SQLModel, table=True):
+    """A user's saved document in the documents browser."""
+
+    __tablename__ = "document_favorite"
+    __table_args__ = (sa.Index("ix_document_favorite_document_id", "document_id"),)
+
+    user_id: str = Field(sa_column=Column(sa.String(), primary_key=True))
+    document_id: int = Field(
+        sa_column=Column(sa.BigInteger, sa.ForeignKey("document.id", ondelete="CASCADE"), primary_key=True)
+    )
+    created_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc),
+        sa_column=Column(sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
+    )
+
+
+class ManualPropertyValuation(SQLModel, table=True):
+    """A user's manually transcribed market estimate from an external provider."""
+
+    __tablename__ = "manual_property_valuation"
+    __table_args__ = (
+        sa.CheckConstraint(
+            "provider IN ('immobiliare', 'idealista', 'other')", name="ck_manual_property_valuation_provider"
+        ),
+        sa.CheckConstraint(
+            "value_min > 0 AND (value_max IS NULL OR value_max >= value_min)",
+            name="ck_manual_property_valuation_range",
+        ),
+        sa.Index("ix_manual_property_valuation_asset", "asset_key"),
+    )
+
+    user_id: str = Field(primary_key=True)
+    asset_key: str = Field(primary_key=True)
+    provider: str = Field(primary_key=True)
+    value_min: Decimal = Field(sa_column=Column(sa.Numeric(14, 2), nullable=False))
+    value_max: Optional[Decimal] = Field(default=None, sa_column=Column(sa.Numeric(14, 2), nullable=True))
+    source_date: Optional[date] = Field(default=None)
+    source_url: Optional[str] = Field(default=None)
+    notes: Optional[str] = Field(default=None)
+    created_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc),
+        sa_column=Column(sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
+    )
+    updated_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc),
+        sa_column=Column(sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
+    )
+
+
+class PropertyValuationPreference(SQLModel, table=True):
+    """One user's preferred source for one cadastral property."""
+
+    __tablename__ = "property_valuation_preference"
+    __table_args__ = (sa.Index("ix_property_valuation_preference_asset", "asset_key"),)
+
+    user_id: str = Field(primary_key=True)
+    asset_key: str = Field(primary_key=True)
+    preferred_source: str
+    updated_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc),
+        sa_column=Column(sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
+    )
+
+
+class PropertyAffrancationAmount(SQLModel, table=True):
+    """A user's editable affrancazione amount for one cadastral property."""
+
+    __tablename__ = "property_affrancation_amount"
+    __table_args__ = (
+        sa.CheckConstraint("amount >= 0", name="ck_property_affrancation_amount_nonnegative"),
+        sa.Index("ix_property_affrancation_amount_asset", "asset_key"),
+    )
+
+    user_id: str = Field(primary_key=True)
+    asset_key: str = Field(primary_key=True)
+    amount: Decimal = Field(sa_column=Column(sa.Numeric(14, 2), nullable=False))
+    updated_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc),
+        sa_column=Column(sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
+    )
+
+
+class PropertyOmiOverride(SQLModel, table=True):
+    """A user's narrower, property-specific OMI value range."""
+
+    __tablename__ = "property_omi_override"
+    __table_args__ = (
+        sa.CheckConstraint(
+            "value_min > 0 AND value_max >= value_min", name="ck_property_omi_override_range"
+        ),
+        sa.Index("ix_property_omi_override_asset", "asset_key"),
+    )
+
+    user_id: str = Field(primary_key=True)
+    asset_key: str = Field(primary_key=True)
+    value_min: Decimal = Field(sa_column=Column(sa.Numeric(14, 2), nullable=False))
+    value_max: Optional[Decimal] = Field(default=None, sa_column=Column(sa.Numeric(14, 2), nullable=True))
+    updated_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc),
+        sa_column=Column(sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
+    )
+
+
+class PropertyOmiSelection(SQLModel, table=True):
+    """A user's selected OMI zone and typology for one cadastral property."""
+
+    __tablename__ = "property_omi_selection"
+    __table_args__ = (
+        sa.CheckConstraint("typology_code IS NULL OR typology_code > 0", name="ck_property_omi_selection_typology"),
+    )
+
+    user_id: str = Field(primary_key=True)
+    asset_key: str = Field(primary_key=True)
+    zone_code: Optional[str] = Field(default=None, sa_column=Column(sa.String(24), nullable=True))
+    typology_code: Optional[int] = Field(default=None)
+    updated_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc),
+        sa_column=Column(sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
+    )
+
+
+class PropertyActualSize(SQLModel, table=True):
+    """A user's effective square-metre size for one cadastral property."""
+
+    __tablename__ = "property_actual_size"
+    __table_args__ = (
+        sa.CheckConstraint("actual_size_sqm > 0", name="ck_property_actual_size_positive"),
+        sa.Index("ix_property_actual_size_asset", "asset_key"),
+    )
+
+    user_id: str = Field(primary_key=True)
+    asset_key: str = Field(primary_key=True)
+    actual_size_sqm: Decimal = Field(sa_column=Column(sa.Numeric(12, 2), nullable=False))
+    updated_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc),
+        sa_column=Column(sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
+    )
+
+
+class CalculationSnapshot(SQLModel, table=True):
+    """Latest persisted result for a deterministic calculation and its source scope."""
+
+    __tablename__ = "calculation_snapshot"
+    __table_args__ = (
+        sa.CheckConstraint("scope_type IN ('document', 'request')", name="ck_calculation_snapshot_scope_type"),
+        sa.Index("ix_calculation_snapshot_calculated_at", "calculated_at"),
+    )
+
+    scope_type: str = Field(sa_column=Column(sa.String(24), primary_key=True))
+    scope_id: str = Field(sa_column=Column(sa.Text, primary_key=True))
+    viewer_key: str = Field(sa_column=Column(sa.Text, primary_key=True))
+    calculation_type: str = Field(sa_column=Column(sa.String(64), primary_key=True))
+    input_hash: str = Field(sa_column=Column(sa.String(64), nullable=False))
+    algorithm_version: str = Field(sa_column=Column(sa.String(40), nullable=False))
+    result: dict[str, Any] = Field(sa_column=Column(JSONB, nullable=False))
+    calculated_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc),
+        sa_column=Column(sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
+    )
 
 
 class PageVisit(SQLModel, table=True):

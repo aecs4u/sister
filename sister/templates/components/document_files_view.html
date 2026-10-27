@@ -1,78 +1,57 @@
-{% macro files_view(entries, breadcrumbs, current_path, n_dirs, n_files, total_size) %}
-<div class="documents-files-view">
-    <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
-        <nav aria-label="Percorso file" class="mb-0">
-            <ol class="breadcrumb mb-0">
-                <li class="breadcrumb-item"><a href="/documents?view=files">Documenti</a></li>
-                {% for crumb in breadcrumbs %}
-                {% if loop.last %}
-                <li class="breadcrumb-item active" aria-current="page">{{ crumb.name }}</li>
-                {% else %}
-                <li class="breadcrumb-item"><a href="/documents{% if crumb.path %}/{{ crumb.path }}{% endif %}?view=files">{{ crumb.name }}</a></li>
-                {% endif %}
-                {% endfor %}
-            </ol>
-        </nav>
-        {% if current_path %}
-        <a href="/documents?view=files" class="btn btn-sm btn-outline-secondary"><i class="fas fa-house me-1"></i>Radice</a>
-        {% endif %}
-    </div>
+{% from "_doc_macros.html" import document_favorite_button %}
 
+{% macro files_view(docs, favorites_enabled=True) %}
+{% set totals = namespace(files=0) %}
+{% for d in docs %}
+    {% set totals.files = totals.files + (d.n_files or 0) %}
+{% endfor %}
+<div class="documents-files-view">
     <div class="d-flex gap-3 mb-3 flex-wrap">
-        {% if n_dirs %}<span class="badge text-bg-secondary py-2 px-3"><i class="fas fa-folder me-1"></i>{{ n_dirs }} cartelle</span>{% endif %}
-        {% if n_files %}<span class="badge text-bg-secondary py-2 px-3"><i class="fas fa-file me-1"></i>{{ n_files }} file</span>{% endif %}
-        {% if total_size %}<span class="badge text-bg-light border py-2 px-3 text-muted"><i class="fas fa-weight-hanging me-1"></i>{{ total_size }} totali</span>{% endif %}
+        <span class="badge text-bg-secondary py-2 px-3"><i class="fas fa-file-lines me-1"></i>{{ docs | length }} documenti</span>
+        <span class="badge text-bg-secondary py-2 px-3"><i class="fas fa-paperclip me-1"></i>{{ totals.files }} file indicizzati</span>
     </div>
 
     <div class="card border-0 shadow-sm">
-        {% if entries %}
-        <label class="visually-hidden" for="files-filter">Filtra i file</label>
-        <input id="files-filter" type="search" class="form-control form-control-sm mb-3"
-               placeholder="Filtra per nome…" aria-label="Filtra i file">
+        {% if docs %}
+        <div class="card-body pb-0">
+            <label class="visually-hidden" for="files-filter">Filtra i documenti e i file</label>
+            <input id="files-filter" type="search" class="form-control form-control-sm"
+                   placeholder="Filtra per nome, tipo o file…" aria-label="Filtra i documenti e i file">
+        </div>
         <div class="table-responsive">
-            <table class="table table-hover align-middle mb-0" id="files-table">
+            <table class="table table-hover align-middle mb-0 files-table" id="files-table">
                 <thead class="table-light">
-                    <tr><th style="width:2rem"></th><th>Nome originale</th><th>Nome documento</th><th style="width:9rem" class="text-end">Dimensione</th><th style="width:11rem">Modificato</th><th style="width:8rem"></th></tr>
+                    <tr><th>Documento</th><th>Descrizione</th><th>Tipo</th><th>File associati</th><th class="text-end">Dimensione</th><th>Indicizzato</th><th class="no-print"></th></tr>
                 </thead>
                 <tbody>
-                    {% if breadcrumbs|length > 1 %}
-                    {% set parent_path = breadcrumbs[-2].path %}
-                    <tr class="files-parent-row">
-                        <td><i class="fas fa-level-up-alt text-muted"></i></td>
-                        <td colspan="5"><a href="/documents{% if parent_path %}/{{ parent_path }}{% endif %}?view=files" class="text-muted fst-italic">.. (cartella superiore)</a></td>
-                    </tr>
-                    {% endif %}
-                    {% for e in entries %}
-                    <tr>
-                        <td class="text-center"><i class="fas {{ e.icon }} {{ e.icon_color }}"></i></td>
-                        <td>
-                            {% if e.is_dir %}
-                            <a href="/documents/{{ e.path }}?view=files" class="fw-semibold text-decoration-none">{{ e.name }}</a>
-                            {% elif e.doc_id %}
-                            <a href="/documents/{{ e.doc_id }}" class="text-decoration-none">{{ e.name }}</a>
-                            <a href="/documents/{{ e.path }}" class="ms-1 text-muted" title="Scarica" download><i class="fas fa-download fa-xs"></i></a>
-                            {% elif e.ext in ('.p7m', '.xml') %}
-                            <a href="/documents/view/{{ e.path }}" class="text-decoration-none">{{ e.name }}</a>
-                            <a href="/documents/{{ e.path }}" class="ms-1 text-muted" title="Scarica" download><i class="fas fa-download fa-xs"></i></a>
-                            {% else %}
-                            <a href="/documents/{{ e.path }}" class="text-decoration-none" {% if e.ext in ('.pdf', '.png', '.jpg', '.jpeg') %}target="_blank"{% else %}download{% endif %}>{{ e.name }}</a>
-                            {% endif %}
+                    {% for d in docs %}
+                    <tr data-favorite-item data-document-id="{{ d.id }}" data-is-favorite="{{ 'true' if d.is_favorite else 'false' }}">
+                        <td class="small">
+                            {% if d.file_format == 'PDF' %}<i class="fas fa-file-pdf text-danger me-1"></i>
+                            {% elif d.file_format == 'P7M' %}<i class="fas fa-file-shield text-warning me-1"></i>
+                            {% elif d.file_format == 'XML' %}<i class="fas fa-file-code text-info me-1"></i>
+                            {% else %}<i class="fas fa-file text-muted me-1"></i>{% endif %}
+                            <a href="/documents/{{ d.id }}" class="fw-semibold text-decoration-none">{{ d.display_name or d.oggetto or d.filename or ('Documento ' ~ d.id) }}</a>
                         </td>
-                        <td class="text-muted small">{% if e.new_name and e.new_name != e.name %}{{ e.new_name }}{% endif %}</td>
-                        <td class="text-end text-muted small">{{ e.size_human }}</td>
-                        <td class="text-muted small">{{ e.mtime }}</td>
-                        <td class="text-end">
-                            {% if e.is_dir %}
-                            <a href="/documents/{{ e.path }}?view=files" class="btn btn-sm btn-outline-secondary"><i class="fas fa-folder-open me-1"></i>Apri</a>
-                            {% elif e.doc_id %}
-                            <a href="/documents/{{ e.doc_id }}" class="btn btn-sm btn-outline-primary"><i class="fas fa-eye me-1"></i>Apri</a>
-                            {% elif e.ext in ('.p7m', '.xml') %}
-                            <a href="/documents/view/{{ e.path }}" class="btn btn-sm btn-outline-warning"><i class="fas fa-file-shield me-1"></i>Visualizza</a>
-                            {% elif e.ext == '.pdf' %}
-                            <a href="/documents/{{ e.path }}" class="btn btn-sm btn-outline-danger" target="_blank"><i class="fas fa-file-pdf me-1"></i>PDF</a>
-                            {% elif e.ext in ('.json', '.csv', '.txt', '.log') %}
-                            <a href="/documents/{{ e.path }}" class="btn btn-sm btn-outline-secondary" download><i class="fas fa-download me-1"></i>Scarica</a>
-                            {% endif %}
+                        <td>{{ d.oggetto if d.oggetto and d.oggetto != d.display_name else '—' }}</td>
+                        <td><span class="badge text-bg-light border">{{ (d.document_type or 'altro') | replace('_', ' ') | title }}</span></td>
+                        <td>
+                            <div class="d-flex flex-column gap-1">
+                                {% for f in d.files or [] %}
+                                <span class="small">
+                                    <i class="fas fa-paperclip text-muted me-1"></i>
+                                    {% if f.id %}<a href="/documents/{{ f.id }}/download" class="text-decoration-none">{{ f.filename or ('File ' ~ f.id) }}</a>
+                                    {% else %}{{ f.filename or 'File' }}{% endif %}
+                                    {% if f.file_format or f.size_human %}<span class="text-muted">({{ f.file_format or 'file' }}{% if f.size_human %}, {{ f.size_human }}{% endif %})</span>{% endif %}
+                                </span>
+                                {% endfor %}
+                            </div>
+                        </td>
+                        <td class="text-end text-muted small" data-sort-value="{{ d.total_file_size or 0 }}">{{ d.total_size_human or '—' }}</td>
+                        <td class="text-muted small">{{ (d.created_at or '')[:16] | replace('T', ' ') }}</td>
+                        <td class="text-end text-nowrap">
+                            {{ document_favorite_button(d, favorites_enabled) }}
+                            <a href="/documents/{{ d.id }}" class="btn btn-sm btn-outline-primary"><i class="fas fa-eye me-1"></i>Apri</a>
                         </td>
                     </tr>
                     {% endfor %}
@@ -80,7 +59,7 @@
             </table>
         </div>
         {% else %}
-        <div class="card-body text-center text-muted py-5"><i class="fas fa-folder-open fa-2x mb-3 d-block"></i>Questa cartella è vuota.</div>
+        <div class="card-body text-center text-muted py-5"><i class="fas fa-folder-open fa-2x mb-3 d-block"></i>Nessun documento indicizzato.</div>
         {% endif %}
     </div>
 </div>

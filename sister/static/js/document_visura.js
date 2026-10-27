@@ -108,14 +108,15 @@
       Array.prototype.forEach.call(heading.childNodes, function (node) {
         if (!comune && node.nodeType === 3 && node.nodeValue.trim()) comune = node.nodeValue.trim();
       });
-      var next = heading.nextElementSibling;
-      while (next && next.tagName !== 'H2') {
+      var group = heading.closest('details.visura-group');
+      var next = group ? group.querySelector('.visura-group-body') : heading.nextElementSibling;
+      while (next && (group || next.tagName !== 'H2')) {
         each('table.cat-compact-table', next, function (table) {
           if (table.hasAttribute('aria-label')) return;
           var kind = table.dataset.landMapKind === 'lands' ? 'Terreni' : 'Fabbricati';
           table.setAttribute('aria-label', kind + ' — ' + comune);
         });
-        next = next.nextElementSibling;
+        next = group ? null : next.nextElementSibling;
       }
     });
     each('.ownership-timeline', root, function (timeline) {

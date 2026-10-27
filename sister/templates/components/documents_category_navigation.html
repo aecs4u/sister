@@ -1,0 +1,56 @@
+{% from "_doc_macros.html" import jump_chips %}
+
+{% macro document_category_navigation(tree) %}
+<section class="card border-0 shadow-sm mb-3 documents-type-index no-print">
+    <div class="card-header d-flex flex-wrap justify-content-between align-items-center gap-2">
+        <div class="d-flex align-items-center gap-2">
+            <h2 class="h6 mb-0"><i class="fas fa-layer-group text-primary me-1" aria-hidden="true"></i>Tipi di documento supportati</h2>
+            <span class="badge text-bg-secondary">10</span>
+        </div>
+        {% if tree %}
+        <div class="d-flex flex-wrap gap-2">
+            <button type="button" data-click="toggleActiveDocuments" data-args='[true]' class="btn btn-sm btn-outline-secondary">
+                <i class="fas fa-angles-down me-1" aria-hidden="true"></i>Espandi
+            </button>
+            <button type="button" data-click="toggleActiveDocuments" data-args='[false]' class="btn btn-sm btn-outline-secondary">
+                <i class="fas fa-angles-up me-1" aria-hidden="true"></i>Riduci
+            </button>
+        </div>
+        {% endif %}
+    </div>
+    <div class="card-body">
+        <div class="row g-3">
+            <section class="col-12 col-lg-4" aria-labelledby="documents-type-visure">
+                <h3 class="h6" id="documents-type-visure">Visure catastali</h3>
+                <ul class="mb-0">
+                    <li><strong>Visura per Immobile</strong><br><span class="small text-muted">Fabbricati o Terreni · Attuale o Storica (analitica, sintetica o completa)</span></li>
+                    <li><strong>Visura per Soggetto</strong><br><span class="small text-muted">Persona o impresa · Codice Fiscale o Partita IVA · Attuale, Sintetica o Storica</span></li>
+                </ul>
+            </section>
+            <section class="col-12 col-lg-4" aria-labelledby="documents-type-catasto">
+                <h3 class="h6" id="documents-type-catasto">Documenti catastali</h3>
+                <ul class="mb-0">
+                    <li>Planimetria Catastale</li>
+                    <li>Elaborato Planimetrico</li>
+                    <li>Estratto di Mappa o Visura di Mappa</li>
+                    <li>Elenco degli Immobili</li>
+                    <li>Elenco Subalterni</li>
+                </ul>
+            </section>
+            <section class="col-12 col-lg-4" aria-labelledby="documents-type-ipotecari">
+                <h3 class="h6" id="documents-type-ipotecari">Documenti ipotecari</h3>
+                <ul class="mb-0">
+                    <li>Ispezione Ipotecaria o Visura Ipotecaria</li>
+                    <li>Nota di Trascrizione o Iscrizione</li>
+                    <li>Titolo Telematico (Atto Notarile)</li>
+                </ul>
+            </section>
+        </div>
+    </div>
+    {% if tree %}
+    <div class="card-footer bg-body-tertiary">
+        {{ jump_chips(tree, 'mb-0') }}
+    </div>
+    {% endif %}
+</section>
+{% endmacro %}
