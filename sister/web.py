@@ -6000,14 +6000,15 @@ def _omi_zone_features_for_properties(
 
 async def _parcel_map_payload(lookup: dict[str, Any]) -> dict[str, Any]:
     """The JSON the parcel map script fetches: markers, parcel and sheet outlines, parcels without a position."""
-    # A parcel with no outline and no sheet outline has no position of its own: send the centre of what is known of its
-    # comune, so the map places it in the right city instead of falling back to the map centre.
     unmapped_parcels = [dict(item) for item in lookup.get("unmapped_parcel_items") or []]
-    centroids = await get_comune_centroids(item.get("municipality_code") for item in unmapped_parcels)
-    for item in unmapped_parcels:
-        point = centroids.get(str(item.get("municipality_code") or "").strip().upper())
-        if point:
-            item["latitude"], item["longitude"] = point
+    # Owned-parcel maps retain unmapped cadastral references for sheet matching, but must not place them
+    # at a municipality centroid: that would look like an actual parcel position.
+    if not lookup.get("listed_only"):
+        centroids = await get_comune_centroids(item.get("municipality_code") for item in unmapped_parcels)
+        for item in unmapped_parcels:
+            point = centroids.get(str(item.get("municipality_code") or "").strip().upper())
+            if point:
+                item["latitude"], item["longitude"] = point
     sheet_features = lookup.get("sheet_features") or []
     parcel_features = lookup.get("parcel_features") or []
     parcel_markers = lookup.get("parcel_markers") or []

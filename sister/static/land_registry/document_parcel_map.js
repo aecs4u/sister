@@ -342,32 +342,22 @@
             var clusterEntries = new Map();
             clusterEntries.set(parcelOverviewMarkers, []);
 
-            function placeOf(item) {
-                var name = String(item.municipality || item.Comune || '').trim();
-                var province = String(item.province || item.Provincia || '').trim();
-                return name ? (province ? name + ' (' + province + ')' : name) : '';
-            }
-
             function clusterMarker(group, members, kind) {
                 var count = members.length;
                 var latSum = 0;
                 var lngSum = 0;
-                var places = new Set();
                 members.forEach(function (entry) {
                     latSum += entry.latlng.lat;
                     lngSum += entry.latlng.lng;
-                    if (entry.place) places.add(entry.place);
                 });
-                var place = places.size === 1 ? Array.from(places)[0] : '';
                 var size = count < 10 ? 34 : (count < 100 ? 40 : 48);
                 var noun = kind === 'sheet'
                     ? localized(container, 'cluster_sheets', 'fogli') : localized(container, 'cluster_parcels', 'particelle');
-                var title = (place ? place + ' · ' : '') + count + ' ' + noun;
+                var title = count + ' ' + noun;
                 var icon = window.L.divIcon({
                     className: 'document-map-cluster-icon',
                     html: '<span class="document-map-cluster document-map-cluster--' + kind + '" style="width:' + size + 'px;height:' + size + 'px">' +
-                        '<span class="document-map-cluster-count">' + count + '</span></span>' +
-                        (place ? '<span class="document-map-cluster-place">' + escapeHtml(place) + '</span>' : ''),
+                        '<span class="document-map-cluster-count">' + count + '</span></span>',
                     iconSize: [size, size],
                     iconAnchor: [size / 2, size / 2]
                 });
@@ -469,7 +459,7 @@
                 var fitButton = container.parentElement.querySelector('[data-document-map-fit-all]');
                 if (fitButton && !fitButton.disabled) occupied.push(fitButton.getBoundingClientRect());
                 Array.prototype.forEach.call(
-                    instance.map.getContainer().querySelectorAll('.document-map-cluster, .document-map-cluster-place'),
+                    instance.map.getContainer().querySelectorAll('.document-map-cluster'),
                     function (cluster) { occupied.push(cluster.getBoundingClientRect()); }
                 );
                 active.forEach(function (item) { occupied.push(item.dot.getBoundingClientRect()); });
@@ -665,7 +655,6 @@
                     manual: null,
                     latlng: point,
                     kind: markerKind,
-                    place: placeOf(item),
                     priority: approximate ? 3 : (kind === 'parcel' ? 2 : 1)
                 };
                 overviewMarkers.push(entry);
