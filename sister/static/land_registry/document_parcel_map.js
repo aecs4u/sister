@@ -269,34 +269,78 @@
             var targets = new Map();
             var dataBounds = window.L.latLngBounds([]);
             var parcelBounds = window.L.latLngBounds([]);
+            var listedPositions = [];
+            var listedPositionKeys = new Set();
             var listedLayers = {};
             var featureKeys = new Set();
             var parcelSheetKeys = new Set();
+            var ownedSheetKeys = new Set();
             var overviewParcelKeys = new Set();
-            var sheetCenters = new Map();
             var overviewMarkers = [];
             var parcelOverviewMarkers = window.L.layerGroup();
-            var sheetOverviewMarkers = window.L.layerGroup();
-            // Parcels without geometry have no true position; they stay visible at every zoom.
-            var approximateParcelMarkers = window.L.layerGroup();
             var updateOverviewMarkers = null;
             var overviewLayoutFrame = null;
             var markerBounds = [];
-            var listedSeen = { sheets: new Set(), parcels: new Set() };
-            var overviewSheetKeys = new Set();
+            var listedSeen = { sheets: new Set(), parcels: new Set(), 'omi-zones': new Set() };
+            var omiZoneFeatureLayers = new Map();
             var foundMarkers = 0;
             var selectedFallbackAdded = false;
             var fitAllButton = null;
+            var omiZonesToggle = null;
+            var requestedMapView = null;
+            var urlToggles = [];
+            var writeMapUrl = null;
+
+            function rememberListedPosition(position) {
+                var point = Array.isArray(position)
+                    ? { lat: Number(position[0]), lng: Number(position[1]) }
+                    : position;
+                if (!point || !Number.isFinite(Number(point.lat)) || !Number.isFinite(Number(point.lng))) return;
+                var latitude = Number(point.lat);
+                var longitude = Number(point.lng);
+                var key = latitude.toFixed(5) + ',' + longitude.toFixed(5);
+                if (listedPositionKeys.has(key)) return;
+                listedPositionKeys.add(key);
+                listedPositions.push([latitude, longitude]);
+            }
+
+            function savedViewNearListedParcels(view) {
+                if (!listedPositions.length) return false;
+                var radians = Math.PI / 180;
+                return listedPositions.some(function (point) {
+                    var latitudeDelta = (point[0] - view[0]) * radians;
+                    var longitudeDelta = (point[1] - view[1]) * radians;
+                    var a = Math.sin(latitudeDelta / 2) * Math.sin(latitudeDelta / 2)
+                        + Math.cos(view[0] * radians) * Math.cos(point[0] * radians)
+                        * Math.sin(longitudeDelta / 2) * Math.sin(longitudeDelta / 2);
+                    var distanceKm = 6371 * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+                    return distanceKm <= 25;
+                });
+            }
+
+            if (listedOnly) {
+                var mapCard = container.closest('.document-parcel-map-card');
+                var layerControl = mapCard && mapCard.querySelector('.leaflet-map-layer-control');
+                if (layerControl) {
+                    var omiLabel = document.createElement('label');
+                    omiZonesToggle = document.createElement('input');
+                    omiZonesToggle.type = 'checkbox';
+                    omiZonesToggle.checked = true;
+                    omiZonesToggle.dataset.documentMapLayer = container.id;
+                    omiZonesToggle.dataset.layerKey = 'omi-zones';
+                    var omiCaption = document.createElement('span');
+                    omiCaption.textContent = 'Zone OMI potenziali';
+                    omiLabel.append(omiZonesToggle, omiCaption);
+                    layerControl.appendChild(omiLabel);
+                }
+            }
 
             // Clustering: the markers of a group are not added to it one by one. At every zoom the ones whose points fall in
             // the same grid cell (of `clusterCellPixels`, in world pixels, so panning never regroups them) are shown as one
-            // count bubble; a click zooms to its members, or lists them when they all sit on the same point (the
-            // approximate position of a comune is shared by all its parcels without an outline).
+            // count bubble; a click zooms to its members, or lists them when they all sit on the same point.
             var clusterCellPixels = 56;
             var clusterEntries = new Map();
-            [parcelOverviewMarkers, sheetOverviewMarkers, approximateParcelMarkers].forEach(function (group) {
-                clusterEntries.set(group, []);
-            });
+            clusterEntries.set(parcelOverviewMarkers, []);
 
             function placeOf(item) {
                 var name = String(item.municipality || item.Comune || '').trim();
@@ -647,8 +691,23 @@
                 // Additive: a later increment adds its features to the same layer (the layer toggles keep working).
                 var features = (collection && Array.isArray(collection.features) ? collection.features : []).filter(function (feature) {
                     var properties = feature.properties || {};
-                    var id = key === 'parcels' ? parcelMapKey(properties) : (properties.reference || parcelSheetKey(properties));
-                    if (listedSeen[key].has(id)) return false;
+                    var id = key === 'parcels'
+                        ? parcelMapKey(properties)
+                        : (key === 'omi-zones'
+                            ? (properties.omi_feature_key || properties.reference)
+                            : parcelSheetKey(properties));
+                    if (listedSeen[key].has(id)) {
+                        // A later map chunk may contain the parcel geometry that proves a zone match.
+                        if (key === 'omi-zones' && properties.matches_owned_parcel) {
+                            var existingZoneLayer = omiZoneFeatureLayers.get(id);
+                            if (existingZoneLayer && !existingZoneLayer.feature.properties.matches_owned_parcel) {
+                                existingZoneLayer.feature.properties.matches_owned_parcel = true;
+                                existingZoneLayer.setStyle(omiZoneStyle(existingZoneLayer.feature));
+                                existingZoneLayer.bindPopup(omiZonePopup(existingZoneLayer.feature));
+                            }
+                        }
+                        return false;
+                    }
                     listedSeen[key].add(id);
                     return true;
                 });
@@ -658,9 +717,15 @@
                         style: style,
                         onEachFeature: function (feature, featureLayer) {
                             var properties = feature.properties || {};
-                            var popup = document.createElement('span');
-                            popup.textContent = properties.reference || localized(container, 'feature_fallback', 'Elemento catastale');
-                            featureLayer.bindPopup(popup);
+                            if (key === 'omi-zones') {
+                                var zoneKey = properties.omi_feature_key || properties.reference;
+                                omiZoneFeatureLayers.set(zoneKey, featureLayer);
+                                featureLayer.bindPopup(omiZonePopup(feature));
+                            } else {
+                                var popup = document.createElement('span');
+                                popup.textContent = properties.reference || localized(container, 'feature_fallback', 'Elemento catastale');
+                                featureLayer.bindPopup(popup);
+                            }
                             if (key === 'parcels') {
                                 var polygonLabel = document.createElement('span');
                                 polygonLabel.textContent = overviewLabel(properties, 'parcel', container);
@@ -686,10 +751,28 @@
                 layer.addData(collection);
                 // bounds of what was just added (asking the live layer breaks on its permanent tooltips)
                 var addedBounds = window.L.geoJSON(collection).getBounds();
-                if (addedBounds.isValid()) {
+                if (key !== 'omi-zones' && addedBounds.isValid()) {
                     dataBounds.extend(addedBounds);
                     if (key === 'parcels') parcelBounds.extend(addedBounds);
                 }
+            }
+
+            function omiZoneStyle(feature) {
+                if ((feature.properties || {}).matches_owned_parcel) {
+                    return { color: '#54278f', weight: 2.5, dashArray: '6 4', fillColor: '#7c3aed', fillOpacity: 0.3 };
+                }
+                return { color: '#a85a00', weight: 2, dashArray: '6 4', fillColor: '#ffb02e', fillOpacity: 0.13 };
+            }
+
+            function omiZonePopup(feature) {
+                var properties = feature.properties || {};
+                var popupParts = ['Zona OMI ' + (properties.omi_zone || '')];
+                if (properties.municipality) popupParts.push(properties.municipality);
+                if (properties.matches_owned_parcel) popupParts.push('Zona con maggiore sovrapposizione alla particella di proprietà');
+                if (properties.boundary_vintage) popupParts.push('Confini ' + properties.boundary_vintage);
+                var popup = document.createElement('span');
+                popup.textContent = popupParts.join(' · ');
+                return popup;
             }
 
             // Draws one increment of the map data; later increments add to what is there (nothing is drawn twice).
@@ -697,11 +780,25 @@
             var parcelMarkers = Array.isArray(data.parcel_markers) ? data.parcel_markers : [];
             var parcelFeatures = data.parcel_features || { type: 'FeatureCollection', features: [] };
             var sheetFeatures = data.sheet_features || { type: 'FeatureCollection', features: [] };
+            var omiZoneFeatures = data.omi_zone_features || { type: 'FeatureCollection', features: [] };
             var unmappedParcels = Array.isArray(data.unmapped_parcels) ? data.unmapped_parcels : [];
+            var ownedSheetFeatures = sheetFeatures;
             foundMarkers += parcelMarkers.length;
 
             if (listedOnly) {
-                addListedGeometry('sheets', sheetFeatures, {
+                parcelMarkers.forEach(function (item) { ownedSheetKeys.add(parcelSheetKey(item)); });
+                (parcelFeatures.features || []).forEach(function (feature) {
+                    ownedSheetKeys.add(parcelSheetKey(feature.properties || {}));
+                });
+                unmappedParcels.forEach(function (item) { ownedSheetKeys.add(parcelSheetKey(item)); });
+                ownedSheetFeatures = {
+                    type: 'FeatureCollection',
+                    features: (sheetFeatures.features || []).filter(function (feature) {
+                        return ownedSheetKeys.has(parcelSheetKey(feature.properties || {}));
+                    })
+                };
+                addListedGeometry('omi-zones', omiZoneFeatures, omiZoneStyle);
+                addListedGeometry('sheets', ownedSheetFeatures, {
                     color: '#1976a8', weight: 2, fillColor: '#1976a8', fillOpacity: 0.05
                 });
                 addListedGeometry('parcels', parcelFeatures, {
@@ -713,6 +810,7 @@
                 var markerLat = Number(item.latitude);
                 var markerLng = Number(item.longitude);
                 if (!Number.isFinite(markerLat) || !Number.isFinite(markerLng)) return;
+                if (listedOnly) rememberListedPosition([markerLat, markerLng]);
                 var markerKey = parcelMapKey(item);
                 if (listedOnly && !overviewParcelKeys.has(markerKey)) {
                     addOverviewMarker(parcelOverviewMarkers, 'parcel', item, [markerLat, markerLng], false);
@@ -727,7 +825,9 @@
                     weight: 2,
                     fillColor: selected ? '#d63384' : '#0d6efd',
                     fillOpacity: 1
-                }).addTo(instance.map);
+                });
+                if (listedOnly && listedLayers.parcels) listedLayers.parcels.addLayer(marker);
+                else marker.addTo(instance.map);
                 var popup = document.createElement('span');
                 popup.textContent = item.reference || localized(container, 'parcel_fallback', 'Particella');
                 marker.bindPopup(popup);
@@ -751,39 +851,15 @@
                     if (overviewParcelKeys.has(key)) return;
                     var center = featureCenter(feature);
                     if (!center) return;
+                    rememberListedPosition(center);
                     addOverviewMarker(parcelOverviewMarkers, 'parcel', properties, center, false);
                     overviewParcelKeys.add(key);
                 });
 
-                (sheetFeatures.features || []).forEach(function (feature) {
-                    var properties = feature.properties || {};
+                (ownedSheetFeatures.features || []).forEach(function (feature) {
                     var center = featureCenter(feature);
                     if (!center) return;
-                    var sheetKey = parcelSheetKey(properties);
-                    if (overviewSheetKeys.has(sheetKey)) return;
-                    overviewSheetKeys.add(sheetKey);
-                    sheetCenters.set(sheetKey, center);
-                    addOverviewMarker(sheetOverviewMarkers, 'sheet', properties, center, false);
-                });
-
-                unmappedParcels.forEach(function (item) {
-                    var key = parcelMapKey(item);
-                    if (overviewParcelKeys.has(key)) return;
-                    // Without a sheet outline either, use the approximate position the server sends (the centre of what is
-                    // known of the comune). Never the map centre: that is another parcel, often in another city.
-                    var center = sheetCenters.get(parcelSheetKey(item));
-                    if (!center) {
-                        var approximateLat = item.latitude === null || item.latitude === undefined || item.latitude === ''
-                            ? NaN : Number(item.latitude);
-                        var approximateLng = item.longitude === null || item.longitude === undefined || item.longitude === ''
-                            ? NaN : Number(item.longitude);
-                        if (!Number.isFinite(approximateLat) || !Number.isFinite(approximateLng)) return;
-                        center = window.L.latLng(approximateLat, approximateLng);
-                    }
-                    addOverviewMarker(approximateParcelMarkers, 'parcel', item, center, true);
-                    overviewParcelKeys.add(key);
-                    dataBounds.extend(center);
-                    parcelBounds.extend(center);
+                    rememberListedPosition(center);
                 });
 
                 var overviewMaxZoom = 14;
@@ -792,17 +868,12 @@
                     clusterEntries.forEach(function (_entries, group) { renderClusters(group); });
                     var visible = instance.map.getZoom() <= overviewMaxZoom;
                     container.classList.toggle('document-map-polygons-labeled', !visible);
-                    if (listedLayers.parcels && !listedLayers.parcels.hasLayer(approximateParcelMarkers)) {
-                        listedLayers.parcels.addLayer(approximateParcelMarkers);
+                    if (!listedLayers.parcels) return;
+                    if (visible && !listedLayers.parcels.hasLayer(parcelOverviewMarkers)) {
+                        listedLayers.parcels.addLayer(parcelOverviewMarkers);
+                    } else if (!visible && listedLayers.parcels.hasLayer(parcelOverviewMarkers)) {
+                        listedLayers.parcels.removeLayer(parcelOverviewMarkers);
                     }
-                    [
-                        [listedLayers.parcels, parcelOverviewMarkers],
-                        [listedLayers.sheets, sheetOverviewMarkers]
-                    ].forEach(function (entry) {
-                        if (!entry[0]) return;
-                        if (visible && !entry[0].hasLayer(entry[1])) entry[0].addLayer(entry[1]);
-                        else if (!visible && entry[0].hasLayer(entry[1])) entry[0].removeLayer(entry[1]);
-                    });
                     scheduleOverviewLabelLayout();
                 };
                 instance.map.on('zoomend', updateOverviewMarkers);
@@ -811,12 +882,14 @@
                 updateOverviewMarkers();
             }
 
-            if (!selectedFallbackAdded && !markerBounds.length && (!listedOnly || !(parcelFeatures.features || []).length)
+            if (!listedOnly && !selectedFallbackAdded && !markerBounds.length
                 && container.dataset.centerKind === 'parcel') {
                 selectedFallbackAdded = true;
                 var selectedMarker = window.L.circleMarker([latitude, longitude], {
                     radius: 8, color: '#ffffff', weight: 2, fillColor: '#d63384', fillOpacity: 1
-                }).addTo(instance.map);
+                });
+                if (listedOnly && listedLayers.parcels) listedLayers.parcels.addLayer(selectedMarker);
+                else selectedMarker.addTo(instance.map);
                 var selectedPopup = document.createElement('span');
                 selectedPopup.textContent = container.dataset.reference || localized(container, 'selected_parcel', 'Particella selezionata');
                 selectedMarker.bindPopup(selectedPopup).openPopup();
@@ -826,7 +899,7 @@
             }
 
             if (listedOnly) {
-                var fallbackSheets = (sheetFeatures.features || []).filter(function (feature) {
+                var fallbackSheets = (ownedSheetFeatures.features || []).filter(function (feature) {
                     return !parcelSheetKeys.has(parcelSheetKey(feature.properties || {}));
                 });
                 if (fallbackSheets.length) {
@@ -909,7 +982,7 @@
             // `l-` listed, `c-` cadastral layers), so a link reproduces what is on screen. The other query parameters stay.
             if (!window.documentParcelMapUrlOwner) window.documentParcelMapUrlOwner = container.id;
             if (window.documentParcelMapUrlOwner === container.id) {
-                var urlToggles = [];
+                urlToggles = [];
                 document.querySelectorAll('[data-document-map-layer], [data-land-registry-layer-map]').forEach(function (toggle) {
                     var listed = toggle.dataset.documentMapLayer !== undefined;
                     if ((listed ? toggle.dataset.documentMapLayer : toggle.dataset.landRegistryLayerMap) !== container.id) return;
@@ -928,9 +1001,12 @@
                 }
                 var view = (urlParams.get('map') || '').split(',').map(Number);
                 if (view.length === 3 && view.every(Number.isFinite) && Math.abs(view[0]) <= 90 && Math.abs(view[1]) <= 180) {
-                    instance.map.setView([view[0], view[1]], Math.min(Math.max(Math.round(view[2]), 1), 20), { animate: false });
+                    requestedMapView = [view[0], view[1], Math.min(Math.max(Math.round(view[2]), 1), 20)];
+                    if (!listedOnly) {
+                        instance.map.setView([view[0], view[1]], requestedMapView[2], { animate: false });
+                    }
                 }
-                var writeMapUrl = function () {
+                writeMapUrl = function () {
                     var next = new URLSearchParams(window.location.search);
                     var center = instance.map.getCenter();
                     next.set('map', center.lat.toFixed(5) + ',' + center.lng.toFixed(5) + ',' + instance.map.getZoom());
@@ -941,9 +1017,11 @@
                             window.location.pathname + '?' + next.toString().replace(/%2C/g, ',') + window.location.hash);
                     } catch (_error) { /* a sandboxed frame may not rewrite its URL */ }
                 };
-                instance.map.on('moveend', writeMapUrl);
-                urlToggles.forEach(function (entry) { entry.toggle.addEventListener('change', writeMapUrl); });
-                writeMapUrl();
+                if (!listedOnly) {
+                    instance.map.on('moveend', writeMapUrl);
+                    urlToggles.forEach(function (entry) { entry.toggle.addEventListener('change', writeMapUrl); });
+                    writeMapUrl();
+                }
             }
 
             container.dataset.mapInitialized = 'true';
@@ -964,9 +1042,22 @@
                 if (updateOverviewMarkers) updateOverviewMarkers();
                 addMapActions(records, targets, instance.map, container);
             }
-            // nobody moved the map and no view came in the URL: show everything that was found, not just the first chunk
-            if (mapData.done === false && !userInteracted && !urlHadView && dataBounds.isValid()) {
+            // A subject URL may carry a viewport from another city. Keep it only when it is close to one of the
+            // subject's own parcels; otherwise show the owned parcel extent. Delay this until all chunks are known.
+            if (listedOnly && !userInteracted) {
+                if (requestedMapView && savedViewNearListedParcels(requestedMapView)) {
+                    instance.map.setView([requestedMapView[0], requestedMapView[1]], requestedMapView[2], { animate: false });
+                } else if (dataBounds.isValid()) {
+                    instance.map.fitBounds(dataBounds, { padding: [28, 28], maxZoom: 17 });
+                }
+            } else if (mapData.done === false && !userInteracted && !urlHadView && dataBounds.isValid()) {
+                // With no saved view, show everything found, not just the first chunk.
                 instance.map.fitBounds(dataBounds, { padding: [28, 28], maxZoom: 17 });
+            }
+            if (listedOnly && writeMapUrl && window.documentParcelMapUrlOwner === container.id) {
+                instance.map.on('moveend', writeMapUrl);
+                urlToggles.forEach(function (entry) { entry.toggle.addEventListener('change', writeMapUrl); });
+                writeMapUrl();
             }
             clearStatus(container);
             window.requestAnimationFrame(function () {

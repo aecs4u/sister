@@ -168,6 +168,26 @@ Visura soggetto {{ _variant_label|lower }}
     {% if subject_hub %}{{ hub_summary(subject_hub, subject_route_prefix, true) }}{% endif %}
     {% if _gruppi %}
     {% set _gruppi_list = _gruppi if _gruppi is sequence and _gruppi is not string and _gruppi is not mapping else [_gruppi] %}
+    {# Sort the municipality groups by name, then by the first sheet represented in each group. #}
+    {% set _group_sort = namespace(items=[]) %}
+    {% for _group in _gruppi_list %}
+        {% set _sheets = namespace(values=[]) %}
+        {% for _raw_rows in [_group.ImmobileFabbricatiS, _group.ImmobileTerreniS] %}
+            {% set _rows = _raw_rows if _raw_rows is sequence and _raw_rows is not string and _raw_rows is not mapping else ([_raw_rows] if _raw_rows else []) %}
+            {% for _row in _rows %}
+                {% set _identifier = (_row.DatiIdentificativi or {}).IdentificativoDefinitivo or {} %}
+                {% set _identifier = _identifier if _identifier is mapping else (_identifier[0] if _identifier else {}) %}
+                {% set _sheet = (_identifier.Foglio or '')|string|trim %}
+                {% if _sheet %}{% set _sheets.values = _sheets.values + [_sheet.zfill(12)] %}{% endif %}
+            {% endfor %}
+        {% endfor %}
+        {% set _group_sort.items = _group_sort.items + [{
+            'municipality': (_group.Descrizione or _group.CodiceComune or '')|string|trim|lower,
+            'sheet': _sheets.values|min if _sheets.values else '999999999999',
+            'group': _group,
+        }] %}
+    {% endfor %}
+    {% set _gruppi_list = _group_sort.items|sort(attribute='sheet')|sort(attribute='municipality')|map(attribute='group')|list %}
     {% set ns = namespace(total_imm=0, total_ter=0, n_comuni=_gruppi_list|length) %}
     {% for g in _gruppi_list %}
         {% set _imm = g.ImmobileFabbricatiS %}

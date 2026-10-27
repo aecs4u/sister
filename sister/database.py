@@ -110,7 +110,7 @@ DATABASE_SCHEMA = os.getenv("DATABASE_SCHEMA", "sister")
 DATABASE_ISTAT_SCHEMA = os.getenv("DATABASE_ISTAT_SCHEMA", "istat")
 # raw payloads (response JSON, XML tree, extraction JSON) live in their own schema; tests point it at a throwaway one
 DATABASE_ARCHIVE_SCHEMA = os.getenv("DATABASE_ARCHIVE_SCHEMA", "sister_archive")
-DATABASE_REVISION = "20261112_property_actual_size"
+DATABASE_REVISION = "20261112_omi_selection_origin"
 
 # ---------------------------------------------------------------------------
 # Engine and session
@@ -2263,6 +2263,7 @@ async def get_user_manual_property_valuations(user_id: str, asset_keys: Iterable
         result.setdefault(row.asset_key, {"valuations": [], "preferred_source": None})["omi_selection"] = {
             "zone_code": row.zone_code,
             "typology_code": row.typology_code,
+            "is_manual": row.is_manual,
         }
     return result
 
@@ -2282,7 +2283,11 @@ async def get_user_property_omi_selections(user_id: str, asset_keys: Iterable[st
             )
         ).scalars().all()
     return {
-        row.asset_key: {"zone_code": row.zone_code, "typology_code": row.typology_code}
+        row.asset_key: {
+            "zone_code": row.zone_code,
+            "typology_code": row.typology_code,
+            "is_manual": row.is_manual,
+        }
         for row in rows
     }
 
@@ -2307,7 +2312,7 @@ async def get_user_property_actual_sizes(user_id: str, asset_keys: Iterable[str]
 async def ensure_user_property_omi_selections(
     user_id: str, defaults: Iterable[dict[str, Any]]
 ) -> None:
-    """Persist automatic OMI guesses once, leaving existing user choices intact."""
+    """Persist or refresh automatic OMI guesses without replacing explicit user choices."""
     values = []
     for item in defaults:
         asset_key = str(item.get("asset_key") or "")
@@ -2325,15 +2330,24 @@ async def ensure_user_property_omi_selections(
             "asset_key": asset_key,
             "zone_code": zone_code,
             "typology_code": typology_code,
+            "is_manual": False,
+            "legacy_zone_code": str(item.get("legacy_zone_code") or "").strip().upper() or None,
         })
     if not values:
         return
     async with _get_session_factory()() as session:
         await session.execute(
             text(
-                "INSERT INTO property_omi_selection (user_id, asset_key, zone_code, typology_code, updated_at) "
-                "VALUES (:user_id, :asset_key, :zone_code, :typology_code, now()) "
-                "ON CONFLICT (user_id, asset_key) DO NOTHING"
+                "INSERT INTO property_omi_selection "
+                "(user_id, asset_key, zone_code, typology_code, is_manual, updated_at) "
+                "VALUES (:user_id, :asset_key, :zone_code, :typology_code, :is_manual, now()) "
+                "ON CONFLICT (user_id, asset_key) DO UPDATE SET "
+                "zone_code = EXCLUDED.zone_code, typology_code = EXCLUDED.typology_code, "
+                "is_manual = FALSE, updated_at = now() "
+                "WHERE property_omi_selection.is_manual IS FALSE OR "
+                "(property_omi_selection.is_manual IS NULL "
+                "AND :legacy_zone_code IS NOT NULL "
+                "AND property_omi_selection.zone_code IS NOT DISTINCT FROM :legacy_zone_code)"
             ),
             values,
         )
@@ -2348,10 +2362,11 @@ async def set_user_property_omi_selection(
         await session.execute(
             text(
                 "INSERT INTO property_omi_selection "
-                "(user_id, asset_key, zone_code, typology_code, updated_at) "
-                "VALUES (:user_id, :asset_key, :zone_code, :typology_code, now()) "
+                "(user_id, asset_key, zone_code, typology_code, is_manual, updated_at) "
+                "VALUES (:user_id, :asset_key, :zone_code, :typology_code, TRUE, now()) "
                 "ON CONFLICT (user_id, asset_key) DO UPDATE SET "
-                "zone_code = EXCLUDED.zone_code, typology_code = EXCLUDED.typology_code, updated_at = now()"
+                "zone_code = EXCLUDED.zone_code, typology_code = EXCLUDED.typology_code, "
+                "is_manual = TRUE, updated_at = now()"
             ),
             {
                 "user_id": user_id,

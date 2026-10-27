@@ -24,6 +24,7 @@ from typing import Any
 
 from . import omi_quotes
 from .cadastral_values import building_cadastral_value, building_multiplier, land_cadastral_value, normalize_category
+from .omi_zones import omi_zone_for_parcel
 from .result_parsers import (
     birth_date_from_codice_fiscale,
     clean_quota,
@@ -65,6 +66,20 @@ def _items(value: Any) -> list[dict[str, Any]]:
 def _first(value: Any) -> dict[str, Any]:
     values = _items(value)
     return values[0] if values else {}
+
+
+def _subject_group_table_sort_key(group: dict[str, Any]) -> tuple[str, str]:
+    """Match the municipality/sheet order used by catasto/visura_soggetto_archive.html."""
+    municipality = str(group.get("Descrizione") or group.get("CodiceComune") or "").strip().lower()
+    sheets: list[str] = []
+    for key in ("ImmobileFabbricatiS", "ImmobileTerreniS"):
+        for row in _items(group.get(key)):
+            identifiers = _first(row.get("DatiIdentificativi"))
+            identifier = _first(identifiers.get("IdentificativoDefinitivo"))
+            sheet = str(identifier.get("Foglio") or "").strip()
+            if sheet:
+                sheets.append(sheet.zfill(12))
+    return municipality, min(sheets, default="999999999999")
 
 
 def _date_value(value: Any) -> date | None:
@@ -1328,7 +1343,10 @@ async def subject_land_registry_kpis(
     cadastral_lands = Decimal(0)
     cadastral_land_rows = 0
 
-    groups = _items(subject.get("GruppoUnitaImmobiliari"))
+    # The archive template sorts municipality groups by name, then by the first cadastral sheet.
+    # The client-side table enrichers pair these rows with table_estimates by position, so the
+    # server-side arrays must follow the same display order.
+    groups = sorted(_items(subject.get("GruppoUnitaImmobiliari")), key=_subject_group_table_sort_key)
     # One entry per table row, in the order the page renders them: `buildings` per fabbricato, `lands` per
     # classamento (the theme also draws one empty row for a terreno without any).
     table_estimates = [{"buildings": [], "lands": []} for _ in groups]
@@ -1721,18 +1739,38 @@ async def subject_land_registry_kpis(
 
     zone_keys = {}
     zone_point_methods = {}
+    geometry_requests: dict[tuple[str, str, str, str], tuple[str, str, dict[str, Any]]] = {}
     for building, marker, feature in mapped_buildings:
+        province = building["province"] or str(marker.get("province") or "").strip()
+        parcel_key = (
+            building["municipality_code"], building["section"], building["sheet"], building["parcel"]
+        )
+        if feature and province:
+            geometry_requests.setdefault(
+                parcel_key,
+                (province, building["municipality_code"], feature),
+            )
         point = _parcel_zone_point(feature, marker)
         if point is None:
             continue
         latitude, longitude, point_method = point
-        province = building["province"] or str(marker.get("province") or "").strip()
         key = (building["municipality_code"], province, latitude, longitude)
-        parcel_key = (
-            building["municipality_code"], building["section"], building["sheet"], building["parcel"]
-        )
         zone_keys[parcel_key] = key
         zone_point_methods[parcel_key] = point_method
+
+    geometry_items = list(geometry_requests.items())
+    geometry_results = await asyncio.gather(*(
+        asyncio.to_thread(omi_zone_for_parcel, province, cadastral_code, feature)
+        for _parcel_key, (province, cadastral_code, feature) in geometry_items
+    ))
+    geometry_parcel_zones = {
+        parcel_key: zone
+        for (parcel_key, _request), zone in zip(geometry_items, geometry_results)
+        if zone
+    }
+    for parcel_key in geometry_parcel_zones:
+        zone_point_methods[parcel_key] = "zona OMI con maggiore sovrapposizione alla particella catastale"
+
     unique_zones = set(zone_keys.values())
     zone_requests = {
         key: (lambda key=key: stats_service.aget_omi_zone_at_point(
@@ -1746,7 +1784,8 @@ async def subject_land_registry_kpis(
         timeout=8,
     )
 
-    parcel_zones = {}
+    parcel_zones = dict(geometry_parcel_zones)
+    point_parcel_zones = {}
     for building, _marker, _feature in mapped_buildings:
         parcel_key = (
             building["municipality_code"], building["section"], building["sheet"], building["parcel"]
@@ -1755,7 +1794,8 @@ async def subject_land_registry_kpis(
         if not zone:
             continue
         zone = str(zone).strip().upper()
-        parcel_zones[parcel_key] = zone
+        point_parcel_zones[parcel_key] = zone
+        parcel_zones.setdefault(parcel_key, zone)
     quote_requests = {}
     selected_zones: dict[str, str] = {}
     for building in buildings:
@@ -1764,15 +1804,35 @@ async def subject_land_registry_kpis(
         parcel_key = (
             building["municipality_code"], building["section"], building["sheet"], building["parcel"]
         )
-        zone = str(saved.get("zone_code") or parcel_zones.get(parcel_key) or "").strip().upper()
+        automatic_zone = str(parcel_zones.get(parcel_key) or "").strip().upper()
+        saved_zone = str(saved.get("zone_code") or "").strip().upper()
+        legacy_automatic_zone = bool(
+            saved.get("is_manual") is None
+            and saved_zone
+            and automatic_zone
+            and saved_zone != automatic_zone
+            and saved_zone == point_parcel_zones.get(parcel_key)
+            and not saved.get("typology_code")
+        )
+        if saved.get("is_manual") is True:
+            zone = saved_zone or automatic_zone
+        elif saved.get("is_manual") is False or legacy_automatic_zone:
+            zone = automatic_zone or saved_zone
+        else:
+            zone = saved_zone or automatic_zone
         selected_zones[asset_key or ""] = zone
         row_estimate = table_estimates[building["group_index"]]["buildings"][building["table_row_index"]]
         row_estimate["omi_comune"] = building["municipality_code"]
         row_estimate["omi_zona"] = zone
         row_estimate["omi_zone_point_method"] = zone_point_methods.get(parcel_key, "")
         row_estimate["omi_zone_selected"] = bool(
-            saved.get("zone_code") and str(saved.get("zone_code")).strip().upper() != parcel_zones.get(parcel_key)
+            saved_zone
+            and saved_zone != automatic_zone
+            and not legacy_automatic_zone
+            and saved.get("is_manual") is not False
         )
+        if legacy_automatic_zone:
+            row_estimate["_omi_legacy_zone_code"] = saved_zone
         row_estimate["omi_typology_selected"] = False
         row_estimate["omi_tipologia"] = str(saved.get("typology_code") or "")
         if zone and building.get("municipality_code"):

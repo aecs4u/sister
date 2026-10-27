@@ -55,6 +55,7 @@ from .database import (
 )
 from .document_scope import subject_search_scope as _subject_search_scope
 from .form_config import get_available_form_groups, get_single_step_groups, get_workflow_groups
+from .omi_zones import omi_boundary_geometries, omi_zone_code, omi_zone_for_parcel
 from .request_types import known_request_tags, known_request_types, request_type_info
 from .visura_view import build_visura_view
 
@@ -1721,10 +1722,12 @@ async def _apply_user_manual_valuations(kpis: dict[str, Any] | None, user) -> di
                         typology_code = int(estimate["omi_tipologia"]) if estimate.get("omi_tipologia") else None
                     except (TypeError, ValueError):
                         typology_code = None
+                    legacy_zone_code = estimate.pop("_omi_legacy_zone_code", None)
                     guessed_selections.append({
                         "asset_key": identity["asset_key"],
                         "zone_code": estimate.get("omi_zona"),
                         "typology_code": typology_code,
+                        "legacy_zone_code": legacy_zone_code,
                     })
             await ensure_user_property_omi_selections(user_key, guessed_selections)
         except Exception as exc:  # The official valuation page remains available if this optional data is unavailable.
@@ -1735,7 +1738,7 @@ async def _apply_user_manual_valuations(kpis: dict[str, Any] | None, user) -> di
 
 
 _LAND_REGISTRY_CALCULATION_TYPE = "subject_land_registry_kpis"
-_LAND_REGISTRY_CALCULATION_VERSION = "9"
+_LAND_REGISTRY_CALCULATION_VERSION = "10"
 _LAND_REGISTRY_CALCULATION_MAX_AGE_SECONDS = 12 * 60 * 60
 
 
@@ -3462,6 +3465,9 @@ def _cadastral_map_lookup_key(item: dict, *, feature_type: str) -> str:
     ]
     if feature_type == "parcel":
         fields.append(item.get("parcel"))
+    elif feature_type == "sheet":
+        # Ignore cached outlines created by the old query, which unioned every numeric alias.
+        fields.append("sheet-match-v2")
     return "\x1f".join(str(value or "").strip().upper() for value in fields)
 
 
@@ -3485,7 +3491,8 @@ async def _read_visura_cadastral_map_cache(document_id: int) -> list[tuple]:
                           concat_ws(chr(31), upper(btrim(coalesce(comune, ''))), upper(btrim(coalesce(province_code, ''))),
                                     upper(btrim(coalesce(comune_code, ''))), upper(btrim(coalesce(section, ''))),
                                     upper(btrim(coalesce(sheet, ''))),
-                                    CASE WHEN feature_type = 'parcel' THEN upper(btrim(coalesce(parcel, ''))) END) AS lookup_key,
+                                    CASE WHEN feature_type = 'parcel' THEN upper(btrim(coalesce(parcel, ''))) END,
+                                    CASE WHEN feature_type = 'sheet' THEN 'SHEET-MATCH-V2' END) AS lookup_key,
                           comune AS municipality, province_code AS province,
                           comune_code AS municipality_code, section, sheet, parcel, source_reference,
                           checked_at >= now() - interval '30 days' AS is_fresh,
@@ -3950,11 +3957,16 @@ async def _google_maps_context(doc: dict) -> dict[str, Any] | None:
             context["sheet_features"].append({
                 "type": "Feature",
                 "properties": {
-                    "reference": f"{item['municipality']} ({item['municipality_code']}) · Foglio {item['sheet']}",
+                    "reference": (
+                        f"{item['municipality']} ({item['municipality_code']}) · "
+                        + (f"Sezione {item['section']} · " if item["section"] else "")
+                        + f"Foglio {item['sheet']}"
+                    ),
                     "sheet": item["sheet"],
                     "section": item["section"],
                     "municipality": item["municipality"],
                     "municipality_code": item["municipality_code"],
+                    "province": item["province"],
                 },
                 "geometry": geometry,
             })
@@ -4161,9 +4173,9 @@ async def _google_maps_context(doc: dict) -> dict[str, Any] | None:
                 AS w(sheet_index, municipality, province, municipality_code, section)
         ), wanted_refs AS (
             SELECT * FROM unnest(%s::int[], %s::text[], %s::int[])
-                AS r(sheet_index, sheet_reference, section_rank)
+                AS r(sheet_index, sheet_reference, reference_rank)
         ), matched AS (
-            SELECT w.sheet_index, r.section_rank, s.sheet_reference, s.geom
+            SELECT w.sheet_index, r.reference_rank, s.sheet_reference, s.geom
             FROM wanted AS w
             JOIN wanted_refs AS r ON r.sheet_index = w.sheet_index
             JOIN spatial.cadastral_sheet AS s
@@ -4178,7 +4190,7 @@ async def _google_maps_context(doc: dict) -> dict[str, Any] | None:
                     )
                  )
         ), ranked AS (
-            SELECT *, max(section_rank) OVER (PARTITION BY sheet_index) AS best_section_rank
+            SELECT *, max(reference_rank) OVER (PARTITION BY sheet_index) AS best_reference_rank
             FROM matched
         )
         SELECT sheet_index,
@@ -4187,7 +4199,7 @@ async def _google_maps_context(doc: dict) -> dict[str, Any] | None:
                max(ST_SRID(geom)) AS max_srid,
                ST_AsGeoJSON(ST_UnaryUnion(ST_Collect(geom)), 6) AS geometry
         FROM ranked
-        WHERE section_rank = best_section_rank
+        WHERE reference_rank = best_reference_rank
         GROUP BY sheet_index
     """
     rows = []
@@ -4313,16 +4325,23 @@ async def _google_maps_context(doc: dict) -> dict[str, Any] | None:
 
                 if is_subject_visura:
                     sheet_wanted = []
-                    sheet_reference_wanted = []
+                    sheet_reference_ranks: dict[tuple[int, str], int] = {}
                     for index, item in enumerate(sheet_identifiers):
-                        sheet_values = {item["sheet"].upper()}
-                        if item["sheet"].isdigit():
-                            normalized_sheet = str(int(item["sheet"]))
-                            sheet_values.update(normalized_sheet.zfill(width) for width in (2, 3, 4))
+                        raw_sheet = item["sheet"].strip().upper()
+                        sheet_values = {raw_sheet: 3}
+                        if raw_sheet.isdigit():
+                            normalized_sheet = str(int(raw_sheet))
+                            sheet_values[normalized_sheet] = max(sheet_values.get(normalized_sheet, 0), 2)
+                            for width in (2, 3, 4):
+                                padded = normalized_sheet.zfill(width)
+                                sheet_values[padded] = max(sheet_values.get(padded, 0), 1)
                             if int(normalized_sheet) >= 100 and int(normalized_sheet) % 100 == 0:
-                                normalized_sheet = str(int(normalized_sheet) // 100)
-                                sheet_values.add(normalized_sheet)
-                                sheet_values.update(normalized_sheet.zfill(width) for width in (2, 3, 4))
+                                # Some source extracts encode these sheets as the number divided by 100.
+                                alternate = str(int(normalized_sheet) // 100)
+                                sheet_values[alternate] = max(sheet_values.get(alternate, 0), 0)
+                                for width in (2, 3, 4):
+                                    padded = alternate.zfill(width)
+                                    sheet_values[padded] = max(sheet_values.get(padded, 0), 0)
 
                         section = item["section"].upper()
                         section_prefixes = []
@@ -4332,33 +4351,32 @@ async def _google_maps_context(doc: dict) -> dict[str, Any] | None:
                                 section_prefixes.append((section[:1], 1))
                         section_prefixes.append(("", 0))
 
-                        reference_candidates = set()
-                        for sheet_value in sheet_values:
+                        for sheet_value, sheet_rank in sheet_values.items():
                             numeric_sheet = str(int(sheet_value)) if sheet_value.isdigit() else sheet_value
                             padded_sheet = numeric_sheet.zfill(4) if numeric_sheet.isdigit() else numeric_sheet
                             for section_prefix, section_rank in section_prefixes:
-                                for suffix in ("", "00"):
-                                    reference = f"{item['municipality_code']}{section_prefix}{padded_sheet}{suffix}"
-                                    reference_candidates.add((reference, section_rank))
+                                for suffix, suffix_rank in (("00", 2), ("", 1)):
+                                    references = [(f"{item['municipality_code']}{section_prefix}{padded_sheet}{suffix}", 1)]
                                     if section_prefix:
-                                        reference_candidates.add((
-                                            f"{item['municipality_code']}{section_prefix}_{padded_sheet}{suffix}",
-                                            section_rank,
+                                        references.append((
+                                            f"{item['municipality_code']}{section_prefix}_{padded_sheet}{suffix}", 0,
                                         ))
                                     else:
-                                        reference_candidates.add((
-                                            f"{item['municipality_code']}_{padded_sheet}{suffix}", section_rank,
-                                        ))
-                                        reference_candidates.add((
-                                            f"{item['municipality_code']}{padded_sheet}{suffix}", section_rank,
-                                        ))
+                                        references.append((f"{item['municipality_code']}_{padded_sheet}{suffix}", 0))
+                                    for reference, separator_rank in references:
+                                        # Prefer the exact section and sheet spelling, then the standard 00 suffix;
+                                        # legacy numeric aliases are considered only if no closer reference exists.
+                                        rank = section_rank * 10000 + sheet_rank * 1000 + suffix_rank * 10 + separator_rank
+                                        key = (index, reference)
+                                        sheet_reference_ranks[key] = max(sheet_reference_ranks.get(key, -1), rank)
                         sheet_wanted.append((
                             index, item["municipality"], item["province"], item["municipality_code"], section,
                         ))
-                        sheet_reference_wanted.extend(
-                            (index, reference, section_rank)
-                            for reference, section_rank in sorted(reference_candidates)
-                        )
+
+                    sheet_reference_wanted = [
+                        (index, reference, rank)
+                        for (index, reference), rank in sorted(sheet_reference_ranks.items())
+                    ]
 
                     if sheet_wanted and sheet_reference_wanted:
                         try:
@@ -4468,11 +4486,16 @@ async def _google_maps_context(doc: dict) -> dict[str, Any] | None:
             context["sheet_features"].append({
                 "type": "Feature",
                 "properties": {
-                    "reference": f"{item['municipality']} ({item['municipality_code']}) · Foglio {item['sheet']}",
+                    "reference": (
+                        f"{item['municipality']} ({item['municipality_code']}) · "
+                        + (f"Sezione {item['section']} · " if item["section"] else "")
+                        + f"Foglio {item['sheet']}"
+                    ),
                     "sheet": item["sheet"],
                     "section": item["section"],
                     "municipality": item["municipality"],
                     "municipality_code": item["municipality_code"],
+                    "province": item["province"],
                 },
                 "geometry": geometry,
             })
@@ -5871,6 +5894,110 @@ async def web_document_parcel_map_data(
     return JSONResponse(await _parcel_map_payload(lookup), headers={"Cache-Control": "private, max-age=300"})
 
 
+def _omi_zone_features_for_properties(
+    parcel_markers: list[dict[str, Any]],
+    parcel_features: list[dict[str, Any]],
+    unmapped_parcels: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """All OMI zones in owned-property municipalities, marking zones overlapping owned parcels."""
+    try:
+        from .provinces import province_code, province_name
+    except ImportError:
+        return []
+
+    municipalities: dict[tuple[str, str], dict[str, Any]] = {}
+    matched_zones: dict[tuple[str, str], set[str]] = {}
+
+    def register_municipality(properties: dict[str, Any]) -> tuple[str, str] | None:
+        cadastral_code = str(properties.get("municipality_code") or "").strip().upper()
+        raw_province = str(properties.get("province") or "").strip()
+        if not cadastral_code or not raw_province:
+            return None
+        sigla = province_code(raw_province)
+        province = province_name(sigla) if sigla else raw_province
+        key = ((province or raw_province).casefold(), cadastral_code)
+        municipalities.setdefault(key, {
+            "province": province or raw_province,
+            "municipality": str(properties.get("municipality") or "").strip(),
+            "municipality_code": cadastral_code,
+        })
+        return key
+
+    for properties in (*parcel_markers, *unmapped_parcels):
+        if isinstance(properties, dict):
+            register_municipality(properties)
+
+    for feature in parcel_features:
+        if not isinstance(feature, dict):
+            continue
+        properties = feature.get("properties") or {}
+        key = register_municipality(properties)
+        if key is None or not isinstance(feature.get("geometry"), dict):
+            continue
+        municipality = municipalities[key]
+        zone = omi_zone_for_parcel(
+            municipality["province"],
+            municipality["municipality_code"],
+            feature,
+        )
+        if zone:
+            matched_zones.setdefault(key, set()).add(zone)
+
+    if not municipalities:
+        return []
+
+    municipalities_by_province: dict[str, list[tuple[tuple[str, str], dict[str, Any]]]] = {}
+    for key, municipality in municipalities.items():
+        municipalities_by_province.setdefault(municipality["province"], []).append((key, municipality))
+
+    selected: dict[str, dict[str, Any]] = {}
+    for province, province_municipalities in municipalities_by_province.items():
+        zone_features = omi_boundary_geometries(province)
+        if not zone_features:
+            continue
+        zones_by_comune: dict[str, list[tuple[dict[str, Any], Any]]] = {}
+        for zone_feature, zone_geometry in zone_features:
+            zone_properties = zone_feature.get("properties") or {}
+            code = str(zone_properties.get("cod_comune") or zone_properties.get("codcom") or "").strip().upper()
+            if code:
+                zones_by_comune.setdefault(code, []).append((zone_feature, zone_geometry))
+
+        for municipality_key, municipality in province_municipalities:
+            cadastral_code = municipality["municipality_code"]
+            for zone_feature, zone_geometry in zones_by_comune.get(cadastral_code, []):
+                source_properties = zone_feature.get("properties") or {}
+                zone = omi_zone_code(source_properties)
+                if not zone:
+                    continue
+                matches_owned_parcel = zone in matched_zones.get(municipality_key, set())
+
+                geometry_json = json.dumps(zone_feature["geometry"], sort_keys=True, separators=(",", ":"))
+                feature_key = hashlib.sha1(
+                    f"{province}|{cadastral_code}|{zone}|{geometry_json}".encode("utf-8")
+                ).hexdigest()
+                vintage = "/".join(
+                    str(source_properties.get(key) or "").strip()
+                    for key in ("anno", "semestre")
+                    if str(source_properties.get(key) or "").strip()
+                )
+                properties = {
+                    "reference": f"Zona OMI {zone} · {municipality['municipality'] or cadastral_code}",
+                    "omi_zone": zone,
+                    "omi_feature_key": feature_key,
+                    "municipality": municipality["municipality"],
+                    "municipality_code": cadastral_code,
+                    "province": province,
+                    "boundary_vintage": vintage,
+                    "matches_owned_parcel": matches_owned_parcel,
+                }
+                selected[feature_key] = {
+                    "type": "Feature",
+                    "properties": properties,
+                    "geometry": zone_feature["geometry"],
+                }
+    return list(selected.values())
+
+
 async def _parcel_map_payload(lookup: dict[str, Any]) -> dict[str, Any]:
     """The JSON the parcel map script fetches: markers, parcel and sheet outlines, parcels without a position."""
     # A parcel with no outline and no sheet outline has no position of its own: send the centre of what is known of its
@@ -5881,15 +6008,31 @@ async def _parcel_map_payload(lookup: dict[str, Any]) -> dict[str, Any]:
         point = centroids.get(str(item.get("municipality_code") or "").strip().upper())
         if point:
             item["latitude"], item["longitude"] = point
+    sheet_features = lookup.get("sheet_features") or []
+    parcel_features = lookup.get("parcel_features") or []
+    parcel_markers = lookup.get("parcel_markers") or []
+    omi_zone_features = (
+        await run_in_threadpool(
+            _omi_zone_features_for_properties,
+            parcel_markers,
+            parcel_features,
+            lookup.get("unmapped_parcel_items") or [],
+        )
+        if lookup.get("listed_only") else []
+    )
     return {
-        "parcel_markers": lookup.get("parcel_markers") or [],
+        "parcel_markers": parcel_markers,
         "parcel_features": {
             "type": "FeatureCollection",
-            "features": lookup.get("parcel_features") or [],
+            "features": parcel_features,
         },
         "sheet_features": {
             "type": "FeatureCollection",
-            "features": lookup.get("sheet_features") or [],
+            "features": sheet_features,
+        },
+        "omi_zone_features": {
+            "type": "FeatureCollection",
+            "features": omi_zone_features,
         },
         "unmapped_parcels": unmapped_parcels,
     }
@@ -7027,6 +7170,17 @@ _HUB_MAP_WAIT_SECONDS = 4  # how long the page waits for the whole map before it
 _HUB_MAP_TASKS: dict[str, asyncio.Task] = {}
 
 
+def _hub_map_sheet_key(item: dict[str, Any]) -> tuple[str, str, str, str]:
+    """Stable cadastral sheet identity shared by parcel chunks and rendered features."""
+    def part(value: Any) -> str:
+        text = str(value or "").strip().upper()
+        return str(int(text)) if text.isdigit() else text
+
+    province = str(item.get("province_code") or item.get("province") or "").strip().upper()
+    municipality = str(item.get("municipality_code") or item.get("municipality") or "").strip().upper()
+    return province, municipality, part(item.get("section")), part(item.get("sheet"))
+
+
 def _hub_map_chunks(parcels: list[dict]) -> list[list[dict]]:
     """Parcels in lookup order (comune, then sheet) cut into chunks: a small one first, then the usual size."""
     ordered = sorted(parcels, key=lambda p: (p.get("province_code") or "", p.get("municipality_code") or "", p["sheet"]))
@@ -7044,6 +7198,7 @@ async def _hub_map_lookup(parcels: list[dict], on_chunk=None) -> dict | None:
     merged: dict | None = None
     failed_chunks = 0
     for chunk in _hub_map_chunks(parcels):
+        chunk_sheet_keys = {_hub_map_sheet_key(parcel) for parcel in chunk}
         xml_parsed = _hub_map_subject_xml(chunk)
         if not xml_parsed:
             continue
@@ -7057,6 +7212,12 @@ async def _hub_map_lookup(parcels: list[dict], on_chunk=None) -> dict | None:
         if lookup is None:
             failed_chunks += 1
             continue
+        # The cadastral source can return a municipality-level fallback outline alongside a requested sheet.
+        # Keep only sheet identities that are actually referenced by this subject's owned parcels.
+        lookup["sheet_features"] = [
+            feature for feature in lookup.get("sheet_features") or []
+            if _hub_map_sheet_key(feature.get("properties") or {}) in chunk_sheet_keys
+        ]
         if on_chunk is not None:
             await on_chunk(lookup)
         if merged is None:
@@ -7065,14 +7226,25 @@ async def _hub_map_lookup(parcels: list[dict], on_chunk=None) -> dict | None:
             continue
         for key in ("parcel_markers", "parcel_features", "unmapped_parcels", "unmapped_parcel_items"):
             merged[key] = (merged.get(key) or []) + (lookup.get(key) or [])
-        known_sheets = {f.get("properties", {}).get("reference") for f in merged.get("sheet_features") or []}
-        merged["sheet_features"] = (merged.get("sheet_features") or []) + [
-            f for f in lookup.get("sheet_features") or [] if f.get("properties", {}).get("reference") not in known_sheets
-        ]
+        known_sheets = {
+            _hub_map_sheet_key(feature.get("properties") or {})
+            for feature in merged.get("sheet_features") or []
+        }
+        fresh_sheets = []
+        for feature in lookup.get("sheet_features") or []:
+            key = _hub_map_sheet_key(feature.get("properties") or {})
+            if key not in known_sheets:
+                known_sheets.add(key)
+                fresh_sheets.append(feature)
+        merged["sheet_features"] = (merged.get("sheet_features") or []) + fresh_sheets
         merged["parcel_count"] = (merged.get("parcel_count") or 0) + (lookup.get("parcel_count") or 0)
-        merged["sheet_count"] = (merged.get("sheet_count") or 0) + (lookup.get("sheet_count") or 0)
     if merged is None:
         return None
+    unique_sheets = {}
+    for feature in merged.get("sheet_features") or []:
+        unique_sheets.setdefault(_hub_map_sheet_key(feature.get("properties") or {}), feature)
+    merged["sheet_features"] = list(unique_sheets.values())
+    merged["sheet_count"] = len({_hub_map_sheet_key(parcel) for parcel in parcels})
     merged["failed_chunks"] = failed_chunks
     for index, marker in enumerate(merged.get("parcel_markers") or []):
         marker["selected"] = index == 0
@@ -7106,7 +7278,10 @@ def _hub_data_url(profile: dict, map_key: str) -> str:
 
 def _empty_map_payload() -> dict:
     empty = {"type": "FeatureCollection", "features": []}
-    return {"parcel_markers": [], "parcel_features": empty, "sheet_features": empty, "unmapped_parcels": []}
+    return {
+        "parcel_markers": [], "parcel_features": empty, "sheet_features": empty,
+        "omi_zone_features": empty, "unmapped_parcels": [],
+    }
 
 
 async def _build_hub_map(map_key: str, parcels: list[dict], data_url: str) -> dict | None:
@@ -7117,7 +7292,8 @@ async def _build_hub_map(map_key: str, parcels: list[dict], data_url: str) -> di
     its context is not remembered: the next page load tries again.
     """
     progress = _HUB_MAP_DATA[map_key] = {"chunks": [], "done": False, "total": len(_hub_map_chunks(parcels))}
-    seen_sheets: set[str] = set()
+    seen_sheets: set[tuple[str, str, str, str]] = set()
+    seen_omi_zones: dict[str, bool] = {}
 
     async def publish(lookup: dict) -> None:
         for marker in lookup.get("parcel_markers") or []:
@@ -7125,12 +7301,28 @@ async def _build_hub_map(map_key: str, parcels: list[dict], data_url: str) -> di
         payload = await _parcel_map_payload(lookup)
         fresh = []
         for feature in payload["sheet_features"]["features"]:  # a sheet can be cut across two chunks
-            reference = (feature.get("properties") or {}).get("reference")
-            if reference in seen_sheets:
+            key = _hub_map_sheet_key(feature.get("properties") or {})
+            if key in seen_sheets:
                 continue
-            seen_sheets.add(reference)
+            seen_sheets.add(key)
             fresh.append(feature)
         payload["sheet_features"]["features"] = fresh
+        fresh_omi_zones = []
+        for feature in payload["omi_zone_features"]["features"]:
+            properties = feature.get("properties") or {}
+            feature_key = str(properties.get("omi_feature_key") or "")
+            if not feature_key:
+                continue
+            matches_owned_parcel = bool(properties.get("matches_owned_parcel"))
+            previous_match = seen_omi_zones.get(feature_key)
+            if previous_match is None:
+                seen_omi_zones[feature_key] = matches_owned_parcel
+                fresh_omi_zones.append(feature)
+            elif matches_owned_parcel and not previous_match:
+                seen_omi_zones[feature_key] = True
+                # Send a duplicate as a style update when a later chunk resolves an owned parcel geometry.
+                fresh_omi_zones.append(feature)
+        payload["omi_zone_features"]["features"] = fresh_omi_zones
         progress["chunks"].append(payload)
 
     complete = False
@@ -7179,6 +7371,7 @@ async def _hub_map_increment(map_key: str, after: int, wait_seconds: float = 25.
         increment["parcel_markers"].extend(payload["parcel_markers"])
         increment["parcel_features"]["features"].extend(payload["parcel_features"]["features"])
         increment["sheet_features"]["features"].extend(payload["sheet_features"]["features"])
+        increment["omi_zone_features"]["features"].extend(payload["omi_zone_features"]["features"])
         increment["unmapped_parcels"].extend(payload["unmapped_parcels"])
     increment["next"] = after + len(fresh)
     increment["done"] = done

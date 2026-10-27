@@ -362,6 +362,7 @@ class PropertyOmiSelection(SQLModel, table=True):
     asset_key: str = Field(primary_key=True)
     zone_code: Optional[str] = Field(default=None, sa_column=Column(sa.String(24), nullable=True))
     typology_code: Optional[int] = Field(default=None)
+    is_manual: Optional[bool] = Field(default=None)
     updated_at: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc),
         sa_column=Column(sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),

@@ -12,6 +12,7 @@
 {% set subject_document_id = subject_document_id|default(none) %}
 {% set subject_portfolio = subject_portfolio|default(none) %}
 {% set subject_map_labels = {
+    'description_listed': 'La mappa mostra le zone OMI di tutti i comuni in cui sono presenti immobili di proprietà (confini 2018/2). In viola è indicata la zona che copre la porzione maggiore di una particella catastale di proprietà.',
     'description_unmapped': 'Le particelle senza geometria catastale sono mostrate con un indicatore approssimativo riferito al comune; usa “Adatta tutte le particelle” per vederle insieme.'
 } %}
 {# the subject's saved soggetto query (web._subject_query_profile), when there is one: its elenco immobili completes the groups of the
@@ -149,8 +150,8 @@
             'omiValuationUrl': '/omi/valuation',
             'labels': preferred_assessment_labels
         }, nonce=csp_nonce) }}
-        {% if manual_valuation_enabled and land_registry_kpis %}
-        <script type="application/json" nonce="{{ csp_nonce }}" data-land-map-omi-options>{{ land_registry_kpis.omi_options_by_comune|default({}, true)|tojson }}</script>
+        {% if land_registry_kpis %}
+        <script type="application/json" nonce="{{ csp_nonce }}" data-land-map-omi-options data-editable="{{ 'true' if manual_valuation_enabled else 'false' }}">{{ land_registry_kpis.omi_options_by_comune|default({}, true)|tojson }}</script>
         {% endif %}
         {% endif %}
     </div>
@@ -188,8 +189,27 @@
 
 {% block extra_js %}
 {{ super() }}
+{% if land_map_parent == 'catasto/visura_soggetto_archive.html' and land_registry_kpis %}
+{# The shared theme tags these tables by their header count. Tag by meaning first, so added theme columns do not break enrichment. #}
+<script nonce="{{ csp_nonce }}">
+(function () {
+    document.querySelectorAll('.document-land-map-content .imm-tables table.cat-compact-table').forEach(function (table) {
+        if (table.dataset.landMapKind) return;
+        var headers = Array.from(table.querySelectorAll('thead th')).map(function (cell) {
+            return cell.textContent.trim().toLocaleLowerCase();
+        });
+        if (headers.some(function (name) { return ['cat.', 'cat', 'categoria', 'category'].indexOf(name) !== -1; })) {
+            table.dataset.landMapKind = 'buildings';
+        } else if (headers.some(function (name) { return ['quality', 'qualità'].indexOf(name) !== -1; })) {
+            table.dataset.landMapKind = 'lands';
+        }
+    });
+})();
+</script>
+{% endif %}
 {{ cadastral_table_scripts() }}
-{{ document_parcel_map_scripts(land_registry_map, nonce=csp_nonce) }}
+{{ document_parcel_map_scripts(land_registry_map, nonce=csp_nonce,
+    renderer_url='/land-registry/static/document_parcel_map.js?v=20261027-owned-parcel-markers') }}
 {# PDF export: the page's own print layout rendered by headless Chromium (/documents/<id>/pdf). #}
 {# PDF of the page, always offered: a subject page exports itself (visura + elenco groups, selected visura kept), others their document #}
 {% if doc and doc.query_only or subject_fiscal_code %}
@@ -226,7 +246,7 @@
 {% endif %}
 {% if manual_valuation_enabled %}
 <script src="/static/js/manual_property_valuations.js?v=20261109b" defer></script>
-<script src="/static/js/property_omi_selections.js?v=20261112a" defer></script>
 {% endif %}
+{% if land_registry_kpis %}<script src="/static/js/property_omi_selections.js?v=20261027b" defer></script>{% endif %}
 {% endif %}
 {% endblock %}

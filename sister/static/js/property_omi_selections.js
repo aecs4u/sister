@@ -11,6 +11,7 @@
     }
     var estimates = read(estimatesSource, []);
     var optionsByComune = read(optionsSource, {});
+    var editable = optionsSource.dataset.editable !== 'false';
     if (!Array.isArray(estimates)) return;
 
     var accordionStateKey = 'omi-selection-accordion:' + window.location.pathname + window.location.search;
@@ -101,6 +102,14 @@
     function addActualSizeCell(estimate) {
         var body = document.createElement('td');
         body.className = 'actual-size-cell';
+        var currentValue = estimate.actual_size_sqm == null
+            ? (estimate.actual_size_default_sqm == null ? '' : String(estimate.actual_size_default_sqm))
+            : String(estimate.actual_size_sqm);
+        if (!editable) {
+            text(body, 'span', '', currentValue || '—');
+            body.title = 'Accedi per modificare la superficie effettiva.';
+            return body;
+        }
         if (!estimate.asset_identity || !estimate.asset_identity.asset_key) return body;
         var input = text(body, 'input', 'form-control form-control-sm', '');
         input.type = 'text';
@@ -240,10 +249,31 @@
                 if (!identity.asset_key || !estimate.omi_comune) {
                     var emptyZone = document.createElement('td');
                     var emptyTypology = document.createElement('td');
+                    if (!editable) {
+                        emptyZone.textContent = estimate.omi_zona || '—';
+                        emptyTypology.textContent = estimate.omi_tipologia || estimate.omi_tipologia_default || '—';
+                        emptyZone.title = emptyTypology.title = 'Accedi per modificare la selezione OMI.';
+                    }
                     insertCells(row, [sizeCell, emptyZone, emptyTypology], targetCell);
                     return;
                 }
                 var options = optionsByComune[estimate.omi_comune] || {zones: [], typologies_by_zone: {}, defaults_by_category: {}};
+
+                if (!editable) {
+                    var zone = String(estimate.omi_zona || '');
+                    var typologyCode = String(estimate.omi_tipologia || estimate.omi_tipologia_default || '');
+                    var typology = (options.typologies_by_zone[zone] || []).find(function (item) {
+                        return String(item.code) === typologyCode;
+                    });
+                    var zoneDisplayCell = document.createElement('td');
+                    zoneDisplayCell.textContent = zone || '—';
+                    zoneDisplayCell.title = 'Accedi per modificare la selezione OMI.';
+                    var typologyDisplayCell = document.createElement('td');
+                    typologyDisplayCell.textContent = typology ? typology.label : (typologyCode || '—');
+                    typologyDisplayCell.title = 'Accedi per modificare la selezione OMI.';
+                    insertCells(row, [sizeCell, zoneDisplayCell, typologyDisplayCell], targetCell);
+                    return;
+                }
 
                 var zoneCell = addSelectCell();
                 var zoneSelect = text(zoneCell.body, 'select', 'form-select form-select-sm');
