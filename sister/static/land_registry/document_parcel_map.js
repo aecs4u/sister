@@ -747,10 +747,20 @@
             }
 
             function omiZoneStyle(feature) {
-                if ((feature.properties || {}).matches_owned_parcel) {
-                    return { color: '#54278f', weight: 2.5, dashArray: '6 4', fillColor: '#7c3aed', fillOpacity: 0.3 };
+                var properties = feature.properties || {};
+                var zone = String(properties.omi_zone || '').trim().toUpperCase();
+                var hue = 0;
+                for (var index = 0; index < zone.length; index += 1) {
+                    hue = (hue + zone.charCodeAt(index) * (index + 1) * 73) % 360;
                 }
-                return { color: '#a85a00', weight: 2, dashArray: '6 4', fillColor: '#ffb02e', fillOpacity: 0.13 };
+                var matchesOwnedParcel = Boolean(properties.matches_owned_parcel);
+                return {
+                    color: 'hsl(' + hue + ' 76% 31%)',
+                    weight: matchesOwnedParcel ? 3 : 1.75,
+                    dashArray: matchesOwnedParcel ? null : '6 4',
+                    fillColor: 'hsl(' + hue + ' 82% 50%)',
+                    fillOpacity: matchesOwnedParcel ? 0.28 : 0.09
+                };
             }
 
             function omiZonePopup(feature) {

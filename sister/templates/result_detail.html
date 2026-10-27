@@ -552,7 +552,29 @@
         if (!el) return;
         var data = {{ result.db_properties | tojson }};
         if (!data.length) return;
-        var hasFabbricati = data.some(function(r){ return r.category || r.cadastral_class || r.income || r.consistency || r.census_zone; });
+        function hasValue(value) { return value != null && String(value).trim() !== ""; }
+        function legacyConsistencyValue(row, measure) {
+            var raw = String(row.consistency || "").trim();
+            var match = raw.match(/^([\d.,]+)\s*(m²|m2|mq|vano|vani|mc)$/i);
+            if (!match) return "";
+            var unit = match[2].toLowerCase();
+            var isArea = /^(m²|m2|mq)$/.test(unit);
+            var isRooms = /^van[oi]$/.test(unit);
+            return (measure === "sqm" && isArea) || (measure === "rooms" && isRooms) ? match[1] : "";
+        }
+        function hasOtherConsistency(row) {
+            if (hasValue(row.consistency_other)) return true;
+            if (!hasValue(row.consistency) || hasValue(row.consistency_sqm) || hasValue(row.consistency_rooms)) return false;
+            return !legacyConsistencyValue(row, "sqm") && !legacyConsistencyValue(row, "rooms");
+        }
+        function consistencyFormatter(measure) {
+            return function(cell) {
+                var value = cell.getValue();
+                if (!hasValue(value)) value = legacyConsistencyValue(cell.getRow().getData(), measure);
+                return hasValue(value) ? String(value) : "-";
+            };
+        }
+        var hasFabbricati = data.some(function(r){ return r.category || r.cadastral_class || r.income || r.consistency || r.consistency_sqm || r.consistency_rooms || r.consistency_other || r.census_zone; });
         var hasTerreni    = data.some(function(r){ return r.quality || r.area || r.dominical_income || r.agricultural_income; });
         var hasSubject    = data.some(function(r){ return r.subject_name || r.subject_fiscal_code; });
         var cols = [
@@ -574,10 +596,30 @@
             {title: "Partita",    field: "partita",       minWidth: headerMinWidth("Partita")},
         ];
         if (hasFabbricati) {
+            var consistencyColumns = [
+                {title: "m²", field: "consistency_sqm", minWidth: 70, hozAlign: "right", sorter: "number", formatter: consistencyFormatter("sqm")},
+                {title: "Vani", field: "consistency_rooms", minWidth: 70, hozAlign: "right", sorter: "number", formatter: consistencyFormatter("rooms")},
+            ];
+            if (data.some(hasOtherConsistency)) {
+                consistencyColumns.push({
+                    title: "Altro", field: "consistency_other", minWidth: headerMinWidth("Altro"),
+                    formatter: function(cell) {
+                        var value = cell.getValue();
+                        if (!hasValue(value)) {
+                            var row = cell.getRow().getData();
+                            if (!hasValue(row.consistency_sqm) && !hasValue(row.consistency_rooms)
+                                && !legacyConsistencyValue(row, "sqm") && !legacyConsistencyValue(row, "rooms")) {
+                                value = row.consistency;
+                            }
+                        }
+                        return hasValue(value) ? String(value) : "-";
+                    }
+                });
+            }
             cols = cols.concat([
                 {title: "Categoria",   field: "category",        minWidth: headerMinWidth("Categoria"),   headerFilter: "input", headerFilterPlaceholder: "filter..."},
                 {title: "Classe",      field: "cadastral_class", minWidth: headerMinWidth("Classe"),      hozAlign: "center"},
-                {title: "Consistenza", field: "consistency",     minWidth: headerMinWidth("Consistenza")},
+                {title: "Consistenza", columns: consistencyColumns},
                 {title: "Rendita",     field: "income",          minWidth: headerMinWidth("Rendita")},
                 {title: "Zona cens.",  field: "census_zone",     minWidth: headerMinWidth("Zona cens.")},
             ]);
@@ -597,7 +639,7 @@
             ]);
         }
         cols = cols.map(function(c) {
-            if (!c.formatter) c.formatter = function(cell) { var v = cell.getValue(); return (v == null || v === "") ? "-" : String(v); };
+            if (!c.columns && !c.formatter) c.formatter = function(cell) { var v = cell.getValue(); return (v == null || v === "") ? "-" : String(v); };
             return c;
         });
         var tabProps = new Tabulator(el, Object.assign({}, commonOpts, {data: data, columns: cols}));

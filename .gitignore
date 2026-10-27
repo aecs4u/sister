@@ -68,3 +68,7 @@ deploy-config.yaml
 
 # local credential files (hashed or plain) must never be committed
 local_users*.txt
+documents
+inputs
+dossiers
+results
