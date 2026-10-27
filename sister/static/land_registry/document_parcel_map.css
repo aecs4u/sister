@@ -160,7 +160,8 @@
     display: none !important;
 }
 
-.document-parcel-map-shell .leaflet-tooltip.document-map-parcel-polygon-label {
+.document-parcel-map-shell .leaflet-tooltip.document-map-parcel-polygon-label,
+.document-parcel-map-shell .leaflet-tooltip.document-map-sheet-polygon-label {
     visibility: hidden !important;
     opacity: 0 !important;
     max-width: min(18rem, 65vw);
@@ -178,7 +179,8 @@
     pointer-events: none;
 }
 
-.document-parcel-map-shell .document-map-polygons-labeled .leaflet-tooltip.document-map-parcel-polygon-label {
+.document-parcel-map-shell .document-map-polygons-labeled .leaflet-tooltip.document-map-parcel-polygon-label,
+.document-parcel-map-shell .document-map-polygons-labeled .leaflet-tooltip.document-map-sheet-polygon-label {
     visibility: visible !important;
     opacity: 1 !important;
 }

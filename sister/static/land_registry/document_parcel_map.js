@@ -91,13 +91,24 @@
     function parcelMapKey(item) {
         var municipality = String(item.municipality_code || '').trim().toUpperCase()
             || normalizeName(item.municipality);
-        return [municipality, normalizeCadastralPart(item.sheet), normalizeCadastralPart(item.parcel)].join('|');
+        var province = String(item.province_code || '').trim().toUpperCase()
+            || normalizeName(item.province);
+        return [
+            province,
+            municipality,
+            normalizeCadastralPart(item.section),
+            normalizeCadastralPart(item.sheet),
+            normalizeCadastralPart(item.parcel)
+        ].join('|');
     }
 
     function parcelSheetKey(item) {
         var municipality = String(item.municipality_code || '').trim().toUpperCase()
             || normalizeName(item.municipality);
+        var province = String(item.province_code || '').trim().toUpperCase()
+            || normalizeName(item.province);
         return [
+            province,
             municipality,
             normalizeCadastralPart(item.section),
             normalizeCadastralPart(item.sheet)
@@ -118,6 +129,7 @@
                 return cell.textContent.trim().toLocaleLowerCase('it').replace(/\s+/g, ' ');
             });
             var municipalityIndex = cellIndex(headers, /^(?:municipality|comune)$/);
+            var sectionIndex = cellIndex(headers, /^(?:sez(?:ione)?(?:\.?\s*(?:urbana|urb\.?))?\.?|section)$/);
             var sheetIndex = cellIndex(headers, /^(?:fog\.?|foglio|sheet)$/);
             var parcelIndex = cellIndex(headers, /^(?:part\.?|particella|parcel)$/);
             if (sheetIndex < 0 || parcelIndex < 0) return;
@@ -131,12 +143,15 @@
 
                 var municipalityText = municipalityIndex >= 0 && cells[municipalityIndex]
                     ? cells[municipalityIndex].textContent.trim() : '';
+                var section = sectionIndex >= 0 && cells[sectionIndex]
+                    ? normalizeCadastralPart(cells[sectionIndex].textContent) : '';
                 var codeMatch = municipalityText.match(/\(([A-Z0-9]{3,8})\)\s*$/i);
                 var record = {
                     row: row,
                     parcelCell: cells[parcelIndex],
                     municipality: normalizeName(municipalityText),
                     municipalityCode: codeMatch ? codeMatch[1].toUpperCase() : '',
+                    section: section,
                     sheet: sheet,
                     parcel: parcel
                 };
@@ -153,15 +168,23 @@
         var candidates = records.filter(function (record) {
             return record.sheet === sheet && record.parcel === parcel;
         });
+        var section = normalizeCadastralPart(item.section);
+        if (section) {
+            var sectionCandidates = candidates.filter(function (record) { return record.section === section; });
+            if (sectionCandidates.length) candidates = sectionCandidates;
+            else if (candidates.some(function (record) { return Boolean(record.section); })) return null;
+        }
         var code = String(item.municipality_code || '').toUpperCase();
         if (code) {
-            var byCode = candidates.find(function (record) { return record.municipalityCode === code; });
-            if (byCode) return byCode;
+            var byCode = candidates.filter(function (record) { return record.municipalityCode === code; });
+            if (byCode.length === 1) return byCode[0];
+            if (byCode.length > 1) return null;
         }
         var municipality = normalizeName(item.municipality);
         if (municipality) {
-            var byMunicipality = candidates.find(function (record) { return record.municipality === municipality; });
-            if (byMunicipality) return byMunicipality;
+            var byMunicipality = candidates.filter(function (record) { return record.municipality === municipality; });
+            if (byMunicipality.length === 1) return byMunicipality[0];
+            if (byMunicipality.length > 1) return null;
         }
         return candidates.length === 1 && !municipality && !code ? candidates[0] : null;
     }
@@ -276,8 +299,10 @@
             var parcelSheetKeys = new Set();
             var ownedSheetKeys = new Set();
             var overviewParcelKeys = new Set();
+            var overviewSheetKeys = new Set();
             var overviewMarkers = [];
             var parcelOverviewMarkers = window.L.layerGroup();
+            var sheetOverviewMarkers = window.L.layerGroup();
             var updateOverviewMarkers = null;
             var overviewLayoutFrame = null;
             var markerBounds = [];
@@ -341,6 +366,7 @@
             var clusterCellPixels = 56;
             var clusterEntries = new Map();
             clusterEntries.set(parcelOverviewMarkers, []);
+            clusterEntries.set(sheetOverviewMarkers, []);
 
             function clusterMarker(group, members, kind) {
                 var count = members.length;
@@ -715,16 +741,19 @@
                                 popup.textContent = properties.reference || localized(container, 'feature_fallback', 'Elemento catastale');
                                 featureLayer.bindPopup(popup);
                             }
-                            if (key === 'parcels') {
+                            if (key === 'parcels' || key === 'sheets') {
                                 var polygonLabel = document.createElement('span');
-                                polygonLabel.textContent = overviewLabel(properties, 'parcel', container);
+                                var featureKind = key === 'sheets' ? 'sheet' : 'parcel';
+                                polygonLabel.textContent = overviewLabel(properties, featureKind, container);
                                 featureLayer.bindTooltip(polygonLabel, {
                                     permanent: true,
                                     direction: 'center',
-                                    className: 'document-map-parcel-polygon-label',
+                                    className: 'document-map-' + featureKind + '-polygon-label',
                                     opacity: 1,
                                     interactive: false
                                 });
+                            }
+                            if (key === 'parcels') {
                                 featureKeys.add(parcelMapKey(properties));
                                 parcelSheetKeys.add(parcelSheetKey(properties));
                                 var row = resolveRow(records, properties);
@@ -856,9 +885,14 @@
                 });
 
                 (ownedSheetFeatures.features || []).forEach(function (feature) {
+                    var properties = feature.properties || {};
+                    var sheetKey = parcelSheetKey(properties);
+                    if (overviewSheetKeys.has(sheetKey)) return;
                     var center = featureCenter(feature);
                     if (!center) return;
                     rememberListedPosition(center);
+                    addOverviewMarker(sheetOverviewMarkers, 'sheet', properties, center, false);
+                    overviewSheetKeys.add(sheetKey);
                 });
 
                 var overviewMaxZoom = 14;
@@ -867,12 +901,14 @@
                     clusterEntries.forEach(function (_entries, group) { renderClusters(group); });
                     var visible = instance.map.getZoom() <= overviewMaxZoom;
                     container.classList.toggle('document-map-polygons-labeled', !visible);
-                    if (!listedLayers.parcels) return;
-                    if (visible && !listedLayers.parcels.hasLayer(parcelOverviewMarkers)) {
-                        listedLayers.parcels.addLayer(parcelOverviewMarkers);
-                    } else if (!visible && listedLayers.parcels.hasLayer(parcelOverviewMarkers)) {
-                        listedLayers.parcels.removeLayer(parcelOverviewMarkers);
-                    }
+                    [
+                        [listedLayers.parcels, parcelOverviewMarkers],
+                        [listedLayers.sheets, sheetOverviewMarkers]
+                    ].forEach(function (entry) {
+                        if (!entry[0]) return;
+                        if (visible && !entry[0].hasLayer(entry[1])) entry[0].addLayer(entry[1]);
+                        else if (!visible && entry[0].hasLayer(entry[1])) entry[0].removeLayer(entry[1]);
+                    });
                     scheduleOverviewLabelLayout();
                 };
                 instance.map.on('zoomend', updateOverviewMarkers);
