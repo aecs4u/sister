@@ -56,6 +56,7 @@ from .database import (
 from .document_scope import subject_search_scope as _subject_search_scope
 from .form_config import get_available_form_groups, get_single_step_groups, get_workflow_groups
 from .omi_zones import omi_boundary_geometries, omi_zone_code, omi_zone_for_parcel
+from .result_parsers import format_amount_it, parse_consistency
 from .request_types import known_request_tags, known_request_types, request_type_info
 from .visura_view import build_visura_view
 
@@ -1738,7 +1739,7 @@ async def _apply_user_manual_valuations(kpis: dict[str, Any] | None, user) -> di
 
 
 _LAND_REGISTRY_CALCULATION_TYPE = "subject_land_registry_kpis"
-_LAND_REGISTRY_CALCULATION_VERSION = "10"
+_LAND_REGISTRY_CALCULATION_VERSION = "11"
 _LAND_REGISTRY_CALCULATION_MAX_AGE_SECONDS = 12 * 60 * 60
 
 
@@ -5732,15 +5733,17 @@ async def web_property_omi_selection(request: Request, asset_key: str, user=Depe
     from .omi_quotes import omi_comune_quotes
 
     quotes = await omi_comune_quotes(comune_code)
-    if quotes is None:
-        raise HTTPException(status_code=503, detail="Le quotazioni OMI non sono temporaneamente disponibili.")
-    zone_quotes = [row for row in quotes if str(row.get("zona") or "").strip().upper() == zone_code] if zone_code else quotes
-    if zone_code and not zone_quotes:
-        raise HTTPException(status_code=422, detail="La zona OMI non è disponibile per questo comune.")
-    if typology_code is not None and not any(
-        str(row.get("cod_tipologia") or "").strip() == str(typology_code) for row in zone_quotes
-    ):
-        raise HTTPException(status_code=422, detail="La tipologia OMI non è disponibile nella zona selezionata.")
+    if quotes is not None:
+        zone_quotes = [
+            row for row in quotes if str(row.get("zona") or "").strip().upper() == zone_code
+        ] if zone_code else quotes
+        if zone_code and not zone_quotes:
+            raise HTTPException(status_code=422, detail="La zona OMI non è disponibile per questo comune.")
+        if typology_code is not None and not any(
+            str(row.get("cod_tipologia") or "").strip() == str(typology_code) for row in zone_quotes
+        ):
+            raise HTTPException(status_code=422, detail="La tipologia OMI non è disponibile nella zona selezionata.")
+    # Keep user selections durable when the optional OMI quotes database is temporarily unreachable.
 
     from .database import set_user_property_omi_selection
 
@@ -6701,6 +6704,13 @@ async def _hub_parcel_ownership(documents: list[dict], own_code: str, budget: li
         ]
         classification = unit.get("classification") or {}
         totals = unit.get("totals") or {}
+        raw_consistency = classification.get("consistency") or ""
+        consistency_value, consistency_unit = parse_consistency(raw_consistency)
+        consistency_sqm = format_amount_it(consistency_value) if consistency_unit == "MQ" else ""
+        consistency_rooms = format_amount_it(consistency_value) if consistency_unit == "VANI" else ""
+        consistency_other = (
+            raw_consistency if raw_consistency and consistency_unit not in {"MQ", "VANI"} else ""
+        )
         if view.get("family") == "fabbricati":
             cadastral_value = building_cadastral_value(
                 classification.get("income_eur"), classification.get("category")
@@ -6751,7 +6761,10 @@ async def _hub_parcel_ownership(documents: list[dict], own_code: str, budget: li
                     "address": unit.get("address") or "",
                     "category": classification.get("category") or "",
                     "cadastral_class": classification.get("class") or "",
-                    "consistency": classification.get("consistency") or "",
+                    "consistency": raw_consistency,
+                    "consistency_sqm": consistency_sqm,
+                    "consistency_rooms": consistency_rooms,
+                    "consistency_other": consistency_other,
                     "income": classification.get("income_eur") or "",
                     "area": (unit.get("surface") or {}).get("total") or (f"{totals['area_m2']} m²" if totals.get("area_m2") else ""),
                     "dominical_income": totals.get("dominical_eur") or "",

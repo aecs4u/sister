@@ -1449,6 +1449,8 @@ async def subject_land_registry_kpis(
                 "value_min": None,
                 "value_max": None,
                 "value_estimate": None,
+                "omi_price_min": None,
+                "omi_price_max": None,
                 "note": omi_note,
                 "omi_area_formula": omi_area_formula,
                 "actual_size_sqm": omi_area,
@@ -1826,10 +1828,13 @@ async def subject_land_registry_kpis(
         row_estimate["omi_zona"] = zone
         row_estimate["omi_zone_point_method"] = zone_point_methods.get(parcel_key, "")
         row_estimate["omi_zone_selected"] = bool(
-            saved_zone
-            and saved_zone != automatic_zone
-            and not legacy_automatic_zone
-            and saved.get("is_manual") is not False
+            saved.get("is_manual") is True
+            or (
+                saved_zone
+                and saved_zone != automatic_zone
+                and not legacy_automatic_zone
+                and saved.get("is_manual") is not False
+            )
         )
         if legacy_automatic_zone:
             row_estimate["_omi_legacy_zone_code"] = saved_zone
@@ -2005,6 +2010,8 @@ async def subject_land_registry_kpis(
         row_estimate["value_min"] = low
         row_estimate["value_max"] = high
         row_estimate["value_estimate"] = estimate
+        row_estimate["omi_price_min"] = price_min
+        row_estimate["omi_price_max"] = price_max
         valued_units += 1
         exact_zone_units += 1
         surface = {"L": "lorda", "N": "netta"}.get(quote.get("superficie"), "")
@@ -2061,6 +2068,8 @@ async def subject_land_registry_kpis(
         row_estimate["value_min"] = low
         row_estimate["value_max"] = high
         row_estimate["value_estimate"] = estimate
+        row_estimate["omi_price_min"] = quote_range["prezzo_min"]
+        row_estimate["omi_price_max"] = quote_range["prezzo_max"]
         valued_units += 1
         municipality_range_units += 1
         row_estimate["range"] = f"{_format_currency_it(low)} – {_format_currency_it(high)}"

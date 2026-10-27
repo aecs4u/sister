@@ -1,0 +1,78 @@
+{# Local wrapper around the shared OMI page so table links can focus a typology by its OMI code. #}
+{% extends base_template|default("base.html") %}
+{% from "components/omi_zone_overview.html" import omi_zone_overview_assets, omi_zone_search_form, omi_zone_result, omi_zone_overview_scripts with context %}
+
+{% block page_title %}{{ page_title|default('Valutazione OMI per zona') }}{% endblock %}
+
+{% block extra_css %}
+{{ super() }}
+{{ omi_zone_overview_assets() }}
+{% endblock %}
+
+{% block content %}
+<div class="container-fluid py-4">
+    <header class="mb-4">
+        <h1 class="h2">{{ page_title|default('Valutazione OMI per zona') }}</h1>
+        <p class="text-muted mb-0">Quotazioni OMI di una zona, evoluzione nel tempo e contesto del comune. Se la zona non è specificata, vengono elencate le zone del comune. Sono indicatori di mercato, non una perizia.</p>
+    </header>
+
+    {{ omi_zone_search_form(comune, zona, locale|default(''), omi_url|default('/omi/valuation')) }}
+
+    {% if error_message %}
+    <div class="alert alert-warning" role="alert">{{ error_message }}</div>
+    {% endif %}
+
+    {% if search_submitted and not error_message %}
+    {{ omi_zone_result(overview, comune, zona, chart_data, csp_nonce|default(''), omi_url|default('/omi/valuation'), omi_method_url|default('')) }}
+    {% endif %}
+</div>
+{% endblock %}
+
+{% block extra_js %}
+{{ super() }}
+{{ omi_zone_overview_scripts(chart_data, csp_nonce|default(''), chart_js_url|default('')) }}
+{% if search_submitted and not error_message and overview.zone_found and chart_data %}
+<script nonce="{{ csp_nonce }}">
+(function () {
+    function focusTypologyFromFragment() {
+        var code;
+        try { code = decodeURIComponent((window.location.hash || '').slice(1)); } catch (error) { return; }
+        if (!code) return;
+        var dataNode = document.getElementById('omiOverviewData');
+        var selector = document.getElementById('omiTypology');
+        if (!dataNode) return;
+        var data;
+        try { data = JSON.parse(dataNode.textContent || '{}'); } catch (error) { return; }
+        var typology = (data.typologies || []).find(function (item) {
+            return String(item.code) === code;
+        });
+        if (!typology) return;
+
+        if (selector && Array.prototype.some.call(selector.options, function (item) { return item.value === code; })) {
+            selector.value = code;
+            selector.dispatchEvent(new Event('change', {bubbles: true}));
+        }
+
+        var heading = document.getElementById('omiLatestTitle');
+        var section = heading && heading.closest('section');
+        var row = section && Array.prototype.find.call(section.querySelectorAll('tbody tr'), function (item) {
+            var label = item.cells[0] && item.cells[0].textContent.trim();
+            return label === typology.label;
+        });
+        if (row) {
+            row.id = code;
+            row.scrollIntoView({block: 'center'});
+        } else if (heading) {
+            heading.scrollIntoView({block: 'start'});
+        }
+    }
+
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', focusTypologyFromFragment, {once: true});
+    } else {
+        focusTypologyFromFragment();
+    }
+})();
+</script>
+{% endif %}
+{% endblock %}

@@ -133,6 +133,52 @@
         return body;
     }
 
+    function addOmiPriceRangeCell(estimate) {
+        var body = document.createElement('td');
+        body.className = 'omi-price-range-cell text-end text-nowrap';
+        var rawLow = estimate.omi_price_min;
+        var rawHigh = estimate.omi_price_max;
+        if (rawLow == null || rawHigh == null || rawLow === '' || rawHigh === '') {
+            text(body, 'span', 'text-muted', '—');
+            body.title = estimate.note || 'Quotazione OMI per m² non disponibile.';
+            return body;
+        }
+
+        var low = Number(rawLow);
+        var high = Number(rawHigh);
+        if (!Number.isFinite(low) || !Number.isFinite(high)) {
+            text(body, 'span', 'text-muted', '—');
+            body.title = estimate.note || 'Quotazione OMI per m² non disponibile.';
+            return body;
+        }
+
+        var formatPrice = new Intl.NumberFormat('it-IT', {maximumFractionDigits: 0});
+        var range = low === high
+            ? '€ ' + formatPrice.format(low)
+            : '€ ' + formatPrice.format(low) + ' – € ' + formatPrice.format(high);
+        var comune = String(estimate.omi_comune || '').trim();
+        var zona = String(estimate.omi_zona || '').trim();
+        var tipologia = String(estimate.omi_tipologia || estimate.omi_tipologia_default || '').trim();
+
+        if (!comune) {
+            text(body, 'span', '', range);
+            return body;
+        }
+
+        var params = new URLSearchParams({comune: comune});
+        if (zona) params.set('zona', zona);
+        var href = '/omi/valuation?' + params.toString();
+        if (zona && tipologia) href += '#' + encodeURIComponent(tipologia);
+        var link = text(body, 'a', '', range);
+        link.href = href;
+        link.target = '_blank';
+        link.rel = 'noopener noreferrer';
+        link.title = 'Apri le quotazioni OMI per la tipologia ' + (tipologia || 'selezionata') +
+            (zona ? ' nella zona ' + zona : ' nel comune ' + comune);
+        link.setAttribute('aria-label', range + ' €/m²; apri le quotazioni OMI');
+        return body;
+    }
+
     function configureTypologies(select, estimate, options, selectedZone, automatic) {
         select.replaceChildren();
         var category = String(estimate.category || '').toUpperCase();
@@ -231,14 +277,18 @@
             var typologyHead = document.createElement('th');
             typologyHead.className = 'text-nowrap';
             typologyHead.textContent = 'OMI Tipologia';
-            zoneHead.scope = typologyHead.scope = 'col';
+            var priceHead = document.createElement('th');
+            priceHead.className = 'text-nowrap text-end';
+            priceHead.textContent = 'Fascia OMI €/m²';
+            zoneHead.scope = typologyHead.scope = priceHead.scope = 'col';
             sizeHead.scope = 'col';
             if (targetHead) {
                 header.insertBefore(sizeHead, targetHead);
                 header.insertBefore(zoneHead, targetHead);
                 header.insertBefore(typologyHead, targetHead);
+                header.insertBefore(priceHead, targetHead);
             } else {
-                header.append(sizeHead, zoneHead, typologyHead);
+                header.append(sizeHead, zoneHead, typologyHead, priceHead);
             }
 
             rows.forEach(function (row, rowIndex) {
@@ -246,6 +296,7 @@
                 var identity = estimate.asset_identity || {};
                 var targetCell = row.cells[targetIndex] || null;
                 var sizeCell = addActualSizeCell(estimate);
+                var priceCell = addOmiPriceRangeCell(estimate);
                 if (!identity.asset_key || !estimate.omi_comune) {
                     var emptyZone = document.createElement('td');
                     var emptyTypology = document.createElement('td');
@@ -254,7 +305,7 @@
                         emptyTypology.textContent = estimate.omi_tipologia || estimate.omi_tipologia_default || '—';
                         emptyZone.title = emptyTypology.title = 'Accedi per modificare la selezione OMI.';
                     }
-                    insertCells(row, [sizeCell, emptyZone, emptyTypology], targetCell);
+                    insertCells(row, [sizeCell, emptyZone, emptyTypology, priceCell], targetCell);
                     return;
                 }
                 var options = optionsByComune[estimate.omi_comune] || {zones: [], typologies_by_zone: {}, defaults_by_category: {}};
@@ -271,7 +322,7 @@
                     var typologyDisplayCell = document.createElement('td');
                     typologyDisplayCell.textContent = typology ? typology.label : (typologyCode || '—');
                     typologyDisplayCell.title = 'Accedi per modificare la selezione OMI.';
-                    insertCells(row, [sizeCell, zoneDisplayCell, typologyDisplayCell], targetCell);
+                    insertCells(row, [sizeCell, zoneDisplayCell, typologyDisplayCell, priceCell], targetCell);
                     return;
                 }
 
@@ -294,7 +345,7 @@
                 var typologySelect = text(typologyCell.body, 'select', 'form-select form-select-sm');
                 typologySelect.setAttribute('aria-label', 'Tipologia OMI per il fabbricato');
                 configureTypologies(typologySelect, estimate, options, zoneSelect.value, false);
-                insertCells(row, [sizeCell, zoneCell.body, typologyCell.body], targetCell);
+                insertCells(row, [sizeCell, zoneCell.body, typologyCell.body, priceCell], targetCell);
 
                 zoneSelect.addEventListener('change', function () {
                     configureTypologies(typologySelect, estimate, options, zoneSelect.value, true);

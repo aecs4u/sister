@@ -228,9 +228,11 @@
           <span class="badge {{ 'text-bg-success' if parcel.ownership else 'text-bg-light border text-muted' }}" title="Titolarità completa dalle visure"><i class="fas fa-users me-1" aria-hidden="true"></i>{{ 'titolari' if parcel.ownership else 'no titolari' }}</span>
         </summary>
 
+        {% set has_other_consistency = parcel.units|selectattr('consistency_other')|list|length > 0 %}
         <div class="table-responsive mt-2">
           <table class="table table-sm align-middle mb-2">
-            <thead><tr><th>Sub</th><th>Titolarità</th><th>Quota</th><th>Indirizzo / Qualità</th><th>Cat. / Classe</th><th>Consistenza / Sup.</th>
+            <thead><tr><th>Sub</th><th>Titolarità</th><th>Quota</th><th>Indirizzo / Qualità</th><th>Cat. / Classe</th><th class="text-end">Superficie / consistenza (m²)</th><th class="text-end">Vani</th>
+              {% if has_other_consistency %}<th>Altra consistenza</th>{% endif %}
               <th class="text-end">Rendita</th><th class="text-end">R. dom.</th><th class="text-end">R. agr.</th></tr></thead>
             <tbody>
               {% for u in parcel.units %}
@@ -238,7 +240,9 @@
                 <td>{{ u.subunit or '-' }}{% if u.enriched_from %} <a href="/documents/{{ u.enriched_from }}" class="text-decoration-none" title="Completato dalla visura: {{ u.enriched_fields|join(', ') }}"><i class="fas fa-circle-plus text-success" aria-label="Completato dalla visura"></i></a>{% endif %}</td><td>{{ u.right_type or '-' }}</td><td>{{ u.ownership_share or '-' }}</td>
                 <td>{% if u.property_type == 'building' %}{{ u.address or '-' }}{% else %}{{ u.quality or '-' }}{% endif %}</td>
                 <td>{% if u.property_type == 'building' %}{{ u.category or '-' }}{% else %}{{ u.cadastral_class or '-' }}{% endif %}</td>
-                <td>{% if u.property_type == 'building' %}{{ u.consistency or '-' }}{% else %}{{ u.area or '-' }}{% endif %}</td>
+                <td class="text-end">{% if u.property_type == 'building' %}{{ u.consistency_sqm or u.area or '-' }}{% else %}{{ u.area or '-' }}{% endif %}</td>
+                <td class="text-end">{% if u.property_type == 'building' %}{{ u.consistency_rooms or '-' }}{% else %}-{% endif %}</td>
+                {% if has_other_consistency %}<td>{{ u.consistency_other or '-' }}</td>{% endif %}
                 <td class="text-end">{{ u.income or '-' }}</td><td class="text-end">{{ u.dominical_income or '-' }}</td><td class="text-end">{{ u.agricultural_income or '-' }}</td>
               </tr>
               {% endfor %}
@@ -429,9 +433,11 @@
           <span class="badge {{ 'text-bg-success' if parcel.ownership else 'text-bg-light border text-muted' }}" title="Titolarità completa dalle visure"><i class="fas fa-users me-1" aria-hidden="true"></i>{{ 'titolari' if parcel.ownership else 'no titolari' }}</span>
         </summary>
 
+        {% set has_other_consistency = parcel.units|selectattr('consistency_other')|list|length > 0 %}
         <div class="table-responsive mt-2">
           <table class="table table-sm align-middle mb-2">
-            <thead><tr><th>Sub</th><th>Titolarità</th><th>Quota</th><th>Indirizzo / Qualità</th><th>Cat. / Classe</th><th>Consistenza / Sup.</th>
+            <thead><tr><th>Sub</th><th>Titolarità</th><th>Quota</th><th>Indirizzo / Qualità</th><th>Cat. / Classe</th><th class="text-end">Superficie / consistenza (m²)</th><th class="text-end">Vani</th>
+              {% if has_other_consistency %}<th>Altra consistenza</th>{% endif %}
               <th class="text-end">Rendita</th><th class="text-end">R. dom.</th><th class="text-end">R. agr.</th></tr></thead>
             <tbody>
               {% for u in parcel.units %}
@@ -439,7 +445,9 @@
                 <td>{{ u.subunit or '-' }}{% if u.enriched_from %} <a href="/documents/{{ u.enriched_from }}" class="text-decoration-none" title="Completato dalla visura: {{ u.enriched_fields|join(', ') }}"><i class="fas fa-circle-plus text-success" aria-label="Completato dalla visura"></i></a>{% endif %}</td><td>{{ u.right_type or '-' }}</td><td>{{ u.ownership_share or '-' }}</td>
                 <td>{% if u.property_type == 'building' %}{{ u.address or '-' }}{% else %}{{ u.quality or '-' }}{% endif %}</td>
                 <td>{% if u.property_type == 'building' %}{{ u.category or '-' }}{% else %}{{ u.cadastral_class or '-' }}{% endif %}</td>
-                <td>{% if u.property_type == 'building' %}{{ u.consistency or '-' }}{% else %}{{ u.area or '-' }}{% endif %}</td>
+                <td class="text-end">{% if u.property_type == 'building' %}{{ u.consistency_sqm or u.area or '-' }}{% else %}{{ u.area or '-' }}{% endif %}</td>
+                <td class="text-end">{% if u.property_type == 'building' %}{{ u.consistency_rooms or '-' }}{% else %}-{% endif %}</td>
+                {% if has_other_consistency %}<td>{{ u.consistency_other or '-' }}</td>{% endif %}
                 <td class="text-end">{{ u.income or '-' }}</td><td class="text-end">{{ u.dominical_income or '-' }}</td><td class="text-end">{{ u.agricultural_income or '-' }}</td>
               </tr>
               {% endfor %}
