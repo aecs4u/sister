@@ -1,53 +1,132 @@
 {% extends "_base.html" %}
-{% block page_title %}Cerca una persona{% endblock %}
+{% block page_title %}Ricerca persona{% endblock %}
 
 {% block content %}
 <div class="container-fluid py-4">
-    <div class="row justify-content-center">
-        <div class="col-12 col-xl-8">
-            <nav aria-label="breadcrumb" class="mb-3">
-                <ol class="breadcrumb mb-0">
-                    <li class="breadcrumb-item"><a href="/">Dashboard</a></li>
-                    <li class="breadcrumb-item active" aria-current="page">Persone</li>
-                </ol>
-            </nav>
+    <nav aria-label="breadcrumb" class="mb-4">
+        <ol class="breadcrumb mb-0">
+            <li class="breadcrumb-item"><a href="/">Dashboard</a></li>
+            <li class="breadcrumb-item active" aria-current="page">Persone</li>
+        </ol>
+    </nav>
 
-            <section class="card border-0 shadow-sm">
+    <div class="row g-4 align-items-stretch">
+        <div class="col-12 col-xl-7">
+            <section class="card border-0 shadow-sm" aria-labelledby="person-search-title">
                 <div class="card-body p-4 p-lg-5">
                     <div class="d-flex align-items-start gap-3 mb-4">
-                        <span class="text-primary fs-3" aria-hidden="true"><i class="fas fa-user"></i></span>
+                        <span class="d-inline-flex align-items-center justify-content-center rounded-3 bg-primary bg-opacity-10 text-primary flex-shrink-0 p-3"
+                              aria-hidden="true">
+                            <i class="fas fa-user fs-4"></i>
+                        </span>
                         <div>
-                            <h1 class="h2 mb-1">Cerca una persona</h1>
-                            <p class="text-muted mb-0">Apri una visura soggetto salvata usando il codice fiscale.</p>
+                            <span class="small fw-semibold text-primary text-uppercase">Persona fisica</span>
+                            <h1 class="h2 mt-1 mb-2" id="person-search-title">Consulta il profilo catastale</h1>
+                            <p class="text-muted mb-0">Cerca nei profili già presenti nell’archivio usando un nome o un codice fiscale, anche parziale.</p>
                         </div>
                     </div>
 
                     {% if error_message %}
-                    <div class="alert alert-danger" role="alert">{{ error_message }}</div>
+                    <div class="alert alert-danger d-flex align-items-start gap-2" id="person-code-error" role="alert">
+                        <i class="fas fa-circle-exclamation mt-1" aria-hidden="true"></i>
+                        <div>{{ error_message }}</div>
+                    </div>
                     {% endif %}
 
                     <form method="get" action="/persons/">
-                        <label class="form-label fw-semibold" for="person-code">Codice fiscale</label>
+                        <label class="form-label fw-semibold" for="person-code">Nome o codice fiscale</label>
                         <div class="input-group input-group-lg">
-                            <input class="form-control font-monospace" id="person-code" name="code" type="text"
-                                   value="{{ code }}" minlength="16" maxlength="16" pattern="[A-Za-z0-9]{16}"
-                                   autocomplete="off" autocapitalize="characters" spellcheck="false" required
-                                   aria-describedby="person-code-help">
-                            <button class="btn btn-primary" type="submit">
-                                <i class="fas fa-magnifying-glass me-2" aria-hidden="true"></i>Apri profilo
+                            <input class="form-control" id="person-code" name="code" type="text"
+                                   value="{{ code }}" maxlength="80" placeholder="Nome o parte del codice fiscale"
+                                   autocomplete="off" spellcheck="false" required
+                                   aria-invalid="{{ 'true' if error_message else 'false' }}"
+                                   aria-describedby="{% if error_message %}person-code-error {% endif %}person-code-help">
+                            <button class="btn btn-primary px-4" type="submit">
+                                <i class="fas fa-magnifying-glass me-2" aria-hidden="true"></i>Cerca
                             </button>
                         </div>
-                        <div class="form-text" id="person-code-help">Inserisci il codice fiscale di 16 lettere e cifre.</div>
+                        <div class="form-text" id="person-code-help">Puoi inserire il nome, il codice fiscale completo o una parte di uno dei due.</div>
                     </form>
 
-                    <hr class="my-4">
-                    <p class="small text-muted mb-0">
-                        Il profilo mostra le visure soggetto disponibili per il codice inserito.
-                        Per consultare tutti i documenti archiviati, <a href="/documents">apri Documenti</a>.
-                    </p>
+                    <div class="border-top mt-4 pt-3">
+                        <p class="small text-muted mb-0">
+                            <i class="fas fa-circle-info me-1 text-primary" aria-hidden="true"></i>
+                            Questa pagina consulta l’archivio e non avvia una nuova richiesta SISTER.
+                            <a href="/forms" class="link-primary">Invia una query</a> per acquisire nuovi dati.
+                        </p>
+                    </div>
                 </div>
             </section>
+
+            {% if search_results is defined and search_results is not none %}
+            <section class="card border-0 shadow-sm mt-4" aria-labelledby="person-search-results-title">
+                <div class="card-body p-0">
+                    <div class="px-4 py-3 border-bottom">
+                        <h2 class="h5 mb-1" id="person-search-results-title">Profili trovati</h2>
+                        <p class="small text-muted mb-0">
+                            {% if search_results %}{{ search_results|length }} risultat{% if search_results|length == 1 %}o{% else %}i{% endif %}{% else %}Nessun risultato{% endif %}
+                            per <span>{{ code }}</span>
+                        </p>
+                    </div>
+                    {% if search_results %}
+                    <div class="list-group list-group-flush">
+                        {% for result in search_results %}
+                        <a class="list-group-item list-group-item-action px-4 py-3" href="/persons/{{ result.fiscal_code }}">
+                            <div class="d-flex justify-content-between align-items-center gap-3">
+                                <div class="min-w-0">
+                                    <div class="fw-semibold text-truncate">{{ result.name or 'Persona' }}</div>
+                                    <div class="small text-muted font-monospace">{{ result.fiscal_code }}</div>
+                                </div>
+                                <span class="small text-primary text-nowrap">Apri profilo <i class="fas fa-arrow-right ms-1" aria-hidden="true"></i></span>
+                            </div>
+                        </a>
+                        {% endfor %}
+                    </div>
+                    {% if search_has_more %}
+                    <p class="small text-muted px-4 py-3 mb-0 border-top">Mostrati i primi {{ search_results|length }} profili. Aggiungi caratteri alla ricerca per restringere i risultati.</p>
+                    {% endif %}
+                    {% else %}
+                    <p class="text-muted px-4 py-3 mb-0">Nessun profilo archiviato corrisponde al testo inserito.</p>
+                    {% endif %}
+                </div>
+            </section>
+            {% endif %}
         </div>
+
+        <aside class="col-12 col-xl-5" aria-label="Informazioni sulla consultazione">
+            <div class="card border-0 shadow-sm h-100">
+                <div class="card-body p-4 p-lg-5 d-flex flex-column">
+                    <h2 class="h5 mb-3"><i class="fas fa-folder-open text-primary me-2" aria-hidden="true"></i>Cosa trovi nel profilo</h2>
+                    <p class="text-muted mb-3">I dati disponibili sono raccolti in un’unica pagina:</p>
+                    <ul class="list-unstyled d-grid gap-3 mb-4">
+                        <li class="d-flex gap-2">
+                            <i class="fas fa-check text-success mt-1" aria-hidden="true"></i>
+                            <span>Visure soggetto ed elenco degli immobili archiviati</span>
+                        </li>
+                        <li class="d-flex gap-2">
+                            <i class="fas fa-check text-success mt-1" aria-hidden="true"></i>
+                            <span>Immobili raggruppati per comune e tipo di catasto</span>
+                        </li>
+                        <li class="d-flex gap-2">
+                            <i class="fas fa-check text-success mt-1" aria-hidden="true"></i>
+                            <span>Mappe e documenti per particella, quando disponibili</span>
+                        </li>
+                    </ul>
+
+                    <div class="border-top pt-3 mt-auto">
+                        <h3 class="small fw-semibold text-uppercase text-muted mb-3">Altre consultazioni</h3>
+                        <div class="d-flex flex-wrap gap-2">
+                            <a class="btn btn-outline-secondary btn-sm" href="/companies/">
+                                <i class="fas fa-building me-1" aria-hidden="true"></i>Cerca una società
+                            </a>
+                            <a class="btn btn-outline-secondary btn-sm" href="/documents">
+                                <i class="fas fa-file-alt me-1" aria-hidden="true"></i>Apri Documenti
+                            </a>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </aside>
     </div>
 </div>
 {% endblock %}

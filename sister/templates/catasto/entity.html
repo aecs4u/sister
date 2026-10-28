@@ -209,7 +209,7 @@
 {% endif %}
 {{ cadastral_table_scripts() }}
 {{ document_parcel_map_scripts(land_registry_map, nonce=csp_nonce,
-    renderer_url='/land-registry/static/document_parcel_map.js?v=20261027-listed-sheet-layers') }}
+    renderer_url='/land-registry/static/document_parcel_map.js?v=20261028-omi-zone-owned-markers') }}
 {# PDF export: the page's own print layout rendered by headless Chromium (/documents/<id>/pdf). #}
 {# PDF of the page, always offered: a subject page exports itself (visura + elenco groups, selected visura kept), others their document #}
 {% if doc and doc.query_only or subject_fiscal_code %}

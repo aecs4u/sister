@@ -88,6 +88,43 @@
         return parts.join(' · ') || String(item.reference || localized(container, 'feature_fallback', 'Elemento catastale'));
     }
 
+    function listedSheetLabel(item, container) {
+        var parts = [];
+        var municipality = String(item.municipality || '').trim();
+        var municipalityCode = String(item.municipality_code || '').trim();
+        if (municipality) parts.push(municipality + (municipalityCode ? ' (' + municipalityCode + ')' : ''));
+        else if (municipalityCode) {
+            parts.push(localized(container, 'municipality_prefix', 'Comune {value}', {value: municipalityCode}));
+        }
+        if (item.section) parts.push(localized(container, 'section_prefix', 'Sezione {value}', {value: item.section}));
+        if (item.sheet) parts.push(localized(container, 'sheet_prefix', 'Foglio {value}', {value: item.sheet}));
+        return parts.join(' · ') || String(item.reference || localized(container, 'feature_fallback', 'Elemento catastale'));
+    }
+
+    function listedParcelLabel(item, container) {
+        var parts = [];
+        if (item.section) parts.push(localized(container, 'section_prefix', 'Sezione {value}', {value: item.section}));
+        if (item.sheet) parts.push(localized(container, 'sheet_prefix', 'Foglio {value}', {value: item.sheet}));
+        if (item.parcel) parts.push(localized(container, 'parcel_prefix', 'Particella {value}', {value: item.parcel}));
+        var subunits = Array.isArray(item.subunits) ? item.subunits : (item.subunit ? [item.subunit] : []);
+        subunits = Array.from(new Set(subunits.map(function (value) {
+            return String(value == null ? '' : value).trim();
+        }).filter(function (value) { return value && value !== '—' && value !== '-'; })));
+        if (subunits.length) {
+            parts.push(localized(container, 'subunit_prefix', 'Subalterno {value}', {value: subunits.join(', ')}));
+        }
+        return parts.join(' · ') || String(item.reference || localized(container, 'feature_fallback', 'Elemento catastale'));
+    }
+
+    function omiZoneMarkerLabel(item) {
+        var parts = ['Zona OMI ' + String(item.omi_zone || '').trim()];
+        var municipality = String(item.municipality || '').trim();
+        var municipalityCode = String(item.municipality_code || '').trim();
+        if (municipality) parts.push(municipality + (municipalityCode ? ' (' + municipalityCode + ')' : ''));
+        else if (municipalityCode) parts.push(municipalityCode);
+        return parts.join(' · ');
+    }
+
     function parcelMapKey(item) {
         var municipality = String(item.municipality_code || '').trim().toUpperCase()
             || normalizeName(item.municipality);
@@ -303,6 +340,8 @@
             var overviewMarkers = [];
             var parcelOverviewMarkers = window.L.layerGroup();
             var sheetOverviewMarkers = window.L.layerGroup();
+            var omiZoneOverviewMarkers = window.L.layerGroup();
+            var overviewOmiZoneKeys = new Set();
             var updateOverviewMarkers = null;
             var overviewLayoutFrame = null;
             var markerBounds = [];
@@ -367,6 +406,7 @@
             var clusterEntries = new Map();
             clusterEntries.set(parcelOverviewMarkers, []);
             clusterEntries.set(sheetOverviewMarkers, []);
+            clusterEntries.set(omiZoneOverviewMarkers, []);
 
             function clusterMarker(group, members, kind) {
                 var count = members.length;
@@ -378,7 +418,10 @@
                 });
                 var size = count < 10 ? 34 : (count < 100 ? 40 : 48);
                 var noun = kind === 'sheet'
-                    ? localized(container, 'cluster_sheets', 'fogli') : localized(container, 'cluster_parcels', 'particelle');
+                    ? localized(container, 'cluster_sheets', 'fogli')
+                    : (kind === 'omi-zone'
+                        ? localized(container, 'cluster_omi_zones', 'zone OMI')
+                        : localized(container, 'cluster_parcels', 'particelle'));
                 var title = count + ' ' + noun;
                 var icon = window.L.divIcon({
                     className: 'document-map-cluster-icon',
@@ -646,10 +689,13 @@
 
             function addOverviewMarker(group, kind, item, position, approximate) {
                 var category = kind === 'parcel' ? cadastralCategory(item.category || item.Categoria) : null;
-                var label = overviewLabel(item, kind, container);
+                var label = kind === 'parcel'
+                    ? listedParcelLabel(item, container)
+                    : (kind === 'sheet' ? listedSheetLabel(item, container) : omiZoneMarkerLabel(item));
                 var point = Array.isArray(position)
                     ? window.L.latLng(position[0], position[1]) : position;
-                var markerKind = kind === 'sheet' ? 'sheet' : (approximate ? 'parcel-fallback' : 'parcel');
+                var markerKind = kind === 'sheet' ? 'sheet'
+                    : (kind === 'omi-zone' ? 'omi-zone' : (approximate ? 'parcel-fallback' : 'parcel'));
                 var categoryStyle = category
                     ? ' style="--document-map-overview-category-background:' + category.color + '"' : '';
                 var icon = window.L.divIcon({
@@ -681,7 +727,7 @@
                     manual: null,
                     latlng: point,
                     kind: markerKind,
-                    priority: approximate ? 3 : (kind === 'parcel' ? 2 : 1)
+                    priority: approximate ? 3 : (kind === 'parcel' ? 2 : (kind === 'omi-zone' ? 1.5 : 1))
                 };
                 overviewMarkers.push(entry);
                 clusterEntries.get(group).push(entry);
@@ -702,6 +748,23 @@
                 return bounds.isValid() ? bounds.getCenter() : null;
             }
 
+            function addOwnedOmiZoneMarker(feature) {
+                var properties = feature && feature.properties || {};
+                if (!properties.matches_owned_parcel) return;
+                var zone = String(properties.omi_zone || '').trim().toLocaleUpperCase('it');
+                if (!zone) return;
+                var key = [
+                    String(properties.province || '').trim().toLocaleUpperCase('it'),
+                    String(properties.municipality_code || '').trim().toLocaleUpperCase('it'),
+                    zone
+                ].join('|');
+                if (overviewOmiZoneKeys.has(key)) return;
+                var center = featureCenter(feature);
+                if (!center) return;
+                overviewOmiZoneKeys.add(key);
+                addOverviewMarker(omiZoneOverviewMarkers, 'omi-zone', properties, center, false);
+            }
+
             function addListedGeometry(key, collection, style) {
                 // Additive: a later increment adds its features to the same layer (the layer toggles keep working).
                 var features = (collection && Array.isArray(collection.features) ? collection.features : []).filter(function (feature) {
@@ -719,6 +782,7 @@
                                 existingZoneLayer.feature.properties.matches_owned_parcel = true;
                                 existingZoneLayer.setStyle(omiZoneStyle(existingZoneLayer.feature));
                                 existingZoneLayer.bindPopup(omiZonePopup(existingZoneLayer.feature));
+                                addOwnedOmiZoneMarker(existingZoneLayer.feature);
                             }
                         }
                         return false;
@@ -744,7 +808,9 @@
                             if (key === 'parcels' || key === 'sheets') {
                                 var polygonLabel = document.createElement('span');
                                 var featureKind = key === 'sheets' ? 'sheet' : 'parcel';
-                                polygonLabel.textContent = overviewLabel(properties, featureKind, container);
+                                polygonLabel.textContent = featureKind === 'sheet'
+                                    ? listedSheetLabel(properties, container)
+                                    : listedParcelLabel(properties, container);
                                 featureLayer.bindTooltip(polygonLabel, {
                                     permanent: true,
                                     direction: 'center',
@@ -764,7 +830,11 @@
                         }
                     }).addTo(instance.map);
                 }
+                if (key === 'omi-zones' && !layer.hasLayer(omiZoneOverviewMarkers)) {
+                    layer.addLayer(omiZoneOverviewMarkers);
+                }
                 if (!features.length) return;
+                if (key === 'omi-zones') features.forEach(addOwnedOmiZoneMarker);
                 var collection = { type: 'FeatureCollection', features: features };
                 layer.addData(collection);
                 // bounds of what was just added (asking the live layer breaks on its permanent tooltips)
@@ -797,7 +867,6 @@
                 var popupParts = ['Zona OMI ' + (properties.omi_zone || '')];
                 if (properties.municipality) popupParts.push(properties.municipality);
                 if (properties.matches_owned_parcel) popupParts.push('Zona con maggiore sovrapposizione alla particella di proprietà');
-                if (properties.boundary_vintage) popupParts.push('Confini ' + properties.boundary_vintage);
                 var popup = document.createElement('span');
                 popup.textContent = popupParts.join(' · ');
                 return popup;
@@ -827,7 +896,7 @@
                 };
                 addListedGeometry('omi-zones', omiZoneFeatures, omiZoneStyle);
                 addListedGeometry('sheets', ownedSheetFeatures, {
-                    color: '#1976a8', weight: 2, fillColor: '#1976a8', fillOpacity: 0.05
+                    color: '#075985', weight: 3, fillColor: '#38bdf8', fillOpacity: 0.16
                 });
                 addListedGeometry('parcels', parcelFeatures, {
                     color: '#d63384', weight: 2, fillColor: '#d63384', fillOpacity: 0.18

@@ -1773,6 +1773,143 @@ async def get_subject_name(fiscal_code: str) -> Optional[str]:
     return row[0] if row else None
 
 
+async def search_person_profiles(query: str, limit: int = 50) -> tuple[list[dict[str, str | None]], bool]:
+    """Find archived person profiles by a fragment of their name or fiscal code."""
+    search_text = " ".join(str(query or "").upper().split())
+    tokens = search_text.split()
+    code_term = re.sub(r"[^A-Z0-9]", "", search_text)
+    if not tokens:
+        return [], False
+
+    normalized_code = func.upper(func.trim(Request.subject_query))
+    name_terms = []
+    for token in tokens:
+        escaped_token = token.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        pattern = f"%{escaped_token}%"
+        name_terms.append(
+            or_(
+                Subject.name.ilike(pattern, escape="\\"),
+                Subject.first_name.ilike(pattern, escape="\\"),
+                Subject.last_name.ilike(pattern, escape="\\"),
+            )
+        )
+    name_match = (
+        select(Subject.id)
+        .where(
+            func.upper(func.trim(Subject.fiscal_code)) == normalized_code,
+            *name_terms,
+        )
+        .exists()
+    )
+    matches = [name_match]
+    if code_term:
+        matches.append(normalized_code.ilike(f"%{code_term}%"))
+
+    result_limit = max(1, int(limit))
+    request_candidates = (
+        select(
+            normalized_code.label("fiscal_code"),
+            Request.responded_at.label("last_seen"),
+        )
+        .where(
+            Request.success.is_(True),
+            Request.responded_at.is_not(None),
+            Request.subject_query.is_not(None),
+            func.length(normalized_code) == 16,
+            or_(*matches),
+        )
+        .subquery()
+    )
+    request_stmt = (
+        select(
+            request_candidates.c.fiscal_code,
+            func.max(request_candidates.c.last_seen).label("last_seen"),
+        )
+        .group_by(request_candidates.c.fiscal_code)
+        .order_by(func.max(request_candidates.c.last_seen).desc(), request_candidates.c.fiscal_code)
+        .limit(result_limit + 1)
+    )
+    document_code = func.upper(func.trim(Subject.fiscal_code))
+    document_name_terms = []
+    for token in tokens:
+        escaped_token = token.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        pattern = f"%{escaped_token}%"
+        document_name_terms.append(
+            or_(
+                Subject.name.ilike(pattern, escape="\\"),
+                Subject.first_name.ilike(pattern, escape="\\"),
+                Subject.last_name.ilike(pattern, escape="\\"),
+                Document.subject_text.ilike(pattern, escape="\\"),
+            )
+        )
+    document_matches = [and_(*document_name_terms)]
+    if code_term:
+        document_matches.append(document_code.ilike(f"%{code_term}%"))
+    document_stmt = (
+        select(
+            document_code.label("fiscal_code"),
+            func.max(Subject.name).label("name"),
+            func.max(func.coalesce(Document.requested_at, Document.created_at)).label("last_seen"),
+        )
+        .select_from(Subject)
+        .join(DocumentSubject, DocumentSubject.subject_id == Subject.id)
+        .join(Document, Document.id == DocumentSubject.document_id)
+        .where(
+            Document.document_type == "visura_soggetto",
+            Subject.fiscal_code.is_not(None),
+            func.length(document_code) == 16,
+            or_(*document_matches),
+        )
+        .group_by(document_code)
+        .order_by(func.max(func.coalesce(Document.requested_at, Document.created_at)).desc(), document_code)
+        .limit(result_limit + 1)
+    )
+    async with _get_session_factory()() as session:
+        rows = (await session.execute(request_stmt)).all()
+        document_rows = (await session.execute(document_stmt)).all()
+        request_codes = [str(row.fiscal_code) for row in rows]
+        names_by_code: dict[str, str] = {}
+        if request_codes:
+            subject_code = func.upper(func.trim(Subject.fiscal_code))
+            name_stmt = (
+                select(subject_code.label("fiscal_code"), Subject.name)
+                .where(subject_code.in_(request_codes))
+                .order_by(Subject.id.desc())
+            )
+            for row in (await session.execute(name_stmt)).all():
+                names_by_code.setdefault(str(row.fiscal_code), row.name)
+
+    candidates: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        fiscal_code = str(row.fiscal_code)
+        candidates[fiscal_code] = {
+            "fiscal_code": fiscal_code,
+            "name": names_by_code.get(fiscal_code),
+            "last_seen": row.last_seen,
+        }
+    for row in document_rows:
+        fiscal_code = str(row.fiscal_code)
+        candidate = candidates.get(fiscal_code)
+        if candidate is None or (row.last_seen and row.last_seen > candidate["last_seen"]):
+            candidates[fiscal_code] = {
+                "fiscal_code": fiscal_code,
+                "name": row.name,
+                "last_seen": row.last_seen,
+            }
+        elif not candidate["name"] and row.name:
+            candidate["name"] = row.name
+    ordered = sorted(
+        candidates.values(),
+        key=lambda item: (item["last_seen"] is not None, item["last_seen"], item["fiscal_code"]),
+        reverse=True,
+    )
+    has_more = len(ordered) > result_limit
+    return [
+        {"fiscal_code": item["fiscal_code"], "name": item["name"]}
+        for item in ordered[:result_limit]
+    ], has_more
+
+
 async def find_subject_inspection_document_ids(fiscal_code: str) -> set[int]:
     """Ids of the ispezioni ipotecarie whose parties include the codice fiscale."""
     stmt = text(

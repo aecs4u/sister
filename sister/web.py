@@ -52,6 +52,7 @@ from .database import (
     get_subject_name,
     parcel_key,
     record_activity,
+    search_person_profiles,
 )
 from .document_scope import subject_search_scope as _subject_search_scope
 from .form_config import get_available_form_groups, get_single_step_groups, get_workflow_groups
@@ -3750,6 +3751,9 @@ async def _google_maps_context(doc: dict) -> dict[str, Any] | None:
         ) or section
         candidate_sheet = parcel_field(candidate, "sheet", "Foglio")
         candidate_parcel = parcel_field(candidate, "parcel", "ParticellaNum", "Particella")
+        candidate_subunit = parcel_field(candidate, "subunit", "Subalterno")
+        if candidate_subunit in {"-", "—"}:
+            candidate_subunit = ""
         candidate_category = parcel_field(candidate, "category", "Categoria")
         if not (candidate_municipality and candidate_province and candidate_sheet and candidate_parcel):
             continue
@@ -3757,7 +3761,13 @@ async def _google_maps_context(doc: dict) -> dict[str, Any] | None:
             candidate_municipality.casefold(), candidate_province.upper(), candidate_code.upper(),
             candidate_section.upper(), candidate_sheet.upper(), candidate_parcel.upper(),
         )
-        if any(item["key"] == key for item in parcel_identifiers):
+        existing_item = next((item for item in parcel_identifiers if item["key"] == key), None)
+        if existing_item:
+            if candidate_subunit and all(
+                candidate_subunit.casefold() != value.casefold()
+                for value in existing_item["subunits"]
+            ):
+                existing_item["subunits"].append(candidate_subunit)
             continue
         parcel_identifiers.append({
             "key": key,
@@ -3767,6 +3777,7 @@ async def _google_maps_context(doc: dict) -> dict[str, Any] | None:
             "section": candidate_section.upper(),
             "sheet": candidate_sheet,
             "parcel": candidate_parcel,
+            "subunits": [candidate_subunit] if candidate_subunit else [],
             "category": candidate_category,
             "reference": parcel_field(candidate, "reference") or " · ".join(
                 part for part in (
@@ -3916,6 +3927,7 @@ async def _google_maps_context(doc: dict) -> dict[str, Any] | None:
                     "reference": item["reference"],
                     "sheet": item["sheet"],
                     "parcel": item["parcel"],
+                    "subunits": item.get("subunits", []),
                     "section": item["section"],
                     "municipality": item["municipality"],
                     "municipality_code": item["municipality_code"],
@@ -3940,6 +3952,7 @@ async def _google_maps_context(doc: dict) -> dict[str, Any] | None:
                 "section": item["section"],
                 "sheet": item["sheet"],
                 "parcel": item["parcel"],
+                "subunits": item.get("subunits", []),
                 "category": item.get("category", ""),
                 "selected": item["key"] == selected_key,
             })
@@ -4438,6 +4451,7 @@ async def _google_maps_context(doc: dict) -> dict[str, Any] | None:
             "section": item["section"],
             "sheet": item["sheet"],
             "parcel": item["parcel"],
+            "subunits": item.get("subunits", []),
             "selected": item["key"] == selected_key,
         })
         if marker_row[6]:
@@ -4452,6 +4466,7 @@ async def _google_maps_context(doc: dict) -> dict[str, Any] | None:
                                 "reference": item["reference"],
                                 "sheet": item["sheet"],
                                 "parcel": item["parcel"],
+                                "subunits": item.get("subunits", []),
                                 "section": item["section"],
                                 "municipality": item["municipality"],
                                 "municipality_code": item["municipality_code"],
@@ -7717,22 +7732,56 @@ async def web_persons_index(
     code: str | None = None,
     user=Depends(_require_auth),
 ):
-    """Lookup entry point for a person's stored subject visura."""
-    normalized_code = (code or "").strip().upper()
-    if normalized_code:
-        if not re.fullmatch(r"[A-Z0-9]{16}", normalized_code):
+    """Search archived person profiles by full fiscal code or partial name/code text."""
+    submitted = " ".join((code or "").strip().split())
+    normalized_code = re.sub(r"[^A-Z0-9]", "", submitted.upper())
+    if submitted and not any(character.isalnum() for character in submitted):
+        response = _get_theme(request).render(
+            "persons_index.html",
+            request,
+            user=user,
+            code=submitted,
+            error_message="Inserisci almeno una lettera o un numero.",
+            search_results=None,
+            search_has_more=False,
+        )
+        response.status_code = 422
+        return response
+    if submitted:
+        if len(submitted) > 80:
             response = _get_theme(request).render(
                 "persons_index.html",
                 request,
                 user=user,
-                code=normalized_code,
-                error_message="Inserisci un codice fiscale composto da 16 lettere o cifre.",
+                code=submitted,
+                error_message="La ricerca può contenere al massimo 80 caratteri.",
+                search_results=None,
+                search_has_more=False,
             )
             response.status_code = 422
             return response
-        return RedirectResponse(url=f"/persons/{normalized_code}", status_code=303)
+        if len(normalized_code) == 16 and re.fullmatch(r"[A-Z0-9 ./-]+", submitted.upper()):
+            return RedirectResponse(url=f"/persons/{normalized_code}", status_code=303)
+        search_results, search_has_more = await search_person_profiles(submitted)
+        return _get_theme(request).render(
+            "persons_index.html",
+            request,
+            user=user,
+            code=submitted,
+            error_message=None,
+            search_results=search_results,
+            search_has_more=search_has_more,
+        )
 
-    return _get_theme(request).render("persons_index.html", request, user=user, code="", error_message=None)
+    return _get_theme(request).render(
+        "persons_index.html",
+        request,
+        user=user,
+        code="",
+        error_message=None,
+        search_results=None,
+        search_has_more=False,
+    )
 
 
 @router.get("/companies/", response_class=HTMLResponse, name="companies_index")

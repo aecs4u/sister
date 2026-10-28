@@ -116,6 +116,10 @@
     background: #075985;
 }
 
+.document-map-overview-marker--omi-zone {
+    background: #6d28d9;
+}
+
 .document-map-overview-marker--parcel-fallback {
     border-style: dashed;
     background: var(--document-map-overview-category-background, #8a3b12);
@@ -141,6 +145,10 @@
 
 .document-map-overview-marker-point--sheet .document-map-overview-dot {
     background: #38bdf8;
+}
+
+.document-map-overview-marker-point--omi-zone .document-map-overview-dot {
+    background: #a78bfa;
 }
 
 .document-map-overview-marker-point--parcel-fallback .document-map-overview-dot {
@@ -258,6 +266,11 @@
 .document-map-cluster--sheet {
     background: #0284c7;
     box-shadow: 0 0 0 2px rgba(2, 132, 199, .35), 0 1px 4px rgba(0, 0, 0, .45);
+}
+
+.document-map-cluster--omi-zone {
+    background: #7c3aed;
+    box-shadow: 0 0 0 2px rgba(124, 58, 237, .35), 0 1px 4px rgba(0, 0, 0, .45);
 }
 
 .document-map-cluster--parcel-fallback {
