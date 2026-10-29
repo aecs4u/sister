@@ -993,6 +993,7 @@ uv run sister history --provincia Roma --limit 10
 - [Form delle query e parametri CLI/API](docs/query_forms.md)
 - [Estrazione HTML, documenti e dati tipizzati](docs/data_extraction.md)
 - [Sessione SISTER nel browser](docs/portal_session.md) e [gestione CAPTCHA](docs/captcha_pages.md)
+- [Eseguire una lista Markdown in sessione](docs/run_list_in_session.md)
 - [Server MCP locale per client LLM](docs/mcp_server.md)
 - [Nomi e manutenzione dei documenti scaricati](docs/document_file_naming.md)
 - [Batch Recrowd: visure soggetto](docs/recrowd_storica_analitica_batch.md) e [visure per immobile](docs/recrowd_immobile_storica_analitica_batch.md)
