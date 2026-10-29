@@ -79,6 +79,27 @@ async def test_get_comune_centroids_falls_back_to_istat_coordinates(monkeypatch)
 
 
 @pytest.mark.asyncio
+async def test_find_parcel_document_ids_uses_normalized_mortgage_properties(monkeypatch):
+    captured = {}
+
+    async def parcel_rows(sql, keys):
+        captured["sql"] = sql
+        captured["keys"] = list(keys)
+        return [(381, 123, "RA", "103", "1714")]
+
+    monkeypatch.setattr(database, "_parcel_key_rows", parcel_rows)
+    key = (123, "RA", "103", "1714")
+
+    found = await database.find_parcel_document_ids({key})
+
+    assert found == {key: {381}}
+    assert captured["keys"] == [key]
+    sql = captured["sql"].lower()
+    assert "join mortgage_inspection_property" in sql
+    assert "join v_cadastral_unit" in sql
+
+
+@pytest.mark.asyncio
 async def test_find_parcel_request_records_groups_requests_by_parcel(monkeypatch):
     captured = {}
 
@@ -123,6 +144,84 @@ async def test_find_parcel_request_records_groups_requests_by_parcel(monkeypatch
     assert [item["request_id"] for item in found[key]] == ["req-map", "req-inspection"]
     assert found[key][0]["total_results"] == 1
     assert found[key][1]["success"] is None
+
+
+@pytest.mark.asyncio
+async def test_find_subject_document_associations_uses_all_normalized_relationships(monkeypatch):
+    class Result:
+        def mappings(self):
+            return self
+
+        def all(self):
+            return [
+                {
+                    "document_id": 101,
+                    "relation": "subject",
+                    "province_code": None,
+                    "municipality": None,
+                    "section": None,
+                    "sheet": None,
+                    "parcel": None,
+                    "subunit": None,
+                },
+                {
+                    "document_id": 101,
+                    "relation": "property",
+                    "province_code": "RA",
+                    "municipality": "RAVENNA",
+                    "section": "RA",
+                    "sheet": "103",
+                    "parcel": "1714",
+                    "subunit": "8",
+                },
+                {
+                    "document_id": 202,
+                    "relation": "mortgage_party",
+                    "province_code": None,
+                    "municipality": None,
+                    "section": None,
+                    "sheet": None,
+                    "parcel": None,
+                    "subunit": None,
+                },
+            ]
+
+    class Session:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_exc):
+            return None
+
+        async def execute(self, statement, params):
+            self.statement = statement
+            self.params = params
+            return Result()
+
+    session = Session()
+    monkeypatch.setattr(database, "_get_session_factory", lambda: lambda: session)
+
+    found = await database.find_subject_document_associations(" rssmra70a01h501z ")
+
+    assert session.params == {"code": "RSSMRA70A01H501Z"}
+    sql = str(session.statement).lower()
+    assert "from document_subject" in sql
+    assert "join mutation_owner" in sql
+    assert "from mortgage_inspection_party" in sql
+    assert "join mortgage_inspection_property" in sql
+    assert "join owned_documents" in sql
+    assert "join known_properties" in sql
+    assert "coalesce(v.document_type, '') <> 'visura_soggetto'" in sql
+    assert found[101]["sources"] == {"subject", "property"}
+    assert found[101]["properties"] == [{
+        "province": "RA",
+        "municipality": "RAVENNA",
+        "section": "RA",
+        "sheet": "103",
+        "parcel": "1714",
+        "subunit": "8",
+    }]
+    assert found[202] == {"sources": {"mortgage_party"}, "properties": []}
 
 
 # ---------------------------------------------------------------------------

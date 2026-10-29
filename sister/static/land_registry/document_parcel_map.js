@@ -875,12 +875,23 @@
             // Draws one increment of the map data; later increments add to what is there (nothing is drawn twice).
             function applyData(data) {
             var parcelMarkers = Array.isArray(data.parcel_markers) ? data.parcel_markers : [];
+            var parcelFitPoints = Array.isArray(data.parcel_fit_points) ? data.parcel_fit_points : [];
             var parcelFeatures = data.parcel_features || { type: 'FeatureCollection', features: [] };
             var sheetFeatures = data.sheet_features || { type: 'FeatureCollection', features: [] };
             var omiZoneFeatures = data.omi_zone_features || { type: 'FeatureCollection', features: [] };
             var unmappedParcels = Array.isArray(data.unmapped_parcels) ? data.unmapped_parcels : [];
             var ownedSheetFeatures = sheetFeatures;
             foundMarkers += parcelMarkers.length;
+
+            // These approximate points include listed parcels that have no exact geometry. Extend
+            // the view bounds only; never render them as parcel positions.
+            parcelFitPoints.forEach(function (point) {
+                var latitude = Number(point.latitude);
+                var longitude = Number(point.longitude);
+                if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return;
+                dataBounds.extend([latitude, longitude]);
+                parcelBounds.extend([latitude, longitude]);
+            });
 
             if (listedOnly) {
                 parcelMarkers.forEach(function (item) { ownedSheetKeys.add(parcelSheetKey(item)); });

@@ -1,4 +1,5 @@
 import asyncio  # noqa: F401 (used by tests via main_module.asyncio)
+import inspect
 import logging
 import os
 import secrets
@@ -276,16 +277,25 @@ app = FastAPI(
     dependencies=[Depends(_reuse_previous)],
 )
 
-# Delivery: compress HTML/JSON (SSE is excluded by default, already-compressed formats are skipped). Versioned theme
-# assets (?v=) are immutable; SISTER's own static files are revalidated through their ETag.
+# Delivery: compress HTML/JSON; exclude SSE and, where the installed Starlette supports the option, already-compressed
+# formats. Versioned theme assets (?v=) are immutable; SISTER's own static files are revalidated through their ETag.
 from starlette.middleware.base import BaseHTTPMiddleware  # noqa: E402
 from starlette.middleware.gzip import DEFAULT_EXCLUDED_CONTENT_TYPES, GZipMiddleware  # noqa: E402
 
-app.add_middleware(
-    GZipMiddleware,
-    minimum_size=1024,
-    exclude_content_types=(*DEFAULT_EXCLUDED_CONTENT_TYPES, "application/pdf", "image/", "application/zip"),
-)
+_gzip_options: dict[str, object] = {"minimum_size": 1024}
+if "exclude_content_types" in inspect.signature(GZipMiddleware).parameters:
+    _gzip_options["exclude_content_types"] = (
+        *DEFAULT_EXCLUDED_CONTENT_TYPES,
+        "application/pdf",
+        "image/",
+        "application/zip",
+    )
+else:
+    logger.warning(
+        "Installed Starlette does not support custom GZip content-type exclusions; "
+        "using its built-in exclusions only"
+    )
+app.add_middleware(GZipMiddleware, **_gzip_options)
 
 
 class StaticCacheMiddleware(BaseHTTPMiddleware):
@@ -702,8 +712,8 @@ try:
         logger.warning("Feedback admin router non disponibile: %s", e)
 
     logger.info("Web UI inizializzata")
-except ImportError:
-    logger.warning("aecs4u-theme non disponibile: web UI disabilitata")
+except ImportError as exc:
+    logger.warning("aecs4u-theme non disponibile: web UI disabilitata (%s)", exc)
 
 
 @app.post("/visura")

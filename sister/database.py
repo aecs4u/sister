@@ -110,7 +110,7 @@ DATABASE_SCHEMA = os.getenv("DATABASE_SCHEMA", "sister")
 DATABASE_ISTAT_SCHEMA = os.getenv("DATABASE_ISTAT_SCHEMA", "istat")
 # raw payloads (response JSON, XML tree, extraction JSON) live in their own schema; tests point it at a throwaway one
 DATABASE_ARCHIVE_SCHEMA = os.getenv("DATABASE_ARCHIVE_SCHEMA", "sister_archive")
-DATABASE_REVISION = "20261112_omi_selection_origin"
+DATABASE_REVISION = "20261113_cadastral_geometry_views"
 
 # ---------------------------------------------------------------------------
 # Engine and session
@@ -1675,8 +1675,18 @@ async def _parcel_key_rows(sql: str, keys: Iterable[tuple[int, str, str, str]]) 
 async def find_parcel_document_ids(keys: Iterable[tuple[int, str, str, str]]) -> dict[tuple, set[int]]:
     """Document ids (visure, planimetrie, ispezioni, …) stored for each parcel key (matched on the unit's parcel)."""
     rows = await _parcel_key_rows(
-        "SELECT v.document_id, k.comune_id, k.section, k.sheet, k.parcel FROM v_document_cadastral_unit v "
-        "JOIN k ON v.comune_id = k.comune_id AND upper(coalesce(v.section, '')) = k.section "
+        "SELECT v.document_id, k.comune_id, k.section, k.sheet, k.parcel FROM ("
+        "SELECT document_id, comune_id, section, sheet, parcel, 'document'::text AS link_source "
+        "FROM v_document_cadastral_unit "
+        "UNION "
+        "SELECT de.document_id, cu.comune_id, cu.section, cu.sheet, cu.parcel, 'mortgage_extraction'::text "
+        "FROM document_extraction de "
+        "JOIN mortgage_inspection_property mip ON mip.inspection_id = de.id "
+        "JOIN v_cadastral_unit cu ON cu.cadastral_unit_id = mip.cadastral_unit_id"
+        ") v "
+        "JOIN k ON v.comune_id = k.comune_id "
+        "AND (upper(coalesce(v.section, '')) = k.section "
+        "OR (v.link_source = 'mortgage_extraction' AND (coalesce(v.section, '') = '' OR k.section = ''))) "
         "AND coalesce(nullif(ltrim(v.sheet, '0'), ''), '0') = k.sheet "
         "AND coalesce(nullif(ltrim(v.parcel, '0'), ''), '0') = k.parcel",
         keys,
@@ -1919,6 +1929,206 @@ async def find_subject_inspection_document_ids(fiscal_code: str) -> set[int]:
     )
     async with _get_session_factory()() as session:
         return {int(row[0]) for row in (await session.execute(stmt, {"code": fiscal_code})).all()}
+
+
+async def find_subject_document_associations(fiscal_code: str) -> dict[int, dict[str, Any]]:
+    """All document relationships known for a subject and its properties.
+
+    The entity page is an archive, so it must not be limited to the newest
+    ``soggetto`` response.  This union deliberately follows every normalized
+    provenance path we have: direct document subjects, ownership acts,
+    mortgage-inspection parties, documents produced by a subject request, and
+    cadastral units found in any saved subject search.  Filename/subject text
+    is retained as a compatibility path for older imports that predate the
+    normalized relationship tables.
+    """
+    code = fiscal_code_key(fiscal_code)
+    stmt = text(
+        """
+        WITH owned_documents AS (
+            SELECT ds.document_id
+            FROM document_subject ds
+            JOIN subject s ON s.id = ds.subject_id
+            WHERE upper(btrim(s.fiscal_code)) = :code
+
+            UNION
+            SELECT om.document_id
+            FROM ownership_mutation om
+            JOIN mutation_owner mo ON mo.mutation_id = om.id
+            JOIN subject s ON s.id = mo.subject_id
+            WHERE upper(btrim(s.fiscal_code)) = :code
+
+            UNION
+            SELECT d.id
+            FROM document d
+            WHERE d.document_type = 'visura_soggetto'
+              AND (
+                    position(:code IN upper(coalesce(d.file_name, ''))) > 0
+                 OR position(:code IN upper(coalesce(d.subject_text, ''))) > 0
+              )
+        ), known_units AS (
+            SELECT p.cadastral_unit_id
+            FROM property p
+            JOIN request r ON r.id = p.request_id
+            WHERE upper(btrim(r.subject_query)) = :code
+              AND p.cadastral_unit_id IS NOT NULL
+
+            UNION
+            SELECT v.cadastral_unit_id
+            FROM v_document_cadastral_unit v
+            JOIN owned_documents od ON od.document_id = v.document_id
+            WHERE v.cadastral_unit_id IS NOT NULL
+        ), known_properties AS (
+            SELECT DISTINCT
+                cu.comune_id,
+                coalesce(cu.province_code, '') AS province_code,
+                coalesce(cu.comune, '') AS municipality,
+                upper(coalesce(cu.section, '')) AS section,
+                coalesce(nullif(ltrim(cu.sheet, '0'), ''), '0') AS sheet,
+                coalesce(nullif(ltrim(cu.parcel, '0'), ''), '0') AS parcel,
+                coalesce(nullif(ltrim(cu.subunit, '0'), ''), '0') AS subunit
+            FROM v_cadastral_unit cu
+            JOIN known_units ku ON ku.cadastral_unit_id = cu.cadastral_unit_id
+            WHERE cu.comune_id IS NOT NULL AND cu.sheet IS NOT NULL AND cu.parcel IS NOT NULL
+        ), associations(document_id, relation, province_code, municipality, section, sheet, parcel, subunit) AS (
+            SELECT ds.document_id, 'subject', NULL::text, NULL::text, NULL::text,
+                   NULL::text, NULL::text, NULL::text
+            FROM document_subject ds
+            JOIN subject s ON s.id = ds.subject_id
+            WHERE upper(btrim(s.fiscal_code)) = :code
+
+            UNION ALL
+            SELECT om.document_id, 'ownership', NULL::text, NULL::text, NULL::text,
+                   NULL::text, NULL::text, NULL::text
+            FROM ownership_mutation om
+            JOIN mutation_owner mo ON mo.mutation_id = om.id
+            JOIN subject s ON s.id = mo.subject_id
+            WHERE upper(btrim(s.fiscal_code)) = :code
+
+            UNION ALL
+            SELECT de.document_id, 'mortgage_party', NULL::text, NULL::text, NULL::text,
+                   NULL::text, NULL::text, NULL::text
+            FROM mortgage_inspection_party mip
+            JOIN subject s ON s.id = mip.subject_id
+            JOIN document_extraction de ON de.id = mip.inspection_id
+            WHERE upper(btrim(s.fiscal_code)) = :code
+
+            UNION ALL
+            SELECT d.id, 'subject_request', NULL::text, NULL::text, NULL::text,
+                   NULL::text, NULL::text, NULL::text
+            FROM document d
+            JOIN request r ON r.id = d.request_id
+            WHERE upper(btrim(r.subject_query)) = :code
+
+            UNION ALL
+            SELECT d.id, 'legacy_identity', NULL::text, NULL::text, NULL::text,
+                   NULL::text, NULL::text, NULL::text
+            FROM document d
+            WHERE position(:code IN upper(coalesce(d.file_name, ''))) > 0
+               OR position(:code IN upper(coalesce(d.subject_text, ''))) > 0
+
+            UNION ALL
+            SELECT DISTINCT v.document_id, 'property', kp.province_code, kp.municipality,
+                   kp.section, kp.sheet, kp.parcel,
+                   CASE WHEN kp.subunit = '0' THEN '' ELSE kp.subunit END
+            FROM v_document_cadastral_unit v
+            JOIN known_properties kp
+              ON v.comune_id = kp.comune_id
+             AND upper(coalesce(v.section, '')) = kp.section
+             AND coalesce(nullif(ltrim(v.sheet, '0'), ''), '0') = kp.sheet
+             AND coalesce(nullif(ltrim(v.parcel, '0'), ''), '0') = kp.parcel
+             AND (
+                    coalesce(v.subunit, '') = ''
+                 OR kp.subunit = '0'
+                 OR coalesce(nullif(ltrim(v.subunit, '0'), ''), '0') = kp.subunit
+             )
+            WHERE coalesce(v.document_type, '') <> 'visura_soggetto'
+
+            UNION ALL
+            SELECT DISTINCT de.document_id, 'property', kp.province_code, kp.municipality,
+                   kp.section, kp.sheet, kp.parcel,
+                   CASE WHEN kp.subunit = '0' THEN '' ELSE kp.subunit END
+            FROM document_extraction de
+            JOIN mortgage_inspection_property mip ON mip.inspection_id = de.id
+            JOIN v_cadastral_unit v ON v.cadastral_unit_id = mip.cadastral_unit_id
+            JOIN known_properties kp
+              ON v.comune_id = kp.comune_id
+             AND (
+                    upper(coalesce(v.section, '')) = kp.section
+                 OR coalesce(v.section, '') = ''
+                 OR kp.section = ''
+             )
+             AND coalesce(nullif(ltrim(v.sheet, '0'), ''), '0') = kp.sheet
+             AND coalesce(nullif(ltrim(v.parcel, '0'), ''), '0') = kp.parcel
+             AND (
+                    coalesce(v.subunit, '') = ''
+                 OR kp.subunit = '0'
+                 OR coalesce(nullif(ltrim(v.subunit, '0'), ''), '0') = kp.subunit
+             )
+
+            UNION ALL
+            SELECT DISTINCT d.id, 'property', kp.province_code, kp.municipality,
+                   kp.section, kp.sheet, kp.parcel,
+                   CASE WHEN kp.subunit = '0' THEN '' ELSE kp.subunit END
+            FROM document d
+            JOIN v_document_cadastral_unit v ON v.document_id = d.id
+            JOIN known_properties kp
+              ON v.comune_id IS NULL
+             AND position('_' || upper(kp.province_code) || '_' IN upper(d.file_name)) > 0
+             AND (
+                    upper(coalesce(v.section, '')) = kp.section
+                 OR coalesce(v.section, '') = ''
+                 OR kp.section = ''
+             )
+             AND coalesce(nullif(ltrim(v.sheet, '0'), ''), '0') = kp.sheet
+             AND coalesce(nullif(ltrim(v.parcel, '0'), ''), '0') = kp.parcel
+             AND (
+                    coalesce(v.subunit, '') = ''
+                 OR kp.subunit = '0'
+                 OR coalesce(nullif(ltrim(v.subunit, '0'), ''), '0') = kp.subunit
+             )
+            WHERE coalesce(d.document_type, '') <> 'visura_soggetto'
+        )
+        SELECT DISTINCT document_id, relation, province_code, municipality, section, sheet, parcel, subunit
+        FROM associations
+        ORDER BY document_id, relation, province_code, municipality, section, sheet, parcel, subunit
+        """
+    )
+    async with _get_session_factory()() as session:
+        rows = (await session.execute(stmt, {"code": code})).mappings().all()
+
+    found: dict[int, dict[str, Any]] = {}
+    for row in rows:
+        document_id = int(row["document_id"])
+        entry = found.setdefault(document_id, {"sources": set(), "properties": []})
+        entry["sources"].add(str(row["relation"]))
+        if row["relation"] != "property":
+            continue
+        prop = {
+            "province": row["province_code"] or "",
+            "municipality": row["municipality"] or "",
+            "section": row["section"] or "",
+            "sheet": row["sheet"] or "",
+            "parcel": row["parcel"] or "",
+            "subunit": row["subunit"] or "",
+        }
+        if prop not in entry["properties"]:
+            entry["properties"].append(prop)
+    return found
+
+
+async def find_documents_with_extraction(document_ids: Iterable[int]) -> set[int]:
+    """Document ids that have at least one persisted structured extraction."""
+    ids = sorted({int(document_id) for document_id in document_ids})
+    if not ids:
+        return set()
+    async with _get_session_factory()() as session:
+        rows = await session.execute(
+            select(DocumentExtraction.document_id)
+            .where(DocumentExtraction.document_id.in_(ids))
+            .distinct()
+        )
+        return {int(document_id) for document_id in rows.scalars()}
 
 
 async def find_subject_query_requests(fiscal_code: str, limit: int = 20) -> list[dict]:

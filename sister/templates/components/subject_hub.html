@@ -13,6 +13,85 @@
 </a>
 {%- endmacro %}
 
+{% macro inspection_extraction_details(documents, in_parcel=true) -%}
+{% set extracted = documents|selectattr('extraction')|list %}
+{% if extracted %}
+<div class="mt-2">
+  <div class="small text-muted mb-1"><i class="fas fa-database me-1" aria-hidden="true"></i>Dati estratti da ispezioni e note</div>
+  {% for document in extracted %}
+  {% set extraction = document.extraction %}
+  <div class="border rounded p-2 mb-2 small" data-mortgage-extraction-document="{{ document.id }}">
+    <div class="d-flex flex-wrap align-items-center gap-2">
+      <a class="fw-semibold" href="/documents/{{ document.id }}">{{ extraction.kind_label }}</a>
+      {% if extraction.registration %}<span class="badge text-bg-light border">{{ extraction.registration }}</span>{% endif %}
+      {% if extraction.presentation %}<span class="text-muted">{{ extraction.presentation }}</span>{% endif %}
+      <span class="badge {{ 'text-bg-success' if in_parcel else 'text-bg-light border text-dark' }} ms-auto">
+        {{ 'usata nel gruppo' if in_parcel else 'estrazione disponibile' }}
+      </span>
+    </div>
+    {% if extraction.inspection_date or extraction.office %}
+    <div class="text-muted mt-1">{% if extraction.inspection_date %}Data ispezione: {{ extraction.inspection_date }}{% endif %}{% if extraction.office %} · Ufficio: {{ extraction.office }}{% endif %}</div>
+    {% endif %}
+    {% if extraction.title_type or extraction.title_description or extraction.title_date %}
+    <div class="mt-1"><strong>Titolo:</strong>
+      {{ extraction.title_type or 'tipo non indicato' }}{% if extraction.title_description %} · {{ extraction.title_description }}{% endif %}{% if extraction.title_date %} · {{ extraction.title_date }}{% endif %}
+      {% if extraction.title_repertory_number %} · Rep. {{ extraction.title_repertory_number }}{% endif %}{% if extraction.title_notary %} · Notaio {{ extraction.title_notary }}{% endif %}
+    </div>
+    {% endif %}
+    {% if extraction.lien_type or extraction.lien_principal_euro or extraction.lien_total_euro or extraction.lien_annual_interest_rate or extraction.lien_duration %}
+    <div class="mt-1"><strong>Formalità / ipoteca:</strong>
+      {{ extraction.lien_type or 'tipo non indicato' }}
+      {% if extraction.lien_principal_euro %} · capitale € {{ extraction.lien_principal_euro }}{% endif %}
+      {% if extraction.lien_interest_euro %} · interessi € {{ extraction.lien_interest_euro }}{% endif %}
+      {% if extraction.lien_expenses_euro %} · spese € {{ extraction.lien_expenses_euro }}{% endif %}
+      {% if extraction.lien_total_euro %} · totale € {{ extraction.lien_total_euro }}{% endif %}
+      {% if extraction.lien_rank %} · grado {{ extraction.lien_rank }}{% endif %}
+      {% if extraction.lien_annual_interest_rate %} · tasso annuo {{ extraction.lien_annual_interest_rate }}{% endif %}
+      {% if extraction.lien_duration %} · durata {{ extraction.lien_duration }}{% endif %}
+    </div>
+    {% endif %}
+    {% if extraction.properties %}
+    <div class="mt-1"><strong>Immobili indicati nella nota:</strong>
+      <ul class="mb-0 ps-3">
+        {% for property in extraction.properties %}
+        <li>{{ property.reference or 'Riferimento catastale non indicato' }}{% if property.address %} · {{ property.address }}{% endif %}{% if property.nature %} · {{ property.nature }}{% endif %}{% if property.room_count is not none %} · {{ property.room_count }} vani{% endif %}{% if property.area_sqm is not none %} · {{ property.area_sqm }} m²{% endif %}{% if property.floor %} · piano {{ property.floor }}{% endif %}</li>
+        {% endfor %}
+      </ul>
+    </div>
+    {% endif %}
+    {% if extraction.parties %}
+    <div class="mt-1"><strong>Parti:</strong>
+      <ul class="mb-0 ps-3">
+        {% for party in extraction.parties %}
+        <li><span class="badge text-bg-light border fw-normal">{{ party.role }}</span> {{ party.name }}{% if party.fiscal_code %} · CF <code>{{ party.fiscal_code }}</code>{% endif %}{% if party.quality %} · {{ party.quality }}{% endif %}{% if party.right %} · {{ party.right }}{% endif %}{% if party.share %} {{ party.share }}{% endif %}</li>
+        {% endfor %}
+      </ul>
+    </div>
+    {% endif %}
+    <div class="text-muted mt-1">
+      {{ extraction.property_count }} {{ 'immobile estratto' if extraction.property_count == 1 else 'immobili estratti' }}
+      · {{ extraction.party_count }} {{ 'soggetto' if extraction.party_count == 1 else 'soggetti' }}
+      {% if extraction.party_count %}({{ extraction.party_favore_count }} a favore, {{ extraction.party_contro_count }} contro){% endif %}
+      {% if extraction.id %} · estrazione #{{ extraction.id }}{% endif %}
+    </div>
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+{%- endmacro %}
+
+{% macro mortgage_documents_in_ownership(documents) -%}
+{% if documents %}
+<section class="border rounded p-3 mt-3" aria-label="Ispezioni ipotecarie collegate alla titolarità">
+  <h4 class="h6"><i class="fas fa-landmark me-1 text-primary" aria-hidden="true"></i>Ispezioni ipotecarie e altri documenti collegati alla titolarità</h4>
+  <div class="d-flex flex-wrap gap-1 mb-2">
+    {% for document in documents %}{{ doc_chip(document) }}{% endfor %}
+  </div>
+  {{ inspection_extraction_details(documents) }}
+</section>
+{% endif %}
+{%- endmacro %}
+
 {% macro current_ownership(owners, subject_code='') %}
 {% if owners %}
 <div class="mb-3">
@@ -75,6 +154,42 @@
       <span class="badge text-bg-light border fw-normal">{{ pr.provincia or '-' }}{% if pr.codice %} ({{ pr.codice }}){% endif %}
         · {{ pr.fabbricati if pr.fabbricati is not none else '-' }} fabbricati · {{ pr.terreni if pr.terreni is not none else '-' }} terreni</span>
       {% endfor %}
+    </div>
+    {% endif %}
+
+    {% set ownership_sources = namespace(rows=[]) %}
+    {% for parcel in profile.map_parcels %}
+      {% for ownership in parcel.ownership|default([], true) %}
+        {% if ownership.view and ownership.view.ownership %}
+          {% set ownership_sources.rows = ownership_sources.rows + [{
+            'document_id': ownership.document_id,
+            'as_of': ownership.as_of,
+            'subunit': ownership.subunit,
+            'municipality': parcel.municipality,
+            'province': parcel.province,
+            'sheet': parcel.sheet,
+            'parcel': parcel.parcel,
+            'provenance': ownership.view.header.provenance,
+            'entry_count': ownership.view.ownership|length
+          }] %}
+        {% endif %}
+      {% endfor %}
+    {% endfor %}
+    {% if ownership_sources.rows %}
+    <div class="mt-3" aria-label="Fonti della titolarità">
+      <h3 class="h6"><i class="fas fa-link me-2 text-primary" aria-hidden="true"></i>Fonti della titolarità</h3>
+      <p class="small text-muted mb-1">Ogni cronologia nelle schede catastali è collegata alla visura da cui sono stati estratti gli atti.</p>
+      <ul class="list-unstyled small mb-0">
+        {% for source in ownership_sources.rows %}
+        <li class="py-1 border-bottom" data-ownership-source-document="{{ source.document_id }}">
+          <a href="/documents/{{ source.document_id }}">Visura per immobile #{{ source.document_id }}</a>
+          · {{ source.municipality }} ({{ source.province }}) · Fg {{ source.sheet }} · P.lla {{ source.parcel }}{% if source.subunit %} · Sub {{ source.subunit }}{% endif %}
+          {% if source.as_of %}· situazione al {{ source.as_of }}{% endif %}
+          {% if source.provenance %}· {{ source.provenance }}{% endif %}
+          · {{ source.entry_count }} {{ 'elemento di titolarità' if source.entry_count == 1 else 'elementi di titolarità' }}
+        </li>
+        {% endfor %}
+      </ul>
     </div>
     {% endif %}
 
@@ -141,6 +256,7 @@
         <h3 class="h6"><i class="fas fa-landmark me-2" aria-hidden="true"></i>Ispezioni ipotecarie del soggetto ({{ profile.subject_inspections|length }})</h3>
         {% if profile.subject_inspections %}
         <div class="d-flex flex-wrap gap-2">{% for d in profile.subject_inspections %}{{ doc_chip(d) }}{% endfor %}</div>
+        {% if not embedded %}{{ inspection_extraction_details(profile.subject_inspections, false) }}{% endif %}
         {% else %}
         <p class="text-muted mb-0">Nessuna ispezione ipotecaria archiviata in cui compaia questo soggetto.</p>
         {% endif %}
@@ -252,7 +368,7 @@
 
         {% if parcel.ownership %}
         <div class="mb-3">
-          <div class="small text-muted mb-1"><i class="fas fa-file-circle-check me-1" aria-hidden="true"></i>Visure per immobile e dati completi</div>
+            <div class="small text-muted mb-1"><i class="fas fa-file-circle-check me-1" aria-hidden="true"></i>Visure per immobile e dati completi</div>
           {% for o in parcel.ownership %}
           <div class="border rounded p-3 mb-3">
             <div class="d-flex flex-wrap align-items-center gap-2 mb-3">
@@ -280,6 +396,14 @@
             {% endif %}
 
             {{ property_history(o.view) }}
+            <div class="alert alert-light border py-2 px-3 mb-3 small" data-ownership-source-document="{{ o.document_id }}">
+              <i class="fas fa-link me-1 text-primary" aria-hidden="true"></i>
+              <strong>Fonte degli atti di titolarità:</strong>
+              <a href="/documents/{{ o.document_id }}">visura per immobile #{{ o.document_id }}</a>
+              {% if o.as_of %}· situazione al {{ o.as_of }}{% endif %}
+              {% if o.view.header.provenance %}· {{ o.view.header.provenance }}{% endif %}
+              <span class="text-muted">. Gli eventi e i titolari nella cronologia seguente provengono da questo documento.</span>
+            </div>
             {{ ownership_history(o.view, color='#0d6efd', badge='bg-primary') }}
 
             <details class="small mt-2">
@@ -304,6 +428,7 @@
             {% endif %}
           </div>
           {% endfor %}
+          {{ mortgage_documents_in_ownership(parcel.documents.ispezioni) }}
         </div>
         {% endif %}
 
@@ -315,6 +440,7 @@
         {% else %}
         <div class="row g-2 pb-2">
           {% for kind, label, icon in profile.kinds %}
+          {% if kind != 'ispezioni' or not parcel.ownership %}
           <div class="col-md-6 col-xl-3">
             <div class="small text-muted mb-1"><i class="fas {{ icon }} me-1" aria-hidden="true"></i>{{ label }}</div>
             <div class="d-flex flex-wrap gap-1">
@@ -330,6 +456,7 @@
               {% if not parcel.documents.get(kind, []) and not parcel_requests.get(kind, []) and not (kind == 'mappe' and parcel.has_map) %}<span class="small text-muted">non archiviata</span>{% endif %}
             </div>
           </div>
+          {% endif %}
           {% endfor %}
           {% if parcel.other_units_documents %}
           <div class="col-12 small text-muted">+{{ parcel.other_units_documents }} documenti di altre unità della stessa particella (non intestate a questo soggetto).</div>
@@ -342,6 +469,7 @@
             {% if parcel.map_document_id %}<a class="btn btn-sm btn-outline-secondary" href="/documents/{{ parcel.map_document_id }}"><i class="fas fa-map-location-dot me-1" aria-hidden="true"></i>Mappa dalla visura</a>{% endif %}
             {% if parcel.is_building and parcel.map_query %}<a class="btn btn-sm btn-outline-secondary" href="/3d?q={{ parcel.map_query|urlencode }}"><i class="fas fa-cube me-1" aria-hidden="true"></i>Vista 3D</a>{% endif %}
           </div>
+          {% if not parcel.ownership %}{{ inspection_extraction_details(parcel.documents.ispezioni) }}{% endif %}
         </div>
         {% endif %}
       </details>
@@ -485,6 +613,14 @@
             {% endif %}
 
             {{ property_history(o.view) }}
+            <div class="alert alert-light border py-2 px-3 mb-3 small" data-ownership-source-document="{{ o.document_id }}">
+              <i class="fas fa-link me-1 text-primary" aria-hidden="true"></i>
+              <strong>Fonte degli atti di titolarità:</strong>
+              <a href="/documents/{{ o.document_id }}">visura per immobile #{{ o.document_id }}</a>
+              {% if o.as_of %}· situazione al {{ o.as_of }}{% endif %}
+              {% if o.view.header.provenance %}· {{ o.view.header.provenance }}{% endif %}
+              <span class="text-muted">. Gli eventi e i titolari nella cronologia seguente provengono da questo documento.</span>
+            </div>
             {{ ownership_history(o.view, color='#0d6efd', badge='bg-primary') }}
 
             <details class="small mt-2">
@@ -509,6 +645,7 @@
             {% endif %}
           </div>
           {% endfor %}
+          {{ mortgage_documents_in_ownership(parcel.documents.ispezioni) }}
         </div>
         {% endif %}
 
@@ -520,6 +657,7 @@
         {% else %}
         <div class="row g-2 pb-2">
           {% for kind, label, icon in profile.kinds %}
+          {% if kind != 'ispezioni' or not parcel.ownership %}
           <div class="col-md-6 col-xl-3">
             <div class="small text-muted mb-1"><i class="fas {{ icon }} me-1" aria-hidden="true"></i>{{ label }}</div>
             <div class="d-flex flex-wrap gap-1">
@@ -535,6 +673,7 @@
               {% if not parcel.documents.get(kind, []) and not parcel_requests.get(kind, []) and not (kind == 'mappe' and parcel.has_map) %}<span class="small text-muted">non archiviata</span>{% endif %}
             </div>
           </div>
+          {% endif %}
           {% endfor %}
           {% if parcel.other_units_documents %}
           <div class="col-12 small text-muted">+{{ parcel.other_units_documents }} documenti di altre unità della stessa particella (non intestate a questo soggetto).</div>
@@ -547,6 +686,7 @@
             {% if parcel.map_document_id %}<a class="btn btn-sm btn-outline-secondary" href="/documents/{{ parcel.map_document_id }}"><i class="fas fa-map-location-dot me-1" aria-hidden="true"></i>Mappa dalla visura</a>{% endif %}
             {% if parcel.is_building and parcel.map_query %}<a class="btn btn-sm btn-outline-secondary" href="/3d?q={{ parcel.map_query|urlencode }}"><i class="fas fa-cube me-1" aria-hidden="true"></i>Vista 3D</a>{% endif %}
           </div>
+          {% if not parcel.ownership %}{{ inspection_extraction_details(parcel.documents.ispezioni) }}{% endif %}
         </div>
         {% endif %}
       </details>

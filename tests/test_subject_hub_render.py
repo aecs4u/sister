@@ -52,12 +52,44 @@ async def test_subject_profile_attaches_cadastral_inspection_and_map_requests(mo
     monkeypatch.setattr(web, "get_db_properties_for_response", properties)
     monkeypatch.setattr(web, "get_db_owners_for_response", lambda _request_id: _resolved([]))
     monkeypatch.setattr(web, "get_subject_name", lambda _code: _resolved("Mario Rossi"))
-    monkeypatch.setattr(web, "find_parcel_document_ids", lambda _keys: _resolved({}))
+    monkeypatch.setattr(web, "find_parcel_document_ids", lambda _keys: _resolved({parcel_key: {381}}))
     monkeypatch.setattr(web, "find_parcel_request_records", parcel_requests)
     monkeypatch.setattr(web, "find_parcels_with_geometry", lambda _keys: _resolved(set()))
     monkeypatch.setattr(web, "find_subject_inspection_document_ids", lambda _code: _resolved(set()))
+    monkeypatch.setattr(
+        web,
+        "get_document_structured_extraction",
+        lambda _document_id: _resolved({
+            "extraction": {"id": 5, "schema_name": "ispezione_ipotecaria_schema"},
+            "inspection": {
+                "note_type": "trascrizione",
+                "registro_generale": 17025,
+                "registro_particolare": 12336,
+                "party_favore_count": 1,
+                "party_contro_count": 1,
+            },
+            "title": {"title_type": "compravendita", "description": "Atto notarile"},
+            "lien": None,
+            "units": [{"properties": [{"sheet": 103, "parcel": 1714}]}],
+            "parties": [{"role": "a_favore"}, {"role": "contro"}],
+        }),
+    )
+    indexed = [{
+        "id": 381,
+        "document_type": "ispezione_ipotecaria",
+        "file_format": "PDF",
+        "filename": "isp_RA_FG103_PT1714_SUB2_T127709_2026_RP12336.pdf",
+        "file_size": 100,
+        "created_at": "2026-10-02T12:00:00",
+        "foglio": "103",
+        "particella": "1714",
+        "subalterno": "2",
+        "sezione_urbana": "RA",
+        "provincia": "RA",
+        "comune": "RAVENNA",
+    }]
 
-    profile = await web._subject_query_profile(code, [], [], page=1)
+    profile = await web._subject_query_profile(code, [], indexed, page=1)
     parcel = profile["map_parcels"][0]
 
     assert {item["request_id"] for item in parcel["requests"]["mappe"]} == {"map-123"}
@@ -65,10 +97,200 @@ async def test_subject_profile_attaches_cadastral_inspection_and_map_requests(mo
     assert parcel["requests"]["ispezioni_catastali"][0]["label"] == "Ispezione catastale"
     assert profile["totals"]["with_map"] == 1
     assert profile["totals"]["with_ispezioni_catastali"] == 1
+    assert profile["totals"]["with_ispezioni"] == 1
+    assert parcel["documents"]["ispezioni"][0]["extraction"]["kind_label"] == "Nota di trascrizione"
+    assert web._subject_cadastral_group_usage(profile) == {
+        381: ["Estrazione di ispezione o nota mostrata nella scheda della particella"]
+    }
 
 
 async def _resolved(value):
     return value
+
+
+@pytest.mark.asyncio
+async def test_subject_document_archive_keeps_every_physical_file_and_provenance(monkeypatch, tmp_path):
+    p7m = tmp_path / "vi_sto_RA_FG103_PT1714_SUB8_2026-10-16.p7m"
+    p7m.write_bytes(b"signed")
+    missing_pdf = tmp_path / "vi_sto_RA_FG103_PT1714_SUB8_2026-10-16.pdf"
+    indexed = [
+        {
+            "id": 101,
+            "document_type": "visura_fabbricati",
+            "file_format": "P7M",
+            "filename": p7m.name,
+            "file_path": str(p7m),
+            "file_size": 6,
+            "oggetto": "Visura storica",
+            "foglio": "103",
+            "particella": "1714",
+            "subalterno": "8",
+            "sezione_urbana": "RA",
+            "provincia": "Ravenna",
+            "comune": "RAVENNA",
+        },
+        {
+            "id": 102,
+            "document_type": "visura_fabbricati",
+            "file_format": "PDF",
+            "filename": missing_pdf.name,
+            "file_path": str(missing_pdf),
+            "file_size": 12,
+            "oggetto": "Visura storica",
+            "foglio": "103",
+            "particella": "1714",
+            "subalterno": "8",
+            "sezione_urbana": "RA",
+            "provincia": "Ravenna",
+            "comune": "RAVENNA",
+        },
+    ]
+    monkeypatch.setattr(
+        web,
+        "find_subject_document_associations",
+        lambda _code: _resolved({
+            101: {
+                "sources": {"ownership", "property"},
+                "properties": [{
+                    "province": "RA",
+                    "municipality": "RAVENNA",
+                    "section": "RA",
+                    "sheet": "103",
+                    "parcel": "1714",
+                    "subunit": "8",
+                }],
+            }
+        }),
+    )
+    monkeypatch.setattr(web, "find_documents_with_extraction", lambda _ids: _resolved({101}))
+
+    archive = await web._subject_document_archive(
+        "RSSMRA70A01H501Z",
+        indexed,
+        {101: ["Dati catastali e titolarità dalla visura per immobile"]},
+    )
+
+    assert archive["document_count"] == 1
+    assert archive["file_count"] == 2
+    assert archive["available_file_count"] == 1
+    assert archive["missing_file_count"] == 1
+    document = archive["categories"][0]["documents"][0]
+    assert document["source_labels"] == ["Titolarità", "Immobile del soggetto"]
+    assert document["property_labels"] == ["RAVENNA · RA · Sez. RA · Fg 103 · P.lla 1714 · Sub 8"]
+    assert document["has_extraction"] is True
+    assert document["used_in_cadastral_groups"] is True
+    assert document["cadastral_group_usage_labels"] == [
+        "Dati catastali e titolarità dalla visura per immobile"
+    ]
+    assert [(item["id"], item["available"]) for item in document["files"]] == [(101, True), (102, False)]
+
+
+def test_subject_document_archive_template_lists_available_and_database_only_files():
+    template_root = Path(__file__).parents[1] / "sister" / "templates"
+    env = Environment(loader=FileSystemLoader(str(template_root)), autoescape=True)
+    template = env.from_string(
+        '{% from "components/subject_document_archive.html" import subject_document_archive %}'
+        "{{ subject_document_archive(archive) }}"
+    )
+    archive = {
+        "document_count": 1,
+        "file_count": 2,
+        "available_file_count": 1,
+        "missing_file_count": 1,
+        "categories": [{
+            "key": "property_visure",
+            "label": "Visure per immobile ed elenchi",
+            "icon": "fa-file-lines",
+            "documents": [{
+                "id": 101,
+                "title": "Visura storica",
+                "type": "visura_fabbricati",
+                "date": "16/10/2026",
+                "source_labels": ["Titolarità", "Immobile del soggetto"],
+                "property_labels": ["RAVENNA · RA · Sez. RA · Fg 103 · P.lla 1714 · Sub 8"],
+                "has_extraction": True,
+                "used_in_cadastral_groups": True,
+                "cadastral_group_usage_labels": [
+                    "Dati catastali e titolarità dalla visura per immobile"
+                ],
+                "files": [
+                    {
+                        "id": 101,
+                        "filename": "visura.p7m",
+                        "file_format": "P7M",
+                        "size_human": "6 B",
+                        "available": True,
+                        "view_url": "/documents/101/view",
+                        "download_url": "/documents/101/download",
+                    },
+                    {
+                        "id": 102,
+                        "filename": "visura.pdf",
+                        "file_format": "PDF",
+                        "size_human": "12 B",
+                        "available": False,
+                        "view_url": "",
+                        "download_url": "",
+                    },
+                ],
+            }],
+        }],
+    }
+
+    html = template.render(archive=archive)
+
+    assert "Tutti i documenti del soggetto e degli immobili" in html
+    assert "incluse quelle precedenti" in html
+    assert 'href="/documents/101/view"' in html
+    assert 'href="/documents/101/download"' in html
+    assert "visura.p7m" in html and "visura.pdf" in html
+    assert "record conserva" in html
+    assert "RAVENNA · RA · Sez. RA · Fg 103 · P.lla 1714 · Sub 8" in html
+    assert "Dati usati nei gruppi catastali" in html
+    assert "Dati catastali e titolarità dalla visura per immobile" in html
+    assert "Estrazione strutturata presente" in html
+
+
+def test_mortgage_extraction_summary_renders_note_data_inside_cadastral_group():
+    template_root = Path(__file__).parents[1] / "sister" / "templates"
+    theme_template_root = Path(aecs4u_theme.__file__).parent / "templates"
+    env = Environment(
+        loader=ChoiceLoader([FileSystemLoader(str(template_root)), FileSystemLoader(str(theme_template_root))]),
+        autoescape=True,
+    )
+    template = env.from_string(
+        '{% from "components/subject_hub.html" import inspection_extraction_details %}'
+        "{{ inspection_extraction_details(documents) }}"
+    )
+    documents = [{
+        "id": 381,
+        "extraction": {
+            "kind_label": "Nota di trascrizione",
+            "registration": "RG 17025 · RP 12336",
+            "presentation": "Presentazione 7 · 2026-02-05",
+            "property_count": 1,
+            "party_count": 2,
+            "party_favore_count": 1,
+            "party_contro_count": 1,
+            "title_type": "compravendita",
+            "title_description": "Atto notarile",
+            "title_date": "2026-01-30",
+            "lien_type": "",
+            "lien_principal_euro": None,
+            "lien_total_euro": None,
+            "lien_rank": None,
+            "schema_name": "ispezione_ipotecaria_schema",
+        },
+    }]
+
+    html = template.render(documents=documents)
+
+    assert 'data-mortgage-extraction-document="381"' in html
+    assert "Nota di trascrizione" in html
+    assert "RG 17025 · RP 12336" in html
+    assert "Atto notarile" in html
+    assert "usata nel gruppo" in html
+    assert "1 a favore, 1 contro" in html
 
 
 @pytest.mark.asyncio

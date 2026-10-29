@@ -5,6 +5,7 @@
 #}
 {% extends land_map_parent %}
 {% from "components/cadastral_assets.html" import cadastral_asset_kpis, cadastral_table_scripts, cadastral_asset_enrichment_data, cadastral_asset_enrichment_scripts %}
+{% from "components/subject_document_archive.html" import subject_document_archive %}
 {% from "land_registry/components/document_parcel_map.html" import document_parcel_map_assets, document_parcel_map_scripts, document_parcel_map %}
 {% set subject_documents = subject_documents|default([], true) %}
 {% set subject_fiscal_code = subject_fiscal_code|default('') %}
@@ -18,6 +19,7 @@
 {# the subject's saved soggetto query (web._subject_query_profile), when there is one: its elenco immobili completes the groups of the
    visura layout (web._subject_tree_with_elenco); here its coverage summary and the parcels something is archived for #}
 {% set subject_hub = subject_hub|default(none) %}
+{% set subject_archive = subject_archive|default(none) %}
 
 {# The subject's visure as a bullet list (the theme's subject_document_nav is a row of buttons), shown at the page bottom.
    Each entry carries what the page's "Documento" card showed, so that card is not repeated for the visura on screen. #}
@@ -141,6 +143,7 @@
         {% if subject_portfolio and not subject_documents %}{{ subject_portfolio_summary(subject_portfolio) }}{% endif %}
         {{ super() }}
         {% if land_map_parent == 'catasto/visura_soggetto_archive.html' %}{{ manual_property_valuation_panel(land_registry_kpis) }}{% endif %}
+        {{ subject_document_archive(subject_archive) }}
         {% if subject_documents %}{{ subject_visure_list(subject_documents, subject_fiscal_code, subject_route_prefix, subject_document_id, subject_portfolio) }}{% endif %}
         {% if land_registry_kpis or land_registry_history %}
         {{ cadastral_asset_enrichment_data(land_registry_kpis, land_registry_history, {
@@ -170,6 +173,7 @@
 {% if subject_portfolio and not subject_documents %}{{ subject_portfolio_summary(subject_portfolio) }}{% endif %}
 {{ super() }}
 {% if land_map_parent == 'catasto/visura_soggetto_archive.html' %}{{ manual_property_valuation_panel(land_registry_kpis) }}{% endif %}
+{{ subject_document_archive(subject_archive) }}
 {% if land_map_slot == 'content' %}
 <div class="container-fluid py-3">
     {{ document_parcel_map(land_registry_map, labels=subject_map_labels) }}

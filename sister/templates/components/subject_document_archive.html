@@ -1,0 +1,137 @@
+{# Exhaustive archive inventory for /persons and /companies entity pages. #}
+
+{% macro subject_document_archive(archive) -%}
+{% if archive %}
+<section class="container-fluid py-3" id="documenti-archivio-completo" aria-labelledby="subject-document-archive-heading">
+  <div class="card border-0 shadow-sm">
+    <div class="card-body">
+      <div class="d-flex flex-wrap align-items-start gap-2 mb-3">
+        <div>
+          <h2 class="h5 mb-1" id="subject-document-archive-heading">
+            <i class="fas fa-box-archive me-2" aria-hidden="true"></i>Tutti i documenti del soggetto e degli immobili
+          </h2>
+          <p class="small text-muted mb-0">
+            Inventario completo ricavato dai collegamenti al soggetto, dalle titolarità, dalle ispezioni ipotecarie
+            e da tutti gli immobili presenti nelle ricerche salvate, incluse quelle precedenti.
+          </p>
+        </div>
+        <div class="d-flex flex-wrap gap-1 ms-auto" aria-label="Conteggi documenti">
+          <span class="badge text-bg-primary">{{ archive.document_count }} {{ 'documento logico' if archive.document_count == 1 else 'documenti logici' }}</span>
+          <span class="badge text-bg-secondary">{{ archive.file_count }} record/file DB</span>
+          <span class="badge text-bg-success">{{ archive.available_file_count }} disponibili</span>
+        </div>
+      </div>
+
+      {% if archive.missing_file_count %}
+      <div class="alert alert-warning py-2 small" role="status">
+        <i class="fas fa-triangle-exclamation me-1" aria-hidden="true"></i>
+        {{ archive.missing_file_count }} {{ 'record conserva' if archive.missing_file_count == 1 else 'record conservano' }}
+        metadati o storia nel database, ma il file originale non è presente nell'archivio su disco.
+      </div>
+      {% endif %}
+
+      {% if archive.categories %}
+      <div class="accordion" id="subject-document-archive-categories">
+        {% for category in archive.categories %}
+        {% set category_id = 'subject-document-category-' ~ category.key %}
+        <div class="accordion-item">
+          <h3 class="accordion-header" id="{{ category_id }}-heading">
+            <button class="accordion-button{% if not loop.first %} collapsed{% endif %}" type="button"
+                    data-bs-toggle="collapse" data-bs-target="#{{ category_id }}"
+                    aria-expanded="{{ 'true' if loop.first else 'false' }}" aria-controls="{{ category_id }}">
+              <i class="fas {{ category.icon }} me-2" aria-hidden="true"></i>{{ category.label }}
+              <span class="badge text-bg-secondary ms-2">{{ category.documents|length }}</span>
+            </button>
+          </h3>
+          <div id="{{ category_id }}" class="accordion-collapse collapse{% if loop.first %} show{% endif %}"
+               aria-labelledby="{{ category_id }}-heading">
+            <div class="accordion-body p-0">
+              <div class="table-responsive">
+                <table class="table table-sm align-middle mb-0">
+                  <thead>
+                    <tr>
+                      <th scope="col">Documento e collegamento</th>
+                      <th scope="col">Immobile</th>
+                      <th scope="col">Data / tipo</th>
+                      <th scope="col">Dati usati nei gruppi catastali</th>
+                      <th scope="col">File nel database</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {% for document in category.documents %}
+                    <tr>
+                      <td>
+                        <a class="fw-semibold" href="/documents/{{ document.id }}">{{ document.title }}</a>
+                        <div class="small text-muted">ID logico <code>{{ document.id }}</code></div>
+                        {% if document.source_labels %}
+                        <div class="d-flex flex-wrap gap-1 mt-1">
+                          {% for label in document.source_labels %}<span class="badge text-bg-light border fw-normal">{{ label }}</span>{% endfor %}
+                        </div>
+                        {% endif %}
+                      </td>
+                      <td class="small">
+                        {% if document.property_labels %}
+                        <ul class="list-unstyled mb-0">
+                          {% for label in document.property_labels %}<li>{{ label }}</li>{% endfor %}
+                        </ul>
+                        {% else %}<span class="text-muted">—</span>{% endif %}
+                      </td>
+                      <td class="small">
+                        <div>{{ document.date or '—' }}</div>
+                        <code>{{ document.type or 'non classificato' }}</code>
+                      </td>
+                      <td class="small">
+                        {% if document.used_in_cadastral_groups %}
+                        <span class="badge text-bg-success"><i class="fas fa-check me-1" aria-hidden="true"></i>Sì</span>
+                        <ul class="list-unstyled mb-0 mt-1">
+                          {% for label in document.cadastral_group_usage_labels %}<li>{{ label }}</li>{% endfor %}
+                        </ul>
+                        {% if document.has_extraction %}<div class="text-muted mt-1">Estrazione strutturata presente.</div>{% endif %}
+                        {% elif document.has_extraction %}
+                        <span class="badge text-bg-warning"><i class="fas fa-minus me-1" aria-hidden="true"></i>No</span>
+                        <div class="text-muted mt-1">Estrazione strutturata disponibile, ma non usata nei gruppi mostrati.</div>
+                        {% else %}
+                        <span class="badge text-bg-light border text-dark"><i class="fas fa-minus me-1" aria-hidden="true"></i>No</span>
+                        <div class="text-muted mt-1">Nessuna estrazione strutturata disponibile.</div>
+                        {% endif %}
+                      </td>
+                      <td>
+                        <ul class="list-unstyled mb-0">
+                          {% for file in document.files %}
+                          <li class="mb-1">
+                            {% if file.available %}
+                            <a href="{{ file.view_url }}" title="Apri {{ file.filename }}">
+                              <i class="fas fa-file-arrow-up me-1" aria-hidden="true"></i>{{ file.filename }}
+                            </a>
+                            <a class="small ms-1" href="{{ file.download_url }}" title="Scarica {{ file.filename }}">
+                              <i class="fas fa-download" aria-label="Scarica"></i>
+                            </a>
+                            {% else %}
+                            <a class="text-danger" href="/documents/{{ file.id }}?template=result_detail"
+                               title="Apri il record: il file non è presente su disco">
+                              <i class="fas fa-file-circle-xmark me-1" aria-hidden="true"></i>{{ file.filename }}
+                            </a>
+                            {% endif %}
+                            <span class="small text-muted">· {{ file.file_format or '?' }}{% if file.size_human %} · {{ file.size_human }}{% endif %} · ID <code>{{ file.id }}</code></span>
+                          </li>
+                          {% endfor %}
+                        </ul>
+                      </td>
+                    </tr>
+                    {% endfor %}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+      {% else %}
+      <p class="text-muted mb-0">Nessun documento collegato al soggetto o ai suoi immobili è presente nel database.</p>
+      {% endif %}
+    </div>
+  </div>
+</section>
+{% endif %}
+{%- endmacro %}
