@@ -35,6 +35,23 @@ def _fake_request():
     )
 
 
+def test_hub_map_geocoding_retries_rural_address_without_unit_details():
+    queries = web._hub_map_geocode_queries(
+        "CONTRADA CALA FRANCESE n. SNC Piano T",
+        "LAMPEDUSA E LINOSA",
+        "AG",
+    )
+
+    assert queries == [
+        "CONTRADA CALA FRANCESE, LAMPEDUSA E LINOSA, Agrigento, Italia",
+        "CALA FRANCESE, LAMPEDUSA E LINOSA, Agrigento, Italia",
+        "CALA FRANCESE, LAMPEDUSA, Agrigento, Italia",
+    ]
+    assert web._hub_map_geocode_query(
+        "VIA FRANCESCO CRISPI n. 26 Piano T", "LAMPEDUSA E LINOSA", "AG"
+    ) == "VIA FRANCESCO CRISPI 26, LAMPEDUSA E LINOSA, Agrigento, Italia"
+
+
 @pytest.mark.asyncio
 async def test_web_results_passes_extended_filters_and_urls(monkeypatch):
     request = _fake_request()

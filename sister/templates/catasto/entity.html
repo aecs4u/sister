@@ -6,6 +6,8 @@
 {% extends land_map_parent %}
 {% from "components/cadastral_assets.html" import cadastral_asset_kpis, cadastral_table_scripts, cadastral_asset_enrichment_data, cadastral_asset_enrichment_scripts %}
 {% from "components/subject_document_archive.html" import subject_document_archive %}
+{% from "components/subject_favorites.html" import subject_favorite_button, subject_favorites_js %}
+{% from "components/subject_notes.html" import subject_note_panel, subject_notes_js %}
 {% from "land_registry/components/document_parcel_map.html" import document_parcel_map_assets, document_parcel_map_scripts, document_parcel_map %}
 {% set subject_documents = subject_documents|default([], true) %}
 {% set subject_fiscal_code = subject_fiscal_code|default('') %}
@@ -13,8 +15,14 @@
 {% set subject_document_id = subject_document_id|default(none) %}
 {% set subject_portfolio = subject_portfolio|default(none) %}
 {% set subject_map_labels = {
-    'description_listed': 'La mappa mostra le zone OMI di tutti i comuni in cui sono presenti immobili di proprietà (confini 2018/2). In viola è indicata la zona che copre la porzione maggiore di una particella catastale di proprietà.',
-    'description_unmapped': 'Le particelle senza geometria catastale sono mostrate con un indicatore approssimativo riferito al comune; usa “Adatta tutte le particelle” per vederle insieme.'
+    'aria_listed': 'Mappa catastale di {parcel_count} particelle elencate, {mapped_parcel_count} con una posizione disponibile',
+    'basemap_control': 'Seleziona la mappa di base',
+    'street_view_control': 'Apri Google Street View al centro della mappa',
+    'description_listed': 'La mappa mostra le zone OMI di tutti i comuni in cui sono presenti immobili di proprietà (confini 2018/2). In viola è indicata la zona che copre la porzione maggiore di una particella catastale di proprietà. I marcatori arancioni tratteggiati derivano da indirizzi geocodificati e indicano posizioni approssimative.',
+    'mapped_count_listed': 'Trovate {mapped_parcel_count} di {parcel_count} particelle con geometria o posizione indicativa da indirizzo',
+    'description_zoom': 'A zoom ridotto i marcatori riportano comune e codice catastale, foglio e particella; ingrandisci per vedere meglio i confini.',
+    'description_unmapped': 'Le particelle senza geometria catastale hanno un marcatore indicativo solo se è disponibile un indirizzo civico geocodificato. Senza una posizione attendibile, il riferimento è elencato sotto la mappa senza marcatore. Il punto del comune serve solo a inquadrare la mappa e non indica la particella.',
+    'map_layers': {'streets': 'Stradale', 'satellite': 'Satellite', 'terrain': 'Rilievo', 'cadastral': 'Confini catastali', 'parcel': 'Particella'}
 } %}
 {# the subject's saved soggetto query (web._subject_query_profile), when there is one: its elenco immobili completes the groups of the
    visura layout (web._subject_tree_with_elenco); here its coverage summary and the parcels something is archived for #}
@@ -133,10 +141,19 @@
 {{ super() }}
 {{ document_parcel_map_assets(land_registry_map, include_layout=land_map_slot == 'sidecar' and land_registry_kpis) }}
 <link rel="stylesheet" href="/static/css/pages/document_visura.css?v=20261027b">
+<link rel="stylesheet" href="/static/css/pages/subject_notes.css?v=20261029a">
 {% endblock %}
 
 {# Layouts that end in a single `content` block get the map after it ... #}
 {% block content %}
+{% if subject_fiscal_code and subject_route_prefix in ['/persons', '/companies'] %}
+<div class="container-fluid pt-3 no-print" aria-label="Azioni del soggetto">
+    <div class="d-flex flex-wrap align-items-start gap-2">
+        {{ subject_favorite_button(subject_fiscal_code, subject_favorite_enabled|default(false), subject_is_favorite|default(false), 'company' if subject_route_prefix == '/companies' else 'person') }}
+        {{ subject_note_panel(subject_fiscal_code, subject_favorite_enabled|default(false), 'company' if subject_route_prefix == '/companies' else 'person') }}
+    </div>
+</div>
+{% endif %}
 {% if land_map_slot == 'sidecar' and (land_registry_map or land_registry_kpis) %}
 <div class="document-land-map-layout">
     <div class="document-land-map-content">
@@ -193,6 +210,10 @@
 
 {% block extra_js %}
 {{ super() }}
+{% if subject_fiscal_code and subject_route_prefix in ['/persons', '/companies'] %}
+{{ subject_favorites_js(csp_nonce) }}
+{{ subject_notes_js(csp_nonce) }}
+{% endif %}
 {% if land_map_parent == 'catasto/visura_soggetto_archive.html' and land_registry_kpis %}
 {# The shared theme tags these tables by their header count. Tag by meaning first, so added theme columns do not break enrichment. #}
 <script nonce="{{ csp_nonce }}">
@@ -213,7 +234,7 @@
 {% endif %}
 {{ cadastral_table_scripts() }}
 {{ document_parcel_map_scripts(land_registry_map, nonce=csp_nonce,
-    renderer_url='/land-registry/static/document_parcel_map.js?v=20261028-omi-zone-owned-markers') }}
+    renderer_url='/land-registry/static/document_parcel_map.js?v=20261029-listed-viewport-unmapped-v6') }}
 {# PDF export: the page's own print layout rendered by headless Chromium (/documents/<id>/pdf). #}
 {# PDF of the page, always offered: a subject page exports itself (visura + elenco groups, selected visura kept), others their document #}
 {% if doc and doc.query_only or subject_fiscal_code %}
@@ -237,11 +258,54 @@
       ? 'Scarica il report completo del soggetto in PDF'
       : 'Scarica la visura in PDF (A4 orizzontale)';
     link.innerHTML = '<i class="fas fa-file-pdf me-2" aria-hidden="true"></i>' + (completeSubjectReport ? 'Report completo' : 'PDF');
-    if (printButton) { printButton.before(link); return; }
-    // without a print button the link still goes next to the hero's other actions
-    var host = document.querySelector('.page-hero .d-flex .btn');
-    if (host) host.before(link);
-    else (document.querySelector('.page-hero') || document.body).appendChild(link);
+
+    var socialButton = document.createElement('button');
+    socialButton.type = 'button';
+    socialButton.className = link.className;
+    socialButton.dataset.documentShare = 'true';
+    socialButton.title = 'Condividi il link del report sui social';
+    socialButton.innerHTML = '<i class="fas fa-share-nodes me-2" aria-hidden="true"></i>Social';
+    socialButton.addEventListener('click', async function () {
+      var heading = document.querySelector('.page-hero h1, .page-hero .display-6');
+      var shareTitle = heading ? heading.textContent.trim() : document.title;
+      var shareData = { title: shareTitle, text: shareTitle, url: window.location.href };
+      if (navigator.share) {
+        try {
+          await navigator.share(shareData);
+          return;
+        } catch (error) {
+          if (error && error.name === 'AbortError') return;
+          console.warn('Report sharing failed:', error);
+        }
+      }
+      try {
+        await navigator.clipboard.writeText(shareData.url);
+        socialButton.innerHTML = '<i class="fas fa-check me-2" aria-hidden="true"></i>Link copied';
+        window.setTimeout(function () {
+          socialButton.innerHTML = '<i class="fas fa-share-nodes me-2" aria-hidden="true"></i>Social';
+        }, 1800);
+      } catch (error) {
+        window.prompt('Copy this report link to share it:', shareData.url);
+      }
+    });
+
+    var emailLink = document.createElement('a');
+    emailLink.className = link.className;
+    emailLink.dataset.documentEmail = 'true';
+    emailLink.title = 'Invia il link del report via email';
+    emailLink.innerHTML = '<i class="fas fa-envelope me-2" aria-hidden="true"></i>Send email';
+    var emailHeading = document.querySelector('.page-hero h1, .page-hero .display-6');
+    var emailTitle = emailHeading ? emailHeading.textContent.trim() : document.title;
+    var emailSubject = (completeSubjectReport ? 'Report: ' : 'Visura: ') + emailTitle;
+    var emailBody = 'Ciao,\n\npuoi consultare il documento qui: ' + window.location.href;
+    emailLink.href = 'mailto:?subject=' + encodeURIComponent(emailSubject) + '&body=' + encodeURIComponent(emailBody);
+
+    var host = printButton || document.querySelector('.page-hero .d-flex .btn');
+    if (host) {
+      host.before(link, socialButton, emailLink);
+      return;
+    }
+    (document.querySelector('.page-hero') || document.body).append(link, socialButton, emailLink);
 })();
 </script>
 {% endif %}
@@ -254,6 +318,6 @@
 {% if manual_valuation_enabled %}
 <script src="/static/js/manual_property_valuations.js?v=20261109b" defer></script>
 {% endif %}
-{% if land_registry_kpis %}<script src="/static/js/property_omi_selections.js?v=20261027d" defer></script>{% endif %}
+{% if land_registry_kpis %}<script src="/static/js/property_omi_selections.js?v=20261029a" defer></script>{% endif %}
 {% endif %}
 {% endblock %}

@@ -1,0 +1,133 @@
+{% macro subject_note_panel(subject_code, enabled=true, subject_type='company') %}
+{% set note_url = '/' ~ ('companies' if subject_type == 'company' else 'persons') ~ '/' ~ subject_code ~ '/note' %}
+<div class="subject-note-panel" data-subject-note data-note-url="{{ note_url }}">
+    <button type="button" class="btn btn-sm btn-outline-secondary" data-subject-note-toggle
+            aria-expanded="false" title="Add a private note to this profile"
+            {% if not enabled %}disabled title="Sign in to save notes"{% endif %}>
+        <i class="far fa-sticky-note me-1" aria-hidden="true"></i>
+        <span data-subject-note-label>Add note</span>
+    </button>
+    <div class="subject-note-display border-start ps-2 mt-2" data-subject-note-display hidden></div>
+    <form class="mt-2" data-subject-note-form hidden>
+        <label class="form-label small mb-1" for="subject-note-{{ subject_type }}-{{ subject_code }}">Private note</label>
+        <textarea class="form-control form-control-sm" id="subject-note-{{ subject_type }}-{{ subject_code }}"
+                  rows="4" maxlength="5000" data-subject-note-input></textarea>
+        <div class="d-flex flex-wrap gap-2 mt-2">
+            <button type="submit" class="btn btn-sm btn-primary" data-subject-note-save>Save note</button>
+            <button type="button" class="btn btn-sm btn-outline-secondary" data-subject-note-cancel>Cancel</button>
+            <button type="button" class="btn btn-sm btn-outline-danger" data-subject-note-delete hidden>Delete note</button>
+        </div>
+    </form>
+    <div class="small mt-2" data-subject-note-status role="status" aria-live="polite"></div>
+</div>
+{% endmacro %}
+
+{% macro subject_notes_js(nonce='') %}
+<script nonce="{{ nonce }}">
+(function () {
+    function setStatus(panel, message, isError) {
+        var status = panel.querySelector('[data-subject-note-status]');
+        status.textContent = message;
+        status.classList.toggle('text-danger', !!isError);
+        status.classList.toggle('text-muted', !isError);
+    }
+
+    function updateNote(panel, note) {
+        panel.dataset.savedNote = note;
+        var display = panel.querySelector('[data-subject-note-display]');
+        var label = panel.querySelector('[data-subject-note-label]');
+        var toggle = panel.querySelector('[data-subject-note-toggle]');
+        var input = panel.querySelector('[data-subject-note-input]');
+        var removeButton = panel.querySelector('[data-subject-note-delete]');
+        display.textContent = note;
+        display.hidden = !note;
+        label.textContent = note ? 'Edit note' : 'Add note';
+        toggle.title = note ? 'Edit your private note' : 'Add a private note to this profile';
+        toggle.setAttribute('aria-label', note ? 'Edit note' : 'Add note');
+        input.value = note;
+        removeButton.hidden = !note;
+    }
+
+    function closeEditor(panel) {
+        var form = panel.querySelector('[data-subject-note-form]');
+        form.hidden = true;
+        panel.querySelector('[data-subject-note-toggle]').setAttribute('aria-expanded', 'false');
+        panel.querySelector('[data-subject-note-input]').value = panel.dataset.savedNote || '';
+    }
+
+    async function saveNote(panel, note) {
+        var saveButton = panel.querySelector('[data-subject-note-save]');
+        var cancelButton = panel.querySelector('[data-subject-note-cancel]');
+        var removeButton = panel.querySelector('[data-subject-note-delete]');
+        [saveButton, cancelButton, removeButton].forEach(function (button) { button.disabled = true; });
+        setStatus(panel, '', false);
+        try {
+            var response = await fetch(panel.dataset.noteUrl, {
+                method: 'PUT',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({note: note})
+            });
+            if (!response.ok) throw new Error('HTTP ' + response.status);
+            var result = await response.json();
+            updateNote(panel, result.note || '');
+            closeEditor(panel);
+            setStatus(panel, result.note ? 'Note saved.' : 'Note deleted.', false);
+        } catch (error) {
+            setStatus(panel, 'Unable to save note (' + error.message + ').', true);
+        } finally {
+            [saveButton, cancelButton, removeButton].forEach(function (button) { button.disabled = false; });
+        }
+    }
+
+    document.querySelectorAll('[data-subject-note]').forEach(function (panel) {
+        var toggle = panel.querySelector('[data-subject-note-toggle]');
+        if (!toggle || toggle.disabled) return;
+        toggle.disabled = true;
+        fetch(panel.dataset.noteUrl).then(function (response) {
+            if (!response.ok) throw new Error('HTTP ' + response.status);
+            return response.json();
+        }).then(function (result) {
+            updateNote(panel, result.note || '');
+            panel.dataset.noteLoaded = 'true';
+            toggle.disabled = false;
+        }).catch(function (error) {
+            setStatus(panel, 'Unable to load your note (' + error.message + '). Reload the page to try again.', true);
+        });
+    });
+
+    document.addEventListener('click', function (event) {
+        var toggle = event.target.closest('[data-subject-note-toggle]');
+        if (toggle && !toggle.disabled) {
+            var panel = toggle.closest('[data-subject-note]');
+            var form = panel.querySelector('[data-subject-note-form]');
+            form.hidden = !form.hidden;
+            toggle.setAttribute('aria-expanded', form.hidden ? 'false' : 'true');
+            setStatus(panel, '', false);
+            if (!form.hidden) panel.querySelector('[data-subject-note-input]').focus();
+            return;
+        }
+
+        var cancelButton = event.target.closest('[data-subject-note-cancel]');
+        if (cancelButton) {
+            var cancelPanel = cancelButton.closest('[data-subject-note]');
+            closeEditor(cancelPanel);
+            setStatus(cancelPanel, '', false);
+            return;
+        }
+
+        var removeButton = event.target.closest('[data-subject-note-delete]');
+        if (removeButton && !removeButton.disabled) {
+            saveNote(removeButton.closest('[data-subject-note]'), '');
+        }
+    });
+
+    document.addEventListener('submit', function (event) {
+        var form = event.target.closest('[data-subject-note-form]');
+        if (!form) return;
+        event.preventDefault();
+        var panel = form.closest('[data-subject-note]');
+        saveNote(panel, panel.querySelector('[data-subject-note-input]').value);
+    });
+})();
+</script>
+{% endmacro %}

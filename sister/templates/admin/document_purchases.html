@@ -1,0 +1,125 @@
+{% extends "_base.html" %}
+
+{% block page_title %}Acquisti documenti{% endblock %}
+
+{% block content %}
+<main class="container-fluid py-4">
+    <nav aria-label="breadcrumb" class="mb-3">
+        <ol class="breadcrumb">
+            <li class="breadcrumb-item"><a href="/admin">Amministrazione</a></li>
+            <li class="breadcrumb-item active" aria-current="page">Acquisti documenti</li>
+        </ol>
+    </nav>
+    <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+        <div>
+            <h1 class="h2 mb-1">Acquisti documenti</h1>
+            <p class="text-muted mb-0">Ogni riga concede a un utente l’accesso al documento indicato.</p>
+        </div>
+        <div class="d-flex gap-2">
+            <a class="btn btn-outline-primary" href="/admin/documents">Catalogo documenti</a>
+            <a class="btn btn-outline-secondary" href="/admin">Torna all’amministrazione</a>
+        </div>
+    </div>
+
+    {% if status == 'created' %}<div class="alert alert-success" role="status">Acquisto registrato.</div>
+    {% elif status == 'updated' %}<div class="alert alert-success" role="status">Acquisto aggiornato.</div>
+    {% elif status == 'deleted' %}<div class="alert alert-success" role="status">Accesso revocato.</div>
+    {% elif status == 'not_found' %}<div class="alert alert-info" role="status">L’acquisto era già stato rimosso.</div>{% endif %}
+    {% if error %}<div class="alert alert-danger" role="alert">{{ error }}</div>{% endif %}
+
+    <section class="card mb-4" aria-labelledby="new-purchase-heading">
+        <div class="card-body">
+            <h2 class="h5" id="new-purchase-heading">Registra un acquisto</h2>
+            <p class="small text-muted">Usa la chiave dell’account: <code>id:123</code>, <code>email:nome@example.com</code> oppure <code>username:nome</code>.</p>
+            <form method="post" action="/admin/document-purchases/create" class="row g-3 align-items-end">
+                {{ csrf_input() }}
+                <div class="col-12 col-lg-4">
+                    <label class="form-label" for="new-user-id">Utente</label>
+                    <input class="form-control" id="new-user-id" name="user_id" required maxlength="320" placeholder="id:123 o email:nome@example.com">
+                </div>
+                <div class="col-6 col-lg-2">
+                    <label class="form-label" for="new-document-id">ID documento</label>
+                    <input class="form-control" id="new-document-id" name="document_id" type="number" min="1" value="{{ selected_document_id }}" required>
+                    <a class="small" href="/admin/documents">Trova nel catalogo</a>
+                </div>
+                <div class="col-6 col-lg-2">
+                    <label class="form-label" for="new-purchased-at">Acquistato il</label>
+                    <input class="form-control" id="new-purchased-at" name="purchased_at" type="datetime-local">
+                </div>
+                <div class="col-12 col-lg-3">
+                    <label class="form-label" for="new-note">Nota</label>
+                    <input class="form-control" id="new-note" name="note" maxlength="2000">
+                </div>
+                <div class="col-12 col-lg-1">
+                    <button class="btn btn-primary w-100" type="submit">Crea</button>
+                </div>
+            </form>
+        </div>
+    </section>
+
+    <section class="card" aria-labelledby="purchase-list-heading">
+        <div class="card-body border-bottom">
+            <div class="d-flex flex-wrap justify-content-between align-items-center gap-3">
+                <h2 class="h5 mb-0" id="purchase-list-heading">Acquisti registrati <span class="badge text-bg-secondary">{{ purchases|length }}</span></h2>
+                <form method="get" action="/admin/document-purchases" class="d-flex gap-2">
+                    <label class="visually-hidden" for="purchase-search">Cerca</label>
+                    <input class="form-control" id="purchase-search" name="q" value="{{ query }}" placeholder="Utente, ID o nome file">
+                    <button class="btn btn-outline-primary" type="submit">Cerca</button>
+                </form>
+            </div>
+        </div>
+        <div class="table-responsive">
+            <table class="table table-striped table-hover align-middle mb-0">
+                <thead><tr><th>Utente</th><th>Documento</th><th>Acquistato il</th><th>Nota</th><th class="text-end">Azioni</th></tr></thead>
+                <tbody>
+                {% for purchase in purchases %}
+                    {% set row_id = loop.index %}
+                    <tr>
+                        <td colspan="5" class="p-0">
+                            <form method="post" action="/admin/document-purchases/update" class="row g-2 align-items-center m-0 p-2">
+                                {{ csrf_input() }}
+                                <input type="hidden" name="old_user_id" value="{{ purchase.user_id }}">
+                                <input type="hidden" name="old_document_id" value="{{ purchase.document_id }}">
+                                <div class="col-12 col-xl-3">
+                                    <label class="visually-hidden" for="user-{{ row_id }}">Utente</label>
+                                    <input class="form-control form-control-sm" id="user-{{ row_id }}" name="user_id" value="{{ purchase.user_id }}" required maxlength="320">
+                                </div>
+                                <div class="col-6 col-xl-1">
+                                    <label class="visually-hidden" for="doc-{{ row_id }}">ID documento</label>
+                                    <input class="form-control form-control-sm" id="doc-{{ row_id }}" name="document_id" type="number" min="1" value="{{ purchase.document_id }}" required>
+                                </div>
+                                <div class="col-6 col-xl-2">
+                                    <label class="visually-hidden" for="date-{{ row_id }}">Acquistato il</label>
+                                    <input class="form-control form-control-sm" id="date-{{ row_id }}" name="purchased_at" type="datetime-local" value="{{ purchase.purchased_at_local }}" required>
+                                </div>
+                                <div class="col-12 col-xl-3">
+                                    <span class="small d-block text-truncate" title="{{ purchase.title }}">#{{ purchase.document_id }} · {{ purchase.title }}</span>
+                                    <input class="form-control form-control-sm" name="note" value="{{ purchase.note }}" maxlength="2000" aria-label="Nota acquisto">
+                                </div>
+                                <div class="col-6 col-xl-1">
+                                    <button class="btn btn-sm btn-outline-primary w-100" type="submit">Salva</button>
+                                </div>
+                            </form>
+                        </td>
+                    </tr>
+                    <tr class="table-light">
+                        <td colspan="4" class="small text-muted pt-0">{{ purchase.filename }}{% if purchase.document_type %} · {{ purchase.document_type }}{% endif %} · registrato da {{ purchase.created_by or '—' }}</td>
+                        <td class="text-end pt-0">
+                            <form method="post" action="/admin/document-purchases/delete" onsubmit="return confirm('Revocare l’accesso a questo documento?')">
+                                {{ csrf_input() }}
+                                <input type="hidden" name="user_id" value="{{ purchase.user_id }}">
+                                <input type="hidden" name="document_id" value="{{ purchase.document_id }}">
+                                <button class="btn btn-sm btn-outline-danger" type="submit">Revoca</button>
+                            </form>
+                        </td>
+                    </tr>
+                {% else %}
+                    <tr><td colspan="5" class="text-center text-muted py-4">Nessun acquisto trovato.</td></tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% if purchases|length >= 500 %}<p class="small text-muted p-3 mb-0">Visualizzati al massimo 500 record. Usa la ricerca per restringere l’elenco.</p>{% endif %}
+    </section>
+</main>
+{% endblock %}

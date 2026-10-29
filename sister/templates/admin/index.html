@@ -1,0 +1,51 @@
+{% extends "_base.html" %}
+
+{% block page_title %}Amministrazione{% endblock %}
+
+{% block content %}
+<main class="container-fluid py-4">
+    <div class="page-hero mb-4">
+        <div class="container-fluid">
+            <h1 class="display-6 fw-bold mb-2"><i class="fas fa-shield-halved me-2"></i>Amministrazione</h1>
+            <p class="lead mb-0">Gestisci gli acquisti registrati e i documenti accessibili a ciascun utente.</p>
+        </div>
+    </div>
+    <div class="row g-3">
+        <div class="col-12 col-xl-3">
+            <section class="card h-100">
+                <div class="card-body">
+                    <h2 class="h5"><i class="fas fa-folder-open me-2"></i>Catalogo documenti</h2>
+                    <p>Trova un documento indicizzato, aprilo e controlla quanti utenti ne hanno accesso.</p>
+                    <a class="btn btn-primary" href="/admin/documents">Sfoglia documenti</a>
+                </div>
+            </section>
+        </div>
+        <div class="col-12 col-xl-3">
+            <section class="card h-100">
+                <div class="card-body">
+                    <h2 class="h5"><i class="fas fa-file-invoice-dollar me-2"></i>Acquisti documenti</h2>
+                    <p>Registra, modifica o revoca l’associazione tra un utente e un documento acquistato.</p>
+                    <a class="btn btn-outline-primary" href="/admin/document-purchases">Gestisci acquisti</a>
+                </div>
+            </section>
+        </div>
+        <div class="col-12 col-xl-3">
+            <section class="card h-100">
+                <div class="card-body">
+                    <h2 class="h5"><i class="fas fa-lock me-2"></i>Regola di accesso</h2>
+                    <p class="mb-0">Gli utenti vedono solo i documenti associati al proprio acquisto. Gli amministratori possono consultare tutti i documenti.</p>
+                </div>
+            </section>
+        </div>
+        <div class="col-12 col-xl-3">
+            <section class="card h-100">
+                <div class="card-body">
+                    <h2 class="h5"><i class="fas fa-clock-rotate-left me-2"></i>Registro accessi</h2>
+                    <p>Consulta chi ha registrato, modificato o revocato l’accesso ai documenti.</p>
+                    <a class="btn btn-outline-primary" href="/admin/activity">Apri registro</a>
+                </div>
+            </section>
+        </div>
+    </div>
+</main>
+{% endblock %}

@@ -14,14 +14,22 @@ else
 fi
 
 usage() {
-  printf 'Usage: %s SOURCE_LIST.md [BATCH_DIR]\n' "$0" >&2
-  printf 'Build a SISTER batch from the Markdown list and run it in the current logged-in session.\n' >&2
-  printf 'Without BATCH_DIR, resumes the latest saved batch for this list when one exists.\n' >&2
-  printf 'After the batch, imports ready, not-yet-stored documents from Richieste.\n' >&2
+  printf 'Usage: %s [OPTIONS] SOURCE_LIST.md [BATCH_DIR]\n' "$0"
+  printf '\nBuild a SISTER batch from a supported Markdown list and run it in the current logged-in session.\n'
+  printf 'Without BATCH_DIR, resumes the latest saved batch for this list when one exists.\n'
+  printf 'After the batch, imports ready, not-yet-stored documents from Richieste.\n'
+  printf '\nOptions:\n  -h, --help  Show this help and exit.\n'
+  printf '\nExamples:\n  %s inputs/codici_fiscali.all.md\n  %s inputs/pvp_sales/IS.md outputs/batches/IS_run_01\n' "$0" "$0"
 }
 
+for arg in "$@"; do
+  case "$arg" in
+    -h|--help) usage; exit 0 ;;
+  esac
+done
+
 if [[ $# -lt 1 || $# -gt 2 ]]; then
-  usage
+  usage >&2
   exit 2
 fi
 

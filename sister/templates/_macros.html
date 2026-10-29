@@ -1,52 +1,32 @@
 {# ── SISTER shared template macros ─────────────────────────────────────────
    Import here so all macros in this file can call render_nested directly.   #}
 {% from "components/nested.html" import render_nested %}
+{% from "components/badges.html" import badge as theme_badge %}
+{% from "components/catasto.html" import tipo_catasto_badge as theme_catasto_badge %}
+{% from "components/card.html" import stat_card as theme_stat_card %}
+{% from "components/job.html" import status_badge as theme_status_badge %}
 
 {# ────────────────────────────────────────────────────────────────────────────
    BADGE MACROS
    ──────────────────────────────────────────────────────────────────────────── #}
 
-{# Request / workflow status badge.
-   large=True adds fs-6 for use in card headers. #}
+{# Status and cadastral-type badges delegate to shared component wrappers. #}
 {% macro status_badge(status, large=False) %}
-{% set s = (status or '')|lower %}
-{% if s in ('completed','success','succeeded','ok') %}
-  {% set cls, label = 'bg-success', 'Completed' %}
-{% elif s in ('failed','error') %}
-  {% set cls, label = 'bg-danger', 'Failed' %}
-{% elif s == 'partial' %}
-  {% set cls, label = 'bg-warning text-dark', 'Partial' %}
-{% elif s == 'running' %}
-  {% set cls, label = 'bg-info text-dark', 'Running' %}
-{% elif s == 'pending' %}
-  {% set cls, label = 'bg-secondary', 'Pending' %}
-{% else %}
-  {% set cls = 'bg-secondary' %}
-  {% set label = (status or '-')|replace('_',' ')|title %}
-{% endif %}
-<span class="badge {{ cls }}{% if large %} fs-6{% endif %}">{{ label }}</span>
+{{ theme_status_badge(status, large=large) }}
 {% endmacro %}
 
-{# Catasto type (F / T / E / mixed) badge. #}
 {% macro catasto_badge(tipo) %}
-{% if tipo == 'F' %}<span class="badge bg-success">F</span>
-{% elif tipo == 'T' %}<span class="badge bg-warning text-dark">T</span>
-{% elif tipo == 'E' %}<span class="badge bg-info text-dark">E</span>
-{% elif tipo %}<span class="badge bg-secondary">{{ tipo }}</span>
-{% else %}<span class="text-muted">-</span>{% endif %}
+{{ theme_catasto_badge(tipo) }}
 {% endmacro %}
 
 {# Source badge: single vs workflow. #}
 {% macro source_badge(source) %}
-{% if source == 'workflow' %}<span class="badge bg-primary">Workflow</span>
-{% else %}<span class="badge bg-secondary">Single</span>{% endif %}
+{{ theme_badge('Workflow' if source == 'workflow' else 'Single', variant='primary' if source == 'workflow' else 'secondary') }}
 {% endmacro %}
 
 {# Request type badge (request_type field). #}
 {% macro request_type_badge(request_type, source) %}
-<span class="badge {% if source == 'workflow' %}bg-primary-subtle text-primary-emphasis{% else %}bg-secondary{% endif %}">
-  {{ request_type or '-' }}
-</span>
+{{ theme_badge(request_type or '-', variant='primary-subtle text-primary-emphasis' if source == 'workflow' else 'secondary') }}
 {% endmacro %}
 
 {# ────────────────────────────────────────────────────────────────────────────
@@ -72,15 +52,7 @@
 
 {# Clickable stat card used in the results dashboard row. #}
 {% macro stats_card(icon, color, value, label, url) %}
-<a href="{{ url }}" class="stats-card-link">
-  <div class="card border-0 shadow-sm h-100">
-    <div class="card-body text-center py-3">
-      <i class="fas {{ icon }} fa-lg text-{{ color }} mb-1"></i>
-      <h4 class="mb-0">{{ value }}</h4>
-      <small class="text-muted">{{ label }}</small>
-    </div>
-  </div>
-</a>
+{{ theme_stat_card(label, value, icon=icon, color=color, href=url) }}
 {% endmacro %}
 
 {# ────────────────────────────────────────────────────────────────────────────

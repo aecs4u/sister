@@ -4,8 +4,22 @@ set -euo pipefail
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 DEFAULT_LIST_PATH="$ROOT/inputs/pvp_sales/IS.md"
 
+usage() {
+  printf 'Usage: %s [OPTIONS] [SOURCE_PATH [BATCH_DIR]]\n' "$0"
+  printf '\nPrompt for a Markdown list path (default: %s), then run it in the current SISTER session.\n' "$DEFAULT_LIST_PATH"
+  printf 'The optional BATCH_DIR is passed to scripts/run_list_in_session.sh.\n'
+  printf '\nOptions:\n  -h, --help  Show this help and exit.\n'
+  printf '\nExamples:\n  %s\n  %s inputs/pvp_sales/IS.md outputs/batches/IS_run_01\n' "$0" "$0"
+}
+
+for arg in "$@"; do
+  case "$arg" in
+    -h|--help) usage; exit 0 ;;
+  esac
+done
+
 if [[ $# -gt 2 ]]; then
-  printf 'Usage: %s [SOURCE_PATH [BATCH_DIR]]\n' "$0" >&2
+  usage >&2
   exit 2
 fi
 

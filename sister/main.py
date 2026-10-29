@@ -531,14 +531,13 @@ try:
         else:
             logger.warning("No local authentication users loaded from %s", _local_users_path)
 
-        # Opt-in: only the usernames listed in SISTER_ADMIN_USERS (comma separated) get role "admin". Nobody is an admin
-        # by default, and admin gating of Browser Control / imports stays off until the variable is set.
+        # Local users receive the admin role only when their username is listed in SISTER_ADMIN_USERS.
         _admin_usernames = {
             name.strip().casefold() for name in os.getenv("SISTER_ADMIN_USERS", "").split(",") if name.strip()
         }
         if not _admin_usernames:
             logger.warning(
-                "SISTER_ADMIN_USERS non configurata: Browser Control e import sono aperti a ogni utente autenticato"
+                "SISTER_ADMIN_USERS non configurata: nessun utente locale riceve il ruolo admin"
             )
 
         def _get_local_user(username: str, _db=None):
@@ -635,7 +634,7 @@ try:
     theme_setup.templates.env.globals["base_template"] = "_base.html"
     theme_setup.templates.env.globals["csrf_token"] = _csrf_token
     theme_setup.templates.env.globals["csrf_input"] = _csrf_input
-    # Templates hide operator-only controls with can_admin(user); a no-op until SISTER_ADMIN_USERS is configured.
+    # Templates hide operator-only controls with the same explicit role check used by protected routes.
     theme_setup.templates.env.globals["can_admin"] = _web_is_admin
     # Defensive fallback: inject_jinja2 (called by setup_theme_from_env) should
     # register get_locale, but guard against running under the wrong venv where

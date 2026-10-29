@@ -1,0 +1,90 @@
+{% extends "_base.html" %}
+
+{% block page_title %}Catalogo documenti · Amministrazione{% endblock %}
+
+{% block content %}
+<main class="container-fluid py-4">
+    <nav aria-label="breadcrumb" class="mb-3">
+        <ol class="breadcrumb">
+            <li class="breadcrumb-item"><a href="/admin">Amministrazione</a></li>
+            <li class="breadcrumb-item active" aria-current="page">Catalogo documenti</li>
+        </ol>
+    </nav>
+
+    <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+        <div>
+            <h1 class="h2 mb-1">Catalogo documenti</h1>
+            <p class="text-muted mb-0">{{ total }} documenti indicizzati. Da qui puoi controllare l’accesso e gestire gli acquisti.</p>
+        </div>
+        <div class="d-flex gap-2">
+            <a class="btn btn-outline-primary" href="/admin/document-purchases">Gestisci acquisti</a>
+            <a class="btn btn-outline-secondary" href="/admin">Amministrazione</a>
+        </div>
+    </div>
+
+    <section class="card" aria-labelledby="admin-documents-heading">
+        <div class="card-body border-bottom">
+            <div class="d-flex flex-wrap justify-content-between align-items-center gap-3">
+                <h2 class="h5 mb-0" id="admin-documents-heading">Documenti</h2>
+                <form method="get" action="/admin/documents" class="d-flex gap-2">
+                    <label class="visually-hidden" for="admin-document-search">Cerca</label>
+                    <input class="form-control" id="admin-document-search" name="q" value="{{ query }}"
+                           placeholder="ID, file, oggetto o richiesta" autocomplete="off">
+                    <button class="btn btn-outline-primary" type="submit">Cerca</button>
+                </form>
+            </div>
+        </div>
+        <div class="table-responsive">
+            <table class="table table-striped table-hover align-middle mb-0">
+                <thead>
+                    <tr>
+                        <th scope="col">Documento</th>
+                        <th scope="col">Tipo</th>
+                        <th scope="col">Richiesta</th>
+                        <th scope="col">Indicizzato</th>
+                        <th scope="col">Utenti con accesso</th>
+                        <th scope="col" class="text-end">Azioni</th>
+                    </tr>
+                </thead>
+                <tbody>
+                {% for document in documents %}
+                    <tr>
+                        <td>
+                            <a href="/documents/{{ document.id }}" class="fw-semibold">#{{ document.id }} · {{ document.oggetto or document.filename }}</a>
+                            <div class="small text-muted text-break">{{ document.filename }}</div>
+                        </td>
+                        <td>{{ document.document_type or '—' }}</td>
+                        <td>{{ document.response_id or '—' }}</td>
+                        <td>{{ document.created_at[:10] if document.created_at else '—' }}</td>
+                        <td><span class="badge text-bg-secondary">{{ document.owner_count }}</span></td>
+                        <td class="text-end">
+                            <a class="btn btn-sm btn-outline-primary"
+                               href="/admin/document-purchases?document_id={{ document.id }}">Gestisci accesso</a>
+                        </td>
+                    </tr>
+                {% else %}
+                    <tr><td colspan="6" class="text-center text-muted py-4">Nessun documento trovato.</td></tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        <div class="card-body d-flex flex-wrap justify-content-between align-items-center gap-2">
+            <span class="small text-muted">Pagina {{ page }} di {{ total_pages }}</span>
+            <nav aria-label="Pagine del catalogo documenti">
+                <ul class="pagination mb-0">
+                    <li class="page-item {{ 'disabled' if page <= 1 else '' }}">
+                        {% if page > 1 %}
+                        <a class="page-link" href="/admin/documents?page={{ page - 1 }}{% if query %}&amp;q={{ query|urlencode }}{% endif %}" aria-label="Pagina precedente">Precedente</a>
+                        {% else %}<span class="page-link">Precedente</span>{% endif %}
+                    </li>
+                    <li class="page-item {{ 'disabled' if page >= total_pages else '' }}">
+                        {% if page < total_pages %}
+                        <a class="page-link" href="/admin/documents?page={{ page + 1 }}{% if query %}&amp;q={{ query|urlencode }}{% endif %}" aria-label="Pagina successiva">Successiva</a>
+                        {% else %}<span class="page-link">Successiva</span>{% endif %}
+                    </li>
+                </ul>
+            </nav>
+        </div>
+    </section>
+</main>
+{% endblock %}

@@ -1,0 +1,12 @@
+.subject-note-panel {
+    max-width: 38rem;
+}
+
+.subject-note-display {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+
+.subject-note-panel [data-subject-note-form] {
+    min-width: min(100%, 22rem);
+}

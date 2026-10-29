@@ -54,6 +54,7 @@ SKIPPED = "skipped"  # not started because ``on_error`` is ``stop``
 
 OK_STATUSES = frozenset({COMPLETED, QUEUED})
 NOT_RUN_STATUSES = frozenset({DUPLICATE, DISABLED, SKIPPED})
+TAG_PERSISTENCE_ERROR = "Tag persistence failed:"
 
 
 # ---------------------------------------------------------------------------
@@ -391,6 +392,16 @@ def _transient(exc: BaseException) -> bool:
     return isinstance(exc, httpx.TransportError)
 
 
+def _metadata_tags(metadata: dict[str, Any]) -> list[str]:
+    value = metadata.get("tags")
+    values = value.replace(";", ",").split(",") if isinstance(value, str) else value or []
+    return list(dict.fromkeys(str(tag).strip().upper() for tag in values if str(tag).strip()))
+
+
+class TagPersistenceError(RuntimeError):
+    """The query ran or was resumed, but its source tags could not be stored."""
+
+
 class BatchRunner:
     """Run a plan against the service. ``emit(event, item, **info)`` reports progress (events: ``skip``, ``start``,
     ``submitted``, ``result``, ``retry``, ``done``, ``written``)."""
@@ -473,18 +484,50 @@ class BatchRunner:
         if prior:
             status = prior.get("status")
             if status == COMPLETED or (status == QUEUED and not self.options.wait):
+                try:
+                    await self._tag_requests(item, prior.get("request_ids", []))
+                except TagPersistenceError as exc:
+                    entry = self._entry(
+                        item,
+                        ERROR,
+                        error=f"{TAG_PERSISTENCE_ERROR} {exc}",
+                        request_ids=prior.get("request_ids", []),
+                        retryable=False,
+                    )
+                    self._record(entry)
+                    self._write_row(item, entry)
+                    return entry
                 self.emit("skip", item, status=status, resumed=True)
                 return {
                     **self._entry(item, status),
                     **{k: prior[k] for k in ("request_ids", "result_file") if k in prior},
                 }
             if status == ERROR and any(marker in str(prior.get("error", "")) for marker in FINAL_ERRORS):
+                try:
+                    await self._tag_requests(item, prior.get("request_ids", []))
+                except TagPersistenceError as exc:
+                    entry = self._entry(
+                        item,
+                        ERROR,
+                        error=f"{TAG_PERSISTENCE_ERROR} {exc}",
+                        request_ids=prior.get("request_ids", []),
+                        retryable=False,
+                    )
+                    self._record(entry)
+                    self._write_row(item, entry)
+                    return entry
                 self.emit("skip", item, status=status, resumed=True)
                 return {
                     **self._entry(item, status, error=prior.get("error", "")),
                     **{k: prior[k] for k in ("request_ids", "result_file") if k in prior},
                 }
-            if status in (QUEUED, TIMEOUT) and prior.get("request_ids"):
+            if (
+                status == ERROR
+                and str(prior.get("error", "")).startswith(TAG_PERSISTENCE_ERROR)
+                and prior.get("request_ids")
+            ):
+                request_ids = list(prior["request_ids"])
+            elif status in (QUEUED, TIMEOUT) and prior.get("request_ids"):
                 request_ids = list(prior["request_ids"])  # already sent: only wait for it again
             else:
                 force = True  # failed before: a new request, not the cached failure
@@ -515,12 +558,33 @@ class BatchRunner:
                 self.emit("submitted", item, request_ids=request_ids)
             if not request_ids:
                 return self._entry(item, ERROR, error="il servizio non ha restituito alcun request_id")
+            try:
+                await self._tag_requests(item, request_ids)
+            except TagPersistenceError as exc:
+                return self._entry(
+                    item,
+                    ERROR,
+                    error=f"{TAG_PERSISTENCE_ERROR} {exc}",
+                    request_ids=request_ids,
+                    retryable=False,
+                )
             if not self.options.wait:
                 return self._entry(item, QUEUED, request_ids=request_ids)
             return await self._wait(item, request_ids)
         except Exception as exc:  # one broken row must not take the others down; transient ones are retried
             detail = f"HTTP {exc.status_code}: {exc.detail}" if isinstance(exc, VisuraAPIError) else repr(exc)
             return self._entry(item, ERROR, error=detail, request_ids=request_ids, retryable=_transient(exc))
+
+    async def _tag_requests(self, item: PlannedQuery, request_ids: list[str]) -> None:
+        tags = _metadata_tags(item.metadata)
+        if not tags or not request_ids:
+            return
+        try:
+            from .database import add_request_tags
+
+            await add_request_tags(request_ids, tags)
+        except Exception as exc:
+            raise TagPersistenceError(str(exc)) from exc
 
     async def _submit(self, item: PlannedQuery, force: bool) -> list[str]:
         params = dict(item.params)

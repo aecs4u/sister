@@ -67,9 +67,11 @@ from sister.db_models import (  # noqa: F401, E402
     Request,
     RequestPayload,
     RequestResult,
+    RequestTag,
     RequestType,
     RequestTypeTag,
     ResultOwner,
+    SubjectFavorite,
     RightKind,
     Subject,
 )

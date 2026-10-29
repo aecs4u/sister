@@ -60,7 +60,7 @@ Unknown keys are rejected everywhere (a typo is an error, not an ignored setting
 | `enabled` | `true` | `false` keeps the query in the file but does not run it |
 | `reuse` | `options.reuse` | per-query override |
 | `retries` | `options.retries` | per-query override |
-| `metadata` | `{}` | free notes copied to the result (never sent to SISTER). `source_files` and `scope_note` also appear at the top level of the result, as in the CSV batches |
+| `metadata` | `{}` | free notes copied to the result (never sent to SISTER). `source_files` and `scope_note` also appear at the top level of the result, as in the CSV batches. A `tags` list is persisted on the request records and shown on their detail pages |
 
 ### `options`
 

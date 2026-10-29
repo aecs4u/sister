@@ -72,6 +72,82 @@
         else row.append.apply(row, cells);
     }
 
+    function cleanCadastralPart(value) {
+        var part = String(value == null ? '' : value).trim().replace(/\s+/g, '').toLocaleUpperCase();
+        return part === '—' || part === '-' ? '' : part;
+    }
+
+    function cadastralRowKey(parts) {
+        var normalized = parts.map(cleanCadastralPart);
+        return normalized[0] && normalized[1] ? normalized.join('|') : '';
+    }
+
+    function estimatesForRows(table, rows, entries) {
+        if (rows.length === entries.length) {
+            return rows.map(function (_row, index) { return entries[index] || {}; });
+        }
+
+        var header = table.querySelector('thead tr');
+        var headings = header ? Array.from(header.cells).map(function (cell) {
+            return cell.textContent.trim().toLocaleLowerCase();
+        }) : [];
+        function columnIndex(names, fallback) {
+            var index = headings.findIndex(function (heading) { return names.indexOf(heading) !== -1; });
+            return index >= 0 ? index : fallback;
+        }
+        var indices = [
+            columnIndex(['fog.', 'foglio', 'sheet'], 2),
+            columnIndex(['part.', 'particella', 'parcel'], 3),
+            columnIndex(['sub.', 'subalterno', 'subunit'], 4)
+        ];
+        var byKey = new Map();
+        entries.forEach(function (estimate) {
+            var identity = estimate && estimate.asset_identity || {};
+            var key = cadastralRowKey([identity.sheet, identity.parcel, identity.subunit]);
+            if (!key) return;
+            if (!byKey.has(key)) byKey.set(key, []);
+            byKey.get(key).push(estimate);
+        });
+
+        return rows.map(function (row) {
+            var key = cadastralRowKey(indices.map(function (index) {
+                return row.cells[index] ? row.cells[index].textContent : '';
+            }));
+            var matches = key ? byKey.get(key) : null;
+            return matches && matches.length ? matches.shift() : {};
+        });
+    }
+
+    function ensureOmiEstimateColumn(table, rows, rowEstimates) {
+        var header = table.querySelector('thead tr');
+        if (!header) return;
+        var targetIndex = Array.prototype.findIndex.call(header.cells, function (item) {
+            return item.textContent.trim() === 'Stima OMI indicativa';
+        });
+        if (targetIndex >= 0) return;
+
+        var cadastralIndex = Array.prototype.findIndex.call(header.cells, function (item) {
+            return item.textContent.trim() === 'Valore catastale';
+        });
+        var headerTarget = cadastralIndex >= 0 ? header.cells[cadastralIndex + 1] || null : null;
+        var estimateHead = document.createElement('th');
+        estimateHead.className = 'text-nowrap';
+        estimateHead.scope = 'col';
+        estimateHead.textContent = 'Stima OMI indicativa';
+        header.insertBefore(estimateHead, headerTarget);
+
+        rows.forEach(function (row, index) {
+            var estimate = rowEstimates[index] || {};
+            var cell = document.createElement('td');
+            var value = estimate.range || estimate.missing || 'Stima OMI non disponibile';
+            cell.className = estimate.range ? 'text-end text-nowrap' : 'text-muted small';
+            cell.textContent = value;
+            cell.title = estimate.note || estimate.missing || 'Stima OMI non disponibile.';
+            var rowTarget = cadastralIndex >= 0 ? row.cells[cadastralIndex + 1] || null : null;
+            row.insertBefore(cell, rowTarget);
+        });
+    }
+
     function saveActualSize(estimate, input, cell) {
         var value = input.value.trim();
         if (value === input.dataset.savedValue) return;
@@ -110,7 +186,11 @@
             body.title = 'Accedi per modificare la superficie effettiva.';
             return body;
         }
-        if (!estimate.asset_identity || !estimate.asset_identity.asset_key) return body;
+        if (!estimate.asset_identity || !estimate.asset_identity.asset_key) {
+            text(body, 'span', 'text-muted', currentValue || '—');
+            body.title = 'Superficie effettiva non modificabile per questa riga.';
+            return body;
+        }
         var input = text(body, 'input', 'form-control form-control-sm', '');
         input.type = 'text';
         input.inputMode = 'decimal';
@@ -256,7 +336,9 @@
             if (!table || table.dataset.omiSelectionsAdded) return;
             var header = table.querySelector('thead tr');
             var rows = Array.from(table.querySelectorAll('tbody tr'));
-            if (!header || rows.length !== entries.length) return;
+            if (!header) return;
+            var rowEstimates = estimatesForRows(table, rows, entries);
+            ensureOmiEstimateColumn(table, rows, rowEstimates);
 
             var targetIndex = Array.prototype.findIndex.call(header.cells, function (item) {
                 return item.textContent.trim() === 'Stima OMI indicativa';
@@ -292,7 +374,7 @@
             }
 
             rows.forEach(function (row, rowIndex) {
-                var estimate = entries[rowIndex] || {};
+                var estimate = rowEstimates[rowIndex] || {};
                 var identity = estimate.asset_identity || {};
                 var targetCell = row.cells[targetIndex] || null;
                 var sizeCell = addActualSizeCell(estimate);

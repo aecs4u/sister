@@ -103,6 +103,12 @@
 
     function listedParcelLabel(item, container) {
         var parts = [];
+        var municipality = String(item.municipality || '').trim();
+        var municipalityCode = String(item.municipality_code || '').trim();
+        if (municipality) parts.push(municipality + (municipalityCode ? ' (' + municipalityCode + ')' : ''));
+        else if (municipalityCode) {
+            parts.push(localized(container, 'municipality_prefix', 'Comune {value}', {value: municipalityCode}));
+        }
         if (item.section) parts.push(localized(container, 'section_prefix', 'Sezione {value}', {value: item.section}));
         if (item.sheet) parts.push(localized(container, 'sheet_prefix', 'Foglio {value}', {value: item.sheet}));
         if (item.parcel) parts.push(localized(container, 'parcel_prefix', 'Particella {value}', {value: item.parcel}));
@@ -320,6 +326,71 @@
                 labels: labels
             });
             container._documentMapInstance = instance;
+            var baseLayers = instance.baseLayers || {};
+            var mapParams = new URLSearchParams(window.location.search);
+            var requestedBasemap = mapParams.get('basemap');
+            var defaultBasemap = listedOnly ? 'satellite' : 'streets';
+            var activeBasemap = Object.prototype.hasOwnProperty.call(baseLayers, requestedBasemap)
+                ? requestedBasemap
+                : defaultBasemap;
+            if (!baseLayers[activeBasemap]) activeBasemap = Object.keys(baseLayers)[0];
+            if (activeBasemap) {
+                Object.keys(baseLayers).forEach(function (key) {
+                    if (instance.map.hasLayer(baseLayers[key])) instance.map.removeLayer(baseLayers[key]);
+                });
+                baseLayers[activeBasemap].addTo(instance.map);
+
+                var mapElement = instance.map.getContainer();
+                var basemapControl = mapElement.querySelector('.leaflet-control-layers');
+                if (!basemapControl && window.L.control && window.L.control.layers) {
+                    var basemapLabels = {
+                        streets: labels.streets || 'Stradale',
+                        satellite: labels.satellite || 'Satellite',
+                        terrain: labels.terrain || 'Rilievo'
+                    };
+                    var basemapChoices = {};
+                    Object.keys(baseLayers).forEach(function (key) {
+                        basemapChoices[basemapLabels[key] || key] = baseLayers[key];
+                    });
+                    window.L.control.layers(basemapChoices, null, { position: 'topright', collapsed: true })
+                        .addTo(instance.map);
+                    basemapControl = mapElement.querySelector('.leaflet-control-layers');
+                }
+                var basemapToggle = basemapControl && basemapControl.querySelector('.leaflet-control-layers-toggle');
+                if (basemapToggle) {
+                    var basemapControlLabel = localized(container, 'basemap_control', 'Seleziona la mappa di base');
+                    basemapToggle.title = basemapControlLabel;
+                    basemapToggle.setAttribute('aria-label', basemapControlLabel);
+                }
+
+                var streetViewControl = window.L.Control.extend({
+                    options: { position: 'topright' },
+                    onAdd: function (map) {
+                        var control = window.L.DomUtil.create('div', 'leaflet-bar document-map-street-view');
+                        var link = window.L.DomUtil.create('a', 'document-map-street-view-control', control);
+                        var updateLink = function () {
+                            var center = map.getCenter();
+                            var params = new URLSearchParams({
+                                api: '1',
+                                map_action: 'pano',
+                                viewpoint: center.lat.toFixed(6) + ',' + center.lng.toFixed(6)
+                            });
+                            link.href = 'https://www.google.com/maps/@?' + params.toString();
+                        };
+                        var label = localized(container, 'street_view_control', 'Apri Google Street View al centro della mappa');
+                        link.target = '_blank';
+                        link.rel = 'noopener noreferrer';
+                        link.title = label;
+                        link.setAttribute('aria-label', label);
+                        link.innerHTML = '<i class="fas fa-street-view" aria-hidden="true"></i>';
+                        window.L.DomEvent.disableClickPropagation(link);
+                        updateLink();
+                        map.on('moveend', updateLink);
+                        return control;
+                    }
+                });
+                new streetViewControl().addTo(instance.map);
+            }
             if (listedOnly) {
                 instance.map.removeLayer(instance.cadastral.sheets);
                 instance.map.removeLayer(instance.cadastral.parcels);
@@ -345,13 +416,17 @@
             var updateOverviewMarkers = null;
             var overviewLayoutFrame = null;
             var markerBounds = [];
+            var foundParcelKeys = new Set();
             var listedSeen = { sheets: new Set(), parcels: new Set(), 'omi-zones': new Set() };
             var omiZoneFeatureLayers = new Map();
             var foundMarkers = 0;
             var selectedFallbackAdded = false;
             var fitAllButton = null;
+            var unmappedParcelItems = new Map();
+            var unmappedParcelDetails = null;
             var omiZonesToggle = null;
             var requestedMapView = null;
+            var parcelPositionMarkers = [];
             var urlToggles = [];
             var writeMapUrl = null;
 
@@ -368,17 +443,65 @@
                 listedPositions.push([latitude, longitude]);
             }
 
-            function savedViewNearListedParcels(view) {
+            function savedViewShowsListedParcels(view) {
                 if (!listedPositions.length) return false;
-                var radians = Math.PI / 180;
+                var size = instance.map.getSize();
+                if (!size || size.x <= 0 || size.y <= 0) return false;
+                var center = instance.map.project(window.L.latLng(view[0], view[1]), view[2]);
+                var horizontalLimit = Math.max(0, size.x / 2 - Math.min(48, size.x * 0.08));
+                var verticalLimit = Math.max(0, size.y / 2 - Math.min(48, size.y * 0.08));
                 return listedPositions.some(function (point) {
-                    var latitudeDelta = (point[0] - view[0]) * radians;
-                    var longitudeDelta = (point[1] - view[1]) * radians;
-                    var a = Math.sin(latitudeDelta / 2) * Math.sin(latitudeDelta / 2)
-                        + Math.cos(view[0] * radians) * Math.cos(point[0] * radians)
-                        * Math.sin(longitudeDelta / 2) * Math.sin(longitudeDelta / 2);
-                    var distanceKm = 6371 * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-                    return distanceKm <= 25;
+                    var projected = instance.map.project(window.L.latLng(point[0], point[1]), view[2]);
+                    return Math.abs(projected.x - center.x) <= horizontalLimit
+                        && Math.abs(projected.y - center.y) <= verticalLimit;
+                });
+            }
+
+            function updateUnmappedParcelList() {
+                if (!listedOnly) return;
+                var unresolved = Array.from(unmappedParcelItems.entries()).filter(function (entry) {
+                    return !foundParcelKeys.has(entry[0]) && !featureKeys.has(entry[0]);
+                }).map(function (entry) { return entry[1]; });
+                if (!unresolved.length && !unmappedParcelDetails) return;
+
+                var card = container.closest('.document-parcel-map-card');
+                if (!card) return;
+                if (!unmappedParcelDetails) {
+                    unmappedParcelDetails = card.querySelector('details');
+                    if (!unmappedParcelDetails) {
+                        unmappedParcelDetails = document.createElement('details');
+                        unmappedParcelDetails.className = 'small mt-2';
+                        var mapShell = container.closest('.document-parcel-map-shell');
+                        var description = mapShell && mapShell.nextElementSibling;
+                        if (description && description.tagName === 'P') description.insertAdjacentElement('afterend', unmappedParcelDetails);
+                        else if (mapShell) mapShell.insertAdjacentElement('afterend', unmappedParcelDetails);
+                        else container.parentElement.appendChild(unmappedParcelDetails);
+                    }
+                    var summary = unmappedParcelDetails.querySelector('summary');
+                    if (!summary) {
+                        summary = document.createElement('summary');
+                        unmappedParcelDetails.appendChild(summary);
+                    }
+                    var list = unmappedParcelDetails.querySelector('ul');
+                    if (!list) {
+                        list = document.createElement('ul');
+                        list.className = 'mb-0 mt-1';
+                        unmappedParcelDetails.appendChild(list);
+                    }
+                }
+
+                unmappedParcelDetails.hidden = unresolved.length === 0;
+                if (!unresolved.length) return;
+                var summary = unmappedParcelDetails.querySelector('summary');
+                summary.textContent = localized(container, 'unmapped_summary', '{count} particelle senza una posizione attendibile', {
+                    count: unresolved.length
+                });
+                var list = unmappedParcelDetails.querySelector('ul');
+                list.replaceChildren();
+                unresolved.forEach(function (item) {
+                    var reference = document.createElement('li');
+                    reference.textContent = item.reference || listedParcelLabel(item, container);
+                    list.appendChild(reference);
                 });
             }
 
@@ -479,7 +602,15 @@
                 });
                 cells.forEach(function (members) {
                     if (members.length < 2) group.addLayer(members[0].marker);
-                    else group.addLayer(clusterMarker(group, members, members[0].kind));
+                    else if (members[0].kind === 'parcel-fallback' && members.every(function (entry) {
+                        return entry.kind === 'parcel-fallback'
+                            && entry.latlng.distanceTo(members[0].latlng) < 1;
+                    })) {
+                        // Separate parcels can geocode to one shared street/locality point.
+                        // Keep their labels individually readable instead of replacing them
+                        // with a count bubble that hides the parcel references.
+                        members.forEach(function (entry) { group.addLayer(entry.marker); });
+                    } else group.addLayer(clusterMarker(group, members, members[0].kind));
                 });
             }
 
@@ -885,10 +1016,21 @@
             var sheetFeatures = data.sheet_features || { type: 'FeatureCollection', features: [] };
             var omiZoneFeatures = data.omi_zone_features || { type: 'FeatureCollection', features: [] };
             var unmappedParcels = Array.isArray(data.unmapped_parcels) ? data.unmapped_parcels : [];
+            unmappedParcels.forEach(function (item) {
+                if (!item || typeof item !== 'object') return;
+                var key = parcelMapKey(item);
+                if (key && !unmappedParcelItems.has(key)) unmappedParcelItems.set(key, item);
+            });
             var ownedSheetFeatures = sheetFeatures;
-            foundMarkers += parcelMarkers.filter(function (item) {
-                return item.position_source !== 'osm_address';
-            }).length;
+            parcelMarkers.forEach(function (item) {
+                var markerLat = Number(item.latitude);
+                var markerLng = Number(item.longitude);
+                if (Number.isFinite(markerLat) && Number.isFinite(markerLng)
+                    && markerLat >= -90 && markerLat <= 90 && markerLng >= -180 && markerLng <= 180) {
+                    foundParcelKeys.add(parcelMapKey(item));
+                }
+            });
+            foundMarkers = foundParcelKeys.size;
 
             // These approximate points include listed parcels that have no exact geometry. Extend
             // the view bounds only; never render them as parcel positions.
@@ -941,6 +1083,22 @@
                 parcelSheetKeys.add(parcelSheetKey(item));
                 var selected = Boolean(item.selected);
                 var osmAddress = item.position_source === 'osm_address';
+                var osmLabelStackIndex = listedOnly && osmAddress
+                    ? parcelPositionMarkers.filter(function (existing) {
+                        if (!existing._documentMapOsmAddress) return false;
+                        var existingPosition = existing.getLatLng();
+                        var latitudeDistance = (existingPosition.lat - markerLat) * 111320;
+                        var longitudeDistance = (existingPosition.lng - markerLng)
+                            * 111320 * Math.cos(markerLat * Math.PI / 180);
+                        return Math.hypot(latitudeDistance, longitudeDistance) <= 40;
+                    }).length
+                    : 0;
+                var osmLabelSide = osmLabelStackIndex % 2 === 0 ? 'top' : 'bottom';
+                var osmLabelStackOffset = Math.floor(osmLabelStackIndex / 2) * 100;
+                var markerLabelDirection = osmAddress ? osmLabelSide : 'top';
+                var markerLabelOffset = osmLabelSide === 'top'
+                    ? [0, -8 - osmLabelStackOffset]
+                    : [0, 58 + osmLabelStackOffset];
                 var marker = window.L.circleMarker([markerLat, markerLng], {
                     radius: selected ? 8 : 6,
                     color: osmAddress ? '#92400e' : '#ffffff',
@@ -948,6 +1106,7 @@
                     fillColor: osmAddress ? '#f59e0b' : (selected ? '#d63384' : '#0d6efd'),
                     fillOpacity: 1
                 });
+                marker._documentMapOsmAddress = osmAddress;
                 if (listedOnly && listedLayers.parcels) listedLayers.parcels.addLayer(marker);
                 else marker.addTo(instance.map);
                 var popup = document.createElement('span');
@@ -958,6 +1117,20 @@
                         : 'Posizione indicativa da indirizzo geocodificato con OpenStreetMap');
                 }
                 marker.bindPopup(popup);
+                if (listedOnly) {
+                    marker.bindTooltip(listedParcelLabel(item, container), {
+                        permanent: true,
+                        direction: markerLabelDirection,
+                        offset: markerLabelOffset,
+                        className: 'document-map-parcel-marker-label',
+                        opacity: 1,
+                        interactive: false
+                    });
+                    marker.on('add', function () {
+                        if (instance.map.getZoom() <= 14) marker.closeTooltip();
+                    });
+                    parcelPositionMarkers.push(marker);
+                }
                 var row = resolveRow(records, item);
                 var target = rowTarget(targets, row);
                 if (target) {
@@ -1000,6 +1173,13 @@
                     clusterEntries.forEach(function (_entries, group) { renderClusters(group); });
                     var visible = instance.map.getZoom() <= overviewMaxZoom;
                     container.classList.toggle('document-map-polygons-labeled', !visible);
+                    parcelPositionMarkers.forEach(function (marker) {
+                        if (!listedLayers.parcels || !listedLayers.parcels.hasLayer(marker) || visible) {
+                            marker.closeTooltip();
+                            return;
+                        }
+                        marker.openTooltip();
+                    });
                     [
                         [listedLayers.parcels, parcelOverviewMarkers],
                         [listedLayers.sheets, sheetOverviewMarkers]
@@ -1047,6 +1227,7 @@
 
 
             refreshFoundCounts();
+            updateUnmappedParcelList();
             if (fitAllButton) fitAllButton.disabled = !parcelBounds.isValid();
             }
 
@@ -1144,6 +1325,7 @@
                     var next = new URLSearchParams(window.location.search);
                     var center = instance.map.getCenter();
                     next.set('map', center.lat.toFixed(5) + ',' + center.lng.toFixed(5) + ',' + instance.map.getZoom());
+                    if (activeBasemap) next.set('basemap', activeBasemap);
                     next.set('layers', urlToggles.filter(function (entry) { return entry.toggle.checked; })
                         .map(function (entry) { return entry.name; }).join(','));
                     try {
@@ -1151,6 +1333,14 @@
                             window.location.pathname + '?' + next.toString().replace(/%2C/g, ',') + window.location.hash);
                     } catch (_error) { /* a sandboxed frame may not rewrite its URL */ }
                 };
+                instance.map.on('baselayerchange', function (event) {
+                    var selectedKey = Object.keys(baseLayers).find(function (key) {
+                        return baseLayers[key] === event.layer;
+                    });
+                    if (!selectedKey) return;
+                    activeBasemap = selectedKey;
+                    if (writeMapUrl) writeMapUrl();
+                });
                 if (!listedOnly) {
                     instance.map.on('moveend', writeMapUrl);
                     urlToggles.forEach(function (entry) { entry.toggle.addEventListener('change', writeMapUrl); });
@@ -1176,10 +1366,11 @@
                 if (updateOverviewMarkers) updateOverviewMarkers();
                 addMapActions(records, targets, instance.map, container);
             }
-            // A subject URL may carry a viewport from another city. Keep it only when it is close to one of the
-            // subject's own parcels; otherwise show the owned parcel extent. Delay this until all chunks are known.
+            // Keep the saved view only when at least one listed parcel position is inside its visible bounds.
+            // A distance-only check can retain a view whose marker is still outside the map. Delay this until all
+            // chunks are known so later parcel geometries and address fallbacks also count.
             if (listedOnly && !userInteracted) {
-                if (requestedMapView && savedViewNearListedParcels(requestedMapView)) {
+                if (requestedMapView && savedViewShowsListedParcels(requestedMapView)) {
                     instance.map.setView([requestedMapView[0], requestedMapView[1]], requestedMapView[2], { animate: false });
                 } else if (dataBounds.isValid()) {
                     instance.map.fitBounds(dataBounds, { padding: [28, 28], maxZoom: 17 });

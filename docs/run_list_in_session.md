@@ -85,3 +85,15 @@ PYTHON_RUNNER="uv run --no-project" ./scripts/run_list_in_session.sh inputs/codi
 
 For the PVP `IS.md` list, `scripts/run_pvp_sales_is.sh` is an optional wrapper that prompts for the Markdown path and
 then calls `scripts/run_list_in_session.sh`.
+
+## Help
+
+The shell runners accept `-h` or `--help`. The Python scripts use `argparse`, which provides the same options:
+
+```bash
+./scripts/run_list_in_session.sh --help
+./scripts/run_pvp_sales_is.sh -h
+./.venv/bin/python scripts/convert_pvp_sales_csvs_to_markdown.py --help
+./.venv/bin/python scripts/build_batch_from_list.py --help
+./.venv/bin/python scripts/run_in_session.py --help
+```

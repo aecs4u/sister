@@ -42,6 +42,12 @@
       <div class="col-6">{{ param_label('Requested', result.requested_at_display or '-') }}</div>
       <div class="col-6">{{ param_label('Responded', result.responded_at_display or '-') }}</div>
     </div>
+    {% if result.tags %}
+    <div class="d-flex flex-wrap align-items-center gap-2 mt-3" aria-label="Record tags">
+      <span class="detail-label mb-0 me-1">Tags</span>
+      {% for tag in result.tags %}<span class="badge bg-primary">{{ tag }}</span>{% endfor %}
+    </div>
+    {% endif %}
   </div>
   <div class="col-lg-6">
     <div class="row g-3">

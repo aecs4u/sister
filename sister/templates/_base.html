@@ -2,8 +2,6 @@
 
 {% block title %}SISTER - {% block page_title %}{% endblock %}{% endblock %}
 
-{% block language_switcher %}{# the UI is authored in Italian: no switcher that would change nothing #}{% endblock %}
-
 {% block extra_css %}
 <meta name="csrf-token" content="{{ csrf_token(request) }}">
 <link rel="stylesheet" href="/static/css/sister.css?v=20261009a">
@@ -49,6 +47,14 @@
                 <span>Documenti</span>
             </a>
         </div>
+        {% if user and (user.id or user.username or user.email) %}
+        <div class="nav-item">
+            <a class="nav-link{% if request.url.path == '/favorites' %} active{% endif %}" href="/favorites">
+                <i class="fas fa-heart"></i>
+                <span>I miei preferiti</span>
+            </a>
+        </div>
+        {% endif %}
         <div class="nav-item">
             <a class="nav-link{% if '/dossiers' in request.url.path %} active{% endif %}" href="/dossiers">
                 <i class="fas fa-folder-open"></i>
@@ -56,6 +62,12 @@
             </a>
         </div>
         {% if can_admin(user) %}
+        <div class="nav-item">
+            <a class="nav-link{% if request.url.path.startswith('/admin') %} active{% endif %}" href="/admin">
+                <i class="fas fa-shield-halved"></i>
+                <span>Amministrazione</span>
+            </a>
+        </div>
         <div class="nav-item">
             <a class="nav-link{% if '/browser' in request.url.path %} active{% endif %}" href="/browser">
                 <i class="fas fa-window-maximize"></i>

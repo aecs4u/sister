@@ -21,6 +21,7 @@ from zoneinfo import ZoneInfo
 
 from dotenv import load_dotenv
 from sqlalchemy import String, and_, cast, delete, distinct, func, inspect, or_, text
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import aliased, sessionmaker
@@ -40,6 +41,7 @@ from .db_models import (
     DocumentExtraction,
     DocumentExtractionPayload,
     DocumentFavorite,
+    DocumentPurchase,
     IstatMunicipality,
     ManualPropertyValuation,
     MortgageInspection,
@@ -59,11 +61,14 @@ from .db_models import (
     RequestPayload,
     RequestProvince,
     RequestResult,
+    RequestTag,
     RequestType,
     RequestTypeTag,
     ResultOwner,
     RightKind,
     Subject,
+    SubjectFavorite,
+    SubjectNote,
 )
 from .provinces import province_code, province_name
 from .reference import (
@@ -110,7 +115,7 @@ DATABASE_SCHEMA = os.getenv("DATABASE_SCHEMA", "sister")
 DATABASE_ISTAT_SCHEMA = os.getenv("DATABASE_ISTAT_SCHEMA", "istat")
 # raw payloads (response JSON, XML tree, extraction JSON) live in their own schema; tests point it at a throwaway one
 DATABASE_ARCHIVE_SCHEMA = os.getenv("DATABASE_ARCHIVE_SCHEMA", "sister_archive")
-DATABASE_REVISION = "20261113_cadastral_geometry_views"
+DATABASE_REVISION = "20261117_subject_notes"
 
 # ---------------------------------------------------------------------------
 # Engine and session
@@ -192,6 +197,9 @@ async def init_db() -> None:
             "request_type_tag",
             "document",
             "document_favorite",
+            "document_purchase",
+            "subject_favorite",
+            "subject_note",
             "manual_property_valuation",
             "property_valuation_preference",
             "property_affrancation_amount",
@@ -517,8 +525,10 @@ async def record_activity(
         return None
 
 
-async def get_recent_activity(limit: int = 50, action: Optional[str] = None) -> list[dict]:
-    """The newest ``activity_log`` rows (newest first), optionally filtered by action, with their params/result."""
+async def get_recent_activity(
+    limit: int = 50, action: Optional[str] = None, action_prefix: Optional[str] = None
+) -> list[dict]:
+    """The newest activity rows, optionally filtered by an exact action or action prefix."""
     async with _get_session_factory()() as session:
         stmt = (
             select(ActivityLog, ActivityLogPayload)
@@ -528,6 +538,8 @@ async def get_recent_activity(limit: int = 50, action: Optional[str] = None) -> 
         )
         if action:
             stmt = stmt.where(ActivityLog.action == action)
+        if action_prefix:
+            stmt = stmt.where(ActivityLog.action.startswith(action_prefix, autoescape=True))
         rows = (await session.execute(stmt)).all()
     return [
         {**row.model_dump(mode="json"), "params": payload.params if payload else None, "result": payload.result if payload else None}
@@ -659,6 +671,43 @@ async def save_requests_batch(requests: list[dict]) -> None:
             )
             await _upsert_request(session, req["request_id"], req["request_type"], unit_id, req.get("cache_key"))
         await session.commit()
+
+
+async def add_request_tags(request_refs: Iterable[str], tags: Iterable[str] | str) -> int:
+    """Attach normalized source tags to persisted requests; return the number of new links."""
+    refs = list(dict.fromkeys(str(ref).strip() for ref in request_refs if str(ref).strip()))
+    if isinstance(tags, str):
+        raw_tags = tags.replace(";", ",").split(",")
+    else:
+        raw_tags = tags
+    normalized_tags = list(dict.fromkeys(str(tag).strip().upper() for tag in raw_tags if str(tag).strip()))
+    if not refs or not normalized_tags:
+        return 0
+
+    session_factory = _get_session_factory()
+    async with session_factory() as session:
+        rows = (
+            await session.execute(select(Request.id, Request.request_ref).where(Request.request_ref.in_(refs)))
+        ).all()
+        request_ids = {request_ref: request_id for request_id, request_ref in rows}
+        missing = sorted(set(refs) - request_ids.keys())
+        if missing:
+            raise ValueError(f"Cannot tag unknown request references: {', '.join(missing)}")
+
+        values = [
+            {"request_id": request_ids[request_ref], "tag": tag}
+            for request_ref in refs
+            for tag in normalized_tags
+        ]
+        result = await session.execute(
+            pg_insert(RequestTag)
+            .values(values)
+            .on_conflict_do_nothing(index_elements=["request_id", "tag"])
+            .returning(RequestTag.request_id)
+        )
+        inserted = len(result.scalars().all())
+        await session.commit()
+        return inserted
 
 
 # ---------------------------------------------------------------------------
@@ -1264,11 +1313,21 @@ async def get_response(request_id: str) -> Optional[dict]:
                 .where(Request.request_ref == request_id)
             )
         ).first()
+        tags = []
+        if row is not None:
+            tags = list(
+                (
+                    await session.execute(
+                        select(RequestTag.tag).where(RequestTag.request_id == row[0].id).order_by(RequestTag.tag)
+                    )
+                ).scalars()
+            )
     if row is None or row[0].responded_at is None:
         return None
     request, data = row
     return {
         "request_id": request.request_ref,
+        "tags": tags,
         "success": request.success,
         "tipo_catasto": request.cadastre_type or "",
         "data": _decode_payload(data),
@@ -1294,6 +1353,15 @@ async def get_result_record(request_id: str) -> Optional[dict]:
             .where(Request.request_ref == request_id)
         )
         row = (await session.execute(stmt)).first()
+        tags = []
+        if row is not None:
+            tags = list(
+                (
+                    await session.execute(
+                        select(RequestTag.tag).where(RequestTag.request_id == row[0].id).order_by(RequestTag.tag)
+                    )
+                ).scalars()
+            )
     if row is None:
         return None
 
@@ -1305,6 +1373,7 @@ async def get_result_record(request_id: str) -> Optional[dict]:
     data = _decode_payload(raw_data)
     return {
         "request_id": req.request_ref,
+        "tags": tags,
         "request_type": req.request_type,
         "tipo_catasto": unit.cadastre_type if unit and unit.cadastre_type else "",
         "provincia": _province_label(comune.province_abbreviation if comune else None),
@@ -2458,6 +2527,64 @@ async def get_all_documents(limit: int = 100, offset: int = 0) -> list[dict]:
     return [_document_record(doc, unit, comune, request_ref=ref) for doc, unit, comune, _content, ref in rows]
 
 
+async def list_admin_documents(query: str = "", limit: int = 50, offset: int = 0) -> tuple[list[dict], int]:
+    """Search indexed documents for the admin catalog, including their current owner counts."""
+    search = str(query or "").strip()
+    predicates = []
+    if search:
+        pattern = f"%{search}%"
+        predicates.append(
+            or_(
+                cast(Document.id, String).ilike(pattern),
+                Document.file_name.ilike(pattern),
+                Document.subject_text.ilike(pattern),
+                Document.document_type.ilike(pattern),
+                Request.request_ref.ilike(pattern),
+            )
+        )
+
+    owner_counts = (
+        select(
+            DocumentPurchase.document_id.label("document_id"),
+            func.count(DocumentPurchase.user_id).label("owner_count"),
+        )
+        .group_by(DocumentPurchase.document_id)
+        .subquery()
+    )
+    stmt = (
+        select(
+            Document,
+            CadastralUnit,
+            IstatMunicipality,
+            Request.request_ref,
+            func.coalesce(owner_counts.c.owner_count, 0).label("owner_count"),
+        )
+        .select_from(Document)
+        .outerjoin(CadastralUnit, Document.cadastral_unit_id == CadastralUnit.id)
+        .outerjoin(IstatMunicipality, CadastralUnit.comune_id == IstatMunicipality.numeric_code)
+        .outerjoin(Request, Document.request_id == Request.id)
+        .outerjoin(owner_counts, owner_counts.c.document_id == Document.id)
+        .order_by(Document.created_at.desc(), Document.id.desc())
+    )
+    count_stmt = select(func.count(distinct(Document.id))).select_from(Document).outerjoin(
+        Request, Document.request_id == Request.id
+    )
+    if predicates:
+        stmt = stmt.where(*predicates)
+        count_stmt = count_stmt.where(*predicates)
+    stmt = stmt.limit(max(1, min(int(limit), 200))).offset(max(0, int(offset)))
+    async with _get_session_factory()() as session:
+        rows = (await session.execute(stmt)).all()
+        total = int((await session.execute(count_stmt)).scalar_one())
+
+    documents = []
+    for doc, unit, comune, ref, owner_count in rows:
+        record = _document_record(doc, unit, comune, request_ref=ref)
+        record["owner_count"] = int(owner_count or 0)
+        documents.append(record)
+    return documents, total
+
+
 async def get_document_favorite_ids(user_id: str) -> set[int]:
     """Return the document IDs favorited by one authenticated user."""
     async with _get_session_factory()() as session:
@@ -2465,6 +2592,124 @@ async def get_document_favorite_ids(user_id: str) -> set[int]:
             select(DocumentFavorite.document_id).where(DocumentFavorite.user_id == user_id)
         )
         return {int(document_id) for document_id in result.scalars()}
+
+
+async def get_document_purchase_ids(user_id: str) -> set[int]:
+    """Return the indexed documents purchased by one authenticated identity."""
+    async with _get_session_factory()() as session:
+        result = await session.execute(
+            select(DocumentPurchase.document_id).where(DocumentPurchase.user_id == user_id)
+        )
+        return {int(document_id) for document_id in result.scalars()}
+
+
+async def has_document_purchase(user_id: str, document_id: int) -> bool:
+    """Check whether one identity has a recorded purchase for an indexed document."""
+    async with _get_session_factory()() as session:
+        result = await session.execute(
+            select(DocumentPurchase.document_id).where(
+                DocumentPurchase.user_id == user_id,
+                DocumentPurchase.document_id == document_id,
+            )
+        )
+        return result.scalar_one_or_none() is not None
+
+
+async def list_document_purchases(query: str = "", limit: int = 500) -> list[dict]:
+    """List recent purchase records for the admin ownership manager."""
+    stmt = (
+        select(DocumentPurchase, Document.file_name, Document.subject_text, Document.document_type)
+        .join(Document, Document.id == DocumentPurchase.document_id)
+        .order_by(DocumentPurchase.updated_at.desc(), DocumentPurchase.document_id.desc())
+        .limit(max(1, min(int(limit), 1000)))
+    )
+    search = str(query or "").strip()
+    if search:
+        pattern = f"%{search}%"
+        stmt = stmt.where(
+            or_(
+                DocumentPurchase.user_id.ilike(pattern),
+                cast(DocumentPurchase.document_id, String).ilike(pattern),
+                Document.file_name.ilike(pattern),
+                Document.subject_text.ilike(pattern),
+            )
+        )
+    async with _get_session_factory()() as session:
+        rows = (await session.execute(stmt)).all()
+    return [
+        {
+            "user_id": purchase.user_id,
+            "document_id": int(purchase.document_id),
+            "purchased_at": purchase.purchased_at,
+            "created_by": purchase.created_by,
+            "note": purchase.note or "",
+            "updated_at": purchase.updated_at,
+            "filename": filename,
+            "title": title or filename,
+            "document_type": document_type or "",
+        }
+        for purchase, filename, title, document_type in rows
+    ]
+
+
+async def create_document_purchase(
+    user_id: str, document_id: int, purchased_at: datetime, created_by: str, note: str | None = None
+) -> None:
+    """Record a purchase; duplicate ownership is rejected instead of silently changing provenance."""
+    async with _get_session_factory()() as session:
+        if await session.get(Document, document_id) is None:
+            raise ValueError("Document not found")
+        if await session.get(DocumentPurchase, (user_id, document_id)) is not None:
+            raise ValueError("This user already owns this document")
+        session.add(
+            DocumentPurchase(
+                user_id=user_id,
+                document_id=document_id,
+                purchased_at=purchased_at,
+                created_by=created_by,
+                note=note or None,
+            )
+        )
+        await session.commit()
+
+
+async def update_document_purchase(
+    old_user_id: str,
+    old_document_id: int,
+    user_id: str,
+    document_id: int,
+    purchased_at: datetime,
+    note: str | None = None,
+) -> None:
+    """Edit a purchase record, including transferring ownership to another identity/document pair."""
+    async with _get_session_factory()() as session:
+        purchase = await session.get(DocumentPurchase, (old_user_id, old_document_id))
+        if purchase is None:
+            raise ValueError("Purchase record not found")
+        if await session.get(Document, document_id) is None:
+            raise ValueError("Document not found")
+        if (user_id, document_id) != (old_user_id, old_document_id):
+            if await session.get(DocumentPurchase, (user_id, document_id)) is not None:
+                raise ValueError("This user already owns this document")
+            purchase.user_id = user_id
+            purchase.document_id = document_id
+        purchase.purchased_at = purchased_at
+        purchase.note = note or None
+        purchase.updated_at = datetime.now(timezone.utc)
+        await session.commit()
+
+
+async def delete_document_purchase(user_id: str, document_id: int) -> bool:
+    """Revoke a document purchase and report whether an ownership record existed."""
+    async with _get_session_factory()() as session:
+        result = await session.execute(
+            delete(DocumentPurchase).where(
+                DocumentPurchase.user_id == user_id,
+                DocumentPurchase.document_id == document_id,
+            )
+        )
+        await session.commit()
+        return bool(result.rowcount)
 
 
 async def set_document_favorite(user_id: str, document_id: int, favorite: bool) -> None:
@@ -2486,6 +2731,103 @@ async def set_document_favorite(user_id: str, document_id: int, favorite: bool) 
             await session.execute(
                 text("DELETE FROM document_favorite WHERE user_id = :user_id AND document_id = :document_id"),
                 {"user_id": user_id, "document_id": document_id},
+            )
+        await session.commit()
+
+
+async def get_subject_favorite_codes(user_id: str, subject_type: str) -> set[str]:
+    """Return the profile codes of one kind saved by an authenticated user."""
+    async with _get_session_factory()() as session:
+        result = await session.execute(
+            select(SubjectFavorite.subject_code).where(
+                SubjectFavorite.user_id == user_id,
+                SubjectFavorite.subject_type == subject_type,
+            )
+        )
+        return {str(code) for code in result.scalars()}
+
+
+async def is_subject_favorite(user_id: str, subject_type: str, subject_code: str) -> bool:
+    """Check whether one person or company profile is saved by a user."""
+    async with _get_session_factory()() as session:
+        result = await session.execute(
+            select(SubjectFavorite.subject_code).where(
+                SubjectFavorite.user_id == user_id,
+                SubjectFavorite.subject_type == subject_type,
+                SubjectFavorite.subject_code == subject_code,
+            )
+        )
+        return result.scalar_one_or_none() is not None
+
+
+async def set_subject_favorite(user_id: str, subject_type: str, subject_code: str, favorite: bool) -> None:
+    """Idempotently add or remove a user's person or company profile favorite."""
+    async with _get_session_factory()() as session:
+        if favorite:
+            await session.execute(
+                text(
+                    "INSERT INTO subject_favorite (user_id, subject_type, subject_code, created_at) "
+                    "VALUES (:user_id, :subject_type, :subject_code, :created_at) "
+                    "ON CONFLICT (user_id, subject_type, subject_code) DO NOTHING"
+                ),
+                {
+                    "user_id": user_id,
+                    "subject_type": subject_type,
+                    "subject_code": subject_code,
+                    "created_at": datetime.now(timezone.utc),
+                },
+            )
+        else:
+            await session.execute(
+                text(
+                    "DELETE FROM subject_favorite WHERE user_id = :user_id "
+                    "AND subject_type = :subject_type AND subject_code = :subject_code"
+                ),
+                {"user_id": user_id, "subject_type": subject_type, "subject_code": subject_code},
+            )
+        await session.commit()
+
+
+async def get_subject_note(user_id: str, subject_type: str, subject_code: str) -> str | None:
+    """Return the signed-in user's private note for one person or company profile."""
+    async with _get_session_factory()() as session:
+        result = await session.execute(
+            select(SubjectNote.note).where(
+                SubjectNote.user_id == user_id,
+                SubjectNote.subject_type == subject_type,
+                SubjectNote.subject_code == subject_code,
+            )
+        )
+        return result.scalar_one_or_none()
+
+
+async def set_subject_note(user_id: str, subject_type: str, subject_code: str, note: str) -> None:
+    """Save or clear the signed-in user's private note for one subject profile."""
+    normalized_note = note.strip()
+    async with _get_session_factory()() as session:
+        if normalized_note:
+            await session.execute(
+                text(
+                    "INSERT INTO subject_note "
+                    "(user_id, subject_type, subject_code, note, created_at, updated_at) "
+                    "VALUES (:user_id, :subject_type, :subject_code, :note, now(), now()) "
+                    "ON CONFLICT (user_id, subject_type, subject_code) DO UPDATE "
+                    "SET note = EXCLUDED.note, updated_at = now()"
+                ),
+                {
+                    "user_id": user_id,
+                    "subject_type": subject_type,
+                    "subject_code": subject_code,
+                    "note": normalized_note,
+                },
+            )
+        else:
+            await session.execute(
+                text(
+                    "DELETE FROM subject_note WHERE user_id = :user_id "
+                    "AND subject_type = :subject_type AND subject_code = :subject_code"
+                ),
+                {"user_id": user_id, "subject_type": subject_type, "subject_code": subject_code},
             )
         await session.commit()
 

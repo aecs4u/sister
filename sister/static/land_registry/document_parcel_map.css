@@ -51,7 +51,26 @@
     position: absolute;
     z-index: 1000;
     top: .75rem;
-    right: .75rem;
+    right: auto;
+    left: 3.25rem;
+}
+
+.document-parcel-map-shell .document-map-street-view-control {
+    display: flex;
+    width: 34px;
+    height: 34px;
+    align-items: center;
+    justify-content: center;
+    color: #243447;
+    font-size: 1.05rem;
+    line-height: 1;
+    text-decoration: none;
+}
+
+.document-parcel-map-shell .document-map-street-view-control:hover,
+.document-parcel-map-shell .document-map-street-view-control:focus-visible {
+    color: #0b57d0;
+    background-color: #f2f6fc;
 }
 
 .document-map-overview-icon {
@@ -169,7 +188,8 @@
 }
 
 .document-parcel-map-shell .leaflet-tooltip.document-map-parcel-polygon-label,
-.document-parcel-map-shell .leaflet-tooltip.document-map-sheet-polygon-label {
+.document-parcel-map-shell .leaflet-tooltip.document-map-sheet-polygon-label,
+.document-parcel-map-shell .leaflet-tooltip.document-map-parcel-marker-label {
     visibility: hidden !important;
     opacity: 0 !important;
     max-width: min(18rem, 65vw);
@@ -188,7 +208,8 @@
 }
 
 .document-parcel-map-shell .document-map-polygons-labeled .leaflet-tooltip.document-map-parcel-polygon-label,
-.document-parcel-map-shell .document-map-polygons-labeled .leaflet-tooltip.document-map-sheet-polygon-label {
+.document-parcel-map-shell .document-map-polygons-labeled .leaflet-tooltip.document-map-sheet-polygon-label,
+.document-parcel-map-shell .document-map-polygons-labeled .leaflet-tooltip.document-map-parcel-marker-label {
     visibility: visible !important;
     opacity: 1 !important;
 }

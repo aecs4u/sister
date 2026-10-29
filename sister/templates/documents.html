@@ -27,12 +27,13 @@
             <div>
                 <h1 class="display-6 fw-bold mb-2"><i class="fas fa-folder-tree me-3"></i>Documenti</h1>
                 <p class="lead mb-0 opacity-75">
-                    <strong>{{ total }}</strong> documenti indicizzati
+                    <strong>{{ total }}</strong> {% if can_admin(user) %}documenti indicizzati{% else %}documenti acquistati disponibili{% endif %}
                     {% if document_file_count and document_file_count != total %}<span class="opacity-75">· {{ document_file_count }} file (PDF allegati inclusi)</span>{% endif %}
                 </p>
             </div>
             <div class="d-flex flex-wrap gap-2 align-items-center">
                 <a href="/dossiers" class="btn btn-outline-light"><i class="fas fa-folder-open me-2"></i>Dossier</a>
+                {% if favorites_enabled %}<a href="/favorites" class="btn btn-outline-light"><i class="fas fa-heart me-2"></i>I miei preferiti</a>{% endif %}
                 <a href="/documents?view=cadastral-map" class="btn btn-outline-light"><i class="fas fa-map-location-dot me-2"></i>Mappa catastale</a>
                 {% if can_admin(user) %}
                 <form method="post" action="/documents/rescan" class="d-inline">
@@ -99,7 +100,7 @@
                  role="tabpanel" aria-labelledby="documents-tab-categories" tabindex="0">
             {{ document_category_navigation(tree) }}
             {% if not tree %}
-            <div class="alert alert-info"><i class="fas fa-circle-info me-2"></i>Nessun documento indicizzato.</div>
+            <div class="alert alert-info"><i class="fas fa-circle-info me-2"></i>{% if can_admin(user) %}Nessun documento indicizzato.{% else %}Nessun documento acquistato è associato a questo account.{% endif %}</div>
             {% else %}
             {% for g in tree %}
             {% call query_section(g) %}

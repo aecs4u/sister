@@ -1653,11 +1653,9 @@ async def _require_auth(request: Request):
 
 
 def _is_admin(user) -> bool:
-    """Operators may drive the portal session (opt-in via SISTER_ADMIN_USERS; everybody is one with auth disabled)."""
+    """Return whether the authenticated principal has an explicit admin role or allow-list entry."""
     if not _auth_required():
         return True
-    if not os.getenv("SISTER_ADMIN_USERS", "").strip():
-        return True  # admin gating is opt-in: no admins configured -> every authenticated user (see main.py)
     from jinja2 import Undefined
 
     if user is None or isinstance(user, Undefined):  # templates rendered without a user (public pages)
@@ -1665,7 +1663,18 @@ def _is_admin(user) -> bool:
     if getattr(user, "is_superuser", False) or str(getattr(user, "role", "")).lower() == "admin":
         return True
     has_role = getattr(user, "has_role", None)
-    return bool(callable(has_role) and has_role("admin"))
+    if callable(has_role) and has_role("admin"):
+        return True
+    configured_admins = {
+        identity.strip().casefold() for identity in os.getenv("SISTER_ADMIN_USERS", "").split(",") if identity.strip()
+    }
+    if not configured_admins:
+        return False
+    user_identities = {
+        str(getattr(user, attribute, "") or "").strip().casefold()
+        for attribute in ("username", "email", "id")
+    }
+    return bool(configured_admins & user_identities)
 
 
 async def _require_admin(request: Request, user=Depends(_require_auth)):
@@ -1696,6 +1705,89 @@ def _favorite_user_key(user) -> Optional[str]:
         if isinstance(value, str) and value.strip():
             return f"{attr}:{value.strip().casefold()}"
     return None
+
+
+async def _visible_document_ids(user) -> set[int] | None:
+    """Return the documents visible to this principal, or None for an explicit admin."""
+    if _is_admin(user):
+        return None
+    user_key = _favorite_user_key(user)
+    if not user_key:
+        return set()
+    from .database import get_document_purchase_ids
+
+    return await get_document_purchase_ids(user_key)
+
+
+async def _filter_purchased_documents(user, documents: list[dict]) -> list[dict]:
+    allowed_ids = await _visible_document_ids(user)
+    if allowed_ids is None:
+        return documents
+    return [item for item in documents if item.get("id") is not None and int(item["id"]) in allowed_ids]
+
+
+async def _require_document_access(user, document_id: int) -> None:
+    """Fail closed for document content unless this principal purchased it or is an admin."""
+    from fastapi import HTTPException
+
+    if _is_admin(user):
+        return
+    user_key = _favorite_user_key(user)
+    if not user_key:
+        raise HTTPException(status_code=404, detail="Document not found")
+    from .database import has_document_purchase
+
+    if not await has_document_purchase(user_key, document_id):
+        # Avoid confirming the existence of a document that belongs to another customer.
+        raise HTTPException(status_code=404, detail="Document not found")
+
+
+async def _require_document_path_access(user, target: Path) -> None:
+    """Allow a purchased, indexed file path; unindexed filesystem files stay admin-only."""
+    from fastapi import HTTPException
+
+    if _is_admin(user):
+        return
+    from .database import get_indexed_file_paths
+
+    indexed = await get_indexed_file_paths()
+    resolved_target = target.resolve()
+    matching_ids = {
+        int(document_id)
+        for indexed_path, document_id in indexed.items()
+        if Path(indexed_path).resolve() == resolved_target
+    }
+    if len(matching_ids) != 1:
+        raise HTTPException(status_code=404, detail="Document not found")
+    await _require_document_access(user, next(iter(matching_ids)))
+
+
+def _purchase_identity(raw: str) -> str:
+    """Validate and normalize the stable principal key used by document favorites and purchases."""
+    value = str(raw or "").strip()
+    if len(value) > 320:
+        raise ValueError("The user key must be 320 characters or fewer")
+    prefix, separator, identifier = value.partition(":")
+    if not separator or prefix.casefold() not in {"id", "email", "username"} or not identifier.strip():
+        raise ValueError("Use a user key such as id:123 or email:name@example.com")
+    prefix = prefix.casefold()
+    identifier = identifier.strip()
+    if prefix in {"email", "username"}:
+        identifier = identifier.casefold()
+    return f"{prefix}:{identifier}"
+
+
+def _purchase_datetime(raw: str) -> datetime:
+    """Interpret admin-entered local times in Rome and persist timestamps in UTC."""
+    from zoneinfo import ZoneInfo
+
+    value = str(raw or "").strip()
+    if not value:
+        return datetime.now(timezone.utc)
+    parsed = datetime.fromisoformat(value)
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=ZoneInfo("Europe/Rome"))
+    return parsed.astimezone(timezone.utc)
 
 
 async def _apply_user_manual_valuations(kpis: dict[str, Any] | None, user) -> dict[str, Any] | None:
@@ -1859,10 +1951,21 @@ def _audited(action: str):
                 )
                 raise
             code = getattr(response, "status_code", 200)
+            response_headers = getattr(response, "headers", {})
+            redirect_query = urlsplit(response_headers.get("location", "")).query
+            rejected_redirect = code < 400 and (
+                "error=" in redirect_query or "status=not_found" in redirect_query
+            )
             await record_activity(
                 action,
                 actor=_actor(user),
-                status="success" if code < 400 else ("rejected" if code < 500 else "error"),
+                status=(
+                    "rejected"
+                    if rejected_redirect or 400 <= code < 500
+                    else "error"
+                    if code >= 500
+                    else "success"
+                ),
                 params=params,
                 result=_summary(response),
                 started_at=started,
@@ -2960,10 +3063,13 @@ async def web_result_detail(request: Request, request_id: str, user=Depends(_req
     result["requested_at_display"] = _format_timestamp(result.get("requested_at"))
     result["responded_at_display"] = _format_timestamp(result.get("responded_at"))
     result["sections"] = _build_result_sections(result.get("data"))
-    result["documents"] = await get_documents_for_response(
-        request_id,
-        foglio=result.get("foglio"),
-        particella=result.get("particella"),
+    result["documents"] = await _filter_purchased_documents(
+        user,
+        await get_documents_for_response(
+            request_id,
+            foglio=result.get("foglio"),
+            particella=result.get("particella"),
+        ),
     )
     for doc in result["documents"]:
         doc["xml_parsed"] = _parse_xml_to_dict(doc.get("xml_content", ""))
@@ -3101,10 +3207,13 @@ async def web_workflow_detail(request: Request, workflow_id: str, user=Depends(_
     result["requested_at_display"] = _format_timestamp(result.get("requested_at"))
     result["responded_at_display"] = _format_timestamp(result.get("responded_at"))
     result["sections"] = _build_result_sections(result.get("data"))
-    result["documents"] = await get_documents_for_response(
-        workflow_id,
-        foglio=result.get("foglio"),
-        particella=result.get("particella"),
+    result["documents"] = await _filter_purchased_documents(
+        user,
+        await get_documents_for_response(
+            workflow_id,
+            foglio=result.get("foglio"),
+            particella=result.get("particella"),
+        ),
     )
     for doc in result["documents"]:
         doc["xml_parsed"] = _parse_xml_to_dict(doc.get("xml_content", ""))
@@ -3125,6 +3234,202 @@ async def web_profile(request: Request, user=Depends(_require_auth)):
     """Signed-in user's profile (target of the header user menu)."""
     theme = _get_theme(request)
     return theme.render("profile.html", request, user=user or _get_user(request))
+
+
+@router.get("/settings", response_class=HTMLResponse)
+async def web_settings(request: Request, user=Depends(_require_auth)):
+    """Signed-in user's preferences, rendered from the shared theme template."""
+    user = user or _get_user(request)
+    is_admin = _is_admin(user)
+    return _get_theme(request).render(
+        "account/settings.html",
+        request,
+        user=user,
+        page_title="Impostazioni",
+        sidebar_enabled=is_admin,
+        nav_items=(
+            [
+                {
+                    "id": "admin",
+                    "label": "Amministrazione",
+                    "icon": "fa-shield-halved",
+                    "children": [
+                        {"label": "Dashboard SISTER", "url": "/", "icon": "fa-house"},
+                        {"label": "Gestione", "url": "/admin", "icon": "fa-shield-halved"},
+                        {"label": "Catalogo documenti", "url": "/admin/documents", "icon": "fa-folder-open"},
+                        {"label": "Registro accessi", "url": "/admin/activity", "icon": "fa-clock-rotate-left"},
+                        {
+                            "label": "Acquisti documenti",
+                            "url": "/admin/document-purchases",
+                            "icon": "fa-file-invoice",
+                        },
+                        {"label": "Browser", "url": "/browser", "icon": "fa-window-maximize"},
+                    ],
+                }
+            ]
+            if is_admin
+            else []
+        ),
+    )
+
+
+@router.get("/admin", response_class=HTMLResponse)
+async def web_admin(request: Request, user=Depends(_require_admin)):
+    """Admin landing page for managing document ownership."""
+    return _get_theme(request).render("admin/index.html", request, user=user)
+
+
+@router.get("/admin/documents", response_class=HTMLResponse)
+async def web_admin_documents(
+    request: Request, q: str = "", page: int = 1, user=Depends(_require_admin)
+):
+    """Browse the indexed document catalog and open ownership management for a document."""
+    from .database import list_admin_documents
+
+    page_size = 50
+    page = max(1, page)
+    documents, total = await list_admin_documents(q, limit=page_size, offset=(page - 1) * page_size)
+    total_pages = max(1, (total + page_size - 1) // page_size)
+    if page > total_pages:
+        page = total_pages
+        documents, total = await list_admin_documents(q, limit=page_size, offset=(page - 1) * page_size)
+    return _get_theme(request).render(
+        "admin/documents.html",
+        request,
+        user=user,
+        documents=documents,
+        query=q,
+        page=page,
+        total_pages=total_pages,
+        total=total,
+    )
+
+
+@router.get("/admin/activity", response_class=HTMLResponse)
+async def web_admin_activity(request: Request, user=Depends(_require_admin)):
+    """Show the latest audited changes to document ownership grants."""
+    from zoneinfo import ZoneInfo
+
+    from .database import get_recent_activity
+
+    events = await get_recent_activity(limit=100, action_prefix="admin.document_purchase.")
+    for event in events:
+        started_at = event.get("started_at")
+        if started_at:
+            try:
+                parsed = datetime.fromisoformat(str(started_at).replace("Z", "+00:00"))
+                if parsed.tzinfo is None:
+                    parsed = parsed.replace(tzinfo=timezone.utc)
+                event["started_at_local"] = parsed.astimezone(ZoneInfo("Europe/Rome")).strftime(
+                    "%Y-%m-%d %H:%M:%S"
+                )
+            except ValueError:
+                event["started_at_local"] = str(started_at)
+    return _get_theme(request).render("admin/activity.html", request, user=user, events=events)
+
+
+@router.get("/admin/document-purchases", response_class=HTMLResponse)
+async def web_admin_document_purchases(
+    request: Request,
+    q: str = "",
+    status: str = "",
+    error: str = "",
+    document_id: int | None = None,
+    user=Depends(_require_admin),
+):
+    """List and manage the purchase records that grant document access."""
+    from .database import list_document_purchases
+    from zoneinfo import ZoneInfo
+
+    purchases = await list_document_purchases(q)
+    for purchase in purchases:
+        purchased_at = purchase.get("purchased_at")
+        if purchased_at is not None:
+            purchase["purchased_at_local"] = purchased_at.astimezone(ZoneInfo("Europe/Rome")).strftime(
+                "%Y-%m-%dT%H:%M"
+            )
+    return _get_theme(request).render(
+        "admin/document_purchases.html",
+        request,
+        user=user,
+        purchases=purchases,
+        query=q,
+        selected_document_id=document_id or "",
+        status=status,
+        error=error,
+    )
+
+
+@router.post("/admin/document-purchases/create")
+@_audited("admin.document_purchase.create")
+async def web_admin_document_purchase_create(request: Request, user=Depends(_require_admin)):
+    from .database import create_document_purchase
+
+    form = await request.form()
+    try:
+        user_key = _purchase_identity(str(form.get("user_id", "")))
+        document_id = int(str(form.get("document_id", "")).strip())
+        if document_id < 1:
+            raise ValueError("Document ID must be positive")
+        purchased_at = _purchase_datetime(str(form.get("purchased_at", "")))
+        note = str(form.get("note", "")).strip()
+        if len(note) > 2000:
+            raise ValueError("The note must be 2000 characters or fewer")
+        await create_document_purchase(
+            user_key, document_id, purchased_at, _favorite_user_key(user) or _actor(user), note
+        )
+    except (TypeError, ValueError) as exc:
+        return RedirectResponse(
+            url=f"/admin/document-purchases?{urlencode({'error': str(exc)})}", status_code=303
+        )
+    return RedirectResponse(url="/admin/document-purchases?status=created", status_code=303)
+
+
+@router.post("/admin/document-purchases/update")
+@_audited("admin.document_purchase.update")
+async def web_admin_document_purchase_update(request: Request, user=Depends(_require_admin)):
+    from .database import update_document_purchase
+
+    form = await request.form()
+    try:
+        old_user_id = _purchase_identity(str(form.get("old_user_id", "")))
+        old_document_id = int(str(form.get("old_document_id", "")).strip())
+        user_key = _purchase_identity(str(form.get("user_id", "")))
+        document_id = int(str(form.get("document_id", "")).strip())
+        if old_document_id < 1 or document_id < 1:
+            raise ValueError("Document IDs must be positive")
+        purchased_at = _purchase_datetime(str(form.get("purchased_at", "")))
+        note = str(form.get("note", "")).strip()
+        if len(note) > 2000:
+            raise ValueError("The note must be 2000 characters or fewer")
+        await update_document_purchase(
+            old_user_id, old_document_id, user_key, document_id, purchased_at, note
+        )
+    except (TypeError, ValueError) as exc:
+        return RedirectResponse(
+            url=f"/admin/document-purchases?{urlencode({'error': str(exc)})}", status_code=303
+        )
+    return RedirectResponse(url="/admin/document-purchases?status=updated", status_code=303)
+
+
+@router.post("/admin/document-purchases/delete")
+@_audited("admin.document_purchase.delete")
+async def web_admin_document_purchase_delete(request: Request, user=Depends(_require_admin)):
+    from .database import delete_document_purchase
+
+    form = await request.form()
+    try:
+        user_key = _purchase_identity(str(form.get("user_id", "")))
+        document_id = int(str(form.get("document_id", "")).strip())
+        if document_id < 1:
+            raise ValueError("Document ID must be positive")
+        deleted = await delete_document_purchase(user_key, document_id)
+    except (TypeError, ValueError) as exc:
+        return RedirectResponse(
+            url=f"/admin/document-purchases?{urlencode({'error': str(exc)})}", status_code=303
+        )
+    status = "deleted" if deleted else "not_found"
+    return RedirectResponse(url=f"/admin/document-purchases?status={status}", status_code=303)
 
 
 @router.get("/about", response_class=HTMLResponse)
@@ -3322,6 +3627,8 @@ async def _render_doc_from_db(
     subject_portfolio: dict | None = None,
     subject_hub: dict | None = None,
     subject_archive: dict | None = None,
+    subject_favorite_enabled: bool = False,
+    subject_is_favorite: bool = False,
     as_pdf: bool = False,
 ):
     """Finalize a doc dict fetched from the DB and render the matching visura template.
@@ -3493,6 +3800,8 @@ async def _render_doc_from_db(
         subject_portfolio=subject_portfolio,
         subject_hub=subject_hub,
         subject_archive=subject_archive,
+        subject_favorite_enabled=subject_favorite_enabled,
+        subject_is_favorite=subject_is_favorite,
         subject_document_id=doc.get("id") if subject_fiscal_code else None,
         manual_valuation_enabled=bool(_favorite_user_key(user)),
         **_land_map_layout(land_map_kind, theme),
@@ -3632,6 +3941,14 @@ async def _read_subject_map_features_from_sister_views(
     connection, parcel_identifiers: list[dict], sheet_identifiers: list[dict]
 ) -> tuple[list[tuple], list[tuple]]:
     """Read the hub's requested keys from SISTER's live cadastral source views."""
+    from .provinces import province_code, province_name
+
+    def source_province_values(item: dict) -> list[str]:
+        raw_province = str(item.get("province") or "").strip()
+        code = province_code(raw_province) or raw_province
+        name = province_name(code) or raw_province
+        return sorted({value.strip().upper() for value in (raw_province, code, name) if value.strip()})
+
     max_keys_per_query = 10
     if len(parcel_identifiers) > max_keys_per_query or len(sheet_identifiers) > max_keys_per_query:
         parcel_rows = []
@@ -3684,8 +4001,12 @@ async def _read_subject_map_features_from_sister_views(
                           ELSE 0
                       END AS section_rank
                FROM sister.v_cadastral_source_parcel_geometry p
-               WHERE lower(btrim(p.municipality_name)) = lower(btrim(%s::text))
-                 AND upper(btrim(p.province)) = upper(btrim(%s::text))
+               WHERE ((%s::text <> ''
+                       AND upper(btrim(p.municipality_code)) = upper(btrim(%s::text)))
+                   OR (lower(btrim(p.municipality_name)) = lower(btrim(%s::text))
+                       AND upper(btrim(p.province)) = ANY(%s::text[])
+                       AND (%s::text = '' OR p.municipality_code IS NULL
+                            OR btrim(p.municipality_code) = '')))
                  AND upper(btrim(p.sheet)) = ANY(%s::text[])
                  AND upper(btrim(p.parcel)) = ANY(%s::text[])"""
         )
@@ -3698,8 +4019,11 @@ async def _read_subject_map_features_from_sister_views(
                 first_prefix,
                 first_prefix,
                 first_prefix,
+                item["municipality_code"],
+                item["municipality_code"],
                 item["municipality"],
-                item["province"],
+                source_province_values(item),
+                item["municipality_code"],
                 sorted(sheet_values),
                 sorted(parcel_values),
             ]
@@ -3785,7 +4109,7 @@ async def _read_subject_map_features_from_sister_views(
                   AND s.sheet_reference = ANY(%s::text[])
                   AND ((%s::text <> '' AND upper(btrim(s.municipality_code)) = upper(btrim(%s::text)))
                        OR (lower(btrim(s.municipality_name)) = lower(btrim(%s::text))
-                           AND upper(btrim(s.province)) = upper(btrim(%s::text))
+                           AND upper(btrim(s.province)) = ANY(%s::text[])
                            AND (%s::text = '' OR s.municipality_code IS NULL
                                 OR btrim(s.municipality_code) = '')))"""
         )
@@ -3803,7 +4127,7 @@ async def _read_subject_map_features_from_sister_views(
                 item["municipality_code"],
                 item["municipality_code"],
                 item["municipality"],
-                item["province"],
+                source_province_values(item),
                 item["municipality_code"],
             ]
         )
@@ -4290,13 +4614,14 @@ async def _google_maps_context(doc: dict) -> dict[str, Any] | None:
         if use_cached_map_features(cached_map_rows, require_fresh=True):
             return context
 
-    # Subject hub maps have normalized local cadastral keys, so resolve their
-    # polygons through SISTER's live geometry views. Document maps continue to
-    # query the cadastral source directly when no current view geometry exists.
-    use_sister_cadastral_views = is_subject_visura and document_id is None
-    dsn = os.getenv(
-        "DATABASE_DSN" if use_sister_cadastral_views else "CADASTRAL_POSTGRES_DSN", ""
-    ).strip()
+    # Resolve hub keys in the cadastral database directly: its indexed regional
+    # views serve parcel lookups quickly. The FDW views in SISTER remain a
+    # fallback for installations without a direct cadastral connection.
+    direct_cadastral_dsn = os.getenv("CADASTRAL_POSTGRES_DSN", "").strip()
+    use_sister_cadastral_views = (
+        is_subject_visura and document_id is None and not direct_cadastral_dsn
+    )
+    dsn = direct_cadastral_dsn or os.getenv("DATABASE_DSN", "").strip()
     if not dsn or not (municipality and province and sheet and parcel):
         if use_cached_map_features(cached_map_rows, require_fresh=False):
             return context
@@ -5127,7 +5452,7 @@ async def web_document_view(request: Request, path: str, user=Depends(_require_a
     base = _files_base()
     target = (base / path).resolve()
 
-    if not str(target).startswith(str(base)):
+    if target != base and base not in target.parents:
         from fastapi import HTTPException
 
         raise HTTPException(status_code=403, detail="Access denied")
@@ -5135,6 +5460,7 @@ async def web_document_view(request: Request, path: str, user=Depends(_require_a
         from fastapi import HTTPException
 
         raise HTTPException(status_code=404, detail="Not found")
+    await _require_document_path_access(user, target)
 
     # Parse the file (handles .p7m extraction + XML parsing)
     xml_content = ""
@@ -5272,7 +5598,7 @@ async def web_documents_export_named(request: Request, user=Depends(_require_aut
     dest_dir = base / "named"
     dest_dir.mkdir(exist_ok=True)
 
-    docs = await get_all_documents(limit=10000)
+    docs = await _filter_purchased_documents(user, await get_all_documents(limit=10000))
     mapping = {
         d["filename"]: d["oggetto"]
         for d in docs
@@ -5314,6 +5640,7 @@ async def web_document_view_by_id(request: Request, doc_id: int, user=Depends(_r
     doc = await get_document_by_id(doc_id)
     if doc is None or not doc.get("file_path"):
         raise HTTPException(status_code=404, detail="Document file not found")
+    await _require_document_access(user, doc_id)
     p = Path(doc["file_path"])
     if not p.exists() or not p.is_file():
         raise HTTPException(status_code=404, detail="Document file not found")
@@ -5335,6 +5662,7 @@ async def web_document_pdf(request: Request, doc_id: int, user=Depends(_require_
     doc = await get_document_by_id(doc_id)
     if doc is None:
         raise HTTPException(status_code=404, detail="Document not found")
+    await _require_document_access(user, doc_id)
     xml_content = doc.pop("xml_content", "") or ""
     doc["xml_parsed"] = _parse_xml_to_dict(xml_content)
     doc["view"] = build_visura_view(xml_content)
@@ -5366,6 +5694,7 @@ async def web_document_download(request: Request, doc_id: int, user=Depends(_req
     doc = await get_document_by_id(doc_id)
     if doc is None or not doc.get("file_path"):
         raise HTTPException(status_code=404, detail="Document file not found")
+    await _require_document_access(user, doc_id)
     p = Path(doc["file_path"])
     if not p.exists() or not p.is_file():
         raise HTTPException(status_code=404, detail="Document file not found")
@@ -5723,6 +6052,7 @@ async def web_document_plan(doc_id: int, request: Request, user=Depends(_require
     doc = await get_document_by_id(doc_id)
     if doc is None or not doc.get("file_path"):
         raise HTTPException(status_code=404, detail="Document not found")
+    await _require_document_access(user, doc_id)
 
     import asyncio as _asyncio
 
@@ -5750,10 +6080,162 @@ async def web_document_favorite(request: Request, doc_id: int, user=Depends(_req
     document = await get_document_by_id(doc_id)
     if document is None:
         raise HTTPException(status_code=404, detail="Document not found")
+    await _require_document_access(user, doc_id)
     from .database import set_document_favorite
 
     await set_document_favorite(user_key, doc_id, payload["favorite"])
     return JSONResponse({"document_id": doc_id, "favorite": payload["favorite"]})
+
+
+@router.put("/companies/{fiscal_code}/favorite", response_class=JSONResponse)
+async def web_company_favorite(request: Request, fiscal_code: str, user=Depends(_require_auth)):
+    """Set a signed-in user's favourite state for one company profile."""
+    from fastapi import HTTPException
+
+    user_key = _favorite_user_key(user)
+    if not user_key:
+        raise HTTPException(status_code=401, detail="Authentication required to save favourites")
+    normalized_code = fiscal_code.strip()
+    if not re.fullmatch(r"\d{11}", normalized_code):
+        raise HTTPException(status_code=404, detail="Azienda non trovata")
+    try:
+        payload = await request.json()
+    except (ValueError, UnicodeDecodeError):
+        raise HTTPException(status_code=400, detail="Expected a JSON body") from None
+    if not isinstance(payload, dict) or type(payload.get("favorite")) is not bool:
+        raise HTTPException(status_code=422, detail="favorite must be a boolean")
+
+    from .database import set_subject_favorite
+
+    await set_subject_favorite(user_key, "company", normalized_code, payload["favorite"])
+    return JSONResponse(
+        {"subject_type": "company", "subject_code": normalized_code, "favorite": payload["favorite"]}
+    )
+
+
+@router.put("/persons/{fiscal_code}/favorite", response_class=JSONResponse)
+async def web_person_favorite(request: Request, fiscal_code: str, user=Depends(_require_auth)):
+    """Set a signed-in user's favourite state for one person profile."""
+    from fastapi import HTTPException
+
+    user_key = _favorite_user_key(user)
+    if not user_key:
+        raise HTTPException(status_code=401, detail="Authentication required to save favourites")
+    normalized_code = fiscal_code.strip().upper()
+    if not re.fullmatch(r"[A-Z0-9]{16}", normalized_code):
+        raise HTTPException(status_code=404, detail="Persona non trovata")
+    try:
+        payload = await request.json()
+    except (ValueError, UnicodeDecodeError):
+        raise HTTPException(status_code=400, detail="Expected a JSON body") from None
+    if not isinstance(payload, dict) or type(payload.get("favorite")) is not bool:
+        raise HTTPException(status_code=422, detail="favorite must be a boolean")
+
+    from .database import set_subject_favorite
+
+    await set_subject_favorite(user_key, "person", normalized_code, payload["favorite"])
+    return JSONResponse(
+        {"subject_type": "person", "subject_code": normalized_code, "favorite": payload["favorite"]}
+    )
+
+
+async def _web_subject_note(request: Request, fiscal_code: str, subject_type: str, user):
+    """Read or save one authenticated user's private note on a subject profile."""
+    from fastapi import HTTPException
+
+    user_key = _favorite_user_key(user)
+    if not user_key:
+        raise HTTPException(status_code=401, detail="Authentication required to save notes")
+
+    normalized_code = fiscal_code.strip().upper() if subject_type == "person" else fiscal_code.strip()
+    valid_code = (
+        bool(re.fullmatch(r"[A-Z0-9]{16}", normalized_code))
+        if subject_type == "person"
+        else bool(re.fullmatch(r"\d{11}", normalized_code))
+    )
+    if not valid_code:
+        raise HTTPException(
+            status_code=404,
+            detail="Persona non trovata" if subject_type == "person" else "Azienda non trovata",
+        )
+
+    from .database import get_subject_note, set_subject_note
+
+    if request.method == "GET":
+        note = await get_subject_note(user_key, subject_type, normalized_code)
+        return JSONResponse({"subject_type": subject_type, "subject_code": normalized_code, "note": note or ""})
+
+    try:
+        payload = await request.json()
+    except (ValueError, UnicodeDecodeError):
+        raise HTTPException(status_code=400, detail="Expected a JSON body") from None
+    if not isinstance(payload, dict) or type(payload.get("note")) is not str:
+        raise HTTPException(status_code=422, detail="note must be a string")
+    note = payload["note"].strip()
+    if len(note) > 5000:
+        raise HTTPException(status_code=422, detail="The note must be 5000 characters or fewer")
+
+    await set_subject_note(user_key, subject_type, normalized_code, note)
+    return JSONResponse({"subject_type": subject_type, "subject_code": normalized_code, "note": note})
+
+
+@router.get("/companies/{fiscal_code}/note", response_class=JSONResponse)
+async def web_company_note_get(request: Request, fiscal_code: str, user=Depends(_require_auth)):
+    return await _web_subject_note(request, fiscal_code, "company", user)
+
+
+@router.put("/companies/{fiscal_code}/note", response_class=JSONResponse)
+async def web_company_note_put(request: Request, fiscal_code: str, user=Depends(_require_auth)):
+    return await _web_subject_note(request, fiscal_code, "company", user)
+
+
+@router.get("/persons/{fiscal_code}/note", response_class=JSONResponse)
+async def web_person_note_get(request: Request, fiscal_code: str, user=Depends(_require_auth)):
+    return await _web_subject_note(request, fiscal_code, "person", user)
+
+
+@router.put("/persons/{fiscal_code}/note", response_class=JSONResponse)
+async def web_person_note_put(request: Request, fiscal_code: str, user=Depends(_require_auth)):
+    return await _web_subject_note(request, fiscal_code, "person", user)
+
+
+@router.get("/favorites", response_class=HTMLResponse)
+async def web_favorites(request: Request, user=Depends(_require_auth)):
+    """Show and manage the signed-in user's saved documents and subject profiles."""
+    from fastapi import HTTPException
+
+    user_key = _favorite_user_key(user)
+    if not user_key:
+        raise HTTPException(status_code=401, detail="Sign in to manage your favourites")
+
+    from .database import get_document_favorite_ids, get_subject_favorite_codes
+
+    favorite_ids = await get_document_favorite_ids(user_key)
+    company_favorites = [
+        {"code": code, "subject_type": "company", "is_favorite": True}
+        for code in sorted(await get_subject_favorite_codes(user_key, "company"))
+    ]
+    person_favorites = [
+        {"code": code, "subject_type": "person", "is_favorite": True}
+        for code in sorted(await get_subject_favorite_codes(user_key, "person"))
+    ]
+    documents = await _filter_purchased_documents(user, await get_documents_by_ids(favorite_ids))
+    for document in documents:
+        document["is_favorite"] = document.get("id") in favorite_ids
+    documents.sort(
+        key=lambda document: (document.get("created_at") or "", document.get("id") or 0),
+        reverse=True,
+    )
+
+    return _get_theme(request).render(
+        "favorites.html",
+        request,
+        user=user,
+        documents=documents,
+        company_favorites=company_favorites,
+        person_favorites=person_favorites,
+        favorites_enabled=True,
+    )
 
 
 _MANUAL_VALUATION_PROVIDERS = {"immobiliare", "idealista", "other"}
@@ -6104,6 +6586,7 @@ async def web_document_geojson(doc_id: int, request: Request, user=Depends(_requ
     doc = await get_document_by_id(doc_id)
     if doc is None or not doc.get("file_path"):
         raise HTTPException(status_code=404, detail="Document not found")
+    await _require_document_access(user, doc_id)
 
     result = _read_planimetria_geojson(doc["file_path"])
     if result is None or result.get("geojson") is None:
@@ -6129,6 +6612,7 @@ async def web_document_parcel_map_data(
     doc = await get_document_by_id(doc_id)
     if doc is None:
         raise HTTPException(status_code=404, detail="Document not found")
+    await _require_document_access(user, doc_id)
 
     xml_content = doc.get("xml_content", "")
     doc["xml_parsed"] = _parse_xml_to_dict(xml_content)
@@ -6152,6 +6636,7 @@ async def web_document_parcel_map_data(
             if related_id in seen_ids:
                 continue
             seen_ids.add(related_id)
+            await _require_document_access(user, related_id)
             related = await get_document_by_id(related_id)
             if not related:
                 raise HTTPException(status_code=422, detail="Related visura does not match this subject portfolio")
@@ -6363,11 +6848,19 @@ async def _subject_parcel_map_data(code: str, code_pattern: str, key: str | None
 
 @router.get("/persons/{fiscal_code}/parcel-map.json", response_class=JSONResponse)
 async def web_person_parcel_map_data(fiscal_code: str, k: str | None = None, after: int = 0, user=Depends(_require_auth)):
+    if not _is_admin(user):
+        from fastapi import HTTPException
+
+        raise HTTPException(status_code=404, detail="Mappa non trovata")
     return await _subject_parcel_map_data(fiscal_code, r"[A-Z0-9]{16}", k, after)
 
 
 @router.get("/companies/{fiscal_code}/parcel-map.json", response_class=JSONResponse)
 async def web_company_parcel_map_data(fiscal_code: str, k: str | None = None, after: int = 0, user=Depends(_require_auth)):
+    if not _is_admin(user):
+        from fastapi import HTTPException
+
+        raise HTTPException(status_code=404, detail="Mappa non trovata")
     return await _subject_parcel_map_data(fiscal_code, r"\d{11}", k, after)
 
 
@@ -6720,6 +7213,7 @@ async def web_documents(
         doc = await get_document_by_id(int(path))
         if doc is None:
             return theme.render("result_detail.html", request, user=user, result=None, request_id=path, not_found=True)
+        await _require_document_access(user, int(path))
         if not template and (doc.get("document_type") or "") == "visura_soggetto":
             fiscal_code = _document_subject_fiscal_code(doc)
             if not fiscal_code:
@@ -6796,6 +7290,18 @@ async def web_documents(
                 for indexed_path, indexed_id in indexed_paths.items()
                 if indexed_path
             }
+            visible_document_ids = await _visible_document_ids(user)
+            if visible_document_ids is not None:
+                siblings = [
+                    sibling
+                    for sibling in siblings
+                    if (
+                        int(doc["id"])
+                        if sibling.resolve() == source.resolve()
+                        else id_by_path.get(sibling.resolve())
+                    )
+                    in visible_document_ids
+                ]
 
             async def _parse_sibling(path: Path) -> dict:
                 parsed = await asyncio.to_thread(_parse_ispezione_ipotecaria_pdf, str(path))
@@ -6829,7 +7335,7 @@ async def web_documents(
     # The cadastral map remains a separate experience. All document browser
     # views share the tabbed documents hub below.
     if not path and view == "cadastral-map":
-        files = await get_all_documents(limit=10000)
+        files = await _filter_purchased_documents(user, await get_all_documents(limit=10000))
         logical = _collapse_to_logical_docs(files)
         return theme.render(
             "documents_map.html",
@@ -6851,6 +7357,7 @@ async def web_documents(
 
             raise HTTPException(status_code=403, detail="Access denied")
         if target.is_file():
+            await _require_document_path_access(user, target)
             return FileResponse(str(target), filename=target.name)
         if not target.is_dir():
             from fastapi import HTTPException
@@ -6864,7 +7371,7 @@ async def web_documents(
         if view in ("map", "tree")
         else "categories"
     )
-    document_files = await get_all_documents(limit=10000)
+    document_files = await _filter_purchased_documents(user, await get_all_documents(limit=10000))
     logical = _collapse_to_logical_docs(document_files)
     favorite_user = _favorite_user_key(user)
     favorite_document_ids = set()
@@ -7091,6 +7598,7 @@ async def _subject_document_archive(
     code: str,
     indexed_files: list[dict],
     cadastral_group_usage: dict[int, list[str]] | None = None,
+    allowed_document_ids: set[int] | None = None,
 ) -> dict:
     """Exhaustive, provenance-labelled document inventory for one entity page.
 
@@ -7101,6 +7609,8 @@ async def _subject_document_archive(
     individually accessible.
     """
     associations = await find_subject_document_associations(code)
+    if allowed_document_ids is not None:
+        associations = {document_id: value for document_id, value in associations.items() if document_id in allowed_document_ids}
     complete_indexed = [dict(item) for item in indexed_files]
     indexed_ids = {int(item["id"]) for item in complete_indexed if item.get("id") is not None}
     missing_associated_ids = set(associations) - indexed_ids
@@ -7824,6 +8334,78 @@ def _hub_map_sheet_key(item: dict[str, Any]) -> tuple[str, str, str, str]:
     return province, municipality, part(item.get("section")), part(item.get("sheet"))
 
 
+def _hub_map_geocode_query(address: Any, municipality: Any, province: Any) -> str:
+    """Build a street-level geocoder query without unit details that do not locate a building."""
+    street_address = str(address or "").strip()
+    if not street_address:
+        return ""
+    # Keep "senza numero civico" and its common abbreviations out of the search
+    # text. Removing only SNC leaves "n. Piano T", which Nominatim cannot resolve.
+    street_address = re.sub(
+        r"\b(?:n(?:umero)?\.?\s*)?(?:s\.?\s*n\.?\s*c\.?|s\s*/\s*n)\b",
+        "",
+        street_address,
+        flags=re.IGNORECASE,
+    )
+    street_address = re.sub(
+        r"\b(?:n(?:umero)?\.?\s*)(\d+[A-Z]?(?:/[A-Z0-9]+)?)",
+        r"\1",
+        street_address,
+        flags=re.IGNORECASE,
+    )
+    street_address = re.sub(
+        r"(\b\d+[A-Z]?(?:/[A-Z0-9]+)?)\s+(?:interno|int\.?|piano|p\.?|scala|sc\.?|edificio|palazzina|lotto|blocco)\b.*$",
+        r"\1",
+        street_address,
+        flags=re.IGNORECASE,
+    )
+    street_address = re.sub(
+        r"\s+(?:interno|int\.?|piano|scala|sc\.?|edificio|palazzina|lotto|blocco)\b.*$",
+        "",
+        street_address,
+        flags=re.IGNORECASE,
+    )
+    street_address = re.sub(r"\s+", " ", street_address).strip(" ,")
+    if not street_address:
+        return ""
+
+    from .provinces import province_code, province_name
+
+    raw_province = str(province or "").strip()
+    province_label = province_name(province_code(raw_province) or raw_province) or raw_province
+    return ", ".join(
+        part for part in (street_address, str(municipality or "").strip(), province_label, "Italia") if part
+    )
+
+
+def _hub_map_geocode_queries(address: Any, municipality: Any, province: Any) -> list[str]:
+    """Return the full address query first, followed by useful rural-place variants."""
+    primary = _hub_map_geocode_query(address, municipality, province)
+    if not primary:
+        return []
+    queries = [primary]
+
+    street_address = str(address or "").strip()
+    locality = re.sub(
+        r"^(?:contrada|c\.?\s*/?\s*da\.?|localit[aà]|frazione)\s+",
+        "",
+        street_address,
+        flags=re.IGNORECASE,
+    ).strip(" ,")
+    if locality and locality.casefold() != street_address.casefold():
+        municipalities = [str(municipality or "").strip()]
+        # OSM often indexes an address under the inhabited centre rather than
+        # the full administrative name (for example, "Lampedusa e Linosa").
+        short_municipality = re.split(r"\s+e\s+", municipalities[0], maxsplit=1, flags=re.IGNORECASE)[0].strip()
+        if short_municipality and short_municipality.casefold() != municipalities[0].casefold():
+            municipalities.append(short_municipality)
+        for municipality_variant in municipalities:
+            query = _hub_map_geocode_query(locality, municipality_variant, province)
+            if query and query not in queries:
+                queries.append(query)
+    return queries
+
+
 def _hub_map_parcel_key(item: dict[str, Any]) -> tuple[str, str, str, str, str]:
     """Stable parcel identity shared by hub profile addresses and map lookup results."""
     def part(value: Any) -> str:
@@ -7918,8 +8500,22 @@ def _hub_map_parcels(profile: dict) -> list[dict]:
 
 def _hub_map_key(parcels: list[dict]) -> str:
     return hashlib.sha1(
-        json.dumps(sorted((p["province_code"], p["municipality_code"], p["section"], p["sheet"], p["parcel"], p["is_building"], p.get("map_address", ""))
-                          for p in parcels)).encode()
+        json.dumps(
+            sorted(
+                (
+                    p["province_code"],
+                    p["municipality_code"],
+                    p["section"],
+                    p["sheet"],
+                    p["parcel"],
+                    p["is_building"],
+                    ";".join(_hub_map_geocode_queries(
+                        p.get("map_address"), p.get("municipality"), p.get("province_code") or p.get("province")
+                    )),
+                )
+                for p in parcels
+            )
+        ).encode()
     ).hexdigest()
 
 
@@ -7961,9 +8557,13 @@ async def _build_hub_map(map_key: str, parcels: list[dict], data_url: str) -> di
         address_fallbacks = []
         for item in lookup.get("unmapped_parcel_items") or []:
             source = parcels_by_key.get(_hub_map_parcel_key(item))
-            address = str((source or {}).get("map_address") or "").strip()
-            if address:
-                address_fallbacks.append((item, source, address))
+            queries = _hub_map_geocode_queries(
+                (source or {}).get("map_address"),
+                (source or {}).get("municipality") or item.get("municipality"),
+                (source or {}).get("province_code") or (source or {}).get("province") or item.get("province"),
+            )
+            if queries:
+                address_fallbacks.append((item, source, queries))
         payload = await _parcel_map_payload(lookup)
         fresh = []
         for feature in payload["sheet_features"]["features"]:  # a sheet can be cut across two chunks
@@ -7994,16 +8594,12 @@ async def _build_hub_map(map_key: str, parcels: list[dict], data_url: str) -> di
         # Publish cadastral results first so a slow address lookup never delays the map.
         # Geocoded points are explicitly approximate and are added only when the parcel
         # has no cadastral polygon/centroid from the cadastral source.
-        for item, source, address in address_fallbacks:
-            query = ", ".join(
-                part for part in (
-                    address,
-                    str(source.get("municipality") or item.get("municipality") or "").strip(),
-                    str(source.get("province") or item.get("province") or "").strip(),
-                    "Italia",
-                ) if part
-            )
-            place = await _geocode_address(query)
+        for item, source, queries in address_fallbacks:
+            place = None
+            for query in queries:
+                place = await _geocode_address(query)
+                if place:
+                    break
             if not place:
                 continue
             try:
@@ -8208,7 +8804,15 @@ def _query_only_subject_doc(profile: dict) -> dict:
 
 
 async def _render_query_only_subject(
-    request, theme, user, profile: dict, route_prefix: str, subject_archive: dict | None = None, as_pdf: bool = False
+    request,
+    theme,
+    user,
+    profile: dict,
+    route_prefix: str,
+    subject_archive: dict | None = None,
+    as_pdf: bool = False,
+    subject_favorite_enabled: bool = False,
+    subject_is_favorite: bool = False,
 ):
     """Render a subject that has a saved soggetto query but no structured visura on the visura layout.
 
@@ -8251,6 +8855,8 @@ async def _render_query_only_subject(
         subject_documents=[],
         subject_hub=profile,
         subject_archive=subject_archive,
+        subject_favorite_enabled=subject_favorite_enabled,
+        subject_is_favorite=subject_is_favorite,
         land_registry_kpis=land_registry_kpis,
         manual_valuation_enabled=bool(_favorite_user_key(user)),
         land_registry_map=land_registry_map,
@@ -8284,13 +8890,18 @@ async def _web_subject_profile(
 
     # The subject relation provides a canonical match for imported XML. Filenames
     # remain a fallback for older/history documents that predate typed ingestion.
+    visible_document_ids = await _visible_document_ids(user)
     try:
         subject_document_ids = await get_subject_document_ids(normalized_code)
     except Exception as exc:  # noqa: BLE001 - retain filename based navigation if this optional index is unavailable.
         logger.debug("Subject document index unavailable: %s", type(exc).__name__)
         subject_document_ids = set()
+    if visible_document_ids is not None:
+        subject_document_ids &= visible_document_ids
 
     indexed_files = await get_all_documents(limit=10000)
+    if visible_document_ids is not None:
+        indexed_files = [item for item in indexed_files if item.get("id") in visible_document_ids]
     candidates = [
         dict(item)
         for item in indexed_files
@@ -8316,21 +8927,42 @@ async def _web_subject_profile(
     subject_documents = _collapse_to_logical_docs(candidates)
     is_company = route_prefix == "/companies"
     # the saved soggetto query is the hub's skeleton; it enriches the visura layout, or stands alone without a visura
-    subject_hub = await _subject_query_profile(
-        normalized_code,
-        subject_documents,
-        indexed_files,
-        1 if as_pdf else page,
-        exhaustive_ownership=as_pdf,
-    )
+    subject_hub = None
+    if visible_document_ids is None:
+        subject_hub = await _subject_query_profile(
+            normalized_code,
+            subject_documents,
+            indexed_files,
+            1 if as_pdf else page,
+            exhaustive_ownership=as_pdf,
+        )
+    favorite_user_key = _favorite_user_key(user)
+    subject_type = "company" if is_company else "person"
+    subject_favorite_enabled = bool(favorite_user_key)
+    subject_is_favorite = False
+    if subject_favorite_enabled and not as_pdf:
+        from .database import is_subject_favorite
+
+        subject_is_favorite = await is_subject_favorite(favorite_user_key, subject_type, normalized_code)
     if subject_hub is not None and document is not None:
         subject_hub["pagination"]["query"] = f"&document={document}"
     if subject_hub is not None and not subject_documents:
         subject_archive = await _subject_document_archive(
-            normalized_code, indexed_files, _subject_cadastral_group_usage(subject_hub)
+            normalized_code,
+            indexed_files,
+            _subject_cadastral_group_usage(subject_hub),
+            allowed_document_ids=visible_document_ids,
         )
         return await _render_query_only_subject(
-            request, _get_theme(request), user, subject_hub, route_prefix, subject_archive, as_pdf
+            request,
+            _get_theme(request),
+            user,
+            subject_hub,
+            route_prefix,
+            subject_archive,
+            as_pdf,
+            subject_favorite_enabled=subject_favorite_enabled,
+            subject_is_favorite=subject_is_favorite,
         )
     if not subject_documents:
         if as_pdf:
@@ -8441,9 +9073,22 @@ async def _web_subject_profile(
     if subject_hub is not None and not (doc.get("xml_content") or "").strip():
         # a visura stored only as PDF has no structured data for the visura layout: show the hub (it lists the file)
         subject_archive = await _subject_document_archive(
-            normalized_code, indexed_files, cadastral_group_usage
+            normalized_code,
+            indexed_files,
+            cadastral_group_usage,
+            allowed_document_ids=visible_document_ids,
         )
-        return await _render_query_only_subject(request, theme, user, subject_hub, route_prefix, subject_archive, as_pdf)
+        return await _render_query_only_subject(
+            request,
+            theme,
+            user,
+            subject_hub,
+            route_prefix,
+            subject_archive,
+            as_pdf,
+            subject_favorite_enabled=subject_favorite_enabled,
+            subject_is_favorite=subject_is_favorite,
+        )
     cadastral_group_usage.setdefault(selected_id, []).append(
         "Gruppi catastali dalla visura per soggetto selezionata"
     )
@@ -8453,7 +9098,10 @@ async def _web_subject_profile(
                 "Gruppi aggregati da una visura per soggetto provinciale"
             )
     subject_archive = await _subject_document_archive(
-        normalized_code, indexed_files, cadastral_group_usage
+        normalized_code,
+        indexed_files,
+        cadastral_group_usage,
+        allowed_document_ids=visible_document_ids,
     )
     return await _render_doc_from_db(
         doc,
@@ -8467,6 +9115,8 @@ async def _web_subject_profile(
         subject_portfolio=subject_portfolio,
         subject_hub=subject_hub,
         subject_archive=subject_archive,
+        subject_favorite_enabled=subject_favorite_enabled,
+        subject_is_favorite=subject_is_favorite,
         as_pdf=as_pdf,
     )
 

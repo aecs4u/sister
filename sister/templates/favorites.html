@@ -1,0 +1,125 @@
+{% extends "_base.html" %}
+{% from "_doc_macros.html" import document_favorite_button, documents_favorites_js %}
+{% from "components/subject_favorites.html" import subject_favorite_button, subject_favorites_js %}
+{% set company_favorites = company_favorites|default([], true) %}
+{% set person_favorites = person_favorites|default([], true) %}
+{% set favorite_total = documents|length + company_favorites|length + person_favorites|length %}
+
+{% block page_title %}I miei preferiti{% endblock %}
+
+{% block extra_css %}
+{{ super() }}
+<link rel="stylesheet" href="/static/css/pages/documents_index.css?v=20261025a">
+{% endblock %}
+
+{% block content %}
+<div class="page-hero no-print">
+    <div class="container-fluid">
+        <nav class="mb-3" aria-label="breadcrumb">
+            <ol class="breadcrumb mb-0">
+                <li class="breadcrumb-item"><a href="/" class="text-white-50">Dashboard</a></li>
+                <li class="breadcrumb-item"><a href="/documents" class="text-white-50">Documenti</a></li>
+                <li class="breadcrumb-item active text-white" aria-current="page">I miei preferiti</li>
+            </ol>
+        </nav>
+        <div class="d-flex flex-wrap justify-content-between align-items-center gap-3">
+            <div>
+                <h1 class="display-6 fw-bold mb-2"><i class="fas fa-heart me-3"></i>I miei preferiti</h1>
+                <p class="lead mb-0 opacity-75">{{ documents|length }} documenti · {{ company_favorites|length }} aziende · {{ person_favorites|length }} persone salvate</p>
+            </div>
+            <a href="/documents" class="btn btn-outline-light"><i class="fas fa-folder-open me-2"></i>Esplora documenti</a>
+        </div>
+    </div>
+</div>
+
+<main class="container-fluid py-3" data-favorites-management>
+    {% if company_favorites %}
+    <div class="card border-0 shadow-sm mb-3" data-subject-favorites-section>
+        <div class="card-header bg-white"><h2 class="h6 mb-0">Aziende salvate</h2></div>
+        <div class="list-group list-group-flush" data-subject-favorites-list>
+            {% for company in company_favorites %}
+            <div class="list-group-item d-flex flex-wrap align-items-center gap-2" data-subject-favorite-item>
+                <i class="fas fa-building text-primary" aria-hidden="true"></i>
+                <a href="/companies/{{ company.code }}" class="font-monospace">{{ company.code }}</a>
+                <span class="small text-muted">Partita IVA</span>
+                <span class="ms-auto">{{ subject_favorite_button(company.code, favorites_enabled, true, 'company') }}</span>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+    {% endif %}
+
+    {% if person_favorites %}
+    <div class="card border-0 shadow-sm mb-3" data-subject-favorites-section>
+        <div class="card-header bg-white"><h2 class="h6 mb-0">Persone salvate</h2></div>
+        <div class="list-group list-group-flush" data-subject-favorites-list>
+            {% for person in person_favorites %}
+            <div class="list-group-item d-flex flex-wrap align-items-center gap-2" data-subject-favorite-item>
+                <i class="fas fa-user text-primary" aria-hidden="true"></i>
+                <a href="/persons/{{ person.code }}" class="font-monospace">{{ person.code }}</a>
+                <span class="small text-muted">Codice fiscale</span>
+                <span class="ms-auto">{{ subject_favorite_button(person.code, favorites_enabled, true, 'person') }}</span>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+    {% endif %}
+
+    {% if documents %}
+    <div class="card border-0 shadow-sm" data-favorites-documents-section>
+        <div class="table-responsive" data-favorites-table>
+            <table class="table table-hover align-middle mb-0">
+                <thead class="table-light">
+                    <tr>
+                        <th>Documento</th>
+                        <th>Descrizione</th>
+                        <th>Tipo</th>
+                        <th>Riferimento catastale</th>
+                        <th>Data</th>
+                        <th class="text-end">Gestisci</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for d in documents %}
+                    <tr data-favorite-item data-document-id="{{ d.id }}" data-is-favorite="true">
+                        <td class="small">
+                            {% if d.file_format == 'PDF' %}<i class="fas fa-file-pdf text-danger me-1" aria-hidden="true"></i>
+                            {% elif d.file_format == 'P7M' %}<i class="fas fa-file-shield text-warning me-1" aria-hidden="true"></i>
+                            {% elif d.file_format == 'XML' %}<i class="fas fa-file-code text-info me-1" aria-hidden="true"></i>
+                            {% else %}<i class="fas fa-file text-muted me-1" aria-hidden="true"></i>{% endif %}
+                            <a href="/documents/{{ d.id }}" class="fw-semibold text-decoration-none">{{ d.oggetto or d.filename or ('Documento ' ~ d.id) }}</a>
+                            <div class="text-muted">{{ d.filename or '' }}</div>
+                        </td>
+                        <td>{{ d.oggetto if d.oggetto and d.oggetto != d.filename else '—' }}</td>
+                        <td><span class="badge text-bg-light border">{{ (d.document_type or 'altro') | replace('_', ' ') | title }}</span></td>
+                        <td class="small">
+                            {% if d.comune %}{{ d.comune }}{% if d.provincia %} ({{ d.provincia }}){% endif %}<br>{% endif %}
+                            {% if d.foglio %}Fg. {{ d.foglio }}{% endif %}{% if d.particella %} · Part. {{ d.particella }}{% endif %}{% if d.subalterno %} · Sub. {{ d.subalterno }}{% endif %}
+                            {% if not d.comune and not d.foglio and not d.particella %}—{% endif %}
+                        </td>
+                        <td class="small text-muted">{{ d.richiesta_del or ((d.created_at or '')[:10]) or '—' }}</td>
+                        <td class="text-end text-nowrap">
+                            {{ document_favorite_button(d, favorites_enabled) }}
+                            <a href="/documents/{{ d.id }}" class="btn btn-sm btn-outline-primary"><i class="fas fa-eye me-1" aria-hidden="true"></i>Apri</a>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+    {% endif %}
+    <div class="card border-0 shadow-sm text-center text-muted py-5" data-favorites-empty {% if favorite_total %}hidden{% endif %}>
+        <i class="far fa-heart fa-2x mb-3 d-block" aria-hidden="true"></i>
+        <p class="mb-2">Non hai ancora salvato preferiti.</p>
+        <a href="/documents" class="btn btn-sm btn-outline-primary">Esplora i documenti</a>
+    </div>
+    <p class="small text-muted mt-2 mb-0"><span data-favorites-count>{{ favorite_total }}</span> preferiti salvati nel tuo account.</p>
+</main>
+{% endblock %}
+
+{% block extra_js %}
+{{ super() }}
+{{ documents_favorites_js(csp_nonce) }}
+{{ subject_favorites_js(csp_nonce) }}
+{% endblock %}

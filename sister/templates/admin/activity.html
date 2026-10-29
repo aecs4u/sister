@@ -1,0 +1,74 @@
+{% extends "_base.html" %}
+
+{% block page_title %}Registro accessi · Amministrazione{% endblock %}
+
+{% block content %}
+<main class="container-fluid py-4">
+    <nav aria-label="breadcrumb" class="mb-3">
+        <ol class="breadcrumb">
+            <li class="breadcrumb-item"><a href="/admin">Amministrazione</a></li>
+            <li class="breadcrumb-item active" aria-current="page">Registro accessi</li>
+        </ol>
+    </nav>
+
+    <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+        <div>
+            <h1 class="h2 mb-1">Registro accessi</h1>
+            <p class="text-muted mb-0">Ultime {{ events|length }} operazioni amministrative sui permessi dei documenti.</p>
+        </div>
+        <div class="d-flex gap-2">
+            <a class="btn btn-outline-primary" href="/admin/document-purchases">Gestisci acquisti</a>
+            <a class="btn btn-outline-secondary" href="/admin">Amministrazione</a>
+        </div>
+    </div>
+
+    <section class="card" aria-labelledby="admin-activity-heading">
+        <div class="card-body border-bottom">
+            <h2 class="h5 mb-0" id="admin-activity-heading">Modifiche ai permessi</h2>
+        </div>
+        <div class="table-responsive">
+            <table class="table table-striped table-hover align-middle mb-0">
+                <thead>
+                    <tr>
+                        <th scope="col">Data e ora</th>
+                        <th scope="col">Operatore</th>
+                        <th scope="col">Operazione</th>
+                        <th scope="col">Esito</th>
+                        <th scope="col">Dettagli</th>
+                    </tr>
+                </thead>
+                <tbody>
+                {% for event in events %}
+                    <tr>
+                        <td class="text-nowrap">{{ event.started_at_local or event.started_at or '—' }}</td>
+                        <td>{{ event.actor or '—' }}</td>
+                        <td>
+                            {% if event.action == 'admin.document_purchase.create' %}Registrazione acquisto
+                            {% elif event.action == 'admin.document_purchase.update' %}Modifica acquisto
+                            {% elif event.action == 'admin.document_purchase.delete' %}Revoca accesso
+                            {% else %}{{ event.action }}{% endif %}
+                        </td>
+                        <td>
+                            {% if event.status == 'success' %}<span class="badge text-bg-success">Completata</span>
+                            {% elif event.status == 'rejected' %}<span class="badge text-bg-warning">Rifiutata</span>
+                            {% else %}<span class="badge text-bg-danger">Errore</span>{% endif %}
+                        </td>
+                        <td>
+                            {% if event.error %}<span class="small text-danger">{{ event.error }}</span>
+                            {% elif event.status == 'rejected' %}<span class="small text-muted">Richiesta non eseguita</span>
+                            {% elif event.result and event.result.http_status %}<span class="small text-muted">HTTP {{ event.result.http_status }}</span>
+                            {% else %}<span class="text-muted">—</span>{% endif %}
+                        </td>
+                    </tr>
+                {% else %}
+                    <tr><td colspan="5" class="text-center text-muted py-4">Nessuna operazione amministrativa registrata.</td></tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% if events|length >= 100 %}
+        <p class="small text-muted p-3 mb-0">Visualizzate le 100 operazioni più recenti.</p>
+        {% endif %}
+    </section>
+</main>
+{% endblock %}

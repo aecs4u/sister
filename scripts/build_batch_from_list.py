@@ -41,6 +41,7 @@ def _parcel_queries(markdown: str) -> list[dict] | None:
         return None
     headers: list[str] | None = None
     queries: list[dict] = []
+    source_tags = ["PVP"] if re.search(r"(?im)^#\s*PVP\s+sales\s+parcels\b", markdown) else []
     for line_number, line in enumerate(markdown.splitlines(), 1):
         cells = _markdown_cells(line)
         if not cells:
@@ -63,6 +64,10 @@ def _parcel_queries(markdown: str) -> list[dict] | None:
         allowed = set(param_names(spec.command))
         params = {key: value for key, value in row.items() if key in allowed and value.strip()}
         metadata = {key: value for key, value in row.items() if key not in allowed and value.strip()}
+        tags = [tag.strip().upper() for tag in metadata.pop("tags", "").replace(";", ",").split(",") if tag.strip()]
+        tags.extend(source_tags)
+        if tags:
+            metadata["tags"] = list(dict.fromkeys(tags))
         try:
             validate_params(spec.command, params)
         except ValueError as exc:

@@ -108,6 +108,19 @@ class RequestTypeTag(SQLModel, table=True):
     tag: str = Field(primary_key=True)
 
 
+class RequestTag(SQLModel, table=True):
+    """Source or workflow tags assigned to an individual persisted request."""
+
+    __tablename__ = "request_tag"
+    __table_args__ = (
+        sa.ForeignKeyConstraint(["request_id"], ["request.id"], ondelete="CASCADE"),
+        sa.Index("ix_request_tag_tag", "tag"),
+    )
+
+    request_id: int = Field(sa_column=Column(sa.BigInteger, primary_key=True))
+    tag: str = Field(primary_key=True)
+
+
 class DocumentType(SQLModel, table=True):
     __tablename__ = "document_type"
 
@@ -258,6 +271,67 @@ class DocumentFavorite(SQLModel, table=True):
         sa_column=Column(sa.BigInteger, sa.ForeignKey("document.id", ondelete="CASCADE"), primary_key=True)
     )
     created_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc),
+        sa_column=Column(sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
+    )
+
+
+class DocumentPurchase(SQLModel, table=True):
+    """A user's recorded purchase and resulting access to one archived document."""
+
+    __tablename__ = "document_purchase"
+    __table_args__ = (sa.Index("ix_document_purchase_document_id", "document_id"),)
+
+    user_id: str = Field(sa_column=Column(sa.String(), primary_key=True))
+    document_id: int = Field(
+        sa_column=Column(sa.BigInteger, sa.ForeignKey("document.id", ondelete="CASCADE"), primary_key=True)
+    )
+    purchased_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc),
+        sa_column=Column(sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
+    )
+    created_by: str = Field(default="", sa_column=Column(sa.String(), nullable=False, server_default=""))
+    note: Optional[str] = Field(default=None, sa_column=Column(sa.Text(), nullable=True))
+    updated_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc),
+        sa_column=Column(sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
+    )
+
+
+class SubjectFavorite(SQLModel, table=True):
+    """A user's saved person or company profile, identified independently of its documents."""
+
+    __tablename__ = "subject_favorite"
+    __table_args__ = (
+        sa.CheckConstraint("subject_type IN ('company', 'person')", name="ck_subject_favorite_type"),
+    )
+
+    user_id: str = Field(sa_column=Column(sa.String(), primary_key=True))
+    subject_type: str = Field(sa_column=Column(sa.String(16), primary_key=True))
+    subject_code: str = Field(sa_column=Column(sa.String(16), primary_key=True))
+    created_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc),
+        sa_column=Column(sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
+    )
+
+
+class SubjectNote(SQLModel, table=True):
+    """A private note a user keeps on one person or company profile."""
+
+    __tablename__ = "subject_note"
+    __table_args__ = (
+        sa.CheckConstraint("subject_type IN ('company', 'person')", name="ck_subject_note_type"),
+    )
+
+    user_id: str = Field(sa_column=Column(sa.String(), primary_key=True))
+    subject_type: str = Field(sa_column=Column(sa.String(16), primary_key=True))
+    subject_code: str = Field(sa_column=Column(sa.String(16), primary_key=True))
+    note: str = Field(sa_column=Column(sa.Text(), nullable=False))
+    created_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc),
+        sa_column=Column(sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
+    )
+    updated_at: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc),
         sa_column=Column(sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
     )

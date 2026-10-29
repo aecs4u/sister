@@ -378,7 +378,6 @@
 <script nonce="{{ nonce }}">
 (function () {
     var filterButton = document.querySelector('[data-favorites-filter]');
-    if (!filterButton) return;
 
     function updateButton(button, favorite) {
         var icon = button.querySelector('i');
@@ -392,6 +391,7 @@
     }
 
     function applyFilter() {
+        if (!filterButton) return;
         var onlyFavorites = filterButton.getAttribute('aria-pressed') === 'true';
         document.querySelectorAll('[data-favorite-item]').forEach(function (item) {
             item.hidden = onlyFavorites && item.dataset.isFavorite !== 'true';
@@ -403,13 +403,15 @@
         if (label) label.textContent = onlyFavorites ? 'Mostra tutti' : 'Solo preferiti';
     }
 
-    filterButton.addEventListener('click', function () {
-        filterButton.setAttribute(
-            'aria-pressed',
-            filterButton.getAttribute('aria-pressed') === 'true' ? 'false' : 'true'
-        );
-        applyFilter();
-    });
+    if (filterButton) {
+        filterButton.addEventListener('click', function () {
+            filterButton.setAttribute(
+                'aria-pressed',
+                filterButton.getAttribute('aria-pressed') === 'true' ? 'false' : 'true'
+            );
+            applyFilter();
+        });
+    }
 
     document.addEventListener('click', function (event) {
         var button = event.target.closest('.document-favorite-toggle');
@@ -435,6 +437,21 @@
                     item.dataset.isFavorite = result.favorite ? 'true' : 'false';
                 }
             });
+            if (!result.favorite && document.querySelector('[data-favorites-management]')) {
+                var managedItem = button.closest('[data-favorite-item]');
+                if (managedItem) managedItem.remove();
+                var count = document.querySelector('[data-favorites-count]');
+                var remainingDocuments = document.querySelectorAll('[data-favorite-item]').length;
+                var remainingSubjects = document.querySelectorAll('[data-subject-favorite-item]').length;
+                var remaining = remainingDocuments + remainingSubjects;
+                if (count) count.textContent = String(remaining);
+                var table = document.querySelector('[data-favorites-table]');
+                if (table && remainingDocuments === 0) table.hidden = true;
+                var documentSection = document.querySelector('[data-favorites-documents-section]');
+                if (documentSection && remainingDocuments === 0) documentSection.hidden = true;
+                var emptyState = document.querySelector('[data-favorites-empty]');
+                if (emptyState) emptyState.hidden = remaining !== 0;
+            }
             applyFilter();
         }).catch(function (error) {
             button.disabled = false;
