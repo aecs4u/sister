@@ -132,13 +132,13 @@ def _mutations(group: dict[str, Any], as_of: date | None = None) -> list[dict[st
 # ── subject visura ──────────────────────────────────────────────────────────────────────────────────────
 
 _BUILDING_HEADER = ["Indirizzo", "Comune", "Fog.", "Part.", "Sub.", "Zona", "Cat.", "Descrizione categoria", "Classe",
-                    "Consistenza", "Rendita", "Partita", "Valore catastale"]
-_BUILDING_WIDTHS = ["2.1fr", "0.9fr", "auto", "auto", "auto", "auto", "auto", "1.5fr", "auto", "auto", "auto", "auto", "auto"]
-_BUILDING_ALIGN = ["left"] * 10 + ["right", "left", "right"]
+                    "Consistenza", "Rendita", "Partita", "Valore catastale", "Cod. Comune / Prov.", "Sez.", "Superficie catastale"]
+_BUILDING_WIDTHS = ["2.1fr", "1fr", "auto", "auto", "auto", "auto", "auto", "1.5fr", "auto", "auto", "auto", "auto", "auto", "auto", "auto", "1.2fr"]
+_BUILDING_ALIGN = ["left"] * 10 + ["right", "left", "right"] + ["left"] * 3
 _LAND_HEADER = ["Comune", "Fog.", "Part.", "Qualità", "Classe", "Superficie", "Reddito dominicale", "Reddito agrario",
-                "Partita", "Valore catastale"]
-_LAND_WIDTHS = ["1.2fr", "auto", "auto", "1.6fr", "auto", "auto", "auto", "auto", "auto", "auto"]
-_LAND_ALIGN = ["left"] * 5 + ["right", "right", "right", "left", "right"]
+                "Partita", "Valore catastale", "Cod. Comune / Prov.", "Sez."]
+_LAND_WIDTHS = ["1.2fr", "auto", "auto", "1.6fr", "auto", "auto", "auto", "auto", "auto", "auto", "auto", "auto"]
+_LAND_ALIGN = ["left"] * 5 + ["right", "right", "right", "left", "right"] + ["left", "left"]
 
 
 def _preferred_source_value(estimate: dict[str, Any]) -> str:
@@ -157,6 +157,11 @@ def _building_rows(
         classamento = _first(unit.get("DatiClassamentoF"))
         consistency = classamento.get("Consistenza") if isinstance(classamento.get("Consistenza"), dict) else {}
         surface = _first(unit.get("SuperficieF"))
+        surface_parts = []
+        if surface.get("Totale"):
+            surface_parts.append(f"Totale {_s(surface.get('Totale'))} m²")
+        if surface.get("EscluseAreeScoperte"):
+            surface_parts.append(f"escluse aree scoperte {_s(surface.get('EscluseAreeScoperte'))} m²")
         category = _s(classamento.get("Categoria"))
         code, _, description = category.partition(":")
         estimate = estimates[index] if index < len(estimates) else {}
@@ -171,6 +176,9 @@ def _building_rows(
             _money(classamento.get("RenditaEuro")) or "—",
             _s(ident.get("Partita")) or "—",
             estimate.get("cadastral_value") or _missing(estimate.get("cadastral_missing", "")),
+            _joined([ident.get("CodiceComune"), ident.get("Provincia") or group.get("Provincia")]) or "—",
+            _s(ident.get("SezUrbana") or ident.get("SezCensuaria") or group.get("Sezione")) or "—",
+            _joined(surface_parts) or "—",
         ]
         if with_omi:
             row.append(estimate.get("range") or _missing(estimate.get("missing", "")))
@@ -201,6 +209,8 @@ def _land_rows(
                 _money(classamento.get("RedditoAgrarioEuro")) or "—",
                 _s(ident.get("Partita")) or "—",
                 estimate.get("cadastral_value") or _missing(estimate.get("cadastral_missing", "")),
+                _joined([ident.get("CodiceComune"), ident.get("Provincia") or group.get("Provincia")]) or "—",
+                _s(ident.get("SezCensuaria") or ident.get("Sezione") or group.get("Sezione")) or "—",
             ])
             if with_preferred_source:
                 asset_key = (estimate.get("asset_identity") or {}).get("asset_key")
@@ -319,26 +329,497 @@ def _parcel_items(lookup: dict[str, Any] | None) -> list[dict[str, Any]]:
     if not (markers or features or unmapped):
         return []
 
-    with_geometry = {(_s(f.get("properties", {}).get("municipality_code")), _s(f.get("properties", {}).get("sheet")),
-                      _s(f.get("properties", {}).get("parcel"))) for f in features}
+    def identity(item: dict[str, Any]) -> tuple[str, ...]:
+        properties = item.get("properties") or item
+        return tuple(_s(properties.get(key)).upper() for key in (
+            "province", "municipality_code", "section", "sheet", "parcel"
+        ))
+
+    with_geometry = {identity(feature) for feature in features}
     rows = []
+    seen = set()
     for item in markers:
-        key = (_s(item.get("municipality_code")), _s(item.get("sheet")), _s(item.get("parcel")))
-        rows.append([_s(item.get("municipality")), _s(item.get("sheet")), _s(item.get("parcel")),
-                     "Geometria catastale" if key in with_geometry else _missing("Posizione approssimata (centro foglio)")])
+        key = identity(item)
+        seen.add(key)
+        if key in with_geometry:
+            position = "Geometria catastale locale"
+        elif item.get("position_source") == "osm_address":
+            position = _joined([
+                "Posizione indicativa geocodificata con OpenStreetMap",
+                item.get("geocode_label"),
+            ])
+        else:
+            position = "Posizione indicativa: centro del foglio catastale"
+        rows.append([
+            _s(item.get("province")) or "—", _s(item.get("municipality")) or "—",
+            _s(item.get("municipality_code")) or "—", _s(item.get("section")) or "—",
+            _s(item.get("sheet")) or "—", _s(item.get("parcel")) or "—",
+            _joined(item.get("subunits") or []) or "—", position,
+        ])
+    for feature in features:
+        key = identity(feature)
+        if key in seen:
+            continue
+        seen.add(key)
+        properties = feature.get("properties") or {}
+        rows.append([
+            _s(properties.get("province")) or "—", _s(properties.get("municipality")) or "—",
+            _s(properties.get("municipality_code")) or "—", _s(properties.get("section")) or "—",
+            _s(properties.get("sheet")) or "—", _s(properties.get("parcel")) or "—",
+            _joined(properties.get("subunits") or []) or "—", "Geometria catastale locale",
+        ])
     for item in unmapped:
-        rows.append([_s(item.get("municipality")), _s(item.get("sheet")), _s(item.get("parcel")),
-                     _missing("Senza geometria nella cartografia locale")])
+        key = identity(item)
+        if key in seen:
+            continue
+        seen.add(key)
+        rows.append([
+            _s(item.get("province")) or "—", _s(item.get("municipality")) or "—",
+            _s(item.get("municipality_code")) or "—", _s(item.get("section")) or "—",
+            _s(item.get("sheet")) or "—", _s(item.get("parcel")) or "—",
+            _joined(item.get("subunits") or []) or "—", "Senza geometria nella cartografia locale",
+        ])
     out: list[dict[str, Any]] = [_table("Particelle elencate nella visura",
-                                        ["Comune", "Foglio", "Particella", "Cartografia"],
-                                        ["1.4fr", "auto", "auto", "2fr"], ["left"] * 4, rows)]
+                                        ["Provincia", "Comune", "Cod. comune", "Sez.", "Foglio", "Particella", "Subalterni", "Cartografia / posizione"],
+                                        ["0.7fr", "1.1fr", "auto", "auto", "auto", "auto", "auto", "2.3fr"], ["left"] * 8, rows)]
+    omi_features = lookup.get("omi_zone_features") or {}
+    omi_rows = []
+    seen_omi = set()
+    for feature in omi_features.get("features") or []:
+        properties = feature.get("properties") or {}
+        key = _s(properties.get("omi_feature_key") or properties.get("reference"))
+        if key in seen_omi:
+            continue
+        seen_omi.add(key)
+        omi_rows.append([
+            _s(properties.get("province")) or "—",
+            _joined([properties.get("municipality"), f"({_s(properties.get('municipality_code'))})" if properties.get("municipality_code") else ""]) or "—",
+            _s(properties.get("omi_zone")) or "—",
+            _s(properties.get("boundary_vintage")) or "—",
+            "Maggiore sovrapposizione con una particella posseduta" if properties.get("matches_owned_parcel")
+            else "Zona OMI in un comune con immobili del soggetto",
+        ])
+    if omi_rows:
+        out.append(_table(
+            "Zone OMI associate alle particelle del soggetto",
+            ["Provincia", "Comune", "Zona OMI", "Edizione confini", "Associazione cartografica"],
+            ["0.7fr", "1.5fr", "auto", "auto", "2.5fr"], ["left"] * 5, omi_rows,
+        ))
     panels = _map_panels(markers, features, unmapped, [f for f in lookup.get("sheet_features") or [] if isinstance(f, dict)])
     if panels:
         out.append({"kind": "map", "panels": panels})
         out.append({"kind": "note", "text": "Schizzo vettoriale dalle geometrie catastali locali, senza cartografia di "
-                                            "sfondo: non in scala tra un riquadro e l'altro. Le particelle senza "
-                                            "geometria sono indicate da un punto al centro del foglio."})
+                                            "sfondo: non in scala tra un riquadro e l'altro. I punti indicano una "
+                                            "posizione approssimata e non il confine o la posizione certa della particella."})
     return out
+
+
+def _joined(values: list[Any], separator: str = " · ") -> str:
+    return separator.join(text for value in values if (text := _s(value)))
+
+
+def _parcel_reference(parcel: dict[str, Any], subunit: Any = "") -> str:
+    parts = []
+    if parcel.get("section"):
+        parts.append(f"Sez. {_s(parcel['section'])}")
+    if parcel.get("sheet"):
+        parts.append(f"Fg. {_s(parcel['sheet'])}")
+    if parcel.get("parcel"):
+        parts.append(f"P.lla {_s(parcel['parcel'])}")
+    if subunit:
+        parts.append(f"Sub. {_s(subunit)}")
+    municipality = _joined([
+        parcel.get("municipality"),
+        f"({parcel.get('municipality_code')})" if parcel.get("municipality_code") else "",
+    ])
+    province = f"Provincia {_s(parcel.get('province'))}" if parcel.get("province") else ""
+    return _joined([municipality, province, *parts]) or "Riferimento catastale non indicato"
+
+
+def _archive_report_items(archive: dict[str, Any] | None) -> list[dict[str, Any]]:
+    if not archive:
+        return []
+    documents = [
+        (category.get("label") or "Altri documenti", document)
+        for category in archive.get("categories") or []
+        for document in category.get("documents") or []
+    ]
+    summary_rows = [
+        ["Documenti logici", str(archive.get("document_count", len(documents)))],
+        ["Record/file nel database", str(archive.get("file_count", 0))],
+        ["File originali disponibili", str(archive.get("available_file_count", 0))],
+        ["File originali assenti", str(archive.get("missing_file_count", 0))],
+    ]
+    rows = []
+    for category, document in documents:
+        files = []
+        for file in document.get("files") or []:
+            facts = [file.get("filename"), f"ID {file.get('id')}" if file.get("id") is not None else "",
+                     file.get("file_format"), file.get("size_human"),
+                     "disponibile" if file.get("available") else "file assente"]
+            files.append(_joined(facts))
+        extraction = "Estrazione strutturata presente" if document.get("has_extraction") else "Nessuna estrazione strutturata"
+        if document.get("used_in_cadastral_groups"):
+            extraction += "; dati usati: " + (_joined(document.get("cadastral_group_usage_labels") or []) or "sì")
+        else:
+            extraction += "; non usato nei gruppi catastali"
+        provenance = _joined(document.get("source_labels") or []) or "Collegamento non classificato"
+        properties = _joined(document.get("property_labels") or [])
+        if properties:
+            provenance += " · Immobili: " + properties
+        rows.append([
+            f"{document.get('title') or 'Documento'} · ID logico {document.get('id', '—')}",
+            _joined([category, document.get("date"), document.get("type") or "tipo non classificato"]),
+            provenance,
+            extraction,
+            _joined(files, "; ") or "Nessun file fisico associato",
+        ])
+    items: list[dict[str, Any]] = [_kv(summary_rows, columns=4)]
+    if archive.get("missing_file_count"):
+        items.append({"kind": "note", "text": (
+            "I record con file assente conservano i metadati e i collegamenti nel database; il file originale non è "
+            "presente nell'archivio su disco."
+        )})
+    if rows:
+        items.append(_table(
+            "Inventario completo dei documenti collegati",
+            ["Documento e ID", "Categoria, data e tipo", "Provenienza e immobili", "Estrazione e utilizzo", "File originali"],
+            ["1.6fr", "1.1fr", "1.8fr", "1.6fr", "2.1fr"], ["left"] * 5, rows,
+        ))
+    else:
+        items.append({"kind": "note", "text": "Nessun documento collegato trovato nell'archivio."})
+    return items
+
+
+def _inspection_details(extraction: dict[str, Any] | None) -> list[str]:
+    if not extraction:
+        return ["Nessuna estrazione strutturata disponibile"]
+    rows = []
+    inspection = _joined([
+        extraction.get("kind_label"), extraction.get("registration"), extraction.get("presentation"),
+        f"ispezione {extraction.get('inspection_date')}" if extraction.get("inspection_date") else "",
+        extraction.get("office"),
+        f"estrazione ID {extraction.get('id')}" if extraction.get("id") else "",
+    ])
+    if inspection:
+        rows.append(inspection)
+    title = _joined([
+        extraction.get("title_type"), extraction.get("title_description"),
+        f"data {extraction.get('title_date')}" if extraction.get("title_date") else "",
+        f"Rep. {extraction.get('title_repertory_number')}" if extraction.get("title_repertory_number") else "",
+        f"notaio {extraction.get('title_notary')}" if extraction.get("title_notary") else "",
+    ])
+    if title:
+        rows.append("Titolo: " + title)
+    lien = _joined([
+        extraction.get("lien_type"),
+        f"capitale € {extraction.get('lien_principal_euro')}" if extraction.get("lien_principal_euro") else "",
+        f"interessi € {extraction.get('lien_interest_euro')}" if extraction.get("lien_interest_euro") else "",
+        f"spese € {extraction.get('lien_expenses_euro')}" if extraction.get("lien_expenses_euro") else "",
+        f"totale € {extraction.get('lien_total_euro')}" if extraction.get("lien_total_euro") else "",
+        f"grado {extraction.get('lien_rank')}" if extraction.get("lien_rank") else "",
+        f"tasso annuo {extraction.get('lien_annual_interest_rate')}" if extraction.get("lien_annual_interest_rate") else "",
+        f"durata {extraction.get('lien_duration')}" if extraction.get("lien_duration") else "",
+    ])
+    if lien:
+        rows.append("Formalità / ipoteca: " + lien)
+    for property in extraction.get("properties") or []:
+        rows.append("Immobile: " + _joined([
+            property.get("reference"), property.get("address"), property.get("nature"),
+            f"{property['room_count']} vani" if property.get("room_count") is not None else "",
+            f"{property['area_sqm']} m²" if property.get("area_sqm") is not None else "",
+            f"piano {property.get('floor')}" if property.get("floor") else "",
+        ]))
+    for party in extraction.get("parties") or []:
+        rows.append("Parte: " + _joined([
+            party.get("role"), party.get("name"),
+            f"CF {party.get('fiscal_code')}" if party.get("fiscal_code") else "",
+            party.get("quality"), party.get("right"), party.get("share"),
+        ]))
+    rows.append(
+        f"{extraction.get('property_count', 0)} immobili estratti · {extraction.get('party_count', 0)} parti "
+        f"({extraction.get('party_favore_count', 0)} a favore, {extraction.get('party_contro_count', 0)} contro)"
+    )
+    return rows
+
+
+def _subject_visura_items(
+    subject_documents: list[dict[str, Any]] | None,
+    profile: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    documents = subject_documents or (profile or {}).get("subject_visure") or []
+    rows = []
+    for document in documents:
+        rows.append([
+            f"{_s(document.get('title')) or 'Visura'} · ID {_s(document.get('id')) or '—'}",
+            _joined([document.get("tipo_catasto"), document.get("subtype") or document.get("tipo"), document.get("scope")]),
+            _s(document.get("situazione_al") or document.get("date")) or "—",
+            _joined([document.get("protocollo"), document.get("protocollo_anno")]) or "—",
+            _joined(document.get("formats") or []) or "—",
+        ])
+    if not rows:
+        return []
+    return [_table(
+        "Visure per soggetto disponibili",
+        ["Documento", "Tipo e ambito", "Situazione/data", "Protocollo", "Formati"],
+        ["2fr", "1.6fr", "1.1fr", "1fr", "0.7fr"], ["left"] * 5, rows,
+    )]
+
+
+def _subject_hub_report_items(
+    profile: dict[str, Any] | None,
+    portfolio: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    if not profile:
+        return []
+    items: list[dict[str, Any]] = []
+    totals = profile.get("totals") or {}
+    query_rows = [
+        ["Ricerca principale ID", _s(profile.get("request_id")) or "—"],
+        ["Tipo catasto", _TIPO_CATASTO.get(_s(profile.get("tipo_catasto")), _s(profile.get("tipo_catasto")) or "—")],
+        ["Richiesta", _s(profile.get("requested_at_display")) or "—"],
+        ["Risposta", _s(profile.get("responded_at_display")) or "—"],
+        ["Particelle", str(totals.get("parcels", 0))],
+        ["Unità", str(totals.get("units", 0))],
+        ["Fabbricati", str(totals.get("buildings", 0))],
+        ["Terreni", str(totals.get("lands", 0))],
+        ["Particelle con visure archiviate", str(totals.get("with_visure", 0))],
+        ["Particelle con planimetrie", str(totals.get("with_planimetrie", 0))],
+        ["Particelle con ispezioni ipotecarie", str(totals.get("with_ispezioni", 0))],
+        ["Particelle con geometria/mappa", str(totals.get("with_map", 0))],
+    ]
+    if portfolio:
+        query_rows.extend([
+            ["Ambito del portafoglio", _s(portfolio.get("scope_label")) or "—"],
+            ["Visure provinciali aggregate", "Sì" if portfolio.get("aggregated") else "No"],
+            ["Province aggregate", _joined(portfolio.get("provinces") or []) or "—"],
+        ])
+    items.append(_kv(query_rows, columns=4))
+
+    provinces = []
+    for province in profile.get("provinces") or []:
+        provinces.append([
+            _s(province.get("provincia")) or "—", _s(province.get("codice")) or "—",
+            str(province.get("fabbricati") if province.get("fabbricati") is not None else "—"),
+            str(province.get("terreni") if province.get("terreni") is not None else "—"),
+        ])
+    if provinces:
+        items.append(_table(
+            "Distribuzione territoriale del risultato salvato",
+            ["Provincia", "Codice", "Fabbricati", "Terreni"],
+            ["1.5fr", "auto", "auto", "auto"], ["left", "left", "right", "right"], provinces,
+        ))
+
+    queries = [{
+        "request_id": profile.get("request_id"),
+        "type": "Ricerca principale · " + _s(profile.get("tipo_catasto")),
+        "date": profile.get("responded_at_display") or profile.get("requested_at_display"),
+        "success": True,
+        "total_results": totals.get("units"),
+    }, *(profile.get("other_queries") or [])]
+    query_history = []
+    for query in queries:
+        success = query.get("success")
+        query_history.append([
+            _s(query.get("request_id")) or "—",
+            _s(query.get("label") or query.get("type") or query.get("request_type") or query.get("tipo_catasto")) or "—",
+            _s(query.get("responded_at_display") or query.get("date") or query.get("responded_at") or query.get("requested_at")) or "—",
+            "Sì" if success is True else ("No" if success is False else "—"),
+            str(query.get("total_results") if query.get("total_results") is not None else "—"),
+        ])
+    if query_history:
+        items.append(_table(
+            "Ricerche per soggetto archiviate",
+            ["ID richiesta", "Tipo", "Data", "Esito", "Risultati"],
+            ["1.1fr", "2fr", "1.4fr", "auto", "auto"], ["left"] * 5, query_history,
+        ))
+
+    unit_rows = []
+    for parcel in profile.get("map_parcels") or []:
+        units = parcel.get("units") or [{}]
+        for unit in units:
+            is_building = unit.get("property_type") == "building"
+            reference = _parcel_reference(parcel, unit.get("subunit"))
+            designation = "Fabbricato" if is_building else "Terreno"
+            details = []
+            for label, value in (
+                ("Indirizzo", unit.get("address")),
+                ("Zona censuaria", unit.get("census_zone")),
+                ("Categoria", unit.get("category")),
+                ("Classe", unit.get("cadastral_class")),
+                ("Consistenza", unit.get("consistency_sqm") or unit.get("consistency_rooms") or unit.get("consistency_other") or unit.get("consistency")),
+                ("Superficie", unit.get("area")),
+                ("Qualità", unit.get("quality")),
+                ("Rendita", unit.get("income")),
+                ("Reddito dominicale", unit.get("dominical_income")),
+                ("Reddito agrario", unit.get("agricultural_income")),
+                ("Partita", unit.get("partita")),
+            ):
+                if value:
+                    details.append(f"{label}: {_s(value)}")
+            enriched = f"Completato dalla visura #{unit.get('enriched_from')} ({_joined(unit.get('enriched_fields') or [])})" if unit.get("enriched_from") else ""
+            unit_rows.append([
+                _joined([parcel.get("province"), parcel.get("municipality")]) or "—",
+                reference,
+                _joined([designation, f"Sub. {unit.get('subunit')}" if unit.get("subunit") else ""]),
+                _joined([unit.get("right_type"), f"Quota {unit.get('ownership_share')}" if unit.get("ownership_share") else ""]) or "—",
+                _joined([*details, enriched]) or "Dati di dettaglio non disponibili",
+            ])
+    if unit_rows:
+        items.append(_table(
+            "Inventario completo delle unità del risultato salvato",
+            ["Provincia e comune", "Identificativo catastale", "Tipo", "Diritto e quota", "Dati catastali e provenienza"],
+            ["1fr", "1.4fr", "0.8fr", "1.1fr", "2.5fr"], ["left"] * 5, unit_rows,
+        ))
+
+    coverage_rows = []
+    linked_rows = []
+    inspection_documents: dict[str, dict[str, Any]] = {}
+    ownership_rows = []
+    property_history_rows = []
+    document_labels = {
+        "visure": "Visure",
+        "planimetrie": "Planimetrie/elaborati",
+        "mappe": "Mappe",
+        "ispezioni": "Ispezioni ipotecarie",
+        "altri": "Altri documenti",
+    }
+    for parcel in profile.get("map_parcels") or []:
+        reference = _parcel_reference(parcel)
+        documents = parcel.get("documents") or {}
+        requests = parcel.get("requests") or {}
+        coverage = [
+            f"{label}: {len(documents.get(kind) or [])}"
+            for kind, label in document_labels.items()
+        ]
+        coverage.extend([
+            f"Richieste catastali: {len(requests.get('ispezioni_catastali') or [])}",
+            f"Richieste mappe: {len(requests.get('mappe') or [])}",
+            "Geometria locale disponibile" if parcel.get("has_map") else "Geometria locale non disponibile",
+            f"Visure con titolarità completa: {len(parcel.get('ownership') or [])}",
+            f"Documenti di altre unità della particella: {parcel.get('other_units_documents', 0)}",
+        ])
+        coverage_rows.append([reference, "Fabbricato" if parcel.get("is_building") else "Terreno", str(len(parcel.get("units") or [])), _joined(coverage)])
+        for kind, label in document_labels.items():
+            for document in documents.get(kind) or []:
+                extraction = document.get("extraction")
+                linked_rows.append([
+                    reference,
+                    label,
+                    f"{_s(document.get('title')) or 'Documento'} · ID {_s(document.get('id')) or '—'}",
+                    _joined([document.get("type"), document.get("date"), f"Sub. {document.get('subunit')}" if document.get("subunit") else "", _joined(document.get("formats") or [])]),
+                    "Estrazione strutturata disponibile" if extraction else "Nessuna estrazione strutturata",
+                ])
+                if kind == "ispezioni":
+                    key = str(document.get("id") or document.get("title") or id(document))
+                    existing = inspection_documents.setdefault(key, {**document, "references": []})
+                    if reference not in existing["references"]:
+                        existing["references"].append(reference)
+        for kind in ("ispezioni_catastali", "mappe"):
+            for query in requests.get(kind) or []:
+                linked_rows.append([
+                    reference,
+                    f"Richiesta: {_s(query.get('label') or kind)}",
+                    f"ID richiesta {_s(query.get('request_id')) or '—'}",
+                    _joined([query.get("date"), "esito positivo" if query.get("success") is True else ("esito negativo" if query.get("success") is False else "esito non indicato"), f"{query.get('total_results')} risultati" if query.get("total_results") is not None else ""]),
+                    "—",
+                ])
+        if parcel.get("has_map") and not documents.get("mappe"):
+            linked_rows.append([reference, "Geometria", "Cartografia catastale locale", "Geometria in cache", "Nessun file documento"])
+
+        for ownership in parcel.get("ownership") or []:
+            source = _joined([
+                f"Visura per immobile #{ownership.get('document_id')}" if ownership.get("document_id") else "Visura per immobile",
+                f"situazione al {ownership.get('as_of')}" if ownership.get("as_of") else "",
+                f"Sub. {ownership.get('subunit')}" if ownership.get("subunit") else "",
+            ])
+            current_owners = ownership.get("current_owners") or []
+            for owner in current_owners:
+                ownership_rows.append([
+                    reference, source, "Intestatario attuale",
+                    _joined([owner.get("name"), f"CF {owner.get('fiscal_code')}" if owner.get("fiscal_code") else ""]),
+                    _joined([owner.get("right"), f"Quota {owner.get('quota')}" if owner.get("quota") else "", owner.get("period")]) or "—",
+                ])
+            for act in ownership.get("acts") or []:
+                owners = _joined([
+                    _joined([owner.get("name"), f"CF {owner.get('fiscal_code')}" if owner.get("fiscal_code") else "", owner.get("right"), owner.get("quota"), owner.get("period")])
+                    for owner in act.get("owners") or []
+                ], "; ")
+                ownership_rows.append([
+                    reference,
+                    source,
+                    _joined(["Atto attuale" if act.get("current") else "Atto", act.get("type"), act.get("date"), act.get("start"), act.get("end")]),
+                    owners or "Titolari non indicati",
+                    "Fonte: visura per immobile",
+                ])
+            view = ownership.get("view") or {}
+            unit_view = ownership.get("unit_view") or {}
+            identifier = unit_view.get("identifier") or {}
+            view_reference = _joined([
+                identifier.get("municipality"), identifier.get("sheet"), identifier.get("parcel"), identifier.get("subunit")
+            ]) or reference
+            for period in view.get("history") or []:
+                period_label = (period.get("period") or {}).get("label") or "—"
+                for facet in period.get("facets") or []:
+                    for record in facet.get("records") or []:
+                        data = record.get("data") or {}
+                        values = _joined([f"{_HISTORY_LABELS.get(key, key)}: {_s(value)}" for key, value in data.items() if value])
+                        derived = (record.get("derived") or {}).get("description") or ""
+                        property_history_rows.append([
+                            view_reference,
+                            source,
+                            period_label,
+                            _s(facet.get("label")) or "—",
+                            values or "—",
+                            _s(derived) or "—",
+                        ])
+
+    if coverage_rows:
+        items.append(_table(
+            "Copertura documentale e cartografica di ogni particella",
+            ["Identificativo catastale", "Tipo", "Unità", "Documenti, richieste e cartografia archiviati"],
+            ["1.7fr", "0.7fr", "0.5fr", "3.1fr"], ["left"] * 4, coverage_rows,
+        ))
+    if linked_rows:
+        items.append(_table(
+            "Documenti e richieste collegati a ciascuna particella",
+            ["Particella", "Categoria", "Documento / richiesta", "Tipo, data, formato ed esito", "Estrazione"],
+            ["1.6fr", "1fr", "1.7fr", "1.8fr", "1.2fr"], ["left"] * 5, linked_rows,
+        ))
+
+    for document in profile.get("subject_inspections") or []:
+        key = str(document.get("id") or document.get("title") or id(document))
+        existing = inspection_documents.setdefault(key, {**document, "references": []})
+        if "Soggetto" not in existing["references"]:
+            existing["references"].append("Soggetto")
+    inspection_rows = []
+    for document in inspection_documents.values():
+        extraction = document.get("extraction")
+        inspection_rows.append([
+            _joined([f"ID {document.get('id')}" if document.get("id") else "", document.get("title"), document.get("date")]) or "Ispezione ipotecaria",
+            _joined(document.get("references") or []) or "—",
+            _joined(_inspection_details(extraction)),
+        ])
+    if inspection_rows:
+        items.append(_table(
+            "Ispezioni ipotecarie ed estrazioni strutturate complete",
+            ["Documento", "Collegamento", "Dati estratti: formalità, immobili, parti e provenienza"],
+            ["1.4fr", "1.8fr", "4.2fr"], ["left"] * 3, inspection_rows,
+        ))
+
+    if ownership_rows:
+        items.append(_table(
+            "Titolarità e atti dalle visure per immobile archiviate",
+            ["Particella", "Fonte", "Atto / intestazione", "Titolari e identificativi", "Diritto e periodo"],
+            ["1.5fr", "1.2fr", "1.7fr", "2fr", "1.4fr"], ["left"] * 5, ownership_rows,
+        ))
+    if property_history_rows:
+        items.append(_table(
+            "Variazioni catastali dalle visure per immobile archiviate",
+            ["Bene", "Fonte", "Periodo", "Dato", "Valori", "Derivazione"],
+            ["1.1fr", "1.2fr", "1fr", "0.9fr", "2.3fr", "1.5fr"], ["left"] * 6, property_history_rows,
+        ))
+    return items
 
 
 def _rings(geometry: dict[str, Any]) -> list[list[list[float]]]:
@@ -438,7 +919,14 @@ def _map_panels(markers: list[dict[str, Any]], features: list[dict[str, Any]], u
     return panels
 
 
-def subject_context(doc: dict[str, Any], kpis: dict[str, Any] | None, lookup: dict[str, Any] | None, today: date) -> dict[str, Any]:
+def subject_context(
+    doc: dict[str, Any],
+    kpis: dict[str, Any] | None,
+    lookup: dict[str, Any] | None,
+    today: date,
+    subject_report: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    subject_report = subject_report or {}
     xml = doc.get("xml_parsed") or {}
     key = next((k for k in _SUBJECT_KEYS if isinstance(xml.get(k), dict)), None)
     if key is None:
@@ -562,16 +1050,81 @@ def subject_context(doc: dict[str, Any], kpis: dict[str, Any] | None, lookup: di
         sections.append({"title": _s(group.get("Descrizione")) or _s(group.get("CodiceComune")) or f"Gruppo {index + 1}",
                          "badges": badges, "items": items})
 
+    history = subject_report.get("land_registry_history") or []
+    history_rows = []
+    omitted_history_events = 0
+    for group_index, group in enumerate(groups):
+        group_history = history[group_index] if group_index < len(history) else {}
+        for kind, row_name in (("buildings", "ImmobileFabbricatiS"), ("lands", "ImmobileTerreniS")):
+            source_rows = _items(group.get(row_name))
+            history_rows_for_kind = group_history.get(kind) or []
+            for row_index, property_row in enumerate(source_rows):
+                unit_history = history_rows_for_kind[row_index] if row_index < len(history_rows_for_kind) else {}
+                identifier = _first(_first(property_row.get("DatiIdentificativi")).get("IdentificativoDefinitivo"))
+                reference = _joined([
+                    group.get("Descrizione") or identifier.get("Comune"),
+                    f"Sez. {identifier.get('SezUrbana') or identifier.get('SezCensuaria')}"
+                    if identifier.get("SezUrbana") or identifier.get("SezCensuaria") else "",
+                    f"Fg. {identifier.get('Foglio')}" if identifier.get("Foglio") else "",
+                    f"P.lla {identifier.get('ParticellaNum') or identifier.get('Particella')}"
+                    if identifier.get("ParticellaNum") or identifier.get("Particella") else "",
+                    f"Sub. {identifier.get('Subalterno')}" if identifier.get("Subalterno") else "",
+                ]) or "Riferimento catastale non indicato"
+                for source in unit_history.get("sources") or []:
+                    omitted_history_events += int(source.get("omitted_events") or 0)
+                    source_label = _joined([
+                        source.get("label"),
+                        f"Documento #{source.get('document_id')}" if source.get("document_id") else "",
+                        f"situazione al {source.get('reference_date')}" if source.get("reference_date") else "",
+                    ])
+                    for event_index, event in enumerate(source.get("ownership") or [], start=1):
+                        owners = _joined([
+                            _joined([
+                                owner.get("name"), owner.get("right"), owner.get("quota"), owner.get("period")
+                            ])
+                            for owner in event.get("owners") or []
+                        ], "; ")
+                        act = _joined([
+                            event.get("act"), event.get("date"),
+                            f"dal {event.get('start')}" if event.get("start") else "",
+                            f"al {event.get('end')}" if event.get("end") else "",
+                            "in corso" if event.get("ongoing") else "",
+                        ])
+                        history_rows.append([reference, source_label, str(event_index), act or "Atto non descritto", owners or "Titolari non indicati"])
+    if history_rows:
+        history_items: list[dict[str, Any]] = [_table(
+            "Eventi storici dalle visure per immobile collegate",
+            ["Bene", "Documento sorgente", "N.", "Atto e periodo", "Titolari, diritti e quote"],
+            ["1.5fr", "1.7fr", "auto", "2.2fr", "2.4fr"], ["left"] * 5, history_rows,
+        )]
+        if omitted_history_events:
+            history_items.append({"kind": "note", "text": f"Eventi storici non riportati: {omitted_history_events}."})
+        else:
+            history_items.append({"kind": "note", "text": "Sono inclusi tutti gli eventi contenuti nei documenti sorgente selezionati per ciascuna unità."})
+        sections.append({"title": "Storia catastale e titolarità documentale", "badges": [], "items": history_items})
+
     parcel_items = _parcel_items(lookup)
     if parcel_items:
         sections.append({"title": "Mappa catastale", "badges": [], "items": parcel_items})
+    visura_items = _subject_visura_items(subject_report.get("subject_documents"), subject_report.get("subject_hub"))
+    if visura_items:
+        sections.append({"title": "Altre visure per soggetto", "badges": [], "items": visura_items})
+    hub_items = _subject_hub_report_items(subject_report.get("subject_hub"), portfolio=subject_report.get("subject_portfolio"))
+    if hub_items:
+        sections.append({"title": "Risultato completo, copertura e dati per particella", "badges": [], "items": hub_items})
+    archive_items = _archive_report_items(subject_report.get("archive"))
+    if archive_items:
+        sections.append({"title": "Archivio storico completo dei documenti", "badges": [], "items": archive_items})
     sections.append({"title": "Avvertenze", "badges": [], "items": [{"kind": "note", "text": (
         "Documento generato da SISTER a partire dalla visura catastale. Le stime OMI e i valori catastali sono indicativi "
         "e non costituiscono perizia; i terreni non hanno quotazioni OMI. I dati personali qui riportati sono soggetti "
         "alla normativa sulla protezione dei dati.")}]})
+    subtitle = f"Visura soggetto {variant} — {_TIPO_CATASTO.get(tipo, tipo)} — {province}".strip(" —")
+    if subject_report:
+        subtitle = f"Report completo del soggetto · {subtitle}"
     return {
         "title": name,
-        "subtitle": f"Visura soggetto {variant} — {_TIPO_CATASTO.get(tipo, tipo)} — {province}".strip(" —"),
+        "subtitle": subtitle,
         "footer": f"SISTER · {name} · generato il {today.strftime('%d/%m/%Y')}",
         "meta": meta,
         "sections": sections,
@@ -685,12 +1238,17 @@ def property_context(doc: dict[str, Any], today: date) -> dict[str, Any]:
     }
 
 
-def build_context(doc: dict[str, Any], kpis: dict[str, Any] | None, lookup: dict[str, Any] | None,
-                  today: date | None = None) -> dict[str, Any]:
+def build_context(
+    doc: dict[str, Any],
+    kpis: dict[str, Any] | None,
+    lookup: dict[str, Any] | None,
+    today: date | None = None,
+    subject_report: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     today = today or date.today()
     xml = doc.get("xml_parsed") or {}
     if any(isinstance(xml.get(k), dict) for k in _SUBJECT_KEYS):
-        return subject_context(doc, kpis, lookup, today)
+        return subject_context(doc, kpis, lookup, today, subject_report)
     if doc.get("view"):
         return property_context(doc, today)
     raise PdfExportError("PDF export is available for visure only")

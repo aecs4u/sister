@@ -228,12 +228,15 @@
 (function () {
     if (document.querySelector('[data-document-pdf]')) return;
     var printButton = document.querySelector('button[onclick="window.print()"], button[data-aecs4u-print]');
+    var completeSubjectReport = {{ (subject_fiscal_code|length > 0 or (doc and doc.query_only))|tojson }};
     var link = document.createElement('a');
     link.className = printButton ? printButton.className : 'btn btn-outline-light';
     link.href = {{ pdf_url|tojson }};
     link.dataset.documentPdf = 'true';
-    link.title = 'Scarica la pagina in PDF (A4 orizzontale)';
-    link.innerHTML = '<i class="fas fa-file-pdf me-2" aria-hidden="true"></i>PDF';
+    link.title = completeSubjectReport
+      ? 'Scarica il report completo del soggetto in PDF'
+      : 'Scarica la visura in PDF (A4 orizzontale)';
+    link.innerHTML = '<i class="fas fa-file-pdf me-2" aria-hidden="true"></i>' + (completeSubjectReport ? 'Report completo' : 'PDF');
     if (printButton) { printButton.before(link); return; }
     // without a print button the link still goes next to the hero's other actions
     var host = document.querySelector('.page-hero .d-flex .btn');

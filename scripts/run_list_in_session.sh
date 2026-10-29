@@ -16,6 +16,8 @@ fi
 usage() {
   printf 'Usage: %s SOURCE_LIST.md [BATCH_DIR]\n' "$0" >&2
   printf 'Build a SISTER batch from the Markdown list and run it in the current logged-in session.\n' >&2
+  printf 'Without BATCH_DIR, resumes the latest saved batch for this list when one exists.\n' >&2
+  printf 'After the batch, imports ready, not-yet-stored documents from Richieste.\n' >&2
 }
 
 if [[ $# -lt 1 || $# -gt 2 ]]; then
@@ -39,8 +41,20 @@ if [[ $# -eq 2 ]]; then
   BATCH_DIR="$(realpath -m -- "$2")"
 else
   LIST_NAME="$(basename -- "$SOURCE_LIST" .md)"
-  RUN_ID="$(date +%Y%m%d_%H%M%S)"
-  BATCH_DIR="$ROOT/outputs/batches/${LIST_NAME}_${RUN_ID}"
+  BATCH_ROOT="$ROOT/outputs/batches"
+  BATCH_DIR=""
+  # Timestamped folder names sort chronologically, so the last matching journal is the latest run.
+  for candidate in "$BATCH_ROOT/${LIST_NAME}_"*; do
+    if [[ -d "$candidate" && -f "$candidate/batch_journal.jsonl" ]]; then
+      BATCH_DIR="$candidate"
+    fi
+  done
+  if [[ -n "$BATCH_DIR" ]]; then
+    printf 'Resuming saved batch for %s: %s\n' "$(basename -- "$SOURCE_LIST")" "$BATCH_DIR"
+  else
+    RUN_ID="$(date +%Y%m%d_%H%M%S)"
+    BATCH_DIR="$BATCH_ROOT/${LIST_NAME}_${RUN_ID}"
+  fi
 fi
 
 mkdir -p -- "$BATCH_DIR"

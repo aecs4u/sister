@@ -46,6 +46,7 @@ from .database import (
     get_db_properties_for_response,
     get_document_by_id,
     get_document_structured_extraction,
+    get_documents_by_ids,
     get_documents_for_response,
     get_response,
     get_result_record,
@@ -3437,7 +3438,11 @@ async def _render_doc_from_db(
         land_registry_kpis = await _subject_land_registry_calculation(
             xml_shown, map_lookup, user, scope_type="document", scope_id=doc.get("id") or doc.get("filename")
         )
-        land_registry_history = await subject_land_registry_history(xml_p)
+        land_registry_history = (
+            await subject_land_registry_history(xml_p, max_events=None)
+            if as_pdf
+            else await subject_land_registry_history(xml_p)
+        )
     from .display import merge_identifiers, readable_owners, subject_for_theme
 
     # the lookups above need the visura's own tree; the page then lists the elenco immobili's other units too
@@ -3445,10 +3450,30 @@ async def _render_doc_from_db(
         xml_shown = xml_p
     doc = {**doc, "xml_parsed": merge_identifiers(subject_for_theme(readable_owners(xml_shown)))}
     if as_pdf:
-        # the PDF of the page: same tree (visura + elenco groups), same valuation
+        # Subject reports also carry the archive and parcel evidence shown alongside the visura.
+        subject_report = None
+        pdf_lookup = map_lookup if land_map_kind == "soggetto" else None
+        if land_map_kind == "soggetto":
+            if map_lookup:
+                try:
+                    map_payload = await _parcel_map_payload(map_lookup)
+                    pdf_lookup = {**map_lookup, "omi_zone_features": map_payload["omi_zone_features"]}
+                except Exception as exc:  # noqa: BLE001 - the report remains useful without the optional OMI overlay.
+                    logger.warning("OMI map overlay unavailable in PDF: %s", type(exc).__name__)
+            if subject_fiscal_code:
+                subject_report = {
+                    "archive": subject_archive,
+                    "subject_documents": subject_documents or [],
+                    "subject_hub": subject_hub,
+                    "subject_portfolio": subject_portfolio,
+                    "land_registry_history": land_registry_history,
+                }
+                if subject_hub:
+                    pdf_lookup = await _hub_parcel_map_for_pdf(subject_hub) or pdf_lookup
         return await _subject_pdf_response(
-            {**doc, "xml_parsed": xml_shown}, land_registry_kpis, map_lookup if land_map_kind == "soggetto" else None,
+            {**doc, "xml_parsed": xml_shown}, land_registry_kpis, pdf_lookup,
             subject_fiscal_code or "",
+            subject_report=subject_report,
         )
     if land_map_kind == "soggetto" and subject_hub:
         # every parcel of the elenco is on the map, not only the ones the visura lists
@@ -4951,6 +4976,7 @@ async def _land_registry_map_context(lookup: dict[str, Any] | None) -> dict[str,
         "parcel_markers": lookup.get("parcel_markers") or [],
         "parcel_features": lookup.get("parcel_features") or [],
         "sheet_features": lookup.get("sheet_features") or [],
+        "omi_zone_features": lookup.get("omi_zone_features") or {"type": "FeatureCollection", "features": []},
         "listed_only": bool(lookup.get("listed_only")),
         "unmapped_parcels": lookup.get("unmapped_parcels") or [],
         "parcel_count": lookup.get("parcel_count") or 0,
@@ -7075,8 +7101,13 @@ async def _subject_document_archive(
     individually accessible.
     """
     associations = await find_subject_document_associations(code)
-    all_logical = _collapse_to_logical_docs([dict(item) for item in indexed_files])
-    physical_by_id = {int(item["id"]): item for item in indexed_files if item.get("id") is not None}
+    complete_indexed = [dict(item) for item in indexed_files]
+    indexed_ids = {int(item["id"]) for item in complete_indexed if item.get("id") is not None}
+    missing_associated_ids = set(associations) - indexed_ids
+    if missing_associated_ids:
+        complete_indexed.extend(await get_documents_by_ids(missing_associated_ids))
+    all_logical = _collapse_to_logical_docs(complete_indexed)
+    physical_by_id = {int(item["id"]): item for item in complete_indexed if item.get("id") is not None}
     extracted_ids = await find_documents_with_extraction(physical_by_id)
     related_ids = set(associations)
     cadastral_group_usage = cadastral_group_usage or {}
@@ -7346,7 +7377,12 @@ def _enrich_units_from_visure(units: list[dict], ownership: list[dict]) -> None:
 
 
 async def _subject_query_profile(
-    code: str, subject_documents: list[dict], indexed_files: list[dict], page: int = 1
+    code: str,
+    subject_documents: list[dict],
+    indexed_files: list[dict],
+    page: int = 1,
+    *,
+    exhaustive_ownership: bool = False,
 ) -> dict | None:
     """Hub of a subject built on its newest saved ``soggetto`` query (None when it was never queried).
 
@@ -7374,10 +7410,21 @@ async def _subject_query_profile(
     keys = {parcel_key(p.get("comune_id"), p.get("section"), p.get("sheet"), p.get("parcel")) for p in properties}
     keys.discard(None)
     document_ids = await find_parcel_document_ids(keys)
+    subject_inspection_ids = await find_subject_inspection_document_ids(code)
+    if exhaustive_ownership:
+        related_ids = set(subject_inspection_ids)
+        for ids in document_ids.values():
+            related_ids.update(ids)
+        missing_ids = related_ids - set(indexed_by_id)
+        if missing_ids:
+            indexed_by_id.update({
+                int(item["id"]): item
+                for item in await get_documents_by_ids(missing_ids)
+                if item.get("id") is not None
+            })
     request_records = await find_parcel_request_records(keys)
     with_map = await find_parcels_with_geometry(keys)
 
-    ownership_budget = [_HUB_OWNERSHIP_DOCUMENTS]
     parcels: dict[tuple, dict] = {}
     for prop in properties:
         right = own_rights.get(prop.get("result_id")) or {}
@@ -7431,7 +7478,6 @@ async def _subject_query_profile(
         parcel["has_map"] = parcel["key"] in with_map
         parcel["map_document_id"] = next((d["id"] for d in grouped["visure"]), None)
 
-    subject_inspection_ids = await find_subject_inspection_document_ids(code)
     subject_inspections = sorted(
         _hub_documents(subject_inspection_ids, indexed_by_id), key=lambda d: d["date"], reverse=True
     )
@@ -7466,6 +7512,11 @@ async def _subject_query_profile(
         parcels.values(),
         key=lambda x: (not x["is_building"], x["province"], x["municipality"], x["sheet"].zfill(5), x["parcel"].zfill(6)),
     )
+    ownership_budget = [
+        sum(len(parcel["units"]) for parcel in parcels.values())
+        if exhaustive_ownership
+        else _HUB_OWNERSHIP_DOCUMENTS
+    ]
     municipality_totals: dict[tuple, int] = {}
     for parcel in ordered:
         municipality = (parcel["province"], parcel["municipality"])
@@ -7985,6 +8036,23 @@ async def _build_hub_map(map_key: str, parcels: list[dict], data_url: str) -> di
     try:
         lookup = await _hub_map_lookup(parcels, publish)
         if lookup is not None:
+            zones_by_key = {}
+            for chunk in progress["chunks"]:
+                for feature in chunk["omi_zone_features"].get("features") or []:
+                    properties = feature.get("properties") or {}
+                    feature_key = str(properties.get("omi_feature_key") or properties.get("reference") or "")
+                    if not feature_key:
+                        continue
+                    previous = zones_by_key.get(feature_key)
+                    if previous is None or (
+                        properties.get("matches_owned_parcel")
+                        and not (previous.get("properties") or {}).get("matches_owned_parcel")
+                    ):
+                        zones_by_key[feature_key] = feature
+            lookup["omi_zone_features"] = {
+                "type": "FeatureCollection",
+                "features": list(zones_by_key.values()),
+            }
             lookup["data_url"] = data_url
             parcel_map = await _land_registry_map_context(lookup)
             complete = not lookup.get("failed_chunks")
@@ -8069,7 +8137,29 @@ async def _hub_parcel_map(profile: dict) -> dict | None:
     })
 
 
-async def _subject_pdf_response(doc: dict, kpis: dict | None, lookup: dict | None, code: str):
+async def _hub_parcel_map_for_pdf(profile: dict) -> dict | None:
+    """Wait for the complete hub map before embedding it in a downloadable report."""
+    parcel_map = await _hub_parcel_map(profile)
+    parcels = _hub_map_parcels(profile)
+    if not parcels:
+        return parcel_map
+    task = _HUB_MAP_TASKS.get(_hub_map_key(parcels))
+    if task is None:
+        return parcel_map
+    try:
+        return await asyncio.shield(task) or parcel_map
+    except Exception as exc:  # noqa: BLE001 - map failure must not block the report's tables and archive.
+        logger.warning("Complete hub map unavailable for PDF: %s", type(exc).__name__)
+        return parcel_map
+
+
+async def _subject_pdf_response(
+    doc: dict,
+    kpis: dict | None,
+    lookup: dict | None,
+    code: str,
+    subject_report: dict | None = None,
+):
     """PDF (Typst) of a subject page from the data the page was built on."""
     from fastapi import HTTPException
     from fastapi.responses import Response
@@ -8077,12 +8167,18 @@ async def _subject_pdf_response(doc: dict, kpis: dict | None, lookup: dict | Non
     from .pdf_typst import PdfExportError, build_context, pdf_filename, render_pdf
 
     try:
-        context = build_context(doc, kpis, lookup)
+        context = (
+            build_context(doc, kpis, lookup, subject_report=subject_report)
+            if subject_report is not None
+            else build_context(doc, kpis, lookup)
+        )
         content = await run_in_threadpool(render_pdf, context)
     except PdfExportError as exc:
         logger.warning("PDF export of subject %s failed: %s", code, exc)
         raise HTTPException(status_code=422, detail=f"PDF export not available: {exc}") from exc
-    stem = Path(str(doc.get("filename") or "")).stem or f"elenco_immobili_{code}"
+    stem = f"report_soggetto_{code}" if subject_report is not None else (
+        Path(str(doc.get("filename") or "")).stem or f"elenco_immobili_{code}"
+    )
     headers = {"Content-Disposition": f'attachment; filename="{pdf_filename(stem, doc.get("id") or 0)}"', "Cache-Control": "no-store"}
     return Response(content=content, media_type="application/pdf", headers=headers)
 
@@ -8122,7 +8218,9 @@ async def _render_query_only_subject(
     doc = _query_only_subject_doc(profile)
 
     try:
-        land_registry_map = await _hub_parcel_map(profile)
+        land_registry_map = await (
+            _hub_parcel_map_for_pdf(profile) if as_pdf else _hub_parcel_map(profile)
+        )
     except Exception as exc:  # noqa: BLE001 - the map and OMI estimate are optional additions to the subject archive
         logger.warning("Subject parcel map unavailable: %s", type(exc).__name__)
         land_registry_map = None
@@ -8136,7 +8234,13 @@ async def _render_query_only_subject(
         logger.warning("Subject valuation unavailable: %s", type(exc).__name__)
         land_registry_kpis = None
     if as_pdf:
-        return await _subject_pdf_response(doc, land_registry_kpis, land_registry_map, profile["code"])
+        return await _subject_pdf_response(
+            doc,
+            land_registry_kpis,
+            land_registry_map,
+            profile["code"],
+            subject_report={"archive": subject_archive, "subject_hub": profile},
+        )
     return theme.render(
         "catasto/entity.html",
         request,
@@ -8212,11 +8316,17 @@ async def _web_subject_profile(
     subject_documents = _collapse_to_logical_docs(candidates)
     is_company = route_prefix == "/companies"
     # the saved soggetto query is the hub's skeleton; it enriches the visura layout, or stands alone without a visura
-    subject_hub = await _subject_query_profile(normalized_code, subject_documents, indexed_files, page)
+    subject_hub = await _subject_query_profile(
+        normalized_code,
+        subject_documents,
+        indexed_files,
+        1 if as_pdf else page,
+        exhaustive_ownership=as_pdf,
+    )
     if subject_hub is not None and document is not None:
         subject_hub["pagination"]["query"] = f"&document={document}"
     if subject_hub is not None and not subject_documents:
-        subject_archive = None if as_pdf else await _subject_document_archive(
+        subject_archive = await _subject_document_archive(
             normalized_code, indexed_files, _subject_cadastral_group_usage(subject_hub)
         )
         return await _render_query_only_subject(
@@ -8330,7 +8440,7 @@ async def _web_subject_profile(
     cadastral_group_usage = _subject_cadastral_group_usage(subject_hub)
     if subject_hub is not None and not (doc.get("xml_content") or "").strip():
         # a visura stored only as PDF has no structured data for the visura layout: show the hub (it lists the file)
-        subject_archive = None if as_pdf else await _subject_document_archive(
+        subject_archive = await _subject_document_archive(
             normalized_code, indexed_files, cadastral_group_usage
         )
         return await _render_query_only_subject(request, theme, user, subject_hub, route_prefix, subject_archive, as_pdf)
@@ -8342,7 +8452,7 @@ async def _web_subject_profile(
             cadastral_group_usage.setdefault(int(source["id"]), []).append(
                 "Gruppi aggregati da una visura per soggetto provinciale"
             )
-    subject_archive = None if as_pdf else await _subject_document_archive(
+    subject_archive = await _subject_document_archive(
         normalized_code, indexed_files, cadastral_group_usage
     )
     return await _render_doc_from_db(
@@ -8363,7 +8473,7 @@ async def _web_subject_profile(
 
 @router.get("/persons/{fiscal_code}/pdf")
 async def web_person_pdf(request: Request, fiscal_code: str, document: int | None = None, user=Depends(_require_auth)):
-    """PDF of the /persons page (the visura selected with ``?document=`` plus the elenco immobili's groups)."""
+    """Complete PDF report for the person, with the selected visura and all linked archive evidence."""
     return await _web_subject_profile(
         request, fiscal_code, document, user=user, route_prefix="/persons", code_pattern=r"[A-Z0-9]{16}", as_pdf=True
     )
@@ -8371,7 +8481,7 @@ async def web_person_pdf(request: Request, fiscal_code: str, document: int | Non
 
 @router.get("/companies/{fiscal_code}/pdf")
 async def web_company_pdf(request: Request, fiscal_code: str, document: int | None = None, user=Depends(_require_auth)):
-    """PDF of the /companies page."""
+    """Complete PDF report for the company, with the selected visura and all linked archive evidence."""
     return await _web_subject_profile(
         request, fiscal_code, document, user=user, route_prefix="/companies", code_pattern=r"\d{11}", as_pdf=True
     )

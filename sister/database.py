@@ -1641,6 +1641,25 @@ async def get_document_by_id(doc_id: int) -> dict | None:
     return _document_record(doc, unit, comune, request_ref=ref, content=content)
 
 
+async def get_documents_by_ids(document_ids: Iterable[int]) -> list[dict]:
+    """Fetch document metadata for an explicit set of IDs, in bounded SQL batches."""
+    ids = sorted({int(document_id) for document_id in document_ids if document_id is not None})
+    if not ids:
+        return []
+    documents = []
+    async with _get_session_factory()() as session:
+        for offset in range(0, len(ids), 2000):
+            batch = ids[offset : offset + 2000]
+            rows = (await session.execute(
+                _document_select().where(Document.id.in_(batch)).order_by(Document.id)
+            )).all()
+            documents.extend(
+                _document_record(doc, unit, comune, request_ref=ref)
+                for doc, unit, comune, _content, ref in rows
+            )
+    return documents
+
+
 def parcel_key(comune_id: Any, section: Any, sheet: Any, parcel: Any) -> tuple[int, str, str, str] | None:
     """Comparable key of a parcel: comune, sezione and foglio/particella without leading zeros (``0060`` == ``60``)."""
     if comune_id is None or not str(sheet or "").strip() or not str(parcel or "").strip():

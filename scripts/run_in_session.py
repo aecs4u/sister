@@ -9,9 +9,9 @@ SISTER ends a session about 30 minutes after the login, whatever the activity. T
    character is wrong (SISTER rejects them), so nothing answered is asked twice;
 4. proves the session with one real search;
 5. runs the plans in order (``query batch --resume``) until ``--minutes`` after the login, or until the portal reports an
-   expired session, then interrupts the batch (the journal keeps every state, ``--resume`` continues) and stops the service,
-   which therefore never gets the chance to open a login of its own;
-6. prints the progress of each plan and what to do next.
+   expired session, then interrupts the batch (the journal keeps every state, ``--resume`` continues);
+6. downloads ready, not-yet-stored documents from SISTER's Richieste page, starting from the earliest request in the batch;
+7. stops the service, which therefore never gets the chance to open a login of its own, and prints progress and next steps.
 
     ../.venv/bin/python scripts/run_in_session.py --batch <dir> [--batch <dir> ...] [--minutes 26] [--logged-in-at 17:43]
     ../.venv/bin/python scripts/run_in_session.py --batch <dir> --dry-run          # plan pruning and timing only
@@ -30,6 +30,7 @@ import signal
 import subprocess
 import sys
 import time
+import urllib.parse
 import urllib.request
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -205,6 +206,45 @@ def cli_env(port: int) -> dict:
     return env
 
 
+def batch_requests_since(directories: list[Path]) -> str:
+    """Return the date of the earliest submitted request recorded in these batch journals."""
+    dates: list[str] = []
+    for directory in directories:
+        journal = directory / "batch_journal.jsonl"
+        if not journal.is_file():
+            continue
+        for line in journal.read_text(encoding="utf-8").splitlines():
+            try:
+                entry = json.loads(line)
+                stamp = entry.get("updated_at")
+                if not entry.get("request_ids") or not stamp:
+                    continue
+                dates.append(datetime.fromisoformat(stamp.replace("Z", "+00:00")).date().isoformat())
+            except (AttributeError, json.JSONDecodeError, TypeError, ValueError):
+                continue
+    return min(dates) if dates else ""
+
+
+def download_ready_documents(port: int, since: str) -> int:
+    """Import ready, not-yet-stored documents from SISTER's Richieste page."""
+    query = urllib.parse.urlencode({"since": since, "skip_known": "true"})
+    headers = {}
+    api_key = os.getenv("API_KEY") or os.getenv("VISURA_API_KEY")
+    if api_key:
+        headers["X-API-Key"] = api_key
+    request = urllib.request.Request(
+        f"http://127.0.0.1:{port}/visura/download-documents?{query}",
+        data=b"",
+        headers=headers,
+        method="POST",
+    )
+    with urllib.request.urlopen(request, timeout=300) as response:
+        result = json.load(response)
+    if result.get("status") != "completed":
+        raise RuntimeError(f"Risposta inattesa da download Richieste: {result.get('status')!r}")
+    return int(result.get("total_documents") or 0)
+
+
 def preflight(port: int, code: str, out: Path) -> bool:
     """One real search: reading the open page is not proof that the portal still honours the session."""
     command = [sys.executable, "-m", "sister.cli", "query", "soggetto", "--cf", code, "--wait", "--yes", "-o", str(out)]
@@ -290,7 +330,7 @@ def main() -> int:
     if args.probe:
         say("la sessione e' valida (prova con una scheda a parte)")
     service = None
-    outcome = "done"
+    outcome = "not_started"
     try:
         for attempt in (1, 2):
             try:
@@ -329,6 +369,14 @@ def main() -> int:
     except KeyboardInterrupt:
         outcome = "interrupted"
     finally:
+        since = batch_requests_since(args.batch)
+        if service is not None and outcome in {"done", "deadline", "interrupted"} and since:
+            say(f"controllo i documenti pronti in Richieste dal {since}")
+            try:
+                count = download_ready_documents(args.port, since)
+                say(f"Richieste: scaricati {count} documenti nuovi (quelli gia' salvati sono stati saltati)")
+            except Exception as exc:  # Keep the extraction result even if the portal document pass fails.
+                say(f"[yellow]download Richieste non completato: {exc}[/yellow]")
         stop(service)
         say("servizio fermo: nessun login automatico possibile")
 

@@ -70,7 +70,7 @@ def _date_key(value: Any) -> date:
     return date.min
 
 
-def _source_record(document: dict[str, Any]) -> dict[str, Any] | None:
+def _source_record(document: dict[str, Any], max_events: int | None = _MAX_EVENTS_PER_SOURCE) -> dict[str, Any] | None:
     view = build_visura_view(document.get("xml_content"))
     if not view or not view.get("ownership"):
         return None
@@ -102,14 +102,15 @@ def _source_record(document: dict[str, Any]) -> dict[str, Any] | None:
         return None
     family_label = "Fabbricati" if view.get("family") == "fabbricati" else "Terreni"
     variant_label = subtype.replace("_", " ").strip().title()
+    selected_ownership = ownership if max_events is None else ownership[:max_events]
     return {
         "document_id": document.get("document_id"),
         "label": f"Visura {family_label}" + (f" · {variant_label}" if variant_label else ""),
         "subtype": subtype,
         "reference_date": str(view.get("as_of") or document.get("reference_date") or "").strip(),
         "event_count": len(ownership),
-        "omitted_events": max(0, len(ownership) - _MAX_EVENTS_PER_SOURCE),
-        "ownership": ownership[:_MAX_EVENTS_PER_SOURCE],
+        "omitted_events": max(0, len(ownership) - len(selected_ownership)),
+        "ownership": selected_ownership,
         "created_at": str(document.get("created_at") or ""),
     }
 
@@ -142,7 +143,9 @@ def _select_sources(sources: list[dict[str, Any]]) -> list[dict[str, Any]]:
     )
 
 
-async def subject_land_registry_history(xml_parsed: dict[str, Any]) -> list[dict[str, Any]] | None:
+async def subject_land_registry_history(
+    xml_parsed: dict[str, Any], *, max_events: int | None = _MAX_EVENTS_PER_SOURCE
+) -> list[dict[str, Any]] | None:
     """Align the best stored per-unit ownership history with subject-visura table rows."""
     subject = next(
         (xml_parsed.get(key) for key in _SUBJECT_KEYS if isinstance(xml_parsed.get(key), dict)),
@@ -209,7 +212,7 @@ async def subject_land_registry_history(xml_parsed: dict[str, Any]) -> list[dict
     sources_by_location: dict[tuple[str, ...], list[dict[str, Any]]] = {}
     for document in documents:
         location = _location_key(document)
-        source = _source_record(document)
+        source = _source_record(document, max_events)
         if source is not None:
             sources_by_location.setdefault(location, []).append(source)
     for group_index, section_name, row_index, key in row_locations:
