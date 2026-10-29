@@ -717,9 +717,14 @@
                     zIndexOffset: 1000
                 });
                 var popup = document.createElement('span');
-                popup.textContent = approximate
-                    ? label + ' · ' + localized(container, 'approximate_location', 'Posizione indicativa: centro del foglio catastale')
-                    : label;
+                var osmAddress = item && item.position_source === 'osm_address';
+                popup.textContent = osmAddress
+                    ? label + ' · ' + (item.geocode_label
+                        ? 'OpenStreetMap: ' + item.geocode_label
+                        : 'Posizione indicativa da indirizzo geocodificato con OpenStreetMap')
+                    : (approximate
+                        ? label + ' · ' + localized(container, 'approximate_location', 'Posizione indicativa: centro del foglio catastale')
+                        : label);
                 marker.bindPopup(popup);
                 var entry = {
                     marker: marker,
@@ -881,7 +886,9 @@
             var omiZoneFeatures = data.omi_zone_features || { type: 'FeatureCollection', features: [] };
             var unmappedParcels = Array.isArray(data.unmapped_parcels) ? data.unmapped_parcels : [];
             var ownedSheetFeatures = sheetFeatures;
-            foundMarkers += parcelMarkers.length;
+            foundMarkers += parcelMarkers.filter(function (item) {
+                return item.position_source !== 'osm_address';
+            }).length;
 
             // These approximate points include listed parcels that have no exact geometry. Extend
             // the view bounds only; never render them as parcel positions.
@@ -921,23 +928,35 @@
                 if (listedOnly) rememberListedPosition([markerLat, markerLng]);
                 var markerKey = parcelMapKey(item);
                 if (listedOnly && !overviewParcelKeys.has(markerKey)) {
-                    addOverviewMarker(parcelOverviewMarkers, 'parcel', item, [markerLat, markerLng], false);
+                    addOverviewMarker(
+                        parcelOverviewMarkers,
+                        'parcel',
+                        item,
+                        [markerLat, markerLng],
+                        item.position_source === 'osm_address'
+                    );
                     overviewParcelKeys.add(markerKey);
                 }
                 if (listedOnly && featureKeys.has(markerKey)) return;
                 parcelSheetKeys.add(parcelSheetKey(item));
                 var selected = Boolean(item.selected);
+                var osmAddress = item.position_source === 'osm_address';
                 var marker = window.L.circleMarker([markerLat, markerLng], {
                     radius: selected ? 8 : 6,
-                    color: '#ffffff',
+                    color: osmAddress ? '#92400e' : '#ffffff',
                     weight: 2,
-                    fillColor: selected ? '#d63384' : '#0d6efd',
+                    fillColor: osmAddress ? '#f59e0b' : (selected ? '#d63384' : '#0d6efd'),
                     fillOpacity: 1
                 });
                 if (listedOnly && listedLayers.parcels) listedLayers.parcels.addLayer(marker);
                 else marker.addTo(instance.map);
                 var popup = document.createElement('span');
                 popup.textContent = item.reference || localized(container, 'parcel_fallback', 'Particella');
+                if (osmAddress) {
+                    popup.textContent += ' · ' + (item.geocode_label
+                        ? 'OpenStreetMap: ' + item.geocode_label
+                        : 'Posizione indicativa da indirizzo geocodificato con OpenStreetMap');
+                }
                 marker.bindPopup(popup);
                 var row = resolveRow(records, item);
                 var target = rowTarget(targets, row);

@@ -179,7 +179,8 @@ def prune_plan(directory: Path, answered: set[str]) -> tuple[int, int, int]:
     plan = json.loads(path.read_text(encoding="utf-8"))
     kept, done, invalid = [], 0, 0
     for query in plan.get("queries", []):
-        code = str((query.get("params") or {}).get("codice_fiscale") or "").strip().upper()
+        params = query.get("params") or {}
+        code = str(params.get("codice_fiscale") or params.get("identificativo") or "").strip().upper()
         if code and code in answered:
             done += 1
         elif len(code) == 16 and not valid_codice_fiscale(code):

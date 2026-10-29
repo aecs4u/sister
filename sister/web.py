@@ -3181,36 +3181,53 @@ async def web_valuation(request: Request):
 # ---------------------------------------------------------------------------
 
 _GEOCODE_CACHE: dict[str, dict[str, Any] | None] = {}
-_NOMINATIM_URL = "https://nominatim.openstreetmap.org/search"
+_NOMINATIM_URL = os.getenv("SISTER_NOMINATIM_URL", "https://nominatim.openstreetmap.org/search").strip()
+_GEOCODE_LOCK = asyncio.Lock()
+_GEOCODE_LAST_REQUEST_AT = 0.0
 
 
 async def _geocode_address(query: str) -> dict[str, Any] | None:
-    """Resolve an address to coordinates with OpenStreetMap Nominatim (no API key); results are cached per process."""
+    """Resolve an address with Nominatim, caching results and spacing requests at one per second."""
+    global _GEOCODE_LAST_REQUEST_AT
     key = re.sub(r"\s+", " ", query).strip().casefold()
     if key in _GEOCODE_CACHE:
         return _GEOCODE_CACHE[key]
     import httpx
 
-    try:
-        async with httpx.AsyncClient(timeout=6.0, headers={"User-Agent": "sister/1 (info@aecs4u.com)"}) as client:
-            response = await client.get(
-                _NOMINATIM_URL, params={"q": query, "format": "jsonv2", "limit": 1, "countrycodes": "it"}
-            )
-            response.raise_for_status()
-            rows = response.json()
-    except Exception as exc:
-        logger.warning("Geocoding unavailable: %s", type(exc).__name__)
-        return None  # not cached: a network error should not stick
-    hit = None
-    if rows:
-        hit = {
-            "lat": float(rows[0]["lat"]),
-            "lng": float(rows[0]["lon"]),
-            "label": rows[0].get("display_name", query),
-            "kind": rows[0].get("type", ""),
-        }
-    _GEOCODE_CACHE[key] = hit
-    return hit
+    async with _GEOCODE_LOCK:
+        if key in _GEOCODE_CACHE:
+            return _GEOCODE_CACHE[key]
+        delay = 1.0 - (time.monotonic() - _GEOCODE_LAST_REQUEST_AT)
+        if delay > 0:
+            await asyncio.sleep(delay)
+        _GEOCODE_LAST_REQUEST_AT = time.monotonic()
+        try:
+            async with httpx.AsyncClient(timeout=6.0, headers={"User-Agent": "sister/1 (info@aecs4u.com)"}) as client:
+                response = await client.get(
+                    _NOMINATIM_URL, params={"q": query, "format": "jsonv2", "limit": 1, "countrycodes": "it"}
+                )
+                response.raise_for_status()
+                rows = response.json()
+        except Exception as exc:
+            logger.warning("Geocoding unavailable: %s", type(exc).__name__)
+            return None  # not cached: a network error should not stick
+        hit = None
+        if rows:
+            try:
+                latitude = float(rows[0]["lat"])
+                longitude = float(rows[0]["lon"])
+            except (KeyError, TypeError, ValueError):
+                rows = []
+            else:
+                if -90 <= latitude <= 90 and -180 <= longitude <= 180:
+                    hit = {
+                        "lat": latitude,
+                        "lng": longitude,
+                        "label": rows[0].get("display_name", query),
+                        "kind": rows[0].get("type", ""),
+                    }
+        _GEOCODE_CACHE[key] = hit
+        return hit
 
 
 @router.get("/3d", response_class=HTMLResponse)
@@ -7387,6 +7404,7 @@ async def _subject_query_profile(
         units = parcel["units"]
         parcel["is_building"] = any(u.get("property_type") == "building" for u in units)
         address = next((u.get("address") for u in units if u.get("address")), None)
+        parcel["map_address"] = str(address or "").strip()
         parcel["map_query"] = f"{address}, {parcel['municipality']}" if address else ""
         ids = {i for i in document_ids.get(parcel["key"], set()) if (indexed_by_id.get(i) or {}).get("document_type") != "visura_soggetto"}
         docs = _hub_documents(ids, indexed_by_id)
@@ -7755,6 +7773,16 @@ def _hub_map_sheet_key(item: dict[str, Any]) -> tuple[str, str, str, str]:
     return province, municipality, part(item.get("section")), part(item.get("sheet"))
 
 
+def _hub_map_parcel_key(item: dict[str, Any]) -> tuple[str, str, str, str, str]:
+    """Stable parcel identity shared by hub profile addresses and map lookup results."""
+    def part(value: Any) -> str:
+        text = str(value or "").strip().upper()
+        return str(int(text)) if text.isdigit() else text
+
+    province, municipality, section, sheet = _hub_map_sheet_key(item)
+    return province, municipality, section, sheet, part(item.get("parcel"))
+
+
 def _hub_map_chunks(parcels: list[dict]) -> list[list[dict]]:
     """Parcels in lookup order (comune, then sheet) cut into chunks: a small one first, then the usual size."""
     ordered = sorted(parcels, key=lambda p: (p.get("province_code") or "", p.get("municipality_code") or "", p["sheet"]))
@@ -7839,7 +7867,7 @@ def _hub_map_parcels(profile: dict) -> list[dict]:
 
 def _hub_map_key(parcels: list[dict]) -> str:
     return hashlib.sha1(
-        json.dumps(sorted((p["province_code"], p["municipality_code"], p["section"], p["sheet"], p["parcel"], p["is_building"])
+        json.dumps(sorted((p["province_code"], p["municipality_code"], p["section"], p["sheet"], p["parcel"], p["is_building"], p.get("map_address", ""))
                           for p in parcels)).encode()
     ).hexdigest()
 
@@ -7874,10 +7902,17 @@ async def _build_hub_map(map_key: str, parcels: list[dict], data_url: str) -> di
     progress = _HUB_MAP_DATA[map_key] = {"chunks": [], "done": False, "total": len(_hub_map_chunks(parcels))}
     seen_sheets: set[tuple[str, str, str, str]] = set()
     seen_omi_zones: dict[str, bool] = {}
+    parcels_by_key = {_hub_map_parcel_key(parcel): parcel for parcel in parcels}
 
     async def publish(lookup: dict) -> None:
         for marker in lookup.get("parcel_markers") or []:
             marker["selected"] = False  # the merged lookup selects the very first one
+        address_fallbacks = []
+        for item in lookup.get("unmapped_parcel_items") or []:
+            source = parcels_by_key.get(_hub_map_parcel_key(item))
+            address = str((source or {}).get("map_address") or "").strip()
+            if address:
+                address_fallbacks.append((item, source, address))
         payload = await _parcel_map_payload(lookup)
         fresh = []
         for feature in payload["sheet_features"]["features"]:  # a sheet can be cut across two chunks
@@ -7904,6 +7939,46 @@ async def _build_hub_map(map_key: str, parcels: list[dict], data_url: str) -> di
                 fresh_omi_zones.append(feature)
         payload["omi_zone_features"]["features"] = fresh_omi_zones
         progress["chunks"].append(payload)
+
+        # Publish cadastral results first so a slow address lookup never delays the map.
+        # Geocoded points are explicitly approximate and are added only when the parcel
+        # has no cadastral polygon/centroid from the cadastral source.
+        for item, source, address in address_fallbacks:
+            query = ", ".join(
+                part for part in (
+                    address,
+                    str(source.get("municipality") or item.get("municipality") or "").strip(),
+                    str(source.get("province") or item.get("province") or "").strip(),
+                    "Italia",
+                ) if part
+            )
+            place = await _geocode_address(query)
+            if not place:
+                continue
+            try:
+                latitude, longitude = float(place["lat"]), float(place["lng"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            if not (-90 <= latitude <= 90 and -180 <= longitude <= 180):
+                continue
+            marker = {
+                "latitude": latitude,
+                "longitude": longitude,
+                "reference": item.get("reference") or "Particella",
+                "municipality": item.get("municipality") or source.get("municipality") or "",
+                "municipality_code": item.get("municipality_code") or source.get("municipality_code") or "",
+                "province": item.get("province") or source.get("province") or "",
+                "section": item.get("section") or source.get("section") or "",
+                "sheet": item.get("sheet") or source.get("sheet") or "",
+                "parcel": item.get("parcel") or source.get("parcel") or "",
+                "position_source": "osm_address",
+                "geocode_label": str(place.get("label") or ""),
+                "selected": False,
+            }
+            lookup.setdefault("parcel_markers", []).append(marker)
+            fallback_payload = _empty_map_payload()
+            fallback_payload["parcel_markers"].append(marker)
+            progress["chunks"].append(fallback_payload)
 
     complete = False
     parcel_map = None

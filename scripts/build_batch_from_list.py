@@ -4,9 +4,10 @@
     ../.venv/bin/python scripts/build_batch_from_list.py /mnt/mobile/data/aecs4u.it/sister/codici_fiscali.all.md \\
         --output-dir /mnt/mobile/data/aecs4u.it/sister/outputs/batch_da_richiedere_20261027
 
-16 characters -> ``soggetto`` (persona fisica), 11 digits -> ``soggetto-immobili`` with ``azienda`` (persona giuridica); both with
-``tipo_catasto`` E (Fabbricati and Terreni) and, with ``--tipo-richiesta storica``, "Tipo richiesta = Storica" (persone fisiche only; the persona giuridica form has no such control, the
-portal's default Attualità applies). A code with a wrong check character is left out and reported. Run the plan with
+16 characters -> ``soggetto`` (persona fisica), 11 digits -> ``azienda`` (persona giuridica), which reads the nationwide
+results table directly; both with ``tipo_catasto`` E (Fabbricati and Terreni) and, with ``--tipo-richiesta storica``,
+"Tipo richiesta = Storica" (persone fisiche only; the persona giuridica form has no such control, the portal's default
+Attualità applies). A code with a wrong check character is left out and reported. Run the plan with
 ``scripts/run_in_session.py --batch <output-dir>``.
 """
 
@@ -40,8 +41,8 @@ def main() -> int:
         if len(code) == 16 and valid_codice_fiscale(code):
             queries.append({"id": f"pf-{code}", "command": "soggetto", "params": {"codice_fiscale": code, "tipo_catasto": "E", **extra}})
         elif len(code) == 11 and (valid_partita_iva(code) or code.startswith("00000000")):
-            queries.append({"id": f"pi-{code}", "command": "soggetto-immobili",
-                            "params": {"codice_fiscale": code, "azienda": True, "tipo_catasto": "E"}})
+            queries.append({"id": f"pi-{code}", "command": "azienda",
+                            "params": {"identificativo": code, "tipo_catasto": "E"}})
         else:
             skipped.append(code)
     args.output_dir.mkdir(parents=True, exist_ok=True)
