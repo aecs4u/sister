@@ -1,5 +1,6 @@
 """Tests for web UI route handlers."""
 
+import re
 from types import SimpleNamespace
 
 import pytest
@@ -50,6 +51,87 @@ def test_hub_map_geocoding_retries_rural_address_without_unit_details():
     assert web._hub_map_geocode_query(
         "VIA FRANCESCO CRISPI n. 26 Piano T", "LAMPEDUSA E LINOSA", "AG"
     ) == "VIA FRANCESCO CRISPI 26, LAMPEDUSA E LINOSA, Agrigento, Italia"
+
+
+def test_document_pagination_is_newest_first_and_clamps_out_of_range_pages():
+    documents = [
+        {"id": document_id, "created_at": f"2026-10-{document_id:02d}"}
+        for document_id in range(1, 6)
+    ]
+
+    selected, page, page_count, offset = web._paginate_documents(documents, 99, page_size=2)
+
+    assert [document["id"] for document in selected] == [1]
+    assert (page, page_count, offset) == (3, 3, 4)
+
+
+def test_location_page_keeps_owner_visura_links_from_other_pages():
+    owner_cf = "RSSMRA85T10A562S"
+    property_document = {
+        "id": 1,
+        "document_type": "visura_fabbricati",
+        "provincia": "MI",
+        "comune": "MILANO",
+        "foglio": "1",
+        "particella": "2",
+        "intestati_json": '[{"CF":"' + owner_cf + '"}]',
+    }
+    owner_document = {
+        "id": 99,
+        "document_type": "visura_soggetto",
+        "oggetto": f"Visura soggetto ({owner_cf})",
+    }
+
+    prop_map = web._build_property_map([property_document], owner_subject_docs=[owner_document])
+    owner_links = prop_map["immobili"][0]["fogli"][0]["particelle"][0]["subalternos"][0]["docs"][0]["owner_docs"]
+
+    assert [document["id"] for document in owner_links] == [99]
+
+
+@pytest.mark.asyncio
+async def test_documents_hub_paginates_and_filters_all_favorites_before_slicing(monkeypatch):
+    from sister import database
+
+    documents = [
+        {
+            "id": document_id,
+            "document_type": "other",
+            "filename": f"document-{document_id}.pdf",
+            "file_format": "PDF",
+            "file_size": 1,
+            "created_at": "2026-10-01T00:00:00",
+        }
+        for document_id in range(1, 206)
+    ]
+
+    async def _get_all_documents(**_kwargs):
+        return documents
+
+    async def _visible_documents(_user, rows):
+        return rows
+
+    async def _favorite_ids(_user_key):
+        return {1, 101, 205}
+
+    monkeypatch.setattr(web, "get_all_documents", _get_all_documents)
+    monkeypatch.setattr(web, "_filter_purchased_documents", _visible_documents)
+    monkeypatch.setattr(web, "_favorite_user_key", lambda _user: "id:buyer")
+    monkeypatch.setattr(database, "get_document_favorite_ids", _favorite_ids)
+
+    paged = await web.web_documents(_fake_request(), page=2, user=SimpleNamespace(role="user"))
+    paged_context = paged["context"]
+    assert paged_context["page"] == 2
+    assert paged_context["page_count"] == 3
+    assert [document["id"] for document in paged_context["files"]] == list(range(105, 5, -1))
+
+    favorites = await web.web_documents(
+        _fake_request(), page=2, favorites=True, user=SimpleNamespace(role="user")
+    )
+    favorites_context = favorites["context"]
+    assert favorites_context["favorites_only"] is True
+    assert favorites_context["total"] == 3
+    assert favorites_context["page"] == favorites_context["page_count"] == 1
+    assert [document["id"] for document in favorites_context["files"]] == [205, 101, 1]
 
 
 @pytest.mark.asyncio
@@ -293,6 +375,37 @@ async def test_web_results_mixed_single_and_workflow(monkeypatch):
     resp = await web.web_results(request, user=None, source="workflow")
     ctx = resp["context"]
     assert ctx["total_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_web_results_preserves_single_no_match_status(monkeypatch):
+    request = _fake_request()
+
+    async def _find(**_kwargs):
+        return [
+            {
+                "request_id": "req_no_match",
+                "request_type": "visura",
+                "source": "single",
+                "success": False,
+                "status": "no_match",
+                "error": "Nessuna corrispondenza trovata",
+            }
+        ]
+
+    async def _count(**_kwargs):
+        return {"total_requests": 1, "total_responses": 1, "successful": 0, "failed": 0, "no_match": 1, "pending": 0}
+
+    async def _count_total(**_kwargs):
+        return 1
+
+    monkeypatch.setattr(web, "find_result_rows", _find)
+    monkeypatch.setattr(web, "count_result_rows", _count)
+    monkeypatch.setattr(web, "count_total_result_rows", _count_total)
+
+    response = await web.web_results(request, user=None, source="single")
+
+    assert response["context"]["results"][0]["status"] == "no_match"
 
 
 # ---------------------------------------------------------------------------
@@ -710,9 +823,185 @@ async def test_web_results_status_filter_passed_to_count(monkeypatch):
     monkeypatch.setattr(web, "count_result_rows", _count)
     monkeypatch.setattr(web, "count_total_result_rows", _count_total)
 
-    await web.web_results(request, user=None, status="failed", source="workflow")
+    response = await web.web_results(request, user=None, status="failed", source="workflow")
     assert count_kwargs["status"] == "failed"
     assert count_kwargs["source"] == "workflow"
+    assert "no_match" in response["context"]["stats_urls"]["no_match"]
+
+    await web.web_results(request, user=None, status="no_match", source="single")
+    assert count_kwargs["status"] == "no_match"
+
+
+def test_results_page_renders_mobile_cards_and_optional_columns(main_module, monkeypatch):
+    """The server-rendered page exposes cards on mobile and keeps optional data out of the default table."""
+    from fastapi.testclient import TestClient
+
+    row = _make_result_rows(1)[0]
+    row.update(
+        {
+            "status": "no_match",
+            "success": False,
+            "request_type_label": "Visura per soggetto",
+            "request_type_description": "Descrizione breve della query",
+            "request_type_tags": ["Catasto"],
+            "person_details": "Mario Rossi",
+            "fiscal_code": "RSSMRA85T10A562S",
+            "property_count": 2,
+            "owner_count": 1,
+        }
+    )
+
+    async def _find(**_kwargs):
+        return [row]
+
+    async def _count(**_kwargs):
+        return {
+            "total_requests": 1,
+            "total_responses": 1,
+            "successful": 0,
+            "failed": 0,
+            "no_match": 1,
+            "partial": 0,
+            "pending": 0,
+        }
+
+    async def _count_total(**_kwargs):
+        return 1
+
+    monkeypatch.setattr(web, "find_result_rows", _find)
+    monkeypatch.setattr(web, "count_result_rows", _count)
+    monkeypatch.setattr(web, "count_total_result_rows", _count_total)
+
+    client = TestClient(main_module.app)
+    response = client.get("/results")
+
+    assert response.status_code == 200
+    html = response.text
+    assert "results-mobile-cards" in html
+    assert "Richieste eseguite" in html
+    assert 'data-copy-request-id="req_0"' in html
+    assert "Scegli colonne" in html
+    assert 'data-result-column="request_type_tags"' in html
+    assert 'data-result-column="extracted_results"' in html
+    assert "Nessuna corrispondenza" in html
+    assert "/static/css/pages/results.css?v=20261030a" in html
+    assert html.count("visible: false") == 10
+    columns = html.split("columns: [", 1)[1].split("\n        ],", 1)[0]
+    assert re.findall(r'\{title: "([^"]+)"', columns)[:7] == [
+        "Data",
+        "Stato",
+        "Tipo richiesta",
+        "Soggetto / immobile",
+        "Comune / provincia",
+        "Rif. richiesta",
+        "Origine",
+    ]
+    for title in ("Data", "Stato"):
+        descriptor = re.search(r'\{title: "' + title + r'"[^}]*\}', columns)
+        assert descriptor and "frozen: true" in descriptor.group(0)
+    css = client.get("/static/css/pages/results.css")
+    assert css.status_code == 200
+    assert "@media (max-width: 767.98px)" in css.text
+    assert ".results-table-card" in css.text
+
+
+@pytest.mark.asyncio
+async def test_document_favorite_state_is_loaded_for_the_signed_in_user(monkeypatch):
+    from sister import database
+
+    user = SimpleNamespace(id="demo-id", username="demo", email="demo@example.com")
+    doc = {"id": 1886}
+    called = {}
+
+    async def _favorite_ids(user_key):
+        called["user_key"] = user_key
+        return {1886, 1885}
+
+    monkeypatch.setattr(database, "get_document_favorite_ids", _favorite_ids)
+
+    enabled = await web._load_document_favorite_state(doc, user)
+
+    assert enabled is True
+    assert called["user_key"] == "id:demo-id"
+    assert doc["favorites_enabled"] is True
+    assert doc["is_favorite"] is True
+
+
+@pytest.mark.asyncio
+async def test_result_detail_filter_clear_controls_are_labeled(main_module, monkeypatch):
+    from starlette.requests import Request
+
+    async def _get_result(_request_id):
+        return {
+            "request_id": "req_accessibility",
+            "request_type": "visura",
+            "tipo_catasto": "F",
+            "provincia": "Trieste",
+            "comune": "TRIESTE",
+            "foglio": "9",
+            "particella": "166",
+            "requested_at": "2026-10-30T10:00:00",
+            "responded_at": "2026-10-30T10:00:01",
+            "success": True,
+            "status": "completed",
+            "data": {},
+            "page_visits": [],
+        }
+
+    async def _get_docs(_request_id, **_kwargs):
+        return []
+
+    async def _get_properties(_request_id):
+        return [{"subject_fiscal_code": "RSSMRA85T10A562S"}]
+
+    async def _get_owners(_request_id):
+        return [{"fiscal_code": "RSSMRA85T10A562S"}]
+
+    monkeypatch.setattr(web, "get_result_record", _get_result)
+    monkeypatch.setattr(web, "get_documents_for_response", _get_docs)
+    monkeypatch.setattr(web, "get_db_properties_for_response", _get_properties)
+    monkeypatch.setattr(web, "get_db_owners_for_response", _get_owners)
+
+    rendered_context = {}
+
+    class _CaptureTheme:
+        def render(self, template_name, _request, **context):
+            rendered_context.update(context)
+            return {"template": template_name}
+
+    template_env = main_module.app.state.theme_setup.templates.env
+    # Patching the proxy attribute makes pytest teardown remove the backing key.
+    monkeypatch.setitem(main_module.app.state._state, "theme_setup", _CaptureTheme())
+
+    request = Request(
+        {
+            "type": "http",
+            "asgi": {"version": "3.0"},
+            "http_version": "1.1",
+            "method": "GET",
+            "scheme": "http",
+            "path": "/results/req_accessibility",
+            "raw_path": b"/results/req_accessibility",
+            "query_string": b"",
+            "headers": [],
+            "client": ("testclient", 50000),
+            "server": ("testserver", 80),
+            "app": main_module.app,
+        }
+    )
+    response = await web.web_result_detail(request, "req_accessibility", user=None)
+
+    assert response["template"] == "result_detail.html"
+    assert rendered_context["result"]["db_properties"]
+    assert rendered_context["result"]["db_owners"]
+    template_source, _, _ = template_env.loader.get_source(template_env, "result_detail.html")
+    template_env.get_template("result_detail.html")  # compile the real template
+    for control_id, label in (
+        ("prop-filter-clear", "Rimuovi il filtro sui titolari"),
+        ("owners-filter-clear", "Rimuovi il filtro sugli immobili"),
+    ):
+        match = re.search(r'<button\b(?:(?!>).)*\bid="' + control_id + r'"(?:(?!>).)*>', template_source, re.DOTALL)
+        assert match and f'aria-label="{label}"' in match.group(0)
 
 
 # ---------------------------------------------------------------------------

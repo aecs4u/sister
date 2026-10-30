@@ -1,0 +1,17 @@
+{
+  "name": "SISTER — Servizio di consultazione catastale",
+  "short_name": "SISTER",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#f8f9fa",
+  "theme_color": "#1b3b58",
+  "icons": [
+    {
+      "src": "/static/icons/apple-touch-icon.png",
+      "sizes": "180x180",
+      "type": "image/png",
+      "purpose": "any"
+    }
+  ]
+}

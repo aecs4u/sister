@@ -8,6 +8,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
+from uuid import uuid4
 
 from dotenv import load_dotenv
 
@@ -17,7 +18,7 @@ load_dotenv(Path(__file__).resolve().parents[2] / ".env", override=False)  # sha
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.exception_handlers import http_exception_handler as fastapi_http_exception_handler
-from fastapi.responses import JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from rich.logging import RichHandler
 from starlette.exceptions import HTTPException as StarletteHTTPException
@@ -278,6 +279,32 @@ app = FastAPI(
     dependencies=[Depends(_reuse_previous)],
 )
 
+
+@app.get("/robots.txt", include_in_schema=False)
+async def robots_txt():
+    """Keep this authenticated application and its user data out of search indexes."""
+    return PlainTextResponse("User-agent: *\nDisallow: /\n")
+
+
+@app.get("/favicon.ico", include_in_schema=False)
+async def favicon():
+    from fastapi.responses import FileResponse
+
+    return FileResponse(Path(__file__).parent / "static" / "icons" / "favicon.ico", media_type="image/x-icon")
+
+
+@app.get("/.well-known/security.txt", include_in_schema=False)
+async def security_txt(request: Request):
+    """Publish a current security contact through SISTER's public contact page."""
+    from datetime import datetime, timedelta, timezone
+
+    expires = (datetime.now(timezone.utc) + timedelta(days=365)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    contact = request.url_for("web_contact")
+    return PlainTextResponse(
+        f"Contact: {contact}\nExpires: {expires}\nPreferred-Languages: it, en\n",
+        headers={"Cache-Control": "public, max-age=86400"},
+    )
+
 # Delivery: compress HTML/JSON; exclude SSE and, where the installed Starlette supports the option, already-compressed
 # formats. Versioned theme assets (?v=) are immutable; SISTER's own static files are revalidated through their ETag.
 from starlette.middleware.base import BaseHTTPMiddleware  # noqa: E402
@@ -336,7 +363,41 @@ async def openapi_schema(_user=Depends(_docs_auth)):
 async def swagger_ui(_user=Depends(_docs_auth)):
     from fastapi.openapi.docs import get_swagger_ui_html
 
-    return get_swagger_ui_html(openapi_url="/openapi.json", title=f"{app.title} - Swagger UI")
+    response = get_swagger_ui_html(openapi_url="/openapi.json", title=f"{app.title} - Swagger UI")
+    html = response.body.decode("utf-8")
+    html = html.replace("    <html>", '    <html lang="it">', 1)
+    html = html.replace(
+        "    </head>",
+        '    <link rel="stylesheet" href="/static/css/swagger_ui.css?v=20261030a">\n    </head>',
+        1,
+    )
+    html = html.replace(
+        "    <body>",
+        '''    <body>
+    <a class="sister-swagger-skip" href="#main-content">Salta alla documentazione API</a>
+    <header class="sister-swagger-header">
+      <nav aria-label="Navigazione SISTER"><a href="/">SISTER</a></nav>
+      <div><h1>Documentazione API</h1><p>Esplora le operazioni disponibili in SISTER.</p></div>
+      <button id="sister-swagger-theme" type="button" aria-pressed="false">Tema scuro</button>
+    </header>
+    <main id="main-content" class="sister-swagger-main">''',
+        1,
+    )
+    html = html.replace('    <script src="', '    </main>\n    <script src="', 1)
+    html = html.replace(
+        "    </body>",
+        '    <script src="/static/js/swagger_ui.js?v=20261030a" defer></script>\n    </body>',
+        1,
+    )
+    return HTMLResponse(
+        content=html,
+        status_code=response.status_code,
+        headers={
+            key: value
+            for key, value in response.headers.items()
+            if key.lower() not in {"content-length", "content-type"}
+        },
+    )
 
 
 @app.get("/redoc", include_in_schema=False)
@@ -353,6 +414,30 @@ async def _http_exception_handler(request: Request, exc: StarletteHTTPException)
         ("/visura", "/auth", "/api", "/sezioni", "/health")
     )
     theme = getattr(request.app.state, "theme_setup", None)
+    if exc.status_code == 500:
+        request_id = _error_request_id(request)
+        logger.error("HTTP 500 response id=%s path=%s", request_id, request.url.path)
+        if wants_html and theme is not None:
+            try:
+                response = theme.render(
+                    "error.html",
+                    request,
+                    user=getattr(request.state, "user", None),
+                    status_code=500,
+                    detail="",
+                    request_id=request_id,
+                )
+                response.status_code = 500
+                response.headers["X-Request-ID"] = request_id
+                response.headers["Cache-Control"] = "no-store"
+                return response
+            except Exception:  # never let the error page itself fail the request
+                logger.exception("Rendering error.html failed for request id=%s", request_id)
+        return JSONResponse(
+            {"detail": "Internal Server Error", "request_id": request_id},
+            status_code=500,
+            headers={"X-Request-ID": request_id, "Cache-Control": "no-store"},
+        )
     if wants_html and theme is not None and exc.status_code in (401, 403, 404):
         try:
             response = theme.render(
@@ -367,6 +452,44 @@ async def _http_exception_handler(request: Request, exc: StarletteHTTPException)
         except Exception:  # never let the error page itself fail the request
             logger.exception("Rendering error.html failed")
     return await fastapi_http_exception_handler(request, exc)
+
+
+@app.exception_handler(Exception)
+async def _unhandled_exception_handler(request: Request, exc: Exception):
+    """Render generic server failures safely and give operators a correlation id."""
+    request_id = _error_request_id(request)
+    logger.exception("Unhandled request error id=%s path=%s", request_id, request.url.path)
+    wants_html = "text/html" in request.headers.get("accept", "") and not request.url.path.startswith(
+        ("/visura", "/auth", "/api", "/sezioni", "/health")
+    )
+    theme = getattr(request.app.state, "theme_setup", None)
+    if wants_html and theme is not None:
+        try:
+            response = theme.render(
+                "error.html",
+                request,
+                user=getattr(request.state, "user", None),
+                status_code=500,
+                detail="",
+                request_id=request_id,
+            )
+            response.status_code = 500
+            response.headers["X-Request-ID"] = request_id
+            response.headers["Cache-Control"] = "no-store"
+            return response
+        except Exception:
+            logger.exception("Rendering error.html failed for request id=%s", request_id)
+    return JSONResponse(
+        {"detail": "Internal Server Error", "request_id": request_id},
+        status_code=500,
+        headers={"X-Request-ID": request_id, "Cache-Control": "no-store"},
+    )
+
+
+def _error_request_id(request: Request) -> str:
+    """Reuse the tracing middleware ID so the user-facing support code matches the server log."""
+    request_id = getattr(request.state, "request_id", None)
+    return request_id if isinstance(request_id, str) and request_id else uuid4().hex[:16]
 
 # ---------------------------------------------------------------------------
 # Theme, static files, and web UI
@@ -613,6 +736,8 @@ try:
     theme_config.fonts_css_url = "/static/vendor/fonts/fonts.css"  # Inter + Lexend, self-hosted
     if not theme_config.site_logo:
         theme_config.site_logo = "/static/images/sister-logo.svg"
+    if not theme_config.favicon:
+        theme_config.favicon = "/static/icons/favicon.ico"
     theme_setup = setup_theme(
         app,
         config=theme_config,

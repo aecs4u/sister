@@ -7,6 +7,7 @@ import pytest
 from sqlalchemy import text
 
 import sister.database as database
+from sister.db_models import Document, DocumentContent
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -28,6 +29,37 @@ async def _rows(sql: str, **params) -> list[dict]:
 # ---------------------------------------------------------------------------
 # init / schema
 # ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_browse_metadata_select_does_not_load_archived_xml():
+    async with database._get_session_factory()() as session:
+        document = Document(file_name="metadata-only.xml", file_size=24)
+        session.add(document)
+        await session.flush()
+        document_id = document.id
+        session.add(DocumentContent(document_id=document_id, content="<Sensitive>archived XML</Sensitive>"))
+        session.add_all(
+            Document(file_name=f"metadata-only-extra-{index}.xml", file_size=24)
+            for index in range(101)
+        )
+        await session.commit()
+
+    sql = str(database._document_select(include_content=False)).lower()
+    assert "document_content" not in sql
+    assert "request" in sql
+
+    browse_rows = await database.get_all_documents()
+    unbounded_rows = await database.get_all_documents(limit=None)
+    selected_rows = await database.get_documents_by_ids([document_id])
+    detail = await database.get_document_by_id(document_id)
+
+    assert len(browse_rows) == 100
+    assert len(unbounded_rows) == 102
+    unbounded_document = next(row for row in unbounded_rows if row["id"] == document_id)
+    assert selected_rows[0]["id"] == document_id
+    assert unbounded_document["xml_content"] == selected_rows[0]["xml_content"] == ""
+    assert detail["xml_content"] == "<Sensitive>archived XML</Sensitive>"
 
 
 @pytest.mark.asyncio
@@ -429,6 +461,31 @@ async def test_count_responses_with_data():
     assert stats["successful"] == 3
     assert stats["failed"] == 0
     assert stats["pending"] == 0
+
+
+@pytest.mark.asyncio
+async def test_count_responses_separates_no_match_from_failures():
+    await database.save_request(
+        request_id="req_no_match_stats",
+        request_type="visura",
+        tipo_catasto="T",
+        provincia="Roma",
+        comune="ROMA",
+        foglio="1",
+        particella="9",
+    )
+    await database.save_response(
+        request_id="req_no_match_stats",
+        success=False,
+        tipo_catasto="T",
+        error="nessuna corrispondenza trovata",
+    )
+
+    stats = await database.count_responses()
+
+    assert stats["total_requests"] == stats["total_responses"] == 1
+    assert stats["successful"] == stats["failed"] == stats["pending"] == 0
+    assert stats["no_match"] == 1
 
 
 @pytest.mark.asyncio

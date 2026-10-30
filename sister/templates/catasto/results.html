@@ -9,15 +9,18 @@
   `tabulator_js_url` to self-hosted files.
 #}
 {% extends base_template|default("base.html") %}
-{% from "components/index.html" import stat_card, page_header %}
+{% from "components/index.html" import page_header %}
 {% from "macros/ui_base.html" import no_results %}
 {% from "components/related_links.html" import related_pages %}
+{% from "components/job.html" import status_badge %}
+{% from "_macros.html" import metric_card %}
 {% block page_title %}Risultati{% endblock %}
 
 {% block extra_css %}
 {{ super() }}
 <link rel="stylesheet" href="{{ tabulator_css_url|default('/static/vendor/tabulator-6.3.1/css/tabulator_bootstrap5.min.css') }}">
 <link rel="stylesheet" href="{{ static_url_path|default('/static/aecs4u-theme') }}/css/data-table.css{{ theme_asset_v|default('') }}">
+<link rel="stylesheet" href="/static/css/pages/results.css?v=20261030a">
 <script src="{{ tabulator_js_url|default('/static/vendor/tabulator-6.3.1/js/tabulator.min.js') }}"></script>
 {% endblock %}
 
@@ -30,7 +33,7 @@
     <div class="d-flex align-items-center gap-3">
       {% if current_count %}
       <span class="text-muted small">
-        Mostrate {{ offset + 1 }}&ndash;{{ offset + current_count }} di {{ total_count }}
+        Mostrate {{ "{:,}".format(offset + 1).replace(",", ".") }}&ndash;{{ "{:,}".format(offset + current_count).replace(",", ".") }} di {{ "{:,}".format(total_count|int).replace(",", ".") }}
         risultat{{ 'o' if total_count == 1 else 'i' }}
       </span>
       {% endif %}
@@ -48,19 +51,22 @@
   {# ── Dashboard stats ──────────────────────────────────────────────────────── #}
   <div class="row g-3 mb-4">
     <div class="col-lg col-md-4 col-6">
-      {{ stat_card('Richieste eseguite', stats.total_requests, icon='fa-list-check', color='primary', href=stats_urls.total) }}
+      {{ metric_card('Richieste eseguite', stats.total_requests, 'fa-list-check', 'primary', stats_urls.total) }}
     </div>
     <div class="col-lg col-md-4 col-6">
-      {{ stat_card('Completate', stats.successful, icon='fa-check-circle', color='success', href=stats_urls.completed) }}
+      {{ metric_card('Completate', stats.successful, 'fa-check-circle', 'success', stats_urls.completed) }}
     </div>
     <div class="col-lg col-md-4 col-6">
-      {{ stat_card('Parziali', stats.partial or 0, icon='fa-adjust', color='warning', href=stats_urls.partial) }}
+      {{ metric_card('Parziali', stats.partial or 0, 'fa-adjust', 'warning', stats_urls.partial) }}
     </div>
     <div class="col-lg col-md-4 col-6">
-      {{ stat_card('Fallite', stats.failed, icon='fa-times-circle', color='danger', href=stats_urls.failed) }}
+      {{ metric_card('Fallite', stats.failed, 'fa-times-circle', 'danger', stats_urls.failed) }}
     </div>
     <div class="col-lg col-md-4 col-6">
-      {{ stat_card('In attesa', stats.pending, icon='fa-hourglass-half', color='warning', href=stats_urls.pending) }}
+      {{ metric_card('In attesa', stats.pending, 'fa-hourglass-half', 'warning', stats_urls.pending) }}
+    </div>
+    <div class="col-lg col-md-4 col-6">
+      {{ metric_card('Senza corrispondenza', stats.no_match or 0, 'fa-circle-question', 'secondary', stats_urls.no_match) }}
     </div>
   </div>
 
@@ -137,7 +143,7 @@
           <label for="filter-status" class="form-label form-label-sm mb-1">Stato</label>
           <select class="form-select form-select-sm" name="status" id="filter-status">
             <option value="">Tutti gli stati</option>
-            {% for val, lbl in [('completed','Completate'),('partial','Parziali'),('failed','Fallite'),('error','Errore'),('running','In corso'),('pending','In attesa')] %}
+            {% for val, lbl in [('completed','Completate'),('partial','Parziali'),('failed','Fallite'),('no_match','Senza corrispondenza'),('error','Errore'),('running','In corso'),('pending','In attesa')] %}
             <option value="{{ val }}" {% if status == val %}selected{% endif %}>{{ lbl }}</option>
             {% endfor %}
           </select>
@@ -184,11 +190,56 @@
 
   {# ── Results table ─────────────────────────────────────────────────────────── #}
   {% if results %}
-  <div class="card border-0 shadow-sm mb-4">
-    <div class="card-body p-0">
-      <div id="tabulator-results"></div>
+  <section class="results-mobile-cards" aria-label="Richieste eseguite">
+    {% for r in results %}
+    {% set result_href = ('/workflows/' if r.source == 'workflow' else '/results/') ~ r.request_id %}
+    <article class="card results-mobile-card" aria-labelledby="mobile-result-title-{{ loop.index }}">
+      <div class="card-body">
+        <div class="d-flex flex-wrap align-items-start justify-content-between gap-2 mb-2">
+          <h2 class="h6 mb-0" id="mobile-result-title-{{ loop.index }}">{{ r.request_type_label or r.request_type or 'Richiesta' }}</h2>
+          {{ status_badge(r.status) }}
+        </div>
+        <div class="d-flex align-items-center gap-2 mb-3">
+          <a href="{{ result_href }}" class="font-monospace text-break">{{ r.request_id[:20] }}{% if r.request_id|length > 20 %}…{% endif %}</a>
+          <button class="btn btn-sm btn-outline-secondary request-id-copy" type="button"
+                  data-copy-request-id="{{ r.request_id }}" aria-label="Copia il riferimento della richiesta" title="Copia il riferimento">
+            <i class="fas fa-copy" aria-hidden="true"></i>
+          </button>
+        </div>
+        <dl class="results-mobile-facts mb-0">
+          <div><dt>Data</dt><dd>{{ r.requested_at_display or '—' }}{% if r.responded_at_display %}<span class="text-muted"> · Risposta {{ r.responded_at_display }}</span>{% endif %}</dd></div>
+          <div><dt>Origine</dt><dd>{{ 'Workflow' if r.source == 'workflow' else 'Singola' }}</dd></div>
+          <div><dt>Soggetto / immobile</dt><dd>{% if r.person_details or r.company_details %}{{ r.person_details or r.company_details }}{% if r.fiscal_code %} · <span class="font-monospace">{{ r.fiscal_code }}</span>{% endif %}{% elif r.fiscal_code %}<span class="font-monospace">{{ r.fiscal_code }}</span>{% elif r.particella and r.particella != '-' %}Foglio {{ r.foglio or '—' }}, particella {{ r.particella }}{% else %}—{% endif %}</dd></div>
+          {% if r.comune or r.provincia %}<div><dt>Comune / provincia</dt><dd>{{ r.comune or '—' }}{% if r.provincia %} · {{ r.provincia }}{% endif %}</dd></div>{% endif %}
+          {% if r.request_type_tags %}<div><dt>Categorie</dt><dd>{{ r.request_type_tags|join(', ') }}</dd></div>{% endif %}
+          <div><dt>Risposta estratta</dt><dd>{{ "{:,}".format((r.total_results if r.total_results is defined and r.total_results is not none else (r.property_count or 0))|int).replace(',', '.') }} risultati · {{ "{:,}".format((r.total_intestati if r.total_intestati is defined and r.total_intestati is not none else (r.owner_count or 0))|int).replace(',', '.') }} intestatari</dd></div>
+        </dl>
+      </div>
+    </article>
+    {% endfor %}
+  </section>
+  <div class="card border-0 shadow-sm mb-4 results-table-card">
+    <details class="results-column-chooser">
+      <summary class="btn btn-outline-secondary btn-sm">Scegli colonne</summary>
+      <fieldset class="results-column-options" aria-label="Colonne aggiuntive">
+        <legend class="small text-muted">Mostra o nascondi colonne</legend>
+        <label><input type="checkbox" data-result-column="request_type_tags"> Categorie</label>
+        <label><input type="checkbox" data-result-column="tipo_catasto"> Catasto</label>
+        <label><input type="checkbox" data-result-column="provincia"> Provincia</label>
+        <label><input type="checkbox" data-result-column="comune"> Comune</label>
+        <label><input type="checkbox" data-result-column="foglio"> Foglio</label>
+        <label><input type="checkbox" data-result-column="particella"> Particella</label>
+        <label><input type="checkbox" data-result-column="fiscal_code"> Codice fiscale / P.IVA</label>
+        <label><input type="checkbox" data-result-column="property_count"> Immobili registrati</label>
+        <label><input type="checkbox" data-result-column="owner_count"> Intestatari registrati</label>
+        <label><input type="checkbox" data-result-column="extracted_results"> Conteggi estratti</label>
+      </fieldset>
+    </details>
+    <div class="card-body p-0 results-desktop-table">
+      <div id="tabulator-results" role="region" aria-label="Tabella delle richieste eseguite"></div>
     </div>
   </div>
+  <span class="visually-hidden" id="results-copy-status" role="status" aria-live="polite"></span>
 
   {# Pagination: first / previous / page N of M / next / last #}
   {% if prev_url or next_url %}
@@ -265,6 +316,8 @@
             "request_type_description": {{ (r.request_type_description or '') | tojson }},
             "request_type_tags": {{ (r.request_type_tags or []) | tojson }},
             "fiscal_code": {{ (r.fiscal_code or '') | tojson }},
+            "subject_or_property": {{ (r.person_details or r.company_details or r.fiscal_code or '') | tojson }},
+            "location_summary": {{ ([r.comune, r.provincia] | select | join(' · ')) | tojson }},
             "person_details": {{ (r.person_details or '') | tojson }},
             "company_details": {{ (r.company_details or '') | tojson }},
             "source": {{ (r.source or 'single') | tojson }},
@@ -285,10 +338,44 @@
     ];
 
     // "RAVENNA" / "ravenna" / "Ravenna" -> "Ravenna" (provincia and comune arrive in mixed case)
-    function titleCase(cell) {
-        var v = cell.getValue();
+    function titleCaseValue(v) {
         if (!v || v === "-") return v || "-";
         return String(v).toLowerCase().replace(/(^|[\s'-])([a-zà-ÿ])/g, function(_, sep, ch) { return sep + ch.toUpperCase(); });
+    }
+    function titleCase(cell) { return titleCaseValue(cell.getValue()); }
+
+    function copyRequestId(button) {
+        var requestId = button.dataset.copyRequestId;
+        if (!requestId) return;
+        var copyPromise;
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+            copyPromise = navigator.clipboard.writeText(requestId);
+        } else {
+            var fallback = document.createElement("textarea");
+            fallback.value = requestId;
+            fallback.setAttribute("readonly", "");
+            fallback.style.position = "fixed";
+            fallback.style.opacity = "0";
+            document.body.appendChild(fallback);
+            fallback.select();
+            var copied = document.execCommand("copy");
+            fallback.remove();
+            copyPromise = copied ? Promise.resolve() : Promise.reject(new Error("copy failed"));
+        }
+        copyPromise.then(function() {
+            var previousLabel = button.getAttribute("aria-label");
+            button.setAttribute("aria-label", "Riferimento copiato");
+            button.innerHTML = '<i class="fas fa-check" aria-hidden="true"></i>';
+            var status = document.getElementById("results-copy-status");
+            if (status) status.textContent = "Riferimento copiato negli appunti.";
+            window.setTimeout(function() {
+                button.setAttribute("aria-label", previousLabel || "Copia il riferimento della richiesta");
+                button.innerHTML = '<i class="fas fa-copy" aria-hidden="true"></i>';
+            }, 1200);
+        }).catch(function() {
+            var status = document.getElementById("results-copy-status");
+            if (status) status.textContent = "Impossibile copiare il riferimento. Selezionalo dal collegamento.";
+        });
     }
 
     var table = new Tabulator(el, {
@@ -304,36 +391,7 @@
             if (d.request_id) window.location.href = base + encodeURIComponent(d.request_id);
         },
         columns: [
-            {title: "#", field: "row_num", sorter: "number", width: 55, hozAlign: "center", frozen: true},
-            {title: "Rif. richiesta", field: "request_id_short",
-             headerFilter: "input", headerFilterPlaceholder: "filtra…",
-             formatter: function(cell) {
-                 var d = cell.getRow().getData();
-                 var base = d.source === "workflow" ? "/workflows/" : "/results/";
-                 var link = document.createElement("a");
-                 var code = document.createElement("code");
-                 link.href = base + encodeURIComponent(d.request_id);
-                 link.title = d.request_id;
-                 code.textContent = d.request_id_short + "...";
-                 link.appendChild(code);
-                 return link;
-             }, cellClick: function(e) { e.stopPropagation(); }, frozen: true},
-            {title: "Stato", field: "status", width: 170, hozAlign: "center",
-             headerFilter: "list",
-             headerFilterParams: {values: {"":"Tutti","completed":"Completata","partial":"Parziale","failed":"Fallita","error":"Errore","pending":"In attesa","running":"In corso","no_match":"Nessuna corrispondenza","cancelled":"Annullata"}},
-             formatter: function(cell) {
-                 var v = cell.getValue();
-                 var link = document.createElement("a");
-                 var span = document.createElement("span");
-                 link.href = filterUrl("status", v || "pending");
-                 var map = {completed:["bg-success","Completata"],failed:["bg-danger","Fallita"],error:["bg-danger","Fallita"],partial:["bg-warning text-dark","Parziale"],running:["bg-info text-dark","In corso"],no_match:["bg-secondary","Nessuna corrispondenza"],cancelled:["bg-secondary","Annullata"]};
-                 var m = map[v] || ["bg-secondary","In attesa"];
-                 span.className = "badge " + m[0];
-                 span.textContent = m[1];
-                 link.appendChild(span);
-                 return link;
-             }, cellClick: function(e) { e.stopPropagation(); }},
-            {title: "Data", field: "requested_at", sorter: "string",
+            {title: "Data", field: "requested_at", sorter: "string", frozen: true,
              headerFilter: "input", headerFilterPlaceholder: "filtra…",
              formatter: function(cell) {
                  var d = cell.getRow().getData();
@@ -350,21 +408,23 @@
                  }
                  return wrap;
              }},
-            {title: "Origine", field: "source", width: 150, hozAlign: "center",
+            {title: "Stato", field: "status", width: 170, hozAlign: "center", frozen: true,
              headerFilter: "list",
-             headerFilterParams: {values: {"": "Tutte", "single": "Singola", "workflow": "Workflow"}},
+             headerFilterParams: {values: {"":"Tutti","completed":"Completata","partial":"Parziale","failed":"Fallita","error":"Errore","pending":"In attesa","running":"In corso","no_match":"Nessuna corrispondenza","cancelled":"Annullata"}},
              formatter: function(cell) {
                  var v = cell.getValue();
                  var link = document.createElement("a");
                  var span = document.createElement("span");
-                 link.href = filterUrl("source", v || "single");
-                 span.className = v === "workflow" ? "badge bg-primary" : "badge bg-secondary";
-                 span.textContent = v === "workflow" ? "Workflow" : "Singola";
+                 link.href = filterUrl("status", v || "pending");
+                 var map = {completed:["bg-success","Completata"],failed:["bg-danger","Fallita"],error:["bg-danger","Fallita"],partial:["bg-warning text-dark","Parziale"],running:["bg-info text-dark","In corso"],no_match:["bg-secondary","Nessuna corrispondenza"],cancelled:["bg-secondary","Annullata"]};
+                 var m = map[v] || ["bg-secondary","In attesa"];
+                 span.className = "badge " + m[0];
+                 span.textContent = m[1];
                  link.appendChild(span);
                  return link;
              }, cellClick: function(e) { e.stopPropagation(); }},
             {title: "Tipo richiesta", field: "request_type",
-             minWidth: 230,
+             minWidth: 160,
              headerFilter: "list",
              headerFilterParams: {values: {
                  "": "Tutte",
@@ -383,15 +443,80 @@
                  link.href = filterUrl("request_type", d.request_type);
                  link.appendChild(span);
                  wrap.appendChild(link);
-                 if (d.request_type_description) {
-                     var description = document.createElement("small");
-                     description.className = "d-block text-muted mt-1";
-                     description.textContent = d.request_type_description;
-                     wrap.appendChild(description);
-                 }
                  return wrap;
              }, cellClick: function(e) { e.stopPropagation(); }},
-            {title: "Categorie", field: "request_type_tags", minWidth: 150,
+            {title: "Soggetto / immobile", field: "subject_or_property", minWidth: 180,
+             headerFilter: "input", headerFilterPlaceholder: "Filtra per soggetto o particella…",
+             formatter: function(cell) {
+                 var d = cell.getRow().getData();
+                 var value = d.subject_or_property;
+                 if (!value) {
+                     var property = [];
+                     if (d.foglio && d.foglio !== "-") property.push("Foglio " + d.foglio);
+                     if (d.particella && d.particella !== "-") property.push("Particella " + d.particella);
+                     value = property.join(" · ");
+                 }
+                 var text = document.createElement("span");
+                 text.className = value ? "small" : "text-muted";
+                 text.textContent = value || "—";
+                 return text;
+             }},
+            {title: "Comune / provincia", field: "location_summary", minWidth: 150,
+             headerFilter: "input", headerFilterPlaceholder: "Filtra per comune o provincia…",
+             formatter: function(cell) {
+                 var d = cell.getRow().getData();
+                 var parts = [];
+                 if (d.comune && d.comune !== "-") parts.push(titleCaseValue(d.comune));
+                 if (d.provincia && d.provincia !== "-") parts.push(titleCaseValue(d.provincia));
+                 var text = document.createElement("span");
+                 text.textContent = parts.join(" · ") || "—";
+                 return text;
+             }},
+            {title: "Rif. richiesta", field: "request_id_short",
+             headerFilter: "input", headerFilterPlaceholder: "filtra…",
+             formatter: function(cell) {
+                 var d = cell.getRow().getData();
+                 var base = d.source === "workflow" ? "/workflows/" : "/results/";
+                 var wrap = document.createElement("div");
+                 wrap.className = "d-flex align-items-center gap-1";
+                 var link = document.createElement("a");
+                 var code = document.createElement("code");
+                 link.href = base + encodeURIComponent(d.request_id);
+                 link.title = d.request_id;
+                 code.textContent = d.request_id.length > d.request_id_short.length
+                     ? d.request_id_short + "…"
+                     : d.request_id;
+                 link.appendChild(code);
+                 var copy = document.createElement("button");
+                 copy.type = "button";
+                 copy.className = "btn btn-sm btn-outline-secondary request-id-copy";
+                 copy.dataset.copyRequestId = d.request_id;
+                 copy.setAttribute("aria-label", "Copia il riferimento della richiesta");
+                 copy.title = "Copia il riferimento";
+                 copy.innerHTML = '<i class="fas fa-copy" aria-hidden="true"></i>';
+                 copy.addEventListener("click", function(e) {
+                     e.preventDefault();
+                     e.stopPropagation();
+                     copyRequestId(copy);
+                 });
+                 wrap.appendChild(link);
+                 wrap.appendChild(copy);
+                 return wrap;
+             }, cellClick: function(e) { e.stopPropagation(); }},
+            {title: "Origine", field: "source", width: 120, hozAlign: "center",
+             headerFilter: "list",
+             headerFilterParams: {values: {"": "Tutte", "single": "Singola", "workflow": "Workflow"}},
+             formatter: function(cell) {
+                 var v = cell.getValue();
+                 var link = document.createElement("a");
+                 var span = document.createElement("span");
+                 link.href = filterUrl("source", v || "single");
+                 span.className = v === "workflow" ? "badge bg-primary" : "badge bg-secondary";
+                 span.textContent = v === "workflow" ? "Workflow" : "Singola";
+                 link.appendChild(span);
+                 return link;
+             }, cellClick: function(e) { e.stopPropagation(); }},
+            {title: "Categorie", field: "request_type_tags", minWidth: 150, visible: false,
              headerFilter: "list",
              headerFilterParams: {values: {
                  "": "Tutte",
@@ -412,7 +537,7 @@
                  });
                  return wrap;
              }},
-            {title: "Codice fiscale / P.IVA", field: "fiscal_code", minWidth: 190,
+            {title: "Codice fiscale / P.IVA", field: "fiscal_code", minWidth: 190, visible: false,
              headerFilter: "input", headerFilterPlaceholder: "filtra codice…",
              formatter: function(cell) {
                  var value = cell.getValue();
@@ -421,35 +546,17 @@
                  text.textContent = value || "—";
                  return text;
              }},
-            {title: "Persona", field: "person_details", minWidth: 220, maxWidth: 340, maxWidth: 340,
-             headerFilter: "input", headerFilterPlaceholder: "nome, cognome, nascita…",
-             formatter: function(cell) {
-                 var value = cell.getValue();
-                 var text = document.createElement("span");
-                 text.className = value ? "small" : "text-muted";
-                 text.textContent = value || "—";
-                 return text;
-             }},
-            {title: "Azienda", field: "company_details", minWidth: 220, maxWidth: 340, maxWidth: 340,
-             headerFilter: "input", headerFilterPlaceholder: "ragione sociale…",
-             formatter: function(cell) {
-                 var value = cell.getValue();
-                 var text = document.createElement("span");
-                 text.className = value ? "small" : "text-muted";
-                 text.textContent = value || "—";
-                 return text;
-             }},
-            {title: "Cat.", field: "tipo_catasto",
+            {title: "Catasto", field: "tipo_catasto", visible: false,
              headerFilter: "input", headerFilterPlaceholder: "filtra…", width: 104, hozAlign: "center"},
-            {title: "Provincia", field: "provincia", formatter: titleCase,
+            {title: "Provincia", field: "provincia", formatter: titleCase, visible: false,
              headerFilter: "input", headerFilterPlaceholder: "filtra…"},
-            {title: "Comune", field: "comune", formatter: titleCase,
+            {title: "Comune", field: "comune", formatter: titleCase, visible: false,
              headerFilter: "input", headerFilterPlaceholder: "filtra…"},
-            {title: "F.", field: "foglio",
+            {title: "Foglio", field: "foglio", visible: false,
              headerFilter: "input", headerFilterPlaceholder: "filtra…", width: 104, hozAlign: "center"},
-            {title: "P.", field: "particella",
+            {title: "Particella", field: "particella", visible: false,
              headerFilter: "input", headerFilterPlaceholder: "filtra…", width: 104, hozAlign: "center"},
-            {title: "Imm.", field: "property_count", sorter: "number", width: 104, hozAlign: "center",
+            {title: "Immobili registrati", field: "property_count", sorter: "number", width: 150, hozAlign: "center", visible: false,
              headerTooltip: "Immobili (DB)",
              formatter: function(cell) {
                  var v = cell.getValue();
@@ -459,7 +566,7 @@
                  badge.textContent = v;
                  return badge;
              }},
-            {title: "Int.", field: "owner_count", sorter: "number", width: 104, hozAlign: "center",
+            {title: "Intestatari registrati", field: "owner_count", sorter: "number", width: 160, hozAlign: "center", visible: false,
              headerTooltip: "Intestati (DB)",
              formatter: function(cell) {
                  var v = cell.getValue();
@@ -469,7 +576,7 @@
                  badge.textContent = v;
                  return badge;
              }},
-            {title: "Risposta estratta", field: "extracted_results", sorter: "number", minWidth: 170,
+            {title: "Conteggi estratti", field: "extracted_results", sorter: "number", minWidth: 170, visible: false,
              headerTooltip: "Conteggi estratti dalla risposta",
              formatter: function(cell) {
                  var d = cell.getRow().getData();
@@ -482,11 +589,29 @@
         ],
     });
 
+    document.querySelectorAll("[data-result-column]").forEach(function(input) {
+        var column = table.getColumn(input.dataset.resultColumn);
+        if (!column) return;
+        input.checked = column.isVisible();
+        input.addEventListener("change", function() {
+            if (this.checked) column.show();
+            else column.hide();
+        });
+    });
+
+    document.addEventListener("click", function(event) {
+        var button = event.target.closest("[data-copy-request-id]");
+        if (!button) return;
+        event.preventDefault();
+        event.stopPropagation();
+        copyRequestId(button);
+    });
+
     // Give each header filter an accessible name (Tabulator renders them unlabelled).
     table.on("tableBuilt", function() {
         el.querySelectorAll(".tabulator-col").forEach(function(col) {
             var title = col.querySelector(".tabulator-col-title");
-            var label = "Filtra per " + (title ? title.textContent.trim() : "column");
+            var label = "Filtra per " + (title ? title.textContent.trim() : "colonna");
             col.querySelectorAll(".tabulator-header-filter input, .tabulator-header-filter select").forEach(function(c) {
                 c.setAttribute("aria-label", label);
             });

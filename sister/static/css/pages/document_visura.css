@@ -100,6 +100,8 @@ table.cat-compact-table td a, table.cat-compact-table td button { display: inlin
 table.cat-compact-table[data-land-map-kind="buildings"] td:first-child { min-width: 12rem; }
 table.cat-compact-table td:nth-child(8) { min-width: 9rem; }
 .document-land-map-kpis strong.text-end { white-space: nowrap; }
+.cat-table-wrap:focus-visible { outline: 2px solid var(--bs-primary, #0d6efd); outline-offset: 2px; }
+.cat-table-scroll-hint { font-size: .75rem; }
 
 /* ── Tracciabilità titolarità (per-property visura storica) ───────────────────
    Shown in each group's "Titolarità" card, one open <details> per property. */

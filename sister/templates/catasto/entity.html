@@ -29,6 +29,10 @@
    visura layout (web._subject_tree_with_elenco); here its coverage summary and the parcels something is archived for #}
 {% set subject_hub = subject_hub|default(none) %}
 {% set subject_archive = subject_archive|default(none) %}
+{% set land_registry_kpis_display = land_registry_kpis|default(none) %}
+{% if land_registry_kpis_display and land_registry_kpis_display.asset_value_note and land_registry_kpis_display.asset_value_note|length > 320 %}
+{% set land_registry_kpis_display = dict(land_registry_kpis, asset_value_note='Stima OMI indicativa; per metodo, ipotesi e limiti consulta «Come si calcola».') %}
+{% endif %}
 
 {# The subject's visure as a bullet list (the theme's subject_document_nav is a row of buttons), shown at the page bottom.
    Each entry carries what the page's "Documento" card showed, so that card is not repeated for the visura on screen. #}
@@ -132,9 +136,15 @@
 {% set kpis_in_main = land_map_parent == 'catasto/visura_soggetto_archive.html' %}
 {% set preferred_assessment_labels = {'attributedOmi': 'Stima attribuibile · fonte preferita'} if land_registry_kpis and land_registry_kpis.owner_assessment.preferred_source_used else {} %}
 {% block before_stats %}
+{% if subject_fiscal_code and subject_route_prefix in ['/persons', '/companies'] %}
+<div class="d-flex flex-wrap align-items-start gap-2 mb-3 no-print" data-subject-favorite-actions>
+    {{ subject_favorite_button(subject_fiscal_code, subject_favorite_enabled|default(false), subject_is_favorite|default(false), 'company' if subject_route_prefix == '/companies' else 'person') }}
+    {{ subject_note_panel(subject_fiscal_code, subject_favorite_enabled|default(false), 'company' if subject_route_prefix == '/companies' else 'person') }}
+</div>
+{% endif %}
 {% if kpis_in_main and land_registry_kpis %}
 <div class="document-land-map-kpis-main mb-4">
-    {{ cadastral_asset_kpis(land_registry_kpis,
+    {{ cadastral_asset_kpis(land_registry_kpis_display,
         omi_valuation_url='/valuation#stima-omi',
         cadastral_valuation_url='/valuation#valore-catastale') }}
     {{ central_omi_summary(land_registry_kpis) }}
@@ -155,14 +165,6 @@
 {% if doc and doc.id %}
 <div class="container-fluid pt-3 no-print" aria-label="Azioni del documento">
     {{ document_favorite_action(doc.id, doc.is_favorite|default(false), doc.favorites_enabled|default(false)) }}
-</div>
-{% endif %}
-{% if subject_fiscal_code and subject_route_prefix in ['/persons', '/companies'] %}
-<div class="container-fluid pt-3 no-print" aria-label="Azioni del soggetto">
-    <div class="d-flex flex-wrap align-items-start gap-2">
-        {{ subject_favorite_button(subject_fiscal_code, subject_favorite_enabled|default(false), subject_is_favorite|default(false), 'company' if subject_route_prefix == '/companies' else 'person') }}
-        {{ subject_note_panel(subject_fiscal_code, subject_favorite_enabled|default(false), 'company' if subject_route_prefix == '/companies' else 'person') }}
-    </div>
 </div>
 {% endif %}
 {% if land_map_slot == 'sidecar' and (land_registry_map or land_registry_kpis) %}
@@ -188,7 +190,7 @@
     </div>
     <aside class="document-land-map-aside" aria-label="{{ 'Indicatori e mappa delle particelle del soggetto' if land_registry_map else 'Indicatori del patrimonio catastale' }}">
         {% if not kpis_in_main %}
-        {{ cadastral_asset_kpis(land_registry_kpis,
+        {{ cadastral_asset_kpis(land_registry_kpis_display,
             omi_valuation_url='/valuation#stima-omi',
             cadastral_valuation_url='/valuation#valore-catastale') }}
         {{ central_omi_summary(land_registry_kpis) }}

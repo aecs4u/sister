@@ -1,4 +1,5 @@
 {% extends "auth_base.html" %}
+{% block auth_extra_head %}{% include "components/sister_meta_links.html" %}{% endblock %}
 {% block auth_page_title %}Accesso — SISTER{% endblock %}
 {% block auth_title %}Accedi a SISTER{% endblock %}
 {% block auth_subtitle %}Servizio per l'estrazione di dati catastali{% endblock %}
@@ -68,6 +69,7 @@
 {% endblock %}
 
 {% block auth_scripts %}
+<script src="/static/js/sister_font_preload.js?v=20261030a" defer></script>
 <script src="/static/js/sister_login.js?v=20261009a" defer></script>
 <script src="/static/js/sister_enhance.js?v=20261029b" defer></script>
 {% if clerk_publishable_key %}

@@ -1576,19 +1576,22 @@ def _document_record(doc: Document, unit: Optional[CadastralUnit], comune: Optio
     }
 
 
-_DOCUMENT_COLUMNS = (Document, CadastralUnit, IstatMunicipality, DocumentContent.content, Request.request_ref)
+def _document_select(*, include_content: bool = True):
+    """Select document metadata and related names; include archived text only for detail views that need it."""
+    columns = (Document, CadastralUnit, IstatMunicipality)
+    if include_content:
+        columns += (DocumentContent.content,)
+    columns += (Request.request_ref,)
 
-
-def _document_select():
-    """``select`` of a document with its unit, comune, archived text and request reference (all outer joins)."""
-    return (
-        select(*_DOCUMENT_COLUMNS)
+    stmt = (
+        select(*columns)
         .select_from(Document)
         .outerjoin(CadastralUnit, Document.cadastral_unit_id == CadastralUnit.id)
         .outerjoin(IstatMunicipality, CadastralUnit.comune_id == IstatMunicipality.numeric_code)
-        .outerjoin(DocumentContent, DocumentContent.document_id == Document.id)
-        .outerjoin(Request, Document.request_id == Request.id)
     )
+    if include_content:
+        stmt = stmt.outerjoin(DocumentContent, DocumentContent.document_id == Document.id)
+    return stmt.outerjoin(Request, Document.request_id == Request.id)
 
 
 async def get_documents_for_response(request_id: str, foglio: str = None, particella: str = None) -> list[dict]:
@@ -1711,7 +1714,7 @@ async def get_document_by_id(doc_id: int) -> dict | None:
 
 
 async def get_documents_by_ids(document_ids: Iterable[int]) -> list[dict]:
-    """Fetch document metadata for an explicit set of IDs, in bounded SQL batches."""
+    """Fetch document metadata (without archived content) for an explicit set of IDs, in bounded SQL batches."""
     ids = sorted({int(document_id) for document_id in document_ids if document_id is not None})
     if not ids:
         return []
@@ -1719,12 +1722,11 @@ async def get_documents_by_ids(document_ids: Iterable[int]) -> list[dict]:
     async with _get_session_factory()() as session:
         for offset in range(0, len(ids), 2000):
             batch = ids[offset : offset + 2000]
-            rows = (await session.execute(
-                _document_select().where(Document.id.in_(batch)).order_by(Document.id)
-            )).all()
+            stmt = _document_select(include_content=False).where(Document.id.in_(batch)).order_by(Document.id)
+            rows = (await session.execute(stmt)).all()
             documents.extend(
                 _document_record(doc, unit, comune, request_ref=ref)
-                for doc, unit, comune, _content, ref in rows
+                for doc, unit, comune, ref in rows
             )
     return documents
 
@@ -2519,12 +2521,16 @@ async def get_indexed_file_metadata() -> dict[str, dict]:
         return {document_file_path(row.file_name): {"id": row.id, "oggetto": row.subject_text or ""} for row in result}
 
 
-async def get_all_documents(limit: int = 100, offset: int = 0) -> list[dict]:
-    """Fetch all documents (for the browse page)."""
-    stmt = _document_select().order_by(Document.created_at.desc()).limit(limit).offset(offset)
+async def get_all_documents(limit: int | None = 100, offset: int = 0) -> list[dict]:
+    """Fetch document metadata for the browse page without transferring archived XML content."""
+    stmt = _document_select(include_content=False).order_by(Document.created_at.desc())
+    if limit is not None:
+        stmt = stmt.limit(limit)
+    if offset:
+        stmt = stmt.offset(offset)
     async with _get_session_factory()() as session:
         rows = (await session.execute(stmt)).all()
-    return [_document_record(doc, unit, comune, request_ref=ref) for doc, unit, comune, _content, ref in rows]
+    return [_document_record(doc, unit, comune, request_ref=ref) for doc, unit, comune, ref in rows]
 
 
 async def list_admin_documents(query: str = "", limit: int = 50, offset: int = 0) -> tuple[list[dict], int]:
@@ -3796,7 +3802,7 @@ async def cleanup_old_responses(ttl_seconds: int) -> int:
 
 
 async def count_responses() -> dict:
-    """Return basic stats about stored data."""
+    """Return request totals using the same failed/no-match definitions as the results page."""
     session_factory = _get_session_factory()
     async with session_factory() as session:
         counts = (
@@ -3805,16 +3811,22 @@ async def count_responses() -> dict:
                     func.count().label("requests"),
                     func.count().filter(Request.responded_at.is_not(None)).label("responses"),
                     func.count().filter(Request.success.is_(True)).label("successful"),
-                    func.count().filter(Request.success.is_(False)).label("failed"),
+                    func.count()
+                    .filter(Request.success.is_(False), ~_no_match_sql_condition())
+                    .label("failed"),
+                    func.count()
+                    .filter(Request.success.is_(False), _no_match_sql_condition())
+                    .label("no_match"),
                 ).select_from(Request)
             )
         ).one()
-    total_requests, total_responses, successful, failed = counts
+    total_requests, total_responses, successful, failed, no_match = counts
     return {
         "total_requests": total_requests,
         "total_responses": total_responses,
         "successful": successful,
         "failed": failed,
+        "no_match": no_match,
         "pending": max(total_requests - total_responses, 0),
     }
 

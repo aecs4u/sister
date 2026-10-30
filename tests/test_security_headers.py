@@ -70,6 +70,103 @@ def test_middleware_sets_a_fresh_nonce_per_request_and_skips_docs():
     assert client.get("/docs").headers["content-security-policy"] == PACKAGE_CSP
 
 
+def test_swagger_ui_adds_italian_accessible_shell_and_local_theme_assets():
+    import asyncio
+
+    from sister.main import app
+
+    route = next(route for route in app.routes if getattr(route, "path", None) == "/docs")
+    response = asyncio.run(route.endpoint(_user=object()))
+    html = response.body.decode("utf-8")
+
+    assert '<html lang="it">' in html
+    assert '<nav aria-label="Navigazione SISTER">' in html
+    assert '<main id="main-content"' in html
+    assert 'href="/static/css/swagger_ui.css?v=20261030a"' in html
+    assert 'src="/static/js/swagger_ui.js?v=20261030a"' in html
+    assert 'id="sister-swagger-theme" type="button" aria-pressed="false"' in html
+    assert '</main>\n    <script src="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui-bundle.js">' in html
+
+
+def test_root_security_metadata_and_app_icons_are_served(main_module):
+    import json
+
+    from fastapi.testclient import TestClient
+
+    client = TestClient(main_module.app)
+
+    robots = client.get("/robots.txt")
+    assert robots.status_code == 200
+    assert robots.text == "User-agent: *\nDisallow: /\n"
+
+    security = client.get("/.well-known/security.txt")
+    assert security.status_code == 200
+    fields = dict(line.split(": ", 1) for line in security.text.splitlines())
+    assert fields["Contact"] == "http://testserver/contact"
+    assert fields["Preferred-Languages"] == "it, en"
+    assert fields["Expires"].endswith("Z")
+    assert security.headers["cache-control"] == "public, max-age=86400"
+
+    manifest = client.get("/static/site.webmanifest")
+    assert manifest.status_code == 200
+    data = json.loads(manifest.text)
+    assert data["name"].startswith("SISTER")
+    assert data["icons"][0]["src"] == "/static/icons/apple-touch-icon.png"
+    icon = client.get(data["icons"][0]["src"])
+    assert icon.status_code == 200 and icon.content.startswith(b"\x89PNG\r\n\x1a\n")
+
+    favicon = client.get("/favicon.ico")
+    assert favicon.status_code == 200 and favicon.content[:4] == b"\x00\x00\x01\x00"
+    for path in ("/contact", "/landing", "/auth/login"):
+        page = client.get(path)
+        assert page.status_code == 200
+        assert 'rel="manifest" href="/static/site.webmanifest"' in page.text
+        assert 'rel="apple-touch-icon" sizes="180x180"' in page.text
+        assert 'rel="shortcut icon" type="image/x-icon" href="/static/icons/favicon.ico"' in page.text
+        assert "sister_font_preload.js?v=20261030a" in page.text
+
+
+def test_server_errors_are_generic_and_include_a_request_id():
+    from fastapi import FastAPI, HTTPException
+    from starlette.exceptions import HTTPException as StarletteHTTPException
+    from starlette.responses import HTMLResponse
+    from starlette.testclient import TestClient
+
+    from sister.main import _http_exception_handler, _unhandled_exception_handler
+
+    class _Theme:
+        def render(self, template_name, _request, **context):
+            return HTMLResponse(
+                f"{template_name}:{context['status_code']}:{context.get('request_id') or ''}"
+            )
+
+    app = FastAPI()
+    app.state.theme_setup = _Theme()
+    app.add_exception_handler(StarletteHTTPException, _http_exception_handler)
+    app.add_exception_handler(Exception, _unhandled_exception_handler)
+
+    @app.get("/unexpected")
+    async def unexpected():
+        raise RuntimeError("sensitive internal detail")
+
+    @app.get("/api/explicit")
+    async def explicit_api_error():
+        raise HTTPException(status_code=500, detail="sensitive explicit detail")
+
+    client = TestClient(app, raise_server_exceptions=False)
+    html = client.get("/unexpected", headers={"Accept": "text/html"})
+    assert html.status_code == 500
+    assert html.text.startswith("error.html:500:")
+    assert html.headers["x-request-id"] in html.text
+    assert "sensitive internal detail" not in html.text
+    assert html.headers["cache-control"] == "no-store"
+
+    api = client.get("/api/explicit", headers={"Accept": "application/json"})
+    assert api.status_code == 500
+    assert api.json() == {"detail": "Internal Server Error", "request_id": api.headers["x-request-id"]}
+    assert "sensitive explicit detail" not in api.text
+
+
 def _cookie_app(**kwargs):
     from fastapi import FastAPI
     from starlette.responses import PlainTextResponse

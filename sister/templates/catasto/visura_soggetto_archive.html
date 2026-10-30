@@ -24,7 +24,8 @@
   {%- if count is not none %} <span class="badge bg-secondary">{{ count }}</span>
   {%- elif properties|length %} <span class="badge bg-secondary">{{ properties|length }}</span>{%- endif %}
 </div>
-<div class="cat-table-wrap mb-3">
+<p class="cat-table-scroll-hint small text-muted text-end mb-1">Scorri orizzontalmente per vedere tutte le colonne.</p>
+<div class="cat-table-wrap mb-3" role="region" tabindex="0" aria-label="{{ _label }}: tabella scorrevole orizzontalmente">
   <table class="cat-compact-table">
     <thead>
       <tr>

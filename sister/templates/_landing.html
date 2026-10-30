@@ -2,6 +2,11 @@
 
 {% block title %}SISTER - Servizio dati catastali{% endblock %}
 
+{% block extra_head %}
+{{ super() }}
+{% include "components/sister_meta_links.html" %}
+{% endblock %}
+
 {% block hero_title %}<i class="fas fa-landmark me-2"></i>SISTER{% endblock %}
 
 {% block hero_subtitle %}Estrazione automatica dei dati catastali dal portale SISTER dell'Agenzia delle Entrate.{% endblock %}
@@ -110,5 +115,21 @@
   .landing-page { --landing-spacing: 3rem; }
   .hero-section .min-vh-75 { min-height: 0; }
   .hero-placeholder { max-height: 220px; }
+  .footer-links a { min-height: 24px; }
+  [data-bs-theme="dark"] .landing-page .btn-light {
+    background-color: var(--bs-secondary-bg) !important;
+    color: var(--bs-body-color) !important;
+    border-color: var(--bs-border-color) !important;
+  }
+  [data-bs-theme="dark"] .landing-page .btn-light:hover,
+  [data-bs-theme="dark"] .landing-page .btn-light:focus-visible {
+    background-color: var(--bs-tertiary-bg) !important;
+    color: var(--bs-body-color) !important;
+    border-color: var(--bs-border-color) !important;
+  }
 </style>
+{% endblock %}
+
+{% block extra_js %}
+<script src="/static/js/sister_font_preload.js?v=20261030a" defer></script>
 {% endblock %}

@@ -166,6 +166,13 @@
 footer a { display: inline-block; padding: .2rem 0; min-height: 24px; }
 .breadcrumb .breadcrumb-item > a,
 .leaflet-control-attribution a { display: inline-flex; align-items: center; min-height: 24px; }
+.info-page-body p a:not(.btn), .info-page-body li a:not(.btn) {
+    display: inline-block; min-height: 24px; line-height: 24px; vertical-align: middle;
+}
+.gl-section li a:not(.btn), .gl-section p a:not(.btn) {
+    display: inline-block; min-height: 24px; line-height: 24px; vertical-align: middle;
+}
+.footer-links a { display: inline-flex; align-items: center; min-height: 24px; }
 .tabulator-cell a { display: inline-flex; align-items: center; min-width: 24px; min-height: 24px; padding-block: .15rem; }
 
 /* D2/D4 · long unbreakable titles must not stretch the grid (Dossiers) */
@@ -336,8 +343,6 @@ code#req-id-text, .request-id { overflow-wrap: anywhere; word-break: break-all; 
 @media (max-width: 575.98px) { .navbar-actions { gap: .5rem !important; } .navbar-actions .user-menu-btn { padding-inline: .25rem; } }
 .table-responsive > table, .tabulator { max-width: 100%; }
 
-/* P1 · long lists paint lazily (the rows stay in the DOM for find-in-page, print and CSV) */
-.documents-hub .tab-pane:not(.active):not(.show) { content-visibility: auto; contain-intrinsic-size: auto 800px; }
 
 /* Round 2 (verified with a headless browser): the theme sets the outline-button colour directly, so the variables above
    were not enough; state selectors keep hover/active/disabled looking like buttons. */

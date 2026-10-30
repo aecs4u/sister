@@ -286,7 +286,13 @@ def parse_query_price_catalog(payload: Any) -> dict[str, Decimal]:
         if not isinstance(item, dict):
             continue
         active = item.get("is_active", item.get("active", True))
-        if active is False or active == 0 or str(active).strip().lower() in {"false", "no", "off"}:
+        if isinstance(active, bool):
+            is_active = active
+        elif isinstance(active, (int, Decimal)):
+            is_active = active == 1
+        else:
+            is_active = str(active).strip().lower() in {"1", "true", "yes", "on", "active"}
+        if not is_active:
             continue
         raw_endpoint = str(item.get("endpoint") or "").strip()
         if " " in raw_endpoint and raw_endpoint.split(None, 1)[0].upper() != "POST":

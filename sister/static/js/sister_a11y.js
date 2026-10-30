@@ -18,6 +18,25 @@
         if (name) el.setAttribute('aria-label', name.replace(/[._-]+/g, ' ').replace(/\.\.\.$/, '').trim());
       });
 
+    // Leaflet creates these anchors after the page loads. Their symbols and English title text are not reliable Italian
+    // names for screen-reader users, so label the controls explicitly (the observer below also catches later maps).
+    root.querySelectorAll('.leaflet-control-zoom-in').forEach(function (el) {
+      el.setAttribute('aria-label', 'Ingrandisci la mappa');
+      el.setAttribute('title', 'Ingrandisci la mappa');
+    });
+    root.querySelectorAll('.leaflet-control-zoom-out').forEach(function (el) {
+      el.setAttribute('aria-label', 'Riduci la mappa');
+      el.setAttribute('title', 'Riduci la mappa');
+    });
+    root.querySelectorAll('.leaflet-control-layers-toggle').forEach(function (el) {
+      el.setAttribute('aria-label', 'Seleziona la cartografia di base');
+      el.setAttribute('title', 'Seleziona la cartografia di base');
+    });
+    root.querySelectorAll('.leaflet-control-fullscreen-button').forEach(function (el) {
+      el.setAttribute('aria-label', 'Attiva o disattiva lo schermo intero');
+      el.setAttribute('title', 'Attiva o disattiva lo schermo intero');
+    });
+
     // Data tables without a caption get one from the closest heading, so they are announced meaningfully.
     root.querySelectorAll('table:not([aria-label]):not([aria-labelledby])').forEach(function (table) {
       if (table.caption) return;

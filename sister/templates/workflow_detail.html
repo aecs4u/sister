@@ -1,7 +1,7 @@
 {% extends "_base.html" %}
 {% from "components/index.html" import card, data_table_assets %}
 {% from "components/job.html" import status_badge, response_counts %}
-{% block page_title %}Workflow {{ workflow_id[:20] }}{% endblock %}
+{% block page_title %}Flusso {{ workflow_id[:20] }}{% endblock %}
 
 {% block extra_css %}
 {{ super() }}
@@ -29,7 +29,7 @@
             </table>
         </div>
         {% else %}
-        <span class="nested-empty">Empty</span>
+        <span class="nested-empty">Vuoto</span>
         {% endif %}
     {% elif value is sequence and value is not string %}
         {% if value %}
@@ -53,7 +53,7 @@
                 </table>
             </div>
             {% endif %}
-        {% else %}<span class="nested-empty">Empty</span>{% endif %}
+        {% else %}<span class="nested-empty">Vuoto</span>{% endif %}
     {% else %}
         {{ value if value not in (None, '') else '-' }}
     {% endif %}
@@ -63,28 +63,28 @@
 <div class="container-fluid py-4">
     <nav class="mb-3" aria-label="breadcrumb">
         <ol class="breadcrumb">
-            <li class="breadcrumb-item"><a href="/workflows">Workflows</a></li>
+            <li class="breadcrumb-item"><a href="/workflows">Flussi di lavoro</a></li>
             <li class="breadcrumb-item active" title="{{ workflow_id }}">{{ workflow_id[:30] }}{% if workflow_id|length > 30 %}&hellip;{% endif %}</li>
         </ol>
     </nav>
 
     {% if result %}
-    <!-- Workflow metadata -->
+    <!-- Metadati del flusso -->
     <div class="card border-0 shadow-sm mb-4">
         <div class="card-header d-flex justify-content-between align-items-center">
-            <h4 class="mb-0"><i class="fas fa-project-diagram text-primary me-2"></i>Workflow Details</h4>
+            <h4 class="mb-0"><i class="fas fa-project-diagram text-primary me-2"></i>Dettagli del flusso</h4>
             {{ status_badge(result.status, large=true) }}
         </div>
         <div class="card-body">
             <div class="row g-4">
                 <div class="col-lg-6">
                     <div class="mb-2">
-                        <div class="detail-label">Workflow ID</div>
+                        <div class="detail-label">ID del flusso</div>
                         <div class="detail-value"><code>{{ result.request_id }}</code></div>
                     </div>
                     <div class="row g-3">
                         <div class="col-6">
-                            <div class="detail-label">Preset</div>
+                            <div class="detail-label">Configurazione</div>
                             <div class="detail-value"><span class="badge bg-secondary">{{ result.request_type }}</span></div>
                         </div>
                         <div class="col-6">
@@ -92,11 +92,11 @@
                             <div class="detail-value">{{ result.tipo_catasto or '-' }}</div>
                         </div>
                         <div class="col-6">
-                            <div class="detail-label">Started</div>
+                            <div class="detail-label">Avviato</div>
                             <div class="detail-value">{{ result.requested_at_display or '-' }}</div>
                         </div>
                         <div class="col-6">
-                            <div class="detail-label">Updated</div>
+                            <div class="detail-label">Aggiornato</div>
                             <div class="detail-value">{{ result.responded_at_display or '-' }}</div>
                         </div>
                     </div>
@@ -130,7 +130,7 @@
         </div>
     </div>
 
-    {% call card("Extracted response", subtitle="Outputs produced by the executed workflow", class="border-0 shadow-sm mb-4") %}
+    {% call card("Risposta estratta", subtitle="Dati prodotti dal flusso eseguito", class="border-0 shadow-sm mb-4") %}
         {{ response_counts(result) }}
     {% endcall %}
 
@@ -169,7 +169,7 @@
                             <div class="accordion-body">
                                 {% if step.get('error') %}
                                 <div class="alert alert-danger mb-3">
-                                    <strong>Error:</strong> {{ step.error }}
+                                    <strong>Errore:</strong> {{ step.error }}
                                 </div>
                                 {% endif %}
                                 {% for key in ['data', 'result', 'output'] %}
@@ -209,7 +209,7 @@
                                     </tbody>
                                 </table>
                                 {% if doc.xml_parsed %}
-                                <h6 class="mt-3"><i class="fas fa-file-code text-secondary me-1"></i>Parsed XML</h6>
+                                <h6 class="mt-3"><i class="fas fa-file-code text-secondary me-1"></i>XML elaborato</h6>
                                 {{ render_nested(doc.xml_parsed) }}
                                 {% endif %}
                             </div>
@@ -245,9 +245,9 @@
     <!-- Raw JSON -->
     <div class="card border-0 shadow-sm">
         <div class="card-header d-flex justify-content-between align-items-center">
-            <h5 class="mb-0"><i class="fas fa-code text-muted me-2"></i>Raw JSON</h5>
+            <h5 class="mb-0"><i class="fas fa-code text-muted me-2"></i>JSON originale</h5>
             <button class="btn btn-sm btn-outline-secondary" type="button" data-bs-toggle="collapse" data-bs-target="#raw-json">
-                <i class="fas fa-eye me-1"></i>Toggle
+                <i class="fas fa-eye me-1" aria-hidden="true"></i>Mostra o nascondi
             </button>
         </div>
         <div class="collapse" id="raw-json">
@@ -261,9 +261,9 @@
     {% else %}
     <div class="alert alert-warning">
         <i class="fas fa-exclamation-triangle me-2"></i>
-        Workflow not found: <code>{{ workflow_id }}</code>
+        Flusso non trovato: <code>{{ workflow_id }}</code>
     </div>
-    <a href="/workflows" class="btn btn-primary">Back to Workflows</a>
+    <a href="/workflows" class="btn btn-primary">Torna ai flussi di lavoro</a>
     {% endif %}
 </div>
 {% endblock %}
@@ -275,7 +275,7 @@
     'use strict';
     var commonOpts = {
         layout: "fitDataFill", pagination: true, paginationSize: 25,
-        movableColumns: true, placeholder: "No data", height: "auto", maxHeight: "500px",
+        movableColumns: true, placeholder: "Nessun dato", height: "auto", maxHeight: "500px",
     };
     function makeColumns(keys) {
         return keys.map(function(key) {

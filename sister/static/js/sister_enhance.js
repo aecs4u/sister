@@ -82,6 +82,18 @@
     if (name === 'codice_fiscale') {
       return validCodiceFiscale(value) ? '' : 'Codice fiscale non valido: 16 caratteri, l’ultimo è di controllo.';
     }
+    if (name === 'identificativo') {
+      var cleaned = value.replace(/[\s\-\.]/g, '').toUpperCase();
+      if (/^\d+$/.test(cleaned)) {
+        if (cleaned.length !== 11) return 'La P.IVA deve avere esattamente 11 cifre.';
+        return validPartitaIva(cleaned) ? '' : 'La P.IVA non supera il controllo della cifra finale.';
+      }
+      if (/^[A-Z0-9]{16}$/.test(cleaned)) {
+        return validCodiceFiscale(cleaned) ? '' : 'Il codice fiscale non supera il controllo della lettera finale.';
+      }
+      if (value.trim().length >= 3) return ''; // company name
+      return 'Inserisci una P.IVA, un codice fiscale o una denominazione di almeno 3 caratteri.';
+    }
     if (/^\d{11}$/.test(value)) return validPartitaIva(value) ? '' : 'Partita IVA non valida: la cifra di controllo non torna.';
     if (/^[A-Z0-9]{16}$/.test(value)) return validCodiceFiscale(value) ? '' : 'Codice fiscale non valido: il carattere di controllo non torna.';
     return 'Inserisci una partita IVA (11 cifre) o un codice fiscale (16 caratteri).';
@@ -119,12 +131,21 @@
         if (!input.getAttribute('aria-describedby')) input.setAttribute('aria-describedby', help.id);
       }
       if (name === 'codice_fiscale' || name === 'identificativo') {
-        input.setAttribute('maxlength', '16');
-        input.setAttribute('autocapitalize', 'characters');
-        input.setAttribute('autocomplete', 'off');
-        input.setAttribute('spellcheck', 'false');
+        if (name === 'codice_fiscale') {
+          input.setAttribute('maxlength', '16');
+          input.setAttribute('autocapitalize', 'characters');
+          input.setAttribute('autocomplete', 'off');
+          input.setAttribute('spellcheck', 'false');
+        } else {
+          // `identificativo` also accepts company names, which can be longer than a fiscal code.
+          input.removeAttribute('maxlength');
+          input.removeAttribute('autocapitalize');
+        }
         var check = function () {
-          input.value = input.value.trim().toUpperCase();
+          input.value = input.value.trim();
+          if (name === 'codice_fiscale' || /^[A-Z0-9]{16}$/i.test(input.value) || /^\d{11}$/.test(input.value)) {
+            input.value = input.value.toUpperCase();
+          }
           showFieldError(input, fiscalMessage(name, input.value));
         };
         input.addEventListener('blur', check);

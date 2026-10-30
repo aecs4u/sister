@@ -7,6 +7,31 @@
 
 {% block page_title %}Documenti{% endblock %}
 
+{% macro documents_pager() %}
+{% if page_count > 1 %}
+<nav class="d-flex flex-wrap justify-content-between align-items-center gap-2 my-3" aria-label="Pagine dei documenti">
+    <p class="small text-muted mb-0">Mostrati {{ page_start }}–{{ page_end }} di {{ total }} documenti · {{ page_size }} per pagina. Filtri e ordinamento riguardano la pagina corrente.</p>
+    <ul class="pagination pagination-sm mb-0 flex-wrap">
+        {% if page > 1 %}
+        <li class="page-item"><a class="page-link" href="{{ request.url.include_query_params(page=1) }}" aria-label="Prima pagina">Prima</a></li>
+        <li class="page-item"><a class="page-link" href="{{ request.url.include_query_params(page=page - 1) }}" aria-label="Pagina precedente">Precedente</a></li>
+        {% else %}
+        <li class="page-item disabled"><span class="page-link" aria-disabled="true">Prima</span></li>
+        <li class="page-item disabled"><span class="page-link" aria-disabled="true">Precedente</span></li>
+        {% endif %}
+        <li class="page-item active" aria-current="page"><span class="page-link">Pagina {{ page }} di {{ page_count }}</span></li>
+        {% if page < page_count %}
+        <li class="page-item"><a class="page-link" href="{{ request.url.include_query_params(page=page + 1) }}" aria-label="Pagina successiva">Successiva</a></li>
+        <li class="page-item"><a class="page-link" href="{{ request.url.include_query_params(page=page_count) }}" aria-label="Ultima pagina">Ultima</a></li>
+        {% else %}
+        <li class="page-item disabled"><span class="page-link" aria-disabled="true">Successiva</span></li>
+        <li class="page-item disabled"><span class="page-link" aria-disabled="true">Ultima</span></li>
+        {% endif %}
+    </ul>
+</nav>
+{% endif %}
+{% endmacro %}
+
 {% block extra_css %}
 {{ super() }}
 <link rel="stylesheet" href="/static/css/doc_sections.css?v=20261009a">
@@ -60,14 +85,15 @@
 
 <div class="container-fluid documents-hub py-3">
     <div class="d-flex justify-content-end mb-2 no-print">
-        <button type="button" class="btn btn-sm btn-outline-danger" data-favorites-filter aria-pressed="false">
-            <i class="far fa-heart me-1" aria-hidden="true"></i>
-            <span data-favorites-filter-label>Solo preferiti</span>
+        <button type="button" class="btn btn-sm {{ 'btn-danger' if favorites_only else 'btn-outline-danger' }}" data-favorites-filter aria-pressed="{{ 'true' if favorites_only else 'false' }}">
+            <i class="{{ 'fas' if favorites_only else 'far' }} fa-heart me-1" aria-hidden="true"></i>
+            <span data-favorites-filter-label>{{ 'Mostra tutti' if favorites_only else 'Solo preferiti' }}</span>
         </button>
     </div>
     {% if total == 0 and not can_admin(user) %}
     <div class="alert alert-info" role="status"><i class="fas fa-circle-info me-2" aria-hidden="true"></i>Non hai ancora documenti disponibili. Per ottenere l’accesso a un documento <a class="alert-link" href="/contact">contatta l’amministratore</a> indicando le chiavi account del tuo <a class="alert-link" href="/profile">profilo</a> e l’ID o il nome del documento.</div>
     {% endif %}
+    {{ documents_pager() }}
     <ul class="nav nav-tabs documents-view-tabs mb-3" id="documents-view-tabs" role="tablist" aria-label="Viste documenti">
         <li class="nav-item" role="presentation">
             <button class="nav-link {{ 'active' if active_view == 'categories' else '' }}" id="documents-tab-categories"
@@ -139,6 +165,7 @@
             {% else %}<p class="text-muted py-4" data-lazy-view="files"><a href="/documents?view=files">Apri la vista per file</a></p>{% endif %}
         </section>
     </div>
+    {{ documents_pager() }}
 
     {{ related_pages("Collegamenti correlati", [
         ("/results", "Risultati", "Risalire dalla richiesta alla risposta salvata.", "fa-database"),
@@ -221,7 +248,7 @@ function showExportToast(type, html) {
     var container = document.getElementById('export-toast-container');
     var id = 'toast-' + Date.now();
     container.insertAdjacentHTML('beforeend', '<div id="' + id + '" class="alert alert-' + type + ' alert-dismissible shadow mb-2" role="alert">'
-        + html + '<button type="button" class="btn-close" data-bs-dismiss="alert"></button></div>');
+        + html + '<button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Chiudi"></button></div>');
     setTimeout(function () { var toast = document.getElementById(id); if (toast) toast.remove(); }, 8000);
 }
 

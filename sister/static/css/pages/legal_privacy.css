@@ -1,0 +1,25 @@
+/* SISTER privacy page extends the shared theme directly, not the common app shell. */
+.legal-page table.data-table {
+    display: block;
+    max-width: 100%;
+    overflow-x: auto;
+}
+
+.legal-page .toc-list a {
+    display: flex;
+    align-items: center;
+    min-height: 24px;
+}
+
+.legal-page p a:not(.btn) {
+    display: inline-block;
+    min-height: 24px;
+    line-height: 24px;
+    vertical-align: middle;
+}
+
+.footer-links a {
+    display: inline-flex;
+    align-items: center;
+    min-height: 24px;
+}

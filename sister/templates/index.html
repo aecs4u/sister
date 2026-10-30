@@ -3,6 +3,7 @@
 
 {% from "components/index.html" import stat_card, card, page_header %}
 {% from "components/job.html" import status_badge, response_summary %}
+{% from "_macros.html" import metric_card %}
 {% from "macros/ui_base.html" import no_results %}
 
 {% block content %}
@@ -23,19 +24,19 @@
     <!-- Stats -->
     <div class="row g-4 mb-4">
         <div class="col-lg col-md-4 col-6">
-            {{ stat_card("Richieste eseguite", stats.total_requests, icon="fa-list-check", color="primary", href="/results") }}
+            {{ metric_card("Richieste eseguite", stats.total_requests, "fa-list-check", "primary", "/results") }}
         </div>
         <div class="col-lg col-md-4 col-6">
-            {{ stat_card("Riuscite", stats.successful, icon="fa-check-circle", color="success", href="/results?status=completed") }}
+            {{ metric_card("Riuscite", stats.successful, "fa-check-circle", "success", "/results?status=completed") }}
         </div>
         <div class="col-lg col-md-4 col-6">
-            {{ stat_card("Fallite", stats.failed, icon="fa-times-circle", color="danger", href="/results?status=failed") }}
+            {{ metric_card("Fallite", stats.failed, "fa-times-circle", "danger", "/results?status=failed") }}
         </div>
         <div class="col-lg col-md-4 col-6">
-            {{ stat_card("Senza corrispondenza", stats.no_match, icon="fa-circle-question", color="warning", href="/results?status=no_match") }}
+            {{ metric_card("Senza corrispondenza", stats.no_match, "fa-circle-question", "warning", "/results?status=no_match") }}
         </div>
         <div class="col-lg col-md-4 col-6">
-            {{ stat_card("Risposte estratte", stats.total_responses, icon="fa-database", color="info", href="/results?status=completed") }}
+            {{ metric_card("Risposte estratte", stats.total_responses, "fa-database", "info", "/results?status=completed") }}
         </div>
     </div>
 
@@ -73,7 +74,7 @@
             {% endcall %}
         </div>
         <div class="col-md-6">
-            {% call card("Richieste eseguite", subtitle="Ultime richieste e relative risposte estratte", class="border-0 shadow-sm h-100") %}
+            {% call card("Attività recenti", subtitle="Ultime richieste e relative risposte estratte", class="border-0 shadow-sm h-100") %}
                     {% if recent %}
                     <div class="list-group list-group-flush">
                         {% for r in recent %}
@@ -126,7 +127,7 @@
         const active = job.status === 'queued' || job.status === 'running';
         button.disabled = active;
         button.innerHTML = active
-            ? '<i class="fas fa-spinner fa-spin me-2"></i>Retrieving pairs…'
+            ? '<i class="fas fa-spinner fa-spin me-2"></i>Recupero delle coppie…'
             : '<i class="fas fa-file-circle-check me-2"></i>Recupera coppie mancanti';
         const hasWarning = job.error || ['partial', 'error', 'completed_with_errors', 'completed_with_gaps'].includes(job.status);
         statusBox.className = `alert ${hasWarning ? 'alert-warning' : (active ? 'alert-info' : 'alert-success')} mt-3 mb-0 py-2`;
@@ -134,15 +135,15 @@
 
         const lines = [];
         if (job.message) lines.push(job.message);
-        else lines.push(`${job.missing_pair_count || 0} missing pairs found across ${job.request_count || 0} requests.`);
-        if (job.current) lines.push(`Current: ${job.current}`);
+        else lines.push(`${job.missing_pair_count || 0} coppie mancanti trovate in ${job.request_count || 0} richieste.`);
+        if (job.current) lines.push(`In corso: ${job.current}`);
         if (job.request_count) {
-            lines.push(`${job.processed_count || 0}/${job.request_count} processed; ${job.success_count || 0} succeeded; ${job.failed_count || 0} failed.`);
+            lines.push(`${job.processed_count || 0}/${job.request_count} elaborate; ${job.success_count || 0} completate; ${job.failed_count || 0} non riuscite.`);
         }
-        if (job.downloaded_count) lines.push(`${job.downloaded_count} document files downloaded and indexed.`);
-        if (job.remaining_pair_count !== undefined && !active) lines.push(`${job.remaining_pair_count} pairs still incomplete.`);
-        if (job.excluded_paid_count) lines.push(`${job.excluded_paid_count} paid documents excluded.`);
-        if (job.skipped_count) lines.push(`${job.skipped_count} unsupported files skipped.`);
+        if (job.downloaded_count) lines.push(`${job.downloaded_count} file di documenti scaricati e indicizzati.`);
+        if (job.remaining_pair_count !== undefined && !active) lines.push(`${job.remaining_pair_count} coppie ancora incomplete.`);
+        if (job.excluded_paid_count) lines.push(`${job.excluded_paid_count} documenti a pagamento esclusi.`);
+        if (job.skipped_count) lines.push(`${job.skipped_count} file non supportati ignorati.`);
         if (job.error) lines.push(job.error);
         statusBox.replaceChildren(document.createTextNode(lines.join(' ')));
 
@@ -151,13 +152,13 @@
             details.className = 'mt-2';
             const summary = document.createElement('summary');
             const total = job.remaining_pair_count || job.remaining_pairs.length;
-            summary.textContent = `${active ? 'Files being checked' : 'Files still missing a pair'} (${total}${total > job.remaining_pairs.length ? ', first 100 shown' : ''})`;
+            summary.textContent = `${active ? 'File in verifica' : 'File senza una coppia'} (${total}${total > job.remaining_pairs.length ? ', mostrati i primi 100' : ''})`;
             details.appendChild(summary);
             const list = document.createElement('ul');
             list.className = 'mb-0 mt-1';
             for (const pair of job.remaining_pairs) {
                 const item = document.createElement('li');
-                item.textContent = `${pair.stem}: missing ${(pair.missing_formats || []).join(', ')}`;
+                item.textContent = `${pair.stem}: formati mancanti ${(pair.missing_formats || []).join(', ')}`;
                 list.appendChild(item);
             }
             details.appendChild(list);
@@ -167,7 +168,7 @@
             const details = document.createElement('details');
             details.className = 'mt-2';
             const summary = document.createElement('summary');
-            summary.textContent = `Skipped files (${job.skipped_count || job.skipped_files.length})`;
+            summary.textContent = `File ignorati (${job.skipped_count || job.skipped_files.length})`;
             details.appendChild(summary);
             const list = document.createElement('ul');
             list.className = 'mb-0 mt-1';
@@ -193,13 +194,13 @@
         } catch (error) {
             statusBox.hidden = false;
             statusBox.className = 'alert alert-warning mt-3 mb-0 py-2';
-            statusBox.textContent = `Unable to read batch status: ${error.message}`;
+            statusBox.textContent = `Impossibile leggere lo stato dell'elaborazione: ${error.message}`;
         }
     }
 
     button.addEventListener('click', async () => {
         button.disabled = true;
-        button.innerHTML = '<i class="fas fa-spinner fa-spin me-2"></i>Scanning documents…';
+        button.innerHTML = '<i class="fas fa-spinner fa-spin me-2"></i>Analisi dei documenti…';
         statusBox.hidden = true;
         try {
             const response = await fetch(startUrl, {
@@ -212,7 +213,7 @@
                 else {
                     statusBox.hidden = false;
                     statusBox.className = 'alert alert-warning mt-3 mb-0 py-2';
-                    statusBox.textContent = result.error || 'Could not start the missing-pair batch.';
+                    statusBox.textContent = result.error || 'Impossibile avviare la ricerca delle coppie mancanti.';
                     button.disabled = false;
                     button.textContent = defaultLabel;
                 }
@@ -222,7 +223,7 @@
         } catch (error) {
             statusBox.hidden = false;
             statusBox.className = 'alert alert-danger mt-3 mb-0 py-2';
-            statusBox.textContent = `Could not start the missing-pair batch: ${error.message}`;
+            statusBox.textContent = `Impossibile avviare la ricerca delle coppie mancanti: ${error.message}`;
             button.disabled = false;
             button.textContent = defaultLabel;
         }

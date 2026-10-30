@@ -353,7 +353,7 @@
             <tbody>
               {% for u in parcel.units %}
               <tr>
-                <td>{{ u.subunit or '-' }}{% if u.enriched_from %} <a href="/documents/{{ u.enriched_from }}" class="text-decoration-none" title="Completato dalla visura: {{ u.enriched_fields|join(', ') }}"><i class="fas fa-circle-plus text-success" aria-label="Completato dalla visura"></i></a>{% endif %}</td><td>{{ u.right_type or '-' }}</td><td>{{ u.ownership_share or '-' }}</td>
+                <td>{{ u.subunit or '-' }}{% if u.enriched_from %} <a href="/documents/{{ u.enriched_from }}" class="text-decoration-none" title="Completato dalla visura: {{ u.enriched_fields|join(', ') }}" aria-label="Apri la visura che completa questi dati"><i class="fas fa-circle-plus text-success" aria-hidden="true"></i></a>{% endif %}</td><td>{{ u.right_type or '-' }}</td><td>{{ u.ownership_share or '-' }}</td>
                 <td>{% if u.property_type == 'building' %}{{ u.address or '-' }}{% else %}{{ u.quality or '-' }}{% endif %}</td>
                 <td>{% if u.property_type == 'building' %}{{ u.category or '-' }}{% else %}{{ u.cadastral_class or '-' }}{% endif %}</td>
                 <td class="text-end">{% if u.property_type == 'building' %}{{ u.consistency_sqm or u.area or '-' }}{% else %}{{ u.area or '-' }}{% endif %}</td>
@@ -570,7 +570,7 @@
             <tbody>
               {% for u in parcel.units %}
               <tr>
-                <td>{{ u.subunit or '-' }}{% if u.enriched_from %} <a href="/documents/{{ u.enriched_from }}" class="text-decoration-none" title="Completato dalla visura: {{ u.enriched_fields|join(', ') }}"><i class="fas fa-circle-plus text-success" aria-label="Completato dalla visura"></i></a>{% endif %}</td><td>{{ u.right_type or '-' }}</td><td>{{ u.ownership_share or '-' }}</td>
+                <td>{{ u.subunit or '-' }}{% if u.enriched_from %} <a href="/documents/{{ u.enriched_from }}" class="text-decoration-none" title="Completato dalla visura: {{ u.enriched_fields|join(', ') }}" aria-label="Apri la visura che completa questi dati"><i class="fas fa-circle-plus text-success" aria-hidden="true"></i></a>{% endif %}</td><td>{{ u.right_type or '-' }}</td><td>{{ u.ownership_share or '-' }}</td>
                 <td>{% if u.property_type == 'building' %}{{ u.address or '-' }}{% else %}{{ u.quality or '-' }}{% endif %}</td>
                 <td>{% if u.property_type == 'building' %}{{ u.category or '-' }}{% else %}{{ u.cadastral_class or '-' }}{% endif %}</td>
                 <td class="text-end">{% if u.property_type == 'building' %}{{ u.consistency_sqm or u.area or '-' }}{% else %}{{ u.area or '-' }}{% endif %}</td>

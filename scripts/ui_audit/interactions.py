@@ -38,6 +38,11 @@ with sync_playwright() as pw:
     # forms
     p.goto(BASE + "/forms", wait_until="load"); p.wait_for_timeout(500)
     p.click("text=Multi-step"); p.wait_for_timeout(500)
+    category_state = p.evaluate("""() => [...document.querySelectorAll('input[name="query-category"]')].map(r => ({
+        checked:r.checked, active:document.querySelector('label[for="'+r.id+'"]').classList.contains('active')
+    }))""")
+    rec("query category toggle shows one selected option", len(category_state) == 2 and sum(x["checked"] for x in category_state) == 1 and all(x["checked"] == x["active"] for x in category_state), str(category_state))
+    rec("batch mode control is hidden for workflows", not p.locator('[aria-label="Job mode"]').is_visible())
     vals = p.evaluate("() => [...document.querySelectorAll('form:not([hidden]) input[name=provincia],form:not([hidden]) input[name=comune],form:not([hidden]) input[name=foglio],form:not([hidden]) input[name=particella]')].filter(i=>i.offsetParent).map(i=>[i.name,i.value,i.placeholder])")
     rec("multi-step form is not pre-filled", vals and all(v[1] == "" for v in vals), str(vals[:4]))
     p.click("text=Passo singolo"); p.click("text=Ricerca persona"); p.wait_for_timeout(400)
@@ -62,12 +67,41 @@ with sync_playwright() as pw:
     rec("results: wide table has a horizontal scroll cue", p.evaluate("() => !!document.querySelector('.scroll-hint-wrap, .tabulator-tableholder')"))
 
     # documents lazy views
-    p.goto(BASE + "/documents", wait_until="load"); p.wait_for_timeout(500)
+    documents_response = p.goto(BASE + "/documents", wait_until="load"); p.wait_for_timeout(500)
+    rec("documents: route returns successfully", documents_response is not None and documents_response.status == 200, str(documents_response.status if documents_response else None))
     size_default = p.evaluate("() => document.querySelectorAll('*').length")
     rec("documents: default view is lighter than before (58,019 nodes)", size_default < 40000, f"{size_default} nodes")
+    doc_pager = p.locator('nav[aria-label="Pagine dei documenti"]')
+    first_page = doc_pager.inner_text() if doc_pager.count() else ""
+    page_rows = p.locator('#documents-pane-categories [data-favorite-item]').count()
+    rec("documents: active category page is bounded to 100 primary rows", page_rows <= 100, f"{page_rows} rows")
+    total = int(p.locator("#documents-tab-categories .badge").inner_text())
+    page_count = max(1, (total + 99) // 100)
+    next_page = doc_pager.locator('[aria-label="Pagina successiva"]')
+    has_pager = doc_pager.count() == 1
+    pagination_ok = (
+        "Pagina 1 di" in first_page and next_page.count() == 1
+        if page_count > 1
+        else not has_pager
+    )
+    rec("documents: pagination matches the available page count", pagination_ok, first_page.replace("\n", " | ")[:140] or f"{total} documents; {page_count} page")
+    selected_page = 1
+    if next_page.count():
+        next_page.click(); p.wait_for_url("**page=2**", timeout=15000); p.wait_for_load_state("load")
+        rec("documents: next page shows page 2", "Pagina 2 di" in p.locator('nav[aria-label="Pagine dei documenti"]').inner_text())
+        selected_page = 2
     p.click("#documents-tab-files"); p.wait_for_url("**view=files**", timeout=15000); p.wait_for_load_state("load")
-    rec("documents: 'Per file' loads its own view", p.evaluate("() => document.querySelector('#documents-tab-files').classList.contains('active') && !!document.querySelector('#files-table, #documents-pane-files table')"))
+    files_state = p.evaluate("""() => ({
+        active:document.querySelector('#documents-tab-files').classList.contains('active'),
+        table:!!document.querySelector('#files-table'),
+        empty:document.querySelector('#documents-pane-files').innerText.includes('Nessun documento indicizzato.'),
+        page:new URLSearchParams(location.search).get('page') || '1'
+    })""")
+    view_ok = files_state["active"] and files_state["page"] == str(selected_page) and (files_state["table"] or (total == 0 and files_state["empty"]))
+    rec("documents: 'Per file' keeps the selected page and renders rows or the empty state", view_ok, str(files_state))
     ctx.close()
     b.close()
 bad = [k for k, (ok, _) in res.items() if not ok]
 print("\nFAILED:", bad if bad else "none")
+if bad:
+    raise SystemExit(1)

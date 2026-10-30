@@ -10,6 +10,25 @@
   const POLL_INTERVAL = 3000;  // ms
   const POLL_TIMEOUT = 120000;  // ms
   const _abortControllers = {};  // groupId → AbortController
+  const _queryToggleNames = ['query-category', 'query-mode'];
+
+  function syncQueryToggleButtons() {
+    _queryToggleNames.forEach(function (name) {
+      document.querySelectorAll('input.btn-check[name="' + name + '"]').forEach(function (radio) {
+        const label = document.querySelector('label[for="' + radio.id + '"]');
+        if (label) label.classList.toggle('active', radio.checked);
+      });
+    });
+  }
+
+  // The shared forms template leaves `active` on its initially selected label after the radio changes.
+  // Re-sync after its delegated handler too, since switching to a workflow resets the job-mode radio in code.
+  syncQueryToggleButtons();
+  document.addEventListener('change', function (event) {
+    if (_queryToggleNames.indexOf(event.target && event.target.name) !== -1) {
+      window.setTimeout(syncQueryToggleButtons, 0);
+    }
+  });
 
   // Non-admins pay from prepaid credits; show the price basis and balance before they submit.
   fetch('/api/ui/query-billing', { headers: { 'Accept': 'application/json' } })
@@ -46,8 +65,59 @@
   };
 
   document.querySelectorAll('.sister-form').forEach(form => {
+    enhanceQueryFormControls(form);
     form.addEventListener('submit', handleFormSubmit);
   });
+  localizeSharedQueryControls();
+
+  function localizeSharedQueryControls() {
+    document.querySelectorAll('button').forEach(function (button) {
+      button.childNodes.forEach(function (node) {
+        if (node.nodeType !== Node.TEXT_NODE) return;
+        node.textContent = node.textContent.replace(/\bClear\b/g, 'Pulisci').replace(/\bStop Execution\b/g, 'Interrompi');
+      });
+    });
+    document.querySelectorAll('.badge').forEach(function (badge) {
+      if (badge.textContent.trim() !== 'Sister workflow') return;
+      badge.textContent = 'Flusso SISTER';
+      const endpoint = badge.nextElementSibling;
+      if (endpoint && endpoint.tagName === 'CODE') {
+        endpoint.hidden = true;
+        endpoint.setAttribute('aria-hidden', 'true');
+      }
+    });
+  }
+
+  function enhanceQueryFormControls(form) {
+    form.method = 'post';
+    form.action = '/forms';
+    const numericFields = new Set(['foglio', 'particella', 'subalterno', 'anno', 'anno_denuncia']);
+    form.querySelectorAll('input:not([type="hidden"]), select, textarea').forEach(function (control) {
+      if (control.required) control.setAttribute('aria-required', 'true');
+      if (!control.hasAttribute('autocomplete')) control.setAttribute('autocomplete', 'off');
+      if (numericFields.has(control.name)) control.setAttribute('inputmode', 'numeric');
+
+      const field = control.closest('.row.g-3 > div');
+      const help = field && field.querySelector('.form-text');
+      if (help) {
+        if (!help.id) help.id = control.id + '-help';
+        const describedBy = new Set((control.getAttribute('aria-describedby') || '').split(/\s+/).filter(Boolean));
+        describedBy.add(help.id);
+        control.setAttribute('aria-describedby', Array.from(describedBy).join(' '));
+      }
+
+      control.addEventListener('invalid', function () {
+        if (this.validity.valueMissing) this.setCustomValidity('Completa questo campo.');
+        else if (this.validity.typeMismatch) this.setCustomValidity('Inserisci un valore nel formato richiesto.');
+        else if (this.validity.patternMismatch) this.setCustomValidity('Il formato inserito non è valido.');
+        else if (this.validity.rangeUnderflow || this.validity.rangeOverflow) {
+          this.setCustomValidity('Il valore è fuori dall’intervallo consentito.');
+        }
+      });
+      control.addEventListener('input', function () { this.setCustomValidity(''); });
+      control.addEventListener('change', function () { this.setCustomValidity(''); });
+    });
+  }
 
   // --- Batch: update CSV placeholder when query type changes ---
   const batchCommandSelect = document.getElementById('param-batch-command');
@@ -82,7 +152,7 @@
       this.classList.add('d-none');
       var statusDiv = document.getElementById('response-status-' + groupId);
       if (statusDiv) {
-        statusDiv.innerHTML = '<div class="alert alert-warning"><i class="fas fa-stop me-2"></i>Execution stopped by user.</div>';
+        statusDiv.innerHTML = '<div class="alert alert-warning"><i class="fas fa-stop me-2"></i>Esecuzione interrotta.</div>';
       }
     });
   });
@@ -102,8 +172,8 @@
       const content = document.getElementById('response-content-' + groupId);
       if (content) {
         navigator.clipboard.writeText(content.textContent);
-        this.innerHTML = '<i class="fas fa-check me-1"></i>Copied';
-        setTimeout(() => { this.innerHTML = '<i class="fas fa-copy me-1"></i>Copy'; }, 2000);
+        this.innerHTML = '<i class="fas fa-check me-1"></i>Copiato';
+        setTimeout(() => { this.innerHTML = '<i class="fas fa-copy me-1"></i>Copia'; }, 2000);
       }
     });
   });
@@ -122,8 +192,8 @@
       a.click();
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
-      this.innerHTML = '<i class="fas fa-check me-1"></i>Exported';
-      setTimeout(() => { this.innerHTML = '<i class="fas fa-download me-1"></i>Export'; }, 2000);
+      this.innerHTML = '<i class="fas fa-check me-1"></i>Esportato';
+      setTimeout(() => { this.innerHTML = '<i class="fas fa-download me-1"></i>Esporta'; }, 2000);
     });
   });
 
@@ -259,7 +329,7 @@
       const data = await res.json();
 
       if (!res.ok) {
-        statusDiv.innerHTML = '<div class="alert alert-danger"><i class="fas fa-times-circle me-2"></i>Error: ' + (data.detail || res.statusText) + '</div>';
+        statusDiv.innerHTML = '<div class="alert alert-danger"><i class="fas fa-times-circle me-2"></i>Errore: ' + (data.detail || res.statusText) + '</div>';
         contentDiv.textContent = JSON.stringify(data, null, 2);
         return;
       }
@@ -292,7 +362,7 @@
 
       // Check for cached results
       if (data.status === 'cached' && data.cached_results) {
-        statusDiv.innerHTML = '<div class="alert alert-success"><i class="fas fa-bolt me-2"></i>Cached result returned instantly!</div>';
+        statusDiv.innerHTML = '<div class="alert alert-success"><i class="fas fa-bolt me-2"></i>Risultato in cache disponibile subito.</div>';
         contentDiv.textContent = JSON.stringify(data, null, 2);
         renderPageVisits(groupId, data);
         return;
@@ -301,7 +371,7 @@
       // Queued — start polling
       const requestIds = data.request_ids || [data.request_id].filter(Boolean);
       if (!requestIds.length) {
-        statusDiv.innerHTML = '<div class="alert alert-warning"><i class="fas fa-exclamation-triangle me-2"></i>No request ID returned.</div>';
+        statusDiv.innerHTML = '<div class="alert alert-warning"><i class="fas fa-exclamation-triangle me-2"></i>Nessun ID richiesta restituito.</div>';
         contentDiv.textContent = JSON.stringify(data, null, 2);
         return;
       }
@@ -319,7 +389,8 @@
       const allCompleted = Object.values(allResults).every(r => r && r.status === 'completed');
       const alertClass = allCompleted ? 'alert-success' : 'alert-warning';
       const icon = allCompleted ? 'fa-check-circle' : 'fa-exclamation-triangle';
-      statusDiv.innerHTML = '<div class="alert ' + alertClass + '"><i class="fas ' + icon + ' me-2"></i>Done. ' + requestIds.length + ' result(s).</div>';
+      const resultLabel = requestIds.length === 1 ? 'risultato' : 'risultati';
+      statusDiv.innerHTML = '<div class="alert ' + alertClass + '"><i class="fas ' + icon + ' me-2"></i>Completato: ' + requestIds.length + ' ' + resultLabel + '.</div>';
       contentDiv.textContent = JSON.stringify(allResults, null, 2);
       renderPageVisits(groupId, allResults);
 
@@ -343,10 +414,10 @@
 
         // Still processing
         const elapsed = Math.round((Date.now() - start) / 1000);
-        if (statusDiv) statusDiv.innerHTML = '<div class="alert alert-info"><i class="fas fa-spinner fa-spin me-2"></i>Processing... (' + elapsed + 's elapsed)</div>';
+        if (statusDiv) statusDiv.innerHTML = '<div class="alert alert-info"><i class="fas fa-spinner fa-spin me-2"></i>Elaborazione in corso… (' + elapsed + ' s)</div>';
 
         if (Date.now() - start > POLL_TIMEOUT) {
-          return { status: 'timeout', message: 'Polling timeout after ' + (POLL_TIMEOUT / 1000) + 's' };
+          return { status: 'timeout', message: 'Tempo massimo di attesa superato dopo ' + (POLL_TIMEOUT / 1000) + ' s' };
         }
 
         await new Promise(resolve => setTimeout(resolve, POLL_INTERVAL));
@@ -401,8 +472,8 @@
 
         if (evt.event === 'start') {
           statusDiv.innerHTML = '<div class="alert alert-info"><i class="fas fa-spinner fa-spin me-2"></i>'
-            + '<strong>Workflow: ' + (evt.preset || '') + '</strong> — '
-            + (evt.planned_steps ? evt.planned_steps.length + ' steps planned' : 'starting...')
+            + '<strong>Flusso: ' + (evt.preset || '') + '</strong> — '
+            + (evt.planned_steps ? evt.planned_steps.length + ' passaggi previsti' : 'avvio in corso…')
             + '</div>';
         } else if (evt.event === 'step') {
           _renderStepAccordion(accId, groupId, evt, stepIndex);
@@ -415,12 +486,12 @@
           const failed = allSteps.filter(function(s) { return s.status === 'error'; }).length;
           const skipped = allSteps.filter(function(s) { return s.status === 'skipped'; }).length;
           let parts = [];
-          if (completed) parts.push(completed + ' completed');
-          if (running) parts.push(running + ' running');
+          if (completed) parts.push(completed + ' completati');
+          if (running) parts.push(running + ' in corso');
           if (failed) parts.push(failed + ' fallite');
-          if (skipped) parts.push(skipped + ' skipped');
+          if (skipped) parts.push(skipped + ' saltati');
           statusDiv.innerHTML = '<div class="alert alert-info"><i class="fas fa-spinner fa-spin me-2"></i>'
-            + '<strong>Workflow</strong> — ' + parts.join(', ')
+            + '<strong>Flusso</strong> — ' + parts.join(', ')
             + '</div>';
         } else if (evt.event === 'done') {
           finalData = evt;
@@ -428,11 +499,11 @@
           const alertClass = (s.failed || 0) > 0 ? 'alert-warning' : 'alert-success';
           const icon = (s.failed || 0) > 0 ? 'fa-exclamation-triangle' : 'fa-check-circle';
           let html = '<div class="alert ' + alertClass + '"><i class="fas ' + icon + ' me-2"></i>';
-          html += '<strong>Workflow: ' + (evt.preset || '') + '</strong> — ';
+          html += '<strong>Flusso: ' + (evt.preset || '') + '</strong> — ';
           html += (s.completed || 0) + ' completate, ' + (s.failed || 0) + ' fallite, ' + (s.skipped || 0) + ' saltate';
-          if ((s.query_cache_hits || 0) > 0) html += ' | ' + s.query_cache_hits + ' identical queries reused';
-          if ((s.properties || 0) > 0 || (s.owners || 0) > 0) html += ' | ' + (s.properties || 0) + ' properties, ' + (s.owners || 0) + ' owners';
-          if ((s.risk_flags || 0) > 0) html += ' | <span class="text-warning">' + (s.risk_flags || 0) + ' risk flag(s)</span>';
+          if ((s.query_cache_hits || 0) > 0) html += ' | ' + s.query_cache_hits + ' richieste duplicate riutilizzate';
+          if ((s.properties || 0) > 0 || (s.owners || 0) > 0) html += ' | ' + (s.properties || 0) + ' immobili, ' + (s.owners || 0) + ' intestatari';
+          if ((s.risk_flags || 0) > 0) html += ' | <span class="text-warning">' + (s.risk_flags || 0) + ' segnalazioni di rischio</span>';
           html += '</div>';
           statusDiv.innerHTML = html;
           contentDiv.textContent = JSON.stringify(evt, null, 2);
@@ -452,6 +523,13 @@
       : step.status === 'error' ? 'bg-danger'
       : step.status === 'running' ? 'bg-primary'
       : 'bg-secondary';
+    const statusLabels = {
+      completed: 'Completato',
+      error: 'Errore',
+      running: 'In corso',
+      skipped: 'Saltato',
+    };
+    const statusLabel = statusLabels[step.status] || step.status;
 
     // If this is a "running" update for a step we already have, update its badge
     const existing = document.getElementById('step-header-' + accId + '-' + step.step);
@@ -460,7 +538,7 @@
       const badge = existing.querySelector('.badge');
       if (badge) {
         badge.className = 'badge ' + badgeClass + ' me-2';
-        badge.textContent = step.status;
+        badge.textContent = statusLabel;
       }
       // Update body content
       const body = document.getElementById(collapseId + '-body');
@@ -475,9 +553,12 @@
     if (step.data) {
       const counts = [];
       for (const key of ['immobili', 'intestati', 'risultati', 'drill_results', 'owner_entities']) {
-        if (step.data[key] && Array.isArray(step.data[key])) counts.push(key + ': ' + step.data[key].length);
+        if (step.data[key] && Array.isArray(step.data[key])) {
+          const labels = { drill_results: 'risultati di approfondimento', owner_entities: 'intestatari' };
+          counts.push((labels[key] || key) + ': ' + step.data[key].length);
+        }
       }
-      if (step.data.total !== undefined) counts.push('total: ' + step.data.total);
+      if (step.data.total !== undefined) counts.push('totale: ' + step.data.total);
       if (step.reason) counts.push(step.reason);
       if (step.error) counts.push(step.error);
       if (counts.length) countsHtml = '<span class="text-muted ms-2 small">' + counts.join(', ') + '</span>';
@@ -491,7 +572,7 @@
     let html = '<div class="accordion-item" id="step-item-' + collapseId + '">';
     html += '<h2 class="accordion-header" id="step-header-' + accId + '-' + step.step + '">';
     html += '<button class="accordion-button collapsed py-2" type="button" data-bs-toggle="collapse" data-bs-target="#' + collapseId + '">';
-    html += '<span class="badge ' + badgeClass + ' me-2">' + step.status + '</span>';
+    html += '<span class="badge ' + badgeClass + ' me-2">' + statusLabel + '</span>';
     if (isRunning) html += '<span class="spinner-border spinner-border-sm me-2" role="status"></span>';
     html += '<strong>' + step.step + '</strong>';
     html += countsHtml;
@@ -501,7 +582,7 @@
     if (!isRunning) {
       html += _buildStepBody(step);
     } else {
-      html += '<div class="text-center py-3"><span class="spinner-border spinner-border-sm me-2"></span>Running...</div>';
+      html += '<div class="text-center py-3"><span class="spinner-border spinner-border-sm me-2"></span>In esecuzione…</div>';
     }
     html += '</div></div></div>';
 
@@ -725,11 +806,11 @@
     if (info) info.classList.remove('d-none');
 
     const nameEl = document.getElementById('csv-file-name-' + groupId);
-    if (nameEl) nameEl.textContent = fileName || 'pasted data';
+    if (nameEl) nameEl.textContent = fileName || 'dati incollati';
 
     const lines = text.trim().split('\n').filter(l => l.trim() && !l.trim().startsWith('#'));
     const rowCount = document.getElementById('csv-row-count-' + groupId);
-    if (rowCount) rowCount.textContent = (lines.length - 1) + ' data row(s)';
+    if (rowCount) rowCount.textContent = (lines.length - 1) + ' righe di dati';
 
     // Trigger batch wizard if data was loaded into the batch textarea
     if (groupId === 'batch' && window.batchWizard) {
@@ -1069,7 +1150,7 @@
     const lines = text.split('\n').filter(l => l.trim() && !l.trim().startsWith('#'));
     if (lines.length < 2) {
       previewDiv.classList.add('d-none');
-      alert('CSV must have a header row and at least one data row.');
+      alert('Il CSV deve contenere una riga di intestazione e almeno una riga di dati.');
       return;
     }
 
@@ -1104,7 +1185,7 @@
 
         // Check required fields
         if (requiredFields.has(h) && !rawVal) {
-          rowErrors[h] = 'Required';
+          rowErrors[h] = 'Obbligatorio';
           return;
         }
 
@@ -1257,10 +1338,10 @@
     const existing = container.querySelector('.csv-summary');
     if (existing) existing.remove();
 
-    const parts = [validCount + ' validi'];
+    const parts = [validCount + ' righe valide'];
     if (errorCount > 0) parts.push(errorCount + ' errori');
-    if (skippedCount > 0) parts.push(skippedCount + ' skipped');
-    parts.push(totalRows + ' total');
+    if (skippedCount > 0) parts.push(skippedCount + ' righe ignorate');
+    parts.push(totalRows + ' righe totali');
 
     const alertType = errorCount > 0 ? 'warning' : 'success';
     const icon = errorCount > 0 ? 'fa-exclamation-triangle' : 'fa-check-circle';
@@ -1386,7 +1467,7 @@
       const infoDiv = document.getElementById('csv-file-info-' + GROUP_ID);
       if (infoDiv) infoDiv.classList.remove('d-none');
       const rowCount = document.getElementById('csv-row-count-' + GROUP_ID);
-      if (rowCount) rowCount.textContent = batchWizard._rawRows.length + ' data row(s), ' + batchWizard._rawHeaders.length + ' columns';
+      if (rowCount) rowCount.textContent = batchWizard._rawRows.length + ' righe di dati, ' + batchWizard._rawHeaders.length + ' colonne';
     },
 
     goTo: function(step) {
@@ -1460,7 +1541,7 @@
       batchWizard._rawHeaders.forEach((col, idx) => {
         // Sample values (first 3 non-empty)
         const samples = batchWizard._rawRows.slice(0, 5).map(r => r[idx]).filter(Boolean).slice(0, 3);
-        const sampleText = samples.length ? samples.join(', ') : '<em class="text-muted">empty</em>';
+        const sampleText = samples.length ? samples.join(', ') : '<em class="text-muted">vuoto</em>';
 
         // Auto-suggest mapping
         const autoField = AUTO_MAP[col.toLowerCase()] || '';
@@ -1515,7 +1596,7 @@
 
           // Required check
           if (requiredSet.has(apiField) && !val) {
-            errors[apiField] = 'Required';
+            errors[apiField] = 'Obbligatorio';
             return;
           }
 

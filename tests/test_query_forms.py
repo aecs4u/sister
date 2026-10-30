@@ -224,10 +224,68 @@ def test_web_forms_page_renders_an_input_for_every_parameter(main_module):
     response = TestClient(main_module.app).get("/forms")
     assert response.status_code == 200
     html = response.text
+    assert re.search(r'<form method="post" action="/forms" id="form-[^"]+" class="sister-form"', html)
+    assert 'method="get" action="/forms"' not in html
     for group, endpoint, command in _single_step_endpoints():
         for param in group.params:
             if endpoint.id in param.endpoints:
                 assert f'name="{param.name}"' in html, f"{group.id}: {param.name} not rendered"
+
+
+def test_form_help_and_choice_labels_are_user_facing_italian():
+    from sister.form_config import _web_param, get_single_step_groups, get_workflow_groups
+
+    search = QUERY_FORMS["search"]
+    richiedente = next(field for field in search.fields if field.param == "richiedente")
+    assert "ADE_USERNAME" not in richiedente.help
+    assert all("POST /" not in form.summary for form in QUERY_FORMS.values())
+
+    catasto_field = next(field for field in search.fields if field.param == "tipo_catasto")
+    catasto = _web_param(catasto_field, required=True, endpoint_id="search")
+    assert ("E", "Entrambi (E)") in catasto.options
+
+    identifier_field = next(field for field in search.fields if field.param == "identificativo_tipo")
+    identifier = _web_param(identifier_field, required=False, endpoint_id="search")
+    assert ("definitivo", "Definitivo") in identifier.options
+    assert ("provvisorio", "Provvisorio") in identifier.options
+
+    inspection = next(group for group in get_single_step_groups() if group.id == "ispezione-ipotecaria")
+    search_type = next(param for param in inspection.params if param.name == "tipo_ricerca")
+    assert search_type.options == [
+        ("immobile", "Immobile"),
+        ("persona_fisica", "Persona fisica"),
+        ("persona_giuridica", "Persona giuridica"),
+        ("nota", "Nota"),
+    ]
+    workflows = {group.id: group for group in get_workflow_groups()}
+    property_options = next(param.options for param in workflows["wf-due-diligence"].params if param.name == "tipo_catasto")
+    entity_options = next(param.options for param in workflows["wf-portfolio"].params if param.name == "tipo_catasto")
+    assert property_options[0] == ("", "Entrambi (T+F)")
+    assert entity_options[0] == ("", "Entrambi (E)")
+
+
+def test_metric_card_uses_italian_thousands_and_non_heading_markup(main_module):
+    template = main_module.app.state.theme_setup.templates.env.from_string(
+        '{% from "_macros.html" import metric_card %}'
+        '{{ metric_card("Richieste", 4012, "fa-list", "primary", "/results") }}'
+    )
+    html = template.render()
+
+    assert ">4.012</div>" in html
+    assert "<h3" not in html
+
+
+def test_privacy_page_discloses_sister_mapping_data_and_controls(main_module):
+    from fastapi.testclient import TestClient
+
+    response = TestClient(main_module.app).get("/privacy")
+
+    assert response.status_code == 200
+    assert "OpenStreetMap Nominatim" in response.text
+    assert "indirizzo, il comune e la provincia" in response.text
+    assert "SISTER_GEOCODING=off" in response.text
+    assert "OpenTopoMap" in response.text
+    assert "Carica vista 3D Google" in response.text
 
 
 def test_web_submit_goes_through_the_cli_client(main_module, monkeypatch):

@@ -206,8 +206,8 @@
             <i class="fas fa-copy" aria-hidden="true"></i>
         </button>
         {% endif %}
-        <a href="/dossiers/{{ d.name }}?download=1" class="btn btn-sm btn-outline-secondary" title="Scarica JSON">
-            <i class="fas fa-download"></i>
+        <a href="/dossiers/{{ d.name }}?download=1" class="btn btn-sm btn-outline-secondary" title="Scarica JSON" aria-label="Scarica il dossier in formato JSON">
+            <i class="fas fa-download" aria-hidden="true"></i>
         </a>
     </div>
 </div>
@@ -381,9 +381,9 @@
                     <div class="btn-group doc-actions" role="group">
                         {{ document_favorite_button(d, favorites_enabled) }}
                         {% if d.viewable %}
-                        <a href="{{ document_href(d, prefix) }}" class="btn btn-outline-{{ color }}" title="{{ 'Apri ispezione ipotecaria' if d.document_type == 'ispezione_ipotecaria' else 'Apri visura' }}"><i class="fas fa-eye"></i></a>
+                        <a href="{{ document_href(d, prefix) }}" class="btn btn-outline-{{ color }}" title="{{ 'Apri ispezione ipotecaria' if d.document_type == 'ispezione_ipotecaria' else 'Apri visura' }}" aria-label="{{ 'Apri ispezione ipotecaria' if d.document_type == 'ispezione_ipotecaria' else 'Apri visura' }}"><i class="fas fa-eye" aria-hidden="true"></i></a>
                         {% endif %}
-                        <a href="{{ prefix }}/{{ d.id }}?template=result_detail" class="btn btn-outline-secondary" title="Dati completi"><i class="fas fa-table-list"></i></a>
+                        <a href="{{ prefix }}/{{ d.id }}?template=result_detail" class="btn btn-outline-secondary" title="Dati completi" aria-label="Apri i dati completi del documento"><i class="fas fa-table-list" aria-hidden="true"></i></a>
                     </div>
                 </td>
             </tr>
@@ -416,27 +416,17 @@
         if (icon) icon.className = (favorite ? 'fas' : 'far') + ' fa-heart' + (visibleLabel ? ' me-1' : '');
     }
 
-    function applyFilter() {
+    function toggleFavoritesFilter() {
         if (!filterButton) return;
-        var onlyFavorites = filterButton.getAttribute('aria-pressed') === 'true';
-        document.querySelectorAll('[data-favorite-item]').forEach(function (item) {
-            item.hidden = onlyFavorites && item.dataset.isFavorite !== 'true';
-        });
-        filterButton.classList.toggle('active', onlyFavorites);
-        var icon = filterButton.querySelector('i');
-        if (icon) icon.className = (onlyFavorites ? 'fas' : 'far') + ' fa-heart me-1';
-        var label = filterButton.querySelector('[data-favorites-filter-label]');
-        if (label) label.textContent = onlyFavorites ? 'Mostra tutti' : 'Solo preferiti';
+        var url = new URL(window.location.href);
+        if (url.searchParams.get('favorites') === 'true') url.searchParams.delete('favorites');
+        else url.searchParams.set('favorites', 'true');
+        url.searchParams.delete('page');
+        window.location.assign(url.toString());
     }
 
     if (filterButton) {
-        filterButton.addEventListener('click', function () {
-            filterButton.setAttribute(
-                'aria-pressed',
-                filterButton.getAttribute('aria-pressed') === 'true' ? 'false' : 'true'
-            );
-            applyFilter();
-        });
+        filterButton.addEventListener('click', toggleFavoritesFilter);
     }
 
     document.addEventListener('click', function (event) {
@@ -463,6 +453,10 @@
                     item.dataset.isFavorite = result.favorite ? 'true' : 'false';
                 }
             });
+            if (!result.favorite && filterButton && filterButton.getAttribute('aria-pressed') === 'true') {
+                window.location.reload();
+                return;
+            }
             if (!result.favorite && document.querySelector('[data-favorites-management]')) {
                 var managedItem = button.closest('[data-favorite-item]');
                 if (managedItem) managedItem.remove();
@@ -478,7 +472,6 @@
                 var emptyState = document.querySelector('[data-favorites-empty]');
                 if (emptyState) emptyState.hidden = remaining !== 0;
             }
-            applyFilter();
         }).catch(function (error) {
             button.disabled = false;
             window.alert('Impossibile aggiornare i preferiti (' + error.message + ').');

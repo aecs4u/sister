@@ -265,11 +265,18 @@ def test_query_price_catalog_prefers_credit_products_and_converts_euro_prices():
                 {"endpoint": "POST /visura/soggetto", "customer_credits": 37, "amount": 0.25},
                 {"endpoint": "/visura/query", "amount": 0.42},
                 {"endpoint": "/visura/inactive", "amount": 9, "is_active": False},
+                {"endpoint": "/visura/inactive-string", "amount": 9, "is_active": "0"},
+                {"endpoint": "/visura/inactive-label", "amount": 9, "active": "inactive"},
+                {"endpoint": "/visura/active-string", "customer_credits": 12, "is_active": "1"},
                 {"endpoint": "/visura/wrong-currency", "amount": 9, "currency": "USD"},
             ]
         }
     )
-    assert prices == {"/visura/soggetto": Decimal("37"), "/visura/query": Decimal("42")}
+    assert prices == {
+        "/visura/soggetto": Decimal("37"),
+        "/visura/query": Decimal("42"),
+        "/visura/active-string": Decimal("12"),
+    }
 
 
 def test_query_price_catalog_omits_conflicting_duplicate_products():
@@ -362,8 +369,9 @@ async def test_a_failed_entitlement_refunds_the_debit(doc_id, wallet, monkeypatc
 
 async def test_the_sql_wallet_keeps_balances_in_postgres(doc_id, monkeypatch):
     """Default backend: balances are rows of ``billing_wallets`` / ``billing_transactions`` in SISTER's schema."""
-    import sister.purchases_billing as pb
     from aecs4u_billing.wallet import set_wallet_service
+
+    import sister.purchases_billing as pb
 
     set_wallet_service(None)
     monkeypatch.setattr(pb, "_SQL_SESSION", None)

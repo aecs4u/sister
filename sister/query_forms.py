@@ -60,13 +60,17 @@ def _f(portal, param, kind="text", help="", choices=None, handled=False, page=1)
 
 # --- shared fields --------------------------------------------------------------------------------------
 
-_RICHIEDENTE = _f("richiedente", "richiedente", help="Richiesta effettuata per conto di (default: ADE_USERNAME)")
+_RICHIEDENTE = _f(
+    "richiedente",
+    "richiedente",
+    help="Indica l'ufficio o la persona per conto di cui viene presentata la richiesta.",
+)
 _MOTIVO = _f("motivoText", "motivo", help="Motivazione della richiesta (default: Esplorazione)")
 _TIPO_CATASTO = _f("tipoCatasto", "tipo_catasto", "select", "T = Terreni, F = Fabbricati, E = entrambi", handled=True)
 # "Tipo richiesta" of the subject forms (radio A = Attualità, S = Storica); set by utils._select_tipo_richiesta, which fails when
 # Storica is asked for and the form has no such control (a silent Attualità would be a wrong answer)
 _TIPO_RICHIESTA = _f(
-    "tipo_richiesta", "tipo_richiesta", "radio", "attualita | storica (default: attualita)",
+    "tipo_richiesta", "tipo_richiesta", "radio", "Scegli se richiedere la situazione attuale o lo storico.",
     {"attualita": "A", "storica": "S"}, handled=True,
 )
 _COMUNE_CAT = _f("comuneCat", "comune", "select", "Comune", handled=True)
@@ -91,7 +95,13 @@ _IMMOBILE = (
     _TIPO_CATASTO,
     _COMUNE_DENOM,
     _SEZIONE,
-    _f("tipoIdentificativo", "identificativo_tipo", "radio", "definitivo | provvisorio", _DEFINITIVO_PROVVISORIO),
+    _f(
+        "tipoIdentificativo",
+        "identificativo_tipo",
+        "radio",
+        "Indica se l'identificativo catastale è definitivo o provvisorio.",
+        _DEFINITIVO_PROVVISORIO,
+    ),
     _f("sezUrb", "sezione_urbana", help="Sezione urbana", handled=True),
     _f("foglio", "foglio", help="Foglio", handled=True),
     _f("particella1", "particella", help="Particella (numero)", handled=True),
@@ -337,7 +347,7 @@ _BASE_FORMS: dict[str, QueryForm] = {
                 "tipoIdentificativo",
                 "identificativo_tipo",
                 "radio",
-                "definitivo | provvisorio",
+                "Indica se l'identificativo catastale è definitivo o provvisorio.",
                 {"definitivo": "0", "provvisorio": "1"},
             ),
             _f("sezUrb", "sezione_urbana", help="Sezione urbana"),
@@ -456,8 +466,7 @@ _EXTRA_HELP = {
     "comune": "Comune (non è un campo di questa maschera)",
     "particella": "Numero di particella (non è un campo di questa maschera)",
     "richiedi_documenti": (
-        "true/false (default true): false legge solo le pagine HTML (immobili e intestati, senza CAPTCHA) "
-        "e non richiede ne' scarica i documenti"
+        "Sì: richiedi e scarica anche i documenti. No: leggi solo i dati delle pagine web, senza scaricare documenti."
     ),
 }
 
@@ -465,7 +474,7 @@ _P = ("provincia", "comune")
 # command -> (summary, API path, client method, search_type, dedicated args, required, required_any)
 _META: dict[str, tuple] = {
     "search": (
-        "Invia una ricerca immobili su SISTER (POST /visura).",
+        "Cerca immobili per provincia, comune, foglio e particella.",
         "/visura",
         "search",
         "",
@@ -474,7 +483,7 @@ _META: dict[str, tuple] = {
         (),
     ),
     "intestati": (
-        "Invia una ricerca degli intestati su SISTER (POST /visura/intestati).",
+        "Cerca gli intestatari di una particella catastale.",
         "/visura/intestati",
         "intestati",
         "",
@@ -483,7 +492,7 @@ _META: dict[str, tuple] = {
         (),
     ),
     "soggetto": (
-        "Ricerca nazionale per codice fiscale su SISTER (POST /visura/soggetto).",
+        "Cerca a livello nazionale una persona tramite codice fiscale o nominativo.",
         "/visura/soggetto",
         "soggetto",
         "",
@@ -492,7 +501,7 @@ _META: dict[str, tuple] = {
         (("codice_fiscale", "cognome"),),
     ),
     "azienda": (
-        "Ricerca per persona giuridica (P.IVA o denominazione) su SISTER (POST /visura/persona-giuridica).",
+        "Cerca una società tramite partita IVA o denominazione.",
         "/visura/persona-giuridica",
         "persona_giuridica",
         "",
@@ -501,7 +510,7 @@ _META: dict[str, tuple] = {
         (),
     ),
     "elenco": (
-        "Elenca tutti gli immobili di un comune (POST /visura/elenco-immobili).",
+        "Elenca gli immobili presenti in un comune.",
         "/visura/elenco-immobili",
         "elenco_immobili",
         "",
@@ -710,12 +719,12 @@ _NO_FORM = (
         "visura-storica",
         (
             ("provincia", "text", _PROVINCIA_HELP),
-            ("comune", "text", "Municipality"),
-            ("foglio", "text", "Sheet number"),
-            ("particella", "text", "Parcel number"),
+            ("comune", "text", "Comune"),
+            ("foglio", "text", "Numero di foglio"),
+            ("particella", "text", "Numero di particella"),
             ("tipo_catasto", "select", "T = Terreni, F = Fabbricati"),
             ("subalterno", "text", "Sub-unit"),
-            ("sezione", "text", "Section"),
+            ("sezione", "text", "Sezione"),
         ),
         ("provincia", "comune", "foglio", "particella"),
     ),
@@ -727,8 +736,8 @@ _NO_FORM = (
         (
             ("provincia", "text", _PROVINCIA_HELP),
             ("codice_fiscale", "text", "Codice fiscale / Partita IVA"),
-            ("azienda", "checkbox", "Search as a legal entity using its tax code / VAT number"),
-            ("tipo_catasto", "select", "T = Terreni, F = Fabbricati, E = both"),
+            ("azienda", "checkbox", "Cerca come persona giuridica usando il codice fiscale o la partita IVA"),
+            ("tipo_catasto", "select", "T = Terreni, F = Fabbricati, E = entrambi"),
             ("tipo_richiesta", "select", "attualita | storica (default: attualita)"),
             ("vista", "select", "analitica | sintetica"),
         ),
@@ -742,7 +751,7 @@ _NO_FORM = (
         (
             ("provincia", "text", _PROVINCIA_HELP),
             ("codice_fiscale", "text", "Codice fiscale / partita IVA"),
-            ("tipo_catasto", "select", "T = Terreni, F = Fabbricati, E = both"),
+            ("tipo_catasto", "select", "T = Terreni, F = Fabbricati, E = entrambi"),
             ("tipo_richiesta", "select", "attualita | storica (default: attualita)"),
             ("con_intestati", "checkbox", "Also read the owners of each property"),
             ("azienda", "checkbox", "The identifier is a partita IVA (persona giuridica)"),

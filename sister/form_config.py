@@ -67,7 +67,7 @@ _TIPO_CATASTO = EndpointParam(
     placeholder="Seleziona il tipo",
     input_type="select",
     required=False,
-    options=[("", "Both (T+F)"), ("T", "Terreni (T)"), ("F", "Fabbricati (F)")],
+    options=[("", "Entrambi (T+F)"), ("T", "Terreni (T)"), ("F", "Fabbricati (F)")],
     help_text="T = Terreni, F = Fabbricati. Lascia vuoto per entrambi.",
 )
 
@@ -86,7 +86,7 @@ _TIPO_CATASTO_TFE = EndpointParam(
     placeholder="Seleziona il tipo",
     input_type="select",
     required=False,
-    options=[("", "Both (E)"), ("T", "Terreni (T)"), ("F", "Fabbricati (F)")],
+    options=[("", "Entrambi (E)"), ("T", "Terreni (T)"), ("F", "Fabbricati (F)")],
 )
 
 _PROVINCIA = EndpointParam(
@@ -519,10 +519,10 @@ SINGLE_STEP_GROUPS: list[FormGroup] = [
                 input_type="select",
                 required=True,
                 options=[
-                    ("immobile", "Property (Immobile)"),
-                    ("persona_fisica", "Person (Persona Fisica)"),
-                    ("persona_giuridica", "Company (Persona Giuridica)"),
-                    ("nota", "Note (Nota)"),
+                    ("immobile", "Immobile"),
+                    ("persona_fisica", "Persona fisica"),
+                    ("persona_giuridica", "Persona giuridica"),
+                    ("nota", "Nota"),
                 ],
                 help_text="Tipo di ricerca ispezione",
             ),
@@ -877,7 +877,7 @@ FORM_GROUPS: list[FormGroup] = SINGLE_STEP_GROUPS + WORKFLOW_GROUPS
 # Single-step parameters: generated from the CLI commands
 # ---------------------------------------------------------------------------
 
-_CATASTO_OPTIONS = [("", "—"), ("T", "Terreni (T)"), ("F", "Fabbricati (F)"), ("E", "Both (E)")]
+_CATASTO_OPTIONS = [("", "—"), ("T", "Terreni (T)"), ("F", "Fabbricati (F)"), ("E", "Entrambi (E)")]
 _generated = False
 
 
@@ -893,9 +893,17 @@ def _web_param(fld, required: bool, endpoint_id: str) -> EndpointParam:
             ("false", "No — solo dati delle pagine HTML"),
         ]
     elif fld.kind in ("select", "radio") and fld.choices:
-        input_type, options = "select", [("", "—")] + [(key, key) for key in fld.choices]
+        option_labels = {
+            "attualita": "Attualità",
+            "storica": "Storica",
+            "definitivo": "Definitivo",
+            "provvisorio": "Provvisorio",
+        }
+        input_type, options = "select", [("", "—")] + [
+            (key, option_labels.get(key, key)) for key in fld.choices
+        ]
     elif fld.kind == "checkbox":
-        input_type, options = "select", [("", "—"), ("true", "Yes"), ("false", "No")]
+        input_type, options = "select", [("", "—"), ("true", "Sì"), ("false", "No")]
     return EndpointParam(
         name=fld.param,
         label=label,

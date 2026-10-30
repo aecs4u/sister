@@ -103,8 +103,9 @@
                             <a href="{{ file.view_url }}" title="Apri {{ file.filename }}">
                               <i class="fas fa-file-arrow-up me-1" aria-hidden="true"></i>{{ file.filename }}
                             </a>
-                            <a class="small ms-1" href="{{ file.download_url }}" title="Scarica {{ file.filename }}">
-                              <i class="fas fa-download" aria-label="Scarica"></i>
+                            <a class="small ms-1" href="{{ file.download_url }}" title="Scarica {{ file.filename }}"
+                               aria-label="Scarica {{ file.filename }}">
+                              <i class="fas fa-download" aria-hidden="true"></i>
                             </a>
                             {% else %}
                             <a class="text-danger" href="/documents/{{ file.id }}?template=result_detail"

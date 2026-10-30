@@ -1,4 +1,5 @@
 {% extends "auth_base.html" %}
+{% block auth_extra_head %}{% include "components/sister_meta_links.html" %}{% endblock %}
 {% block auth_page_title %}Esci — SISTER{% endblock %}
 {% block auth_title %}Vuoi uscire?{% endblock %}
 {% block auth_subtitle %}La sessione su questo browser verrà chiusa.{% endblock %}
@@ -20,5 +21,6 @@
 {% block auth_footer %}{% endblock %}
 
 {% block auth_scripts %}
+<script src="/static/js/sister_font_preload.js?v=20261030a" defer></script>
 <script src="/static/js/sister_login.js?v=20261009a" defer></script>
 {% endblock %}

@@ -1,11 +1,27 @@
 {% extends "legal/privacy.html" %}
 {# The theme's privacy policy plus two fixes it does not ship: wide tables scroll instead of overflowing small screens, and
    heading levels are normalised (sister_a11y.js). #}
+{% block extra_head %}
+{{ super() }}
+{% include "components/sister_meta_links.html" %}
+{% endblock %}
 {% block extra_css %}
 {{ super() }}
-<style>.legal-page table.data-table { display: block; max-width: 100%; overflow-x: auto; }</style>
+<link rel="stylesheet" href="/static/css/pages/legal_privacy.css?v=20261030b">
+{% endblock %}
+{% block content %}
+{{ super() }}
+<div class="container-fluid py-3">
+    <section class="legal-page legal-page--full-width legal-section" id="sister-external-services" aria-labelledby="sister-external-services-title">
+        <h2 class="h4" id="sister-external-services-title">Trattamenti specifici di SISTER e servizi esterni</h2>
+        <p>Per mostrare marcatori approssimativi, SISTER può inviare a OpenStreetMap Nominatim l’indirizzo, il comune e la provincia associati a particelle senza geometria catastale. Nella pagina 3D l’indirizzo viene inviato quando selezioni <strong>Mostra</strong> o apri una vista collegata a un immobile. Le richieste partono in background quando servono; se il risultato è già nella cache locale del server, l’indirizzo non viene inviato di nuovo. Le risposte di geocodifica sono conservate sul server per il riutilizzo.</p>
+        <p>Le mappe caricano tessere da OpenStreetMap, Esri e OpenTopoMap: i rispettivi fornitori possono ricevere l’area geografica visualizzata e i dati tecnici necessari alla richiesta. Nella pagina 3D, Google riceve coordinate e dati tecnici solo quando scegli <strong>Carica vista 3D Google</strong>. La geocodifica verso servizi esterni può essere disattivata dall’amministratore con <code>SISTER_GEOCODING=off</code>; la disattivazione impedisce nuove richieste di geocodifica, ma non disabilita i fornitori delle tessere cartografiche.</p>
+        <p>Per maggiori dettagli sui servizi cartografici e sulle mappe, consulta anche la <a href="/terms">pagina informativa di SISTER</a>.</p>
+    </section>
+</div>
 {% endblock %}
 {% block extra_js %}
 {{ super() }}
+<script src="/static/js/sister_font_preload.js?v=20261030a" defer></script>
 <script src="/static/js/sister_a11y.js?v=20261009f" defer></script>
 {% endblock %}

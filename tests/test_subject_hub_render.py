@@ -6,7 +6,7 @@ from pathlib import Path
 
 import aecs4u_theme
 import pytest
-from jinja2 import ChoiceLoader, Environment, FileSystemLoader
+from jinja2 import ChoiceLoader, DictLoader, Environment, FileSystemLoader
 
 from sister import web
 
@@ -243,6 +243,7 @@ def test_subject_document_archive_template_lists_available_and_database_only_fil
     assert "incluse quelle precedenti" in html
     assert 'href="/documents/101/view"' in html
     assert 'href="/documents/101/download"' in html
+    assert 'aria-label="Scarica visura.p7m"' in html
     assert "visura.p7m" in html and "visura.pdf" in html
     assert "record conserva" in html
     assert "RAVENNA · RA · Sez. RA · Fg 103 · P.lla 1714 · Sub 8" in html
@@ -403,6 +404,7 @@ async def test_documented_parcel_renders_full_visura_and_opens_first_visura_grou
     assert "ROSSI MARIO" in html and "ROSSI ANNA" in html and "VERDI LUCA" in html
     assert "Storia dell&#39;immobile" in html or "Storia dell'immobile" in html
     assert 'href="/documents/1814"' in html
+    assert 'aria-label="Apri la visura che completa questi dati"' in html
     assert 'href="/results/map-123"' in html and "Mappa catastale" in html
     assert 'href="/results/inspection-456"' in html and "Ispezione catastale" in html
 
@@ -437,3 +439,35 @@ async def test_documented_parcel_renders_full_visura_and_opens_first_visura_grou
     group["CodiceComune"] = "A547"
     group["ImmobileFabbricatiS"][0]["DatiIdentificativi"]["IdentificativoDefinitivo"]["CodiceComune"] = "A547"
     assert "Situazione catastale" not in grouped_template.render(profile=profile, group=group)
+
+
+def test_subject_buildings_table_exposes_keyboard_scroll_and_hint():
+    template_root = Path(__file__).parents[1] / "sister" / "templates"
+    theme_template_root = Path(aecs4u_theme.__file__).parent / "templates"
+    env = Environment(
+        loader=ChoiceLoader(
+            [
+                DictLoader({"test_base.html": "{% block page_title %}{% endblock %}"}),
+                FileSystemLoader(str(template_root)),
+                FileSystemLoader(str(theme_template_root)),
+            ]
+        ),
+        autoescape=True,
+    )
+    env.globals["_"] = lambda value: value
+    module = env.get_template("catasto/visura_soggetto_archive.html").make_module(
+        vars={
+            "base_template": "test_base.html",
+            "doc": {"xml_parsed": {}, "query_only": True},
+            "subject_route_prefix": "/persons",
+        }
+    )
+
+    rendered = module.buildings_table(
+        [{"address": "Via Roma 1", "category": "A/4", "income": "€ 120"}],
+        eyebrow="Fabbricati",
+    )
+
+    assert "Scorri orizzontalmente per vedere tutte le colonne." in rendered
+    assert 'role="region" tabindex="0"' in rendered
+    assert 'aria-label="Fabbricati: tabella scorrevole orizzontalmente"' in rendered

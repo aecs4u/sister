@@ -2,20 +2,21 @@
 {% set note_url = '/' ~ ('companies' if subject_type == 'company' else 'persons') ~ '/' ~ subject_code ~ '/note' %}
 <div class="subject-note-panel" data-subject-note data-note-url="{{ note_url }}">
     <button type="button" class="btn btn-sm btn-outline-secondary" data-subject-note-toggle
-            aria-expanded="false" title="Add a private note to this profile"
-            {% if not enabled %}disabled title="Sign in to save notes"{% endif %}>
+            aria-expanded="false" title="Aggiungi una nota privata a questo profilo"
+            aria-label="Aggiungi una nota"
+            {% if not enabled %}disabled title="Accedi per salvare le note"{% endif %}>
         <i class="far fa-sticky-note me-1" aria-hidden="true"></i>
-        <span data-subject-note-label>Add note</span>
+        <span data-subject-note-label>Aggiungi nota</span>
     </button>
     <div class="subject-note-display border-start ps-2 mt-2" data-subject-note-display hidden></div>
     <form class="mt-2" data-subject-note-form hidden>
-        <label class="form-label small mb-1" for="subject-note-{{ subject_type }}-{{ subject_code }}">Private note</label>
+        <label class="form-label small mb-1" for="subject-note-{{ subject_type }}-{{ subject_code }}">Nota privata</label>
         <textarea class="form-control form-control-sm" id="subject-note-{{ subject_type }}-{{ subject_code }}"
                   rows="4" maxlength="5000" data-subject-note-input></textarea>
         <div class="d-flex flex-wrap gap-2 mt-2">
-            <button type="submit" class="btn btn-sm btn-primary" data-subject-note-save>Save note</button>
-            <button type="button" class="btn btn-sm btn-outline-secondary" data-subject-note-cancel>Cancel</button>
-            <button type="button" class="btn btn-sm btn-outline-danger" data-subject-note-delete hidden>Delete note</button>
+            <button type="submit" class="btn btn-sm btn-primary" data-subject-note-save>Salva nota</button>
+            <button type="button" class="btn btn-sm btn-outline-secondary" data-subject-note-cancel>Annulla</button>
+            <button type="button" class="btn btn-sm btn-outline-danger" data-subject-note-delete hidden>Elimina nota</button>
         </div>
     </form>
     <div class="small mt-2" data-subject-note-status role="status" aria-live="polite"></div>
@@ -41,9 +42,9 @@
         var removeButton = panel.querySelector('[data-subject-note-delete]');
         display.textContent = note;
         display.hidden = !note;
-        label.textContent = note ? 'Edit note' : 'Add note';
-        toggle.title = note ? 'Edit your private note' : 'Add a private note to this profile';
-        toggle.setAttribute('aria-label', note ? 'Edit note' : 'Add note');
+        label.textContent = note ? 'Modifica nota' : 'Aggiungi nota';
+        toggle.title = note ? 'Modifica la tua nota privata' : 'Aggiungi una nota privata a questo profilo';
+        toggle.setAttribute('aria-label', note ? 'Modifica nota' : 'Aggiungi nota');
         input.value = note;
         removeButton.hidden = !note;
     }
@@ -71,9 +72,9 @@
             var result = await response.json();
             updateNote(panel, result.note || '');
             closeEditor(panel);
-            setStatus(panel, result.note ? 'Note saved.' : 'Note deleted.', false);
+            setStatus(panel, result.note ? 'Nota salvata.' : 'Nota eliminata.', false);
         } catch (error) {
-            setStatus(panel, 'Unable to save note (' + error.message + ').', true);
+            setStatus(panel, 'Impossibile salvare la nota (' + error.message + ').', true);
         } finally {
             [saveButton, cancelButton, removeButton].forEach(function (button) { button.disabled = false; });
         }
@@ -91,7 +92,7 @@
             panel.dataset.noteLoaded = 'true';
             toggle.disabled = false;
         }).catch(function (error) {
-            setStatus(panel, 'Unable to load your note (' + error.message + '). Reload the page to try again.', true);
+            setStatus(panel, 'Impossibile caricare la nota (' + error.message + '). Aggiorna la pagina per riprovare.', true);
         });
     });
 

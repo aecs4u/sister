@@ -69,8 +69,12 @@ from .visura_view import build_visura_view
 _OPENDATA_API_URL = os.getenv("OPENDATA_API_URL", "http://localhost:8024")
 _QUERY_SHARED_PRICE_PATH = os.getenv("SISTER_QUERY_SHARED_PRICE_PATH", "/visura/query")
 _QUERY_PRICE_CACHE_SECONDS = 60.0
+_QUERY_PRICE_FAILURE_CACHE_SECONDS = 30.0
 _query_price_cache_until = 0.0
 _query_price_cache: dict[str, Decimal] | None = None
+_query_price_failure_until = 0.0
+_DOCUMENTS_PAGE_SIZE = 100
+_QUERY_FORM_TAG = re.compile(r'<form id="(form-[^"]+)" class="sister-form"')
 
 
 # Base directory for the document browser (/documents).
@@ -571,7 +575,7 @@ def _link_related_visura_docs(docs: list[dict]) -> None:
             doc["related_soggetto_docs"] = list(property_links.get(doc_id, {}).values())
 
 
-def _build_property_map(docs: list[dict]) -> dict:
+def _build_property_map(docs: list[dict], *, owner_subject_docs: list[dict] | None = None) -> dict:
     """Group documents by cadastral coordinates into a nested property map.
 
     Visura-soggetto documents are nested as owner children under property docs
@@ -614,13 +618,19 @@ def _build_property_map(docs: list[dict]) -> dict:
         except Exception:
             return []
 
-    # Global CF → [soggetto docs] index (ALL visura_soggetto regardless of coords)
+    # Global CF → [soggetto docs] index. Paginated location views pass the
+    # complete subject list separately so a property's owner links survive
+    # pagination without adding every subject row to the rendered page.
     cf_soggetti: dict[str, list[dict]] = {}
-    for d in docs:
+    subject_index: dict[str, dict[int | str, dict]] = {}
+    for d in [*docs, *(owner_subject_docs or [])]:
         if (d.get("document_type") or "") == _SOGGETTO_TYPE:
             cf = _cf_from_oggetto(d.get("oggetto") or "")
             if cf:
-                cf_soggetti.setdefault(cf, []).append(d)
+                document_id = d.get("id")
+                identity = document_id if document_id is not None else f"{d.get('filename') or ''}:{id(d)}"
+                subject_index.setdefault(cf, {}).setdefault(identity, d)
+    cf_soggetti = {cf: list(subjects.values()) for cf, subjects in subject_index.items()}
 
     # Separate docs with cadastral coords from the rest
     immobili_docs = [d for d in docs if d.get("foglio") and d.get("particella") and d.get("provincia")]
@@ -1003,6 +1013,21 @@ def _build_document_tree(docs: list[dict]) -> list[dict]:
         tree.append(leaf("altro", "Altri documenti", "fa-file", "secondary", unclassified))
 
     return tree
+
+
+def _paginate_documents(docs: list[dict], page: int, page_size: int = _DOCUMENTS_PAGE_SIZE) -> tuple[list[dict], int, int, int]:
+    """Return a stable newest-first document page and its display bounds."""
+    ordered = sorted(
+        docs,
+        key=lambda document: (str(document.get("created_at") or ""), int(document.get("id") or 0)),
+        reverse=True,
+    )
+    page_size = max(1, int(page_size))
+    page_count = max(1, (len(ordered) + page_size - 1) // page_size)
+    page = min(max(1, int(page or 1)), page_count)
+    start = (page - 1) * page_size
+    selected = ordered[start : start + page_size]
+    return selected, page, page_count, start
 
 
 def _dossiers_base() -> "Path":
@@ -1775,6 +1800,14 @@ async def _filter_purchased_documents(user, documents: list[dict]) -> list[dict]
     if allowed_ids is None:
         return documents
     return [item for item in documents if item.get("id") is not None and int(item["id"]) in allowed_ids]
+
+
+async def _load_visible_documents(user, *, admin_limit: int | None = None) -> list[dict]:
+    """Load only documents this principal can see; avoid scanning the full catalog for purchasers."""
+    visible_ids = await _visible_document_ids(user)
+    if visible_ids is None:
+        return await get_all_documents(limit=admin_limit)
+    return await get_documents_by_ids(visible_ids)
 
 
 async def _require_document_access(user, document_id: int) -> None:
@@ -2865,7 +2898,7 @@ async def web_forms(request: Request, user=Depends(_require_auth)):
 
     theme = _get_theme(request)
     prices = await _query_product_prices()
-    return theme.render(
+    response = theme.render(
         "catasto/forms.html",
         request,
         user=user,
@@ -2874,6 +2907,17 @@ async def web_forms(request: Request, user=Depends(_require_auth)):
         workflow_groups=_examples_as_placeholders(get_workflow_groups()),
         query_credits_enabled=purchases_billing.query_credits_enabled(bool(prices)),
     )
+    # The shared template omits method/action, so HTML defaults to GET and leaks query values into the URL when
+    # JavaScript is disabled. Query forms are JavaScript-driven and must never submit sensitive values as GET.
+    if isinstance(response, HTMLResponse) and response.body:
+        html = response.body.decode("utf-8")
+        html, form_count = _QUERY_FORM_TAG.subn(
+            r'<form method="post" action="/forms" id="\1" class="sister-form"', html
+        )
+        if form_count:
+            response.body = html.encode("utf-8")
+            response.headers["content-length"] = str(len(response.body))
+    return response
 
 
 @router.post("/results/refresh", response_class=HTMLResponse)
@@ -2990,7 +3034,7 @@ async def web_results(
         item["request_type_label"] = item.get("request_type_label") or type_info.label
         item["request_type_description"] = item.get("request_type_description") or type_info.description
         item["request_type_tags"] = item.get("request_type_tags") or list(type_info.tags)
-        if item.get("source") != "workflow":
+        if item.get("source") != "workflow" and not item.get("status"):
             item["status"] = (
                 "completed" if item.get("success") is True else "failed" if item.get("success") is False else "pending"
             )
@@ -3089,6 +3133,7 @@ async def web_results(
         "completed": _build_url("/results", status="completed", **stats_filters),
         "partial": _build_url("/results", status="partial", **stats_filters),
         "failed": _build_url("/results", status="failed", **stats_filters),
+        "no_match": _build_url("/results", status="no_match", **stats_filters),
         "pending": _build_url("/results", status="pending", **stats_filters),
     }
     prev_url = None
@@ -3174,15 +3219,21 @@ async def _query_product_prices() -> dict[str, Decimal] | None:
     """Load the active SISTER query product prices from OpenData, with a brief in-process cache.
 
     OpenData remains the price source of truth. A missing or unreachable catalogue is represented by ``None`` and
-    causes paid queries to fail closed; a successful but empty catalogue is returned as an empty mapping.
+    causes paid queries to fail closed. Failed lookups are briefly cached to avoid retrying a broken endpoint on every
+    form refresh; a successful but empty catalogue is returned as an empty mapping.
     """
-    global _query_price_cache, _query_price_cache_until
+    global _query_price_cache, _query_price_cache_until, _query_price_failure_until
     now = time.monotonic()
     if _query_price_cache is not None and now < _query_price_cache_until:
         return dict(_query_price_cache)
+    if now < _query_price_failure_until:
+        return None
 
     response = await _opendata_get("/api/pricing")
     if response is None or response.status_code != 200:
+        _query_price_failure_until = now + _QUERY_PRICE_FAILURE_CACHE_SECONDS
+        if response is not None:
+            logger.warning("OpenData query price catalogue returned HTTP %s", response.status_code)
         return None
     try:
         from . import purchases_billing
@@ -3190,9 +3241,11 @@ async def _query_product_prices() -> dict[str, Decimal] | None:
         prices = purchases_billing.parse_query_price_catalog(response.json())
     except Exception as exc:  # noqa: BLE001 - invalid price data must never turn into a free query
         logger.warning("OpenData query price catalogue invalid: %s", type(exc).__name__)
+        _query_price_failure_until = now + _QUERY_PRICE_FAILURE_CACHE_SECONDS
         return None
     _query_price_cache = prices
     _query_price_cache_until = now + _QUERY_PRICE_CACHE_SECONDS
+    _query_price_failure_until = 0.0
     return dict(prices)
 
 
@@ -6098,13 +6151,11 @@ async def web_documents_export_named(request: Request, user=Depends(_require_aut
     """Copy all documents to documents/named/ using the display name stored in oggetto."""
     import shutil
 
-    from .database import get_all_documents
-
     base = _files_base()
     dest_dir = base / "named"
     dest_dir.mkdir(exist_ok=True)
 
-    docs = await _filter_purchased_documents(user, await get_all_documents(limit=10000))
+    docs = await _load_visible_documents(user)
     mapping = {
         d["filename"]: d["oggetto"]
         for d in docs
@@ -7809,7 +7860,13 @@ async def web_admin_credits_grant(request: Request, user=Depends(_require_admin)
 @router.get("/documents", response_class=HTMLResponse)
 @router.get("/documents/{path:path}", response_class=HTMLResponse)
 async def web_documents(
-    request: Request, path: str = "", template: str = "", view: str = "", user=Depends(_require_auth)
+    request: Request,
+    path: str = "",
+    template: str = "",
+    view: str = "",
+    page: int = 1,
+    favorites: bool = False,
+    user=Depends(_require_auth),
 ):
     """Documents hub — single-step query responses.
 
@@ -7822,6 +7879,7 @@ async def web_documents(
         view: ``map`` to select the location tab or ``files`` to select the file-oriented tab.
         template: force a viewer template, e.g. ``?template=result_detail`` for
             the exhaustive field-by-field view.
+        page: one-based page number for the document hub's newest-first list.
     """
 
     theme = _get_theme(request)
@@ -7961,7 +8019,7 @@ async def web_documents(
     # The cadastral map remains a separate experience. All document browser
     # views share the tabbed documents hub below.
     if not path and view == "cadastral-map":
-        files = await _filter_purchased_documents(user, await get_all_documents(limit=10000))
+        files = await _load_visible_documents(user)
         logical = _collapse_to_logical_docs(files)
         return theme.render(
             "documents_map.html",
@@ -7997,8 +8055,9 @@ async def web_documents(
         if view in ("map", "tree")
         else "categories"
     )
-    document_files = await _filter_purchased_documents(user, await get_all_documents(limit=10000))
+    document_files = await _load_visible_documents(user)
     logical = _collapse_to_logical_docs(document_files)
+    _link_related_visura_docs(logical)
     favorite_user = _favorite_user_key(user)
     favorite_document_ids = set()
     if favorite_user:
@@ -8010,9 +8069,23 @@ async def web_documents(
         if document.get("id") is not None:
             logical_file_ids.add(document["id"])
         document["is_favorite"] = bool(logical_file_ids & favorite_document_ids)
-    _link_related_visura_docs(logical)
-    tree = _build_document_tree(logical)
-    prop_map = _build_property_map(logical)
+    favorites_only = bool(favorites and favorite_user)
+    if favorites_only:
+        logical = [document for document in logical if document.get("is_favorite")]
+    document_file_count = (
+        sum(document.get("n_files") or 1 for document in logical)
+        if favorites_only
+        else len(document_files)
+    )
+    page_documents, page, page_count, page_offset = _paginate_documents(logical, page)
+    tree = _build_document_tree(page_documents) if active_view == "categories" else []
+    prop_map = (
+        _build_property_map(page_documents, owner_subject_docs=logical)
+        if active_view == "location"
+        else {"immobili": [], "soggetti": [], "altri": []}
+    )
+    document_page_start = page_offset + 1 if page_documents else 0
+    document_page_end = page_offset + len(page_documents)
     return theme.render(
         "documents.html",
         request,
@@ -8020,10 +8093,16 @@ async def web_documents(
         tree=tree,
         prop_map=prop_map,
         total=len(logical),
-        document_file_count=len(document_files),
+        document_file_count=document_file_count,
         active_view=active_view,
-        files=logical,
+        files=page_documents,
         favorites_enabled=bool(favorite_user),
+        favorites_only=favorites_only,
+        page=page,
+        page_count=page_count,
+        page_size=_DOCUMENTS_PAGE_SIZE,
+        page_start=document_page_start,
+        page_end=document_page_end,
     )
 
 
@@ -9536,9 +9615,11 @@ async def _web_subject_profile(
     if visible_document_ids is not None:
         subject_document_ids &= visible_document_ids
 
-    indexed_files = await get_all_documents(limit=10000)
-    if visible_document_ids is not None:
-        indexed_files = [item for item in indexed_files if item.get("id") in visible_document_ids]
+    indexed_files = (
+        await get_all_documents(limit=None)
+        if visible_document_ids is None
+        else await get_documents_by_ids(visible_document_ids)
+    )
     candidates = [
         dict(item)
         for item in indexed_files
@@ -10275,10 +10356,6 @@ async def web_api_workflow_stream(request: Request, user=Depends(_require_auth))
     if missing:
         return JSONResponse({"detail": f"Campi obbligatori mancanti: {', '.join(missing)}"}, status_code=422)
     paid_user = not _is_admin(user)
-    if paid_user and plan.workflow.include_paid_steps:
-        return JSONResponse(
-            {"detail": "I passaggi ipotecari a pagamento richiedono l’amministratore"}, status_code=403
-        )
     if not plan.steps:
         return JSONResponse({"detail": "La richiesta non contiene query da eseguire"}, status_code=422)
     unit_cost, price_path = await _query_product_price(_QUERY_SHARED_PRICE_PATH) if paid_user else (None, None)
@@ -10567,10 +10644,6 @@ async def web_api_query_quote(request: Request, user=Depends(_require_auth)):
             missing = _missing_required_fields(plan.workflow)
             if missing:
                 raise ValueError(f"Campi obbligatori mancanti: {', '.join(missing)}")
-            if not _is_admin(user) and plan.workflow.include_paid_steps:
-                return JSONResponse(
-                    {"detail": "I passaggi ipotecari a pagamento richiedono l’amministratore"}, status_code=403
-                )
             units = len(plan.steps)
             cost_path = _QUERY_SHARED_PRICE_PATH
         else:

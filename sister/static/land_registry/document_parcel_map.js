@@ -656,6 +656,10 @@
                     instance.map.getContainer().querySelectorAll('.leaflet-control'),
                     function (control) { return control.getBoundingClientRect(); }
                 );
+                Array.prototype.forEach.call(
+                    instance.map.getContainer().querySelectorAll('.leaflet-popup'),
+                    function (popup) { occupied.push(popup.getBoundingClientRect()); }
+                );
                 var fitButton = container.parentElement.querySelector('[data-document-map-fit-all]');
                 if (fitButton && !fitButton.disabled) occupied.push(fitButton.getBoundingClientRect());
                 Array.prototype.forEach.call(
@@ -764,6 +768,10 @@
                 if (!overviewMarkers.length || overviewLayoutFrame !== null) return;
                 overviewLayoutFrame = window.requestAnimationFrame(layoutOverviewLabels);
             }
+
+            // Overview labels share the map with feature popups. Reflow them when a popup opens or closes so OMI and
+            // parcel labels do not sit underneath the currently focused popup.
+            instance.map.on('popupopen popupclose', scheduleOverviewLabelLayout);
 
             // Let the user drag a label chip to resolve overlaps; the offset is kept relative
             // to its marker, so it follows pans and zooms. Double-click restores automatic placement.

@@ -3,7 +3,7 @@
 {% from "components/job.html" import status_badge, response_summary %}
 {% from "macros/ui_base.html" import no_results %}
 {% from "components/related_links.html" import related_pages %}
-{% block page_title %}Workflow{% endblock %}
+{% block page_title %}Flussi di lavoro{% endblock %}
 
 {% block content %}
 <div class="container-fluid py-4">
@@ -67,7 +67,7 @@
                         </p>
                         <div class="d-flex justify-content-between align-items-center">
                             <div class="text-muted small">
-                                <i class="fas fa-tasks me-1"></i>{{ run.completed_steps }}/{{ run.total_steps }} steps
+                                <i class="fas fa-tasks me-1"></i>{{ run.completed_steps }}/{{ run.total_steps }} passaggi
                             </div>
                             <div class="text-muted small">{{ run.created_at_display or '-' }}</div>
                         </div>

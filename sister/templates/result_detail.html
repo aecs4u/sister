@@ -44,8 +44,8 @@
       <div class="col-6">{{ param_label('Risposta il', result.responded_at_display or '-') }}</div>
     </div>
     {% if result.tags %}
-    <div class="d-flex flex-wrap align-items-center gap-2 mt-3" aria-label="Record tags">
-      <span class="detail-label mb-0 me-1">Tags</span>
+    <div class="d-flex flex-wrap align-items-center gap-2 mt-3" aria-label="Etichette del record">
+      <span class="detail-label mb-0 me-1">Etichette</span>
       {% for tag in result.tags %}<span class="badge bg-primary">{{ tag }}</span>{% endfor %}
     </div>
     {% endif %}
@@ -251,7 +251,10 @@
       <div class="d-flex align-items-center gap-3">
         <span id="prop-filter-chip" class="badge bg-info text-dark d-none" style="font-size:.75rem">
           <i class="fas fa-filter me-1"></i><span id="prop-filter-label"></span>
-          <i class="fas fa-times-circle ms-1" id="prop-filter-clear" style="cursor:pointer" title="Rimuovi filtro"></i>
+          <button type="button" class="btn btn-sm btn-link p-0 ms-1 text-reset" id="prop-filter-clear"
+                  aria-label="Rimuovi il filtro sui titolari" title="Rimuovi il filtro sui titolari">
+            <i class="fas fa-times-circle" aria-hidden="true"></i>
+          </button>
         </span>
         <div class="form-check form-switch mb-0">
           <input class="form-check-input" type="checkbox" role="switch" id="toggle-group-props">
@@ -323,7 +326,10 @@
       <div class="d-flex align-items-center gap-3">
         <span id="owners-filter-chip" class="badge bg-info text-dark d-none" style="font-size:.75rem">
           <i class="fas fa-filter me-1"></i><span id="owners-filter-label"></span>
-          <i class="fas fa-times-circle ms-1" id="owners-filter-clear" style="cursor:pointer" title="Rimuovi filtro"></i>
+          <button type="button" class="btn btn-sm btn-link p-0 ms-1 text-reset" id="owners-filter-clear"
+                  aria-label="Rimuovi il filtro sugli immobili" title="Rimuovi il filtro sugli immobili">
+            <i class="fas fa-times-circle" aria-hidden="true"></i>
+          </button>
         </span>
         <div id="toggle-timeline-wrap" class="form-check form-switch mb-0 d-none">
           <input class="form-check-input" type="checkbox" role="switch" id="toggle-owners-timeline">
@@ -399,7 +405,7 @@
     if (copyBtn && jsonPre) {
         copyBtn.addEventListener("click", function() {
             navigator.clipboard.writeText(jsonPre.textContent).then(function() {
-                copyBtn.innerHTML = '<i class="fas fa-check me-1"></i>Copied';
+                copyBtn.innerHTML = '<i class="fas fa-check me-1"></i>Copiato';
                 setTimeout(function() { copyBtn.innerHTML = '<i class="fas fa-copy me-1"></i>Copia'; }, 1500);
             });
         });
@@ -441,7 +447,7 @@
                 field: key,
                 minWidth: headerMinWidth(key),
                 headerFilter: "input",
-                headerFilterPlaceholder: "filter...",
+                headerFilterPlaceholder: "Filtra…",
                 sorter: "string",
                 formatter: function(cell) {
                     var v = cell.getValue();
@@ -601,13 +607,13 @@
                 badge.textContent = v === "building" ? "Fabbricato" : v === "land" ? "Terreno" : v || "-";
                 return badge;
              }},
-            {title: "Provincia",  field: "province",      minWidth: headerMinWidth("Provincia"),  headerFilter: "input", headerFilterPlaceholder: "filter..."},
-            {title: "Comune",     field: "municipality",  minWidth: headerMinWidth("Comune"),     headerFilter: "input", headerFilterPlaceholder: "filter..."},
-            {title: "Foglio",     field: "sheet",         minWidth: headerMinWidth("Foglio"),     hozAlign: "center", headerFilter: "input", headerFilterPlaceholder: "filter..."},
-            {title: "Particella", field: "parcel",        minWidth: headerMinWidth("Particella"), hozAlign: "center", headerFilter: "input", headerFilterPlaceholder: "filter..."},
+            {title: "Provincia",  field: "province",      minWidth: headerMinWidth("Provincia"),  headerFilter: "input", headerFilterPlaceholder: "Filtra…"},
+            {title: "Comune",     field: "municipality",  minWidth: headerMinWidth("Comune"),     headerFilter: "input", headerFilterPlaceholder: "Filtra…"},
+            {title: "Foglio",     field: "sheet",         minWidth: headerMinWidth("Foglio"),     hozAlign: "center", headerFilter: "input", headerFilterPlaceholder: "Filtra…"},
+            {title: "Particella", field: "parcel",        minWidth: headerMinWidth("Particella"), hozAlign: "center", headerFilter: "input", headerFilterPlaceholder: "Filtra…"},
             {title: "Sub",        field: "subunit",       minWidth: headerMinWidth("Sub"),        hozAlign: "center"},
             {title: "Sez.",       field: "section",       minWidth: headerMinWidth("Sez."),       hozAlign: "center"},
-            {title: "Indirizzo",  field: "address",       minWidth: headerMinWidth("Indirizzo"),  headerFilter: "input", headerFilterPlaceholder: "filter..."},
+            {title: "Indirizzo",  field: "address",       minWidth: headerMinWidth("Indirizzo"),  headerFilter: "input", headerFilterPlaceholder: "Filtra…"},
             {title: "Partita",    field: "partita",       minWidth: headerMinWidth("Partita")},
         ];
         if (hasFabbricati) {
@@ -632,7 +638,7 @@
                 });
             }
             cols = cols.concat([
-                {title: "Categoria",   field: "category",        minWidth: headerMinWidth("Categoria"),   headerFilter: "input", headerFilterPlaceholder: "filter..."},
+                {title: "Categoria",   field: "category",        minWidth: headerMinWidth("Categoria"),   headerFilter: "input", headerFilterPlaceholder: "Filtra…"},
                 {title: "Classe",      field: "cadastral_class", minWidth: headerMinWidth("Classe"),      hozAlign: "center"},
                 {title: "Consistenza", columns: consistencyColumns},
                 {title: "Rendita",     field: "income",          minWidth: headerMinWidth("Rendita")},
@@ -641,7 +647,7 @@
         }
         if (hasTerreni) {
             cols = cols.concat([
-                {title: "Qualità",         field: "quality",              minWidth: headerMinWidth("Qualità"),         headerFilter: "input", headerFilterPlaceholder: "filter..."},
+                {title: "Qualità",         field: "quality",              minWidth: headerMinWidth("Qualità"),         headerFilter: "input", headerFilterPlaceholder: "Filtra…"},
                 {title: "Superficie",      field: "area",                 minWidth: headerMinWidth("Superficie")},
                 {title: "Red. Dominicale", field: "dominical_income",     minWidth: headerMinWidth("Red. Dominicale")},
                 {title: "Red. Agrario",    field: "agricultural_income",  minWidth: headerMinWidth("Red. Agrario")},
@@ -649,8 +655,8 @@
         }
         if (hasSubject) {
             cols = cols.concat([
-                {title: "Soggetto",    field: "subject_name",         minWidth: headerMinWidth("Soggetto"),    headerFilter: "input", headerFilterPlaceholder: "filter..."},
-                {title: "C.F. / P.IVA", field: "subject_fiscal_code", minWidth: headerMinWidth("C.F. / P.IVA"), headerFilter: "input", headerFilterPlaceholder: "filter..."},
+                {title: "Soggetto",    field: "subject_name",         minWidth: headerMinWidth("Soggetto"),    headerFilter: "input", headerFilterPlaceholder: "Filtra…"},
+                {title: "C.F. / P.IVA", field: "subject_fiscal_code", minWidth: headerMinWidth("C.F. / P.IVA"), headerFilter: "input", headerFilterPlaceholder: "Filtra…"},
             ]);
         }
         cols = cols.map(function(c) {
@@ -795,12 +801,12 @@
 
         function baseCols() {
             var cols = [
-                {title: "Nominativo",     field: "nominativo",      minWidth: headerMinWidth("Nominativo"),     headerFilter: "input", headerFilterPlaceholder: "filter..."},
-                {title: "Codice Fiscale", field: "fiscal_code",     minWidth: headerMinWidth("Codice Fiscale"), headerFilter: "input", headerFilterPlaceholder: "filter..."},
-                {title: "Titolarità",     field: "right_type",      minWidth: headerMinWidth("Titolarità"),     headerFilter: "input", headerFilterPlaceholder: "filter..."},
+                {title: "Nominativo",     field: "nominativo",      minWidth: headerMinWidth("Nominativo"),     headerFilter: "input", headerFilterPlaceholder: "Filtra…"},
+                {title: "Codice Fiscale", field: "fiscal_code",     minWidth: headerMinWidth("Codice Fiscale"), headerFilter: "input", headerFilterPlaceholder: "Filtra…"},
+                {title: "Titolarità",     field: "right_type",      minWidth: headerMinWidth("Titolarità"),     headerFilter: "input", headerFilterPlaceholder: "Filtra…"},
                 {title: "Quota",          field: "ownership_share", minWidth: headerMinWidth("Quota"),          hozAlign: "center"},
                 {title: "Cod. Diritto",   field: "right_code",      minWidth: headerMinWidth("Cod. Diritto")},
-                {title: "Diritto",        field: "right_description", minWidth: headerMinWidth("Diritto"),      headerFilter: "input", headerFilterPlaceholder: "filter..."},
+                {title: "Diritto",        field: "right_description", minWidth: headerMinWidth("Diritto"),      headerFilter: "input", headerFilterPlaceholder: "Filtra…"},
             ];
             if (hasDates) {
                 cols = cols.concat([
@@ -1077,8 +1083,8 @@
         new Tabulator(el, Object.assign({}, commonOpts, {
             data: {{ result.page_visit_rows | tojson }},
             columns: [
-                {title: "Step",      field: "Step",      minWidth: headerMinWidth("Step"),      headerFilter: "input", sorter: "string"},
-                {title: "URL",       field: "URL",       minWidth: headerMinWidth("URL"),       headerFilter: "input", sorter: "string",
+                {title: "Passaggio", field: "Step",      minWidth: headerMinWidth("Passaggio"), headerFilter: "input", sorter: "string"},
+                {title: "Indirizzo URL", field: "URL",    minWidth: headerMinWidth("Indirizzo URL"), headerFilter: "input", sorter: "string",
                  formatter: function(cell) {
                      var v = cell.getValue();
                      if (v && v !== "-") {
@@ -1089,8 +1095,8 @@
                      }
                      return "-";
                  }},
-                {title: "Timestamp", field: "Timestamp", minWidth: headerMinWidth("Timestamp"), headerFilter: "input", sorter: "string"},
-                {title: "Errors",    field: "Errors",    minWidth: headerMinWidth("Errors"),    headerFilter: "input", sorter: "string"},
+                {title: "Data e ora", field: "Timestamp", minWidth: headerMinWidth("Data e ora"), headerFilter: "input", sorter: "string"},
+                {title: "Errori",     field: "Errors",    minWidth: headerMinWidth("Errori"),    headerFilter: "input", sorter: "string"},
             ],
         }));
     })();
