@@ -115,7 +115,7 @@ DATABASE_SCHEMA = os.getenv("DATABASE_SCHEMA", "sister")
 DATABASE_ISTAT_SCHEMA = os.getenv("DATABASE_ISTAT_SCHEMA", "istat")
 # raw payloads (response JSON, XML tree, extraction JSON) live in their own schema; tests point it at a throwaway one
 DATABASE_ARCHIVE_SCHEMA = os.getenv("DATABASE_ARCHIVE_SCHEMA", "sister_archive")
-DATABASE_REVISION = "20261117_subject_notes"
+DATABASE_REVISION = "20261119_billing_wallet_tables"
 
 # ---------------------------------------------------------------------------
 # Engine and session
@@ -2594,35 +2594,90 @@ async def get_document_favorite_ids(user_id: str) -> set[int]:
         return {int(document_id) for document_id in result.scalars()}
 
 
-async def get_document_purchase_ids(user_id: str) -> set[int]:
-    """Return the indexed documents purchased by one authenticated identity."""
+class PurchaseError(ValueError):
+    """A purchase operation was refused; ``code`` is a stable key the UI turns into a message."""
+
+    def __init__(self, code: str, message: str = ""):
+        super().__init__(message or code)
+        self.code = code
+
+
+def _purchase_user_keys(user_ids: "str | Iterable[str]") -> list[str]:
+    """Normalise one key or several principal keys to the case-insensitive form stored/compared."""
+    values = [user_ids] if isinstance(user_ids, str) else list(user_ids)
+    return sorted({str(value).strip().casefold() for value in values if str(value or "").strip()})
+
+
+def _identity_part(user_id: str) -> str:
+    """The identifier after the key prefix: ``email:a@b.it`` and ``id:A@B.it`` name the same person."""
+    return str(user_id).partition(":")[2].strip().casefold()
+
+
+def _same_identity_clause(user_id: str):
+    return func.lower(func.substr(DocumentPurchase.user_id, func.strpos(DocumentPurchase.user_id, ":") + 1)) == _identity_part(user_id)
+
+
+def _active_purchase_clause():
+    """A purchase gives access while it is not revoked, already started and not expired."""
+    return and_(
+        DocumentPurchase.revoked_at.is_(None),
+        DocumentPurchase.purchased_at <= func.now(),
+        or_(DocumentPurchase.expires_at.is_(None), DocumentPurchase.expires_at > func.now()),
+    )
+
+
+async def get_document_purchase_ids(user_ids: "str | Iterable[str]") -> set[int]:
+    """Return the indexed documents an identity (any of its key forms) currently has access to."""
+    keys = _purchase_user_keys(user_ids)
+    if not keys:
+        return set()
     async with _get_session_factory()() as session:
         result = await session.execute(
-            select(DocumentPurchase.document_id).where(DocumentPurchase.user_id == user_id)
+            select(DocumentPurchase.document_id).where(
+                func.lower(DocumentPurchase.user_id).in_(keys), _active_purchase_clause()
+            )
         )
         return {int(document_id) for document_id in result.scalars()}
 
 
-async def has_document_purchase(user_id: str, document_id: int) -> bool:
-    """Check whether one identity has a recorded purchase for an indexed document."""
+async def has_document_purchase(user_ids: "str | Iterable[str]", document_id: int) -> bool:
+    """Check whether an identity (any of its key forms) has current access to an indexed document."""
+    keys = _purchase_user_keys(user_ids)
+    if not keys:
+        return False
     async with _get_session_factory()() as session:
         result = await session.execute(
             select(DocumentPurchase.document_id).where(
-                DocumentPurchase.user_id == user_id,
+                func.lower(DocumentPurchase.user_id).in_(keys),
                 DocumentPurchase.document_id == document_id,
+                _active_purchase_clause(),
             )
         )
-        return result.scalar_one_or_none() is not None
+        return result.first() is not None
 
 
-async def list_document_purchases(query: str = "", limit: int = 500) -> list[dict]:
-    """List recent purchase records for the admin ownership manager."""
+def _purchase_state(purchase: DocumentPurchase, now: datetime) -> str:
+    if purchase.revoked_at is not None:
+        return "revoked"
+    if purchase.expires_at is not None and purchase.expires_at <= now:
+        return "expired"
+    if purchase.purchased_at > now:
+        return "scheduled"
+    return "active"
+
+
+async def list_document_purchases(query: str = "", limit: int = 500, status: str = "active") -> list[dict]:
+    """List purchase records for the admin ownership manager (``status``: active, revoked or all)."""
     stmt = (
         select(DocumentPurchase, Document.file_name, Document.subject_text, Document.document_type)
         .join(Document, Document.id == DocumentPurchase.document_id)
         .order_by(DocumentPurchase.updated_at.desc(), DocumentPurchase.document_id.desc())
         .limit(max(1, min(int(limit), 1000)))
     )
+    if status == "active":
+        stmt = stmt.where(DocumentPurchase.revoked_at.is_(None))
+    elif status == "revoked":
+        stmt = stmt.where(DocumentPurchase.revoked_at.is_not(None))
     search = str(query or "").strip()
     if search:
         pattern = f"%{search}%"
@@ -2636,6 +2691,7 @@ async def list_document_purchases(query: str = "", limit: int = 500) -> list[dic
         )
     async with _get_session_factory()() as session:
         rows = (await session.execute(stmt)).all()
+    now = datetime.now(timezone.utc)
     return [
         {
             "user_id": purchase.user_id,
@@ -2644,6 +2700,15 @@ async def list_document_purchases(query: str = "", limit: int = 500) -> list[dic
             "created_by": purchase.created_by,
             "note": purchase.note or "",
             "updated_at": purchase.updated_at,
+            "source": purchase.source or "admin_grant",
+            "amount_cents": purchase.amount_cents,
+            "currency": purchase.currency or "",
+            "payment_ref": purchase.payment_ref or "",
+            "expires_at": purchase.expires_at,
+            "revoked_at": purchase.revoked_at,
+            "revoked_by": purchase.revoked_by or "",
+            "revoked_reason": purchase.revoked_reason or "",
+            "state": _purchase_state(purchase, now),
             "filename": filename,
             "title": title or filename,
             "document_type": document_type or "",
@@ -2653,23 +2718,57 @@ async def list_document_purchases(query: str = "", limit: int = 500) -> list[dic
 
 
 async def create_document_purchase(
-    user_id: str, document_id: int, purchased_at: datetime, created_by: str, note: str | None = None
+    user_id: str,
+    document_id: int,
+    purchased_at: datetime,
+    created_by: str,
+    note: str | None = None,
+    *,
+    source: str = "admin_grant",
+    amount_cents: int | None = None,
+    currency: str | None = None,
+    payment_ref: str | None = None,
+    wallet_tx_id: str | None = None,
+    expires_at: datetime | None = None,
 ) -> None:
-    """Record a purchase; duplicate ownership is rejected instead of silently changing provenance."""
+    """Record a purchase or grant; an already active one is refused, a revoked one is re-activated."""
     async with _get_session_factory()() as session:
         if await session.get(Document, document_id) is None:
-            raise ValueError("Document not found")
-        if await session.get(DocumentPurchase, (user_id, document_id)) is not None:
-            raise ValueError("This user already owns this document")
-        session.add(
-            DocumentPurchase(
-                user_id=user_id,
-                document_id=document_id,
-                purchased_at=purchased_at,
-                created_by=created_by,
-                note=note or None,
+            raise PurchaseError("document_not_found")
+        if payment_ref:
+            clash = await session.execute(
+                select(DocumentPurchase.user_id).where(DocumentPurchase.payment_ref == payment_ref)
+            )
+            if clash.first() is not None:  # the same Stripe/wallet payment must never fulfil twice
+                raise PurchaseError("duplicate_payment")
+        purchase = await session.get(DocumentPurchase, (user_id, document_id))
+        if purchase is not None and purchase.revoked_at is None:
+            raise PurchaseError("duplicate")
+        # The same person typed under another key form (email: / username: / id:) already has this document.
+        same_person = await session.execute(
+            select(DocumentPurchase.user_id).where(
+                DocumentPurchase.document_id == document_id,
+                DocumentPurchase.revoked_at.is_(None),
+                DocumentPurchase.user_id != user_id,
+                _same_identity_clause(user_id),
             )
         )
+        if same_person.first() is not None:
+            raise PurchaseError("duplicate")
+        if purchase is None:
+            purchase = DocumentPurchase(user_id=user_id, document_id=document_id)
+            session.add(purchase)
+        purchase.purchased_at = purchased_at
+        purchase.created_by = created_by
+        purchase.note = note or None
+        purchase.source = source or "admin_grant"
+        purchase.amount_cents = amount_cents
+        purchase.currency = (currency or "").upper() or None
+        purchase.payment_ref = payment_ref or None
+        purchase.wallet_tx_id = wallet_tx_id or None
+        purchase.expires_at = expires_at
+        purchase.revoked_at = purchase.revoked_by = purchase.revoked_reason = None
+        purchase.updated_at = datetime.now(timezone.utc)
         await session.commit()
 
 
@@ -2678,29 +2777,61 @@ async def update_document_purchase(
     old_document_id: int,
     user_id: str,
     document_id: int,
-    purchased_at: datetime,
+    purchased_at: datetime | None,
     note: str | None = None,
+    expires_at: datetime | None = None,
 ) -> None:
-    """Edit a purchase record, including transferring ownership to another identity/document pair."""
+    """Edit a purchase record, including moving it to another identity/document pair.
+
+    ``purchased_at=None`` keeps the stored instant (the admin form posts minute precision, so an unchanged
+    value must not silently rewrite the seconds).
+    """
     async with _get_session_factory()() as session:
         purchase = await session.get(DocumentPurchase, (old_user_id, old_document_id))
         if purchase is None:
-            raise ValueError("Purchase record not found")
+            raise PurchaseError("not_found")
         if await session.get(Document, document_id) is None:
-            raise ValueError("Document not found")
+            raise PurchaseError("document_not_found")
         if (user_id, document_id) != (old_user_id, old_document_id):
             if await session.get(DocumentPurchase, (user_id, document_id)) is not None:
-                raise ValueError("This user already owns this document")
+                raise PurchaseError("duplicate")
+            same_person = await session.execute(
+                select(DocumentPurchase.user_id).where(
+                    DocumentPurchase.document_id == document_id,
+                    DocumentPurchase.revoked_at.is_(None),
+                    DocumentPurchase.user_id != old_user_id,
+                    _same_identity_clause(user_id),
+                )
+            )
+            if same_person.first() is not None:
+                raise PurchaseError("duplicate")
             purchase.user_id = user_id
             purchase.document_id = document_id
-        purchase.purchased_at = purchased_at
+        if purchased_at is not None:
+            purchase.purchased_at = purchased_at
         purchase.note = note or None
+        purchase.expires_at = expires_at
         purchase.updated_at = datetime.now(timezone.utc)
         await session.commit()
 
 
+async def revoke_document_purchase(user_id: str, document_id: int, revoked_by: str, reason: str) -> bool:
+    """End an access without deleting its history; return whether an active record was revoked."""
+    async with _get_session_factory()() as session:
+        purchase = await session.get(DocumentPurchase, (user_id, document_id))
+        if purchase is None or purchase.revoked_at is not None:
+            return False
+        now = datetime.now(timezone.utc)
+        purchase.revoked_at = now
+        purchase.revoked_by = revoked_by
+        purchase.revoked_reason = reason or None
+        purchase.updated_at = now
+        await session.commit()
+        return True
+
+
 async def delete_document_purchase(user_id: str, document_id: int) -> bool:
-    """Revoke a document purchase and report whether an ownership record existed."""
+    """Physically remove a purchase record (maintenance/tests); the UI revokes softly instead."""
     async with _get_session_factory()() as session:
         result = await session.execute(
             delete(DocumentPurchase).where(
@@ -3054,8 +3185,8 @@ async def ensure_user_property_omi_selections(
                 "is_manual = FALSE, updated_at = now() "
                 "WHERE property_omi_selection.is_manual IS FALSE OR "
                 "(property_omi_selection.is_manual IS NULL "
-                "AND :legacy_zone_code IS NOT NULL "
-                "AND property_omi_selection.zone_code IS NOT DISTINCT FROM :legacy_zone_code)"
+                "AND CAST(:legacy_zone_code AS VARCHAR) IS NOT NULL "
+                "AND property_omi_selection.zone_code IS NOT DISTINCT FROM CAST(:legacy_zone_code AS VARCHAR))"
             ),
             values,
         )

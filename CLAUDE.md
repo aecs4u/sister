@@ -100,8 +100,10 @@ uv run sister-mcp
 - The service **never logs in by itself**: it attaches to the SISTER session left open in the shared Chrome
   (`BROWSER_CDP_ENDPOINT`) by `scripts/ade_login.py`. One session per user ("Utente gia' in sessione" → `ade_login.py --close`);
   it expires after about 30 minutes and is lost when Chrome restarts. Details: `docs/portal_session.md`.
-- uvicorn runs with `--reload` over every `*.py` (also `scripts/`, `tests/`): editing Python while a batch/crawler
-  runs restarts the service and drops the request in flight. A restart does **not** log out (CDP mode).
+- `scripts/start.sh` runs without `--reload` by default so edits cannot restart a live demo or batch process. Opt in to
+  hot reload for local UI work with `scripts/start.sh --reload`. Reload watches every `*.py` (including
+  `scripts/` and `tests/`) and can drop an in-flight request; do not use it for batches or crawlers. A restart does
+  **not** log out (CDP mode).
 - **A SISTER session lasts ~30 minutes from the login, whatever the activity** (measured 2026-10-26: 29.6, 29.8 and 30.4 min;
   the keep-alive does not extend it). Run bulk work with `scripts/run_in_session.py --batch <dir> ...` right after the login:
   it checks the browser, starts the service, drops answered rows and wrong codici fiscali from the plans, proves the session with
@@ -137,8 +139,12 @@ uv run sister-mcp
   rest 600/min, per socket peer), nonce-based CSP outside `/docs` (`sister/security.py`), opt-in admin gating via
   `SISTER_ADMIN_USERS` (Browser Control, imports, rescans), hashed passwords in `local_users.txt` (`scripts/hash_local_password.py`).
   Sign-in/out/password-help pages are SISTER's own (`sister/auth_pages.py`), mounted before the package's.
-- Front-end assets are self-hosted in `sister/static/vendor/` (official Bootstrap 5.3.2, Font Awesome 6.5.0, Tabulator 6.3.1,
-  Chart.js 4.4.4 — do not use crowdaction's trimmed CSS copies). No third-party requests remain (fonts included).
+- Core front-end assets are self-hosted in `sister/static/vendor/` (official Bootstrap 5.3.2, Font Awesome 6.5.0,
+  Tabulator 6.3.1, Chart.js 4.4.4 — do not use crowdaction's trimmed CSS copies; fonts are local too). Map views request
+  tiles from OpenStreetMap, Esri and OpenTopoMap; the Google 3D map is loaded only after the visitor chooses it. Subject
+  map fallbacks may geocode unmapped parcel addresses in the background; `/3d` address searches run on form submission
+  or when opening an address-specific link. Results are cached server-side; geocoding can be disabled with
+  `SISTER_GEOCODING=off`.
 - `OPENDATA_API_URL` (workflow storage, separate service) is called with a 1 s connect / 4 s total timeout and a 30 s circuit
   breaker (`web._opendata_get`); when it is down `/workflows` shows a notice instead of stalling.
 - Environment: keep `httpx` below 1.0 (`pyproject.toml` pins `<1`; 1.0 pre-releases have no `AsyncClient` and break `VisuraClient`).

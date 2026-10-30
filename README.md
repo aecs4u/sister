@@ -632,6 +632,11 @@ uv run sister history --provincia Trieste --limit 20
 uv run sister health
 ```
 
+`requests --status` scans history pages until it finds the requested number of matching records; `--offset` skips
+matching records, and `--limit` accepts values from 1 to 200. `get`, `wait`, and `query ... --wait` return a non-zero
+exit status when a request fails, expires, or needs human action. `health` returns non-zero when the service is degraded
+or the SISTER session is unauthenticated.
+
 Per altri esempi vedi [`examples/cli_usage.sh`](examples/cli_usage.sh).
 
 ---

@@ -22,7 +22,8 @@ START_UVICORN_ARGS=(
     --reload-include "*.html"
     --reload-exclude "static/*"
 )
-START_DEFAULT_RELOAD=true
+# Keep production/demo/batch processes out of the fragile reloader. Opt in with --reload for local UI work.
+START_DEFAULT_RELOAD=false
 START_SKIP_SYNC="${START_SKIP_SYNC:-true}"
 START_PROJECT_ROOT="${PROJECT_ROOT}"
 

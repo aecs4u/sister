@@ -14,7 +14,7 @@ depends_on = None
 def upgrade() -> None:
     import os
 
-    schema = os.getenv("DATABASE_SCHEMA", "sister")
+    schema = op.get_context().opts.get("sister_schema") or os.getenv("DATABASE_SCHEMA", "sister")
     inspector = sa.inspect(op.get_bind())
     if not inspector.has_table("document_favorite", schema=schema):
         op.create_table(
@@ -46,5 +46,5 @@ def upgrade() -> None:
 def downgrade() -> None:
     import os
 
-    schema = os.getenv("DATABASE_SCHEMA", "sister")
+    schema = op.get_context().opts.get("sister_schema") or os.getenv("DATABASE_SCHEMA", "sister")
     op.drop_table("document_favorite", schema=schema)

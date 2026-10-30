@@ -1,4 +1,5 @@
 {% extends "_base.html" %}
+{% from "_doc_macros.html" import document_favorite_action, documents_favorites_js %}
 {% block page_title %}Planimetria {{ doc.filename or doc_id }}{% endblock %}
 
 {% block extra_css %}
@@ -23,6 +24,7 @@
         Planimetria — {{ doc.filename or ('Doc ' ~ doc_id) }}
       </h5>
       <div class="d-flex gap-2 align-items-center flex-wrap">
+        {{ document_favorite_action(doc_id, doc.is_favorite|default(false), doc.favorites_enabled|default(false)) }}
         {% if has_geojson %}
         <span class="badge bg-light text-dark border" id="badge-count">{{ n_features }} elementi</span>
         {% else %}
@@ -97,6 +99,7 @@
 
 {% block extra_js %}
 {{ super() }}
+{{ documents_favorites_js(csp_nonce) }}
 <script id="plan-config" type="application/json">
 {"doc_id": {{ doc_id }}, "proj4": {{ proj4 | tojson }}, "epsg": {{ epsg | tojson }}}
 </script>

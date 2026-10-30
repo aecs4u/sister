@@ -69,6 +69,7 @@
 
 {% block auth_scripts %}
 <script src="/static/js/sister_login.js?v=20261009a" defer></script>
+<script src="/static/js/sister_enhance.js?v=20261029b" defer></script>
 {% if clerk_publishable_key %}
 <script nonce="{{ csp_nonce }}">
 window.SisterLoginClerk = { nextUrl: {{ next_url | tojson }}, callbackUrl: "/auth/clerk/callback" };

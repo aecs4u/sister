@@ -280,7 +280,15 @@ class DocumentPurchase(SQLModel, table=True):
     """A user's recorded purchase and resulting access to one archived document."""
 
     __tablename__ = "document_purchase"
-    __table_args__ = (sa.Index("ix_document_purchase_document_id", "document_id"),)
+    __table_args__ = (
+        sa.Index("ix_document_purchase_document_id", "document_id"),
+        sa.Index(
+            "ux_document_purchase_payment_ref",
+            "payment_ref",
+            unique=True,
+            postgresql_where=sa.text("payment_ref IS NOT NULL"),
+        ),
+    )
 
     user_id: str = Field(sa_column=Column(sa.String(), primary_key=True))
     document_id: int = Field(
@@ -296,6 +304,17 @@ class DocumentPurchase(SQLModel, table=True):
         default_factory=lambda: datetime.now(timezone.utc),
         sa_column=Column(sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
     )
+    # How the access was obtained: 'admin_grant', or what aecs4u-billing fulfilled ('stripe', 'wallet').
+    source: str = Field(default="admin_grant", sa_column=Column(sa.String(32), nullable=False, server_default="admin_grant"))
+    amount_cents: Optional[int] = Field(default=None, sa_column=Column(sa.Integer(), nullable=True))
+    currency: Optional[str] = Field(default=None, sa_column=Column(sa.String(3), nullable=True))
+    payment_ref: Optional[str] = Field(default=None, sa_column=Column(sa.String(), nullable=True))
+    wallet_tx_id: Optional[str] = Field(default=None, sa_column=Column(sa.String(), nullable=True))
+    expires_at: Optional[datetime] = Field(default=None, sa_column=Column(sa.DateTime(timezone=True), nullable=True))
+    # Revocation is soft: the row stays as the history of what was granted, to whom and why it ended.
+    revoked_at: Optional[datetime] = Field(default=None, sa_column=Column(sa.DateTime(timezone=True), nullable=True))
+    revoked_by: Optional[str] = Field(default=None, sa_column=Column(sa.String(), nullable=True))
+    revoked_reason: Optional[str] = Field(default=None, sa_column=Column(sa.Text(), nullable=True))
 
 
 class SubjectFavorite(SQLModel, table=True):

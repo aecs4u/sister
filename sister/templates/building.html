@@ -3,7 +3,7 @@
 
 {% block extra_css %}
 {{ super() }}
-<link rel="stylesheet" href="/static/css/pages/building_3d.css?v=20261016c">
+<link rel="stylesheet" href="/static/css/pages/building_3d.css?v=20261030a">
 {% endblock %}
 
 {% block content %}
@@ -30,6 +30,7 @@
                     <label for="b3dQuery" class="form-label small mb-1">Indirizzo</label>
                     <input type="text" class="form-control" id="b3dQuery" name="q" value="{{ query }}"
                            placeholder="Via El Alamein 2, 48124 Ravenna" maxlength="200" required>
+                    <div class="form-text">Premendo “Mostra”, l’indirizzo viene cercato con OpenStreetMap Nominatim.</div>
                 </div>
                 <div class="col-md-auto">
                     <button type="submit" class="btn btn-primary w-100"><i class="fas fa-search me-2" aria-hidden="true"></i>Mostra</button>
@@ -37,9 +38,15 @@
             </form>
 
             {% if not place %}
+            {% if query %}
             <div class="alert alert-warning mb-0" role="alert">
-                Indirizzo non trovato{% if query %}: <strong>{{ query }}</strong>{% endif %}. Prova a indicare via, numero civico, CAP e comune.
+                Indirizzo non trovato: <strong>{{ query }}</strong>. Prova a indicare via, numero civico, CAP e comune.
             </div>
+            {% else %}
+            <div class="alert alert-info mb-0" role="status">
+                Inserisci un indirizzo per cercarne la posizione. La ricerca parte solo quando premi “Mostra”.
+            </div>
+            {% endif %}
             {% else %}
             <p class="small mb-3">
                 <i class="fas fa-location-dot text-danger me-1" aria-hidden="true"></i>{{ place.label }}
@@ -50,19 +57,25 @@
             <div class="building3d-stage rounded overflow-hidden border mb-3" id="building3dStage"
                  data-lat="{{ place.lat }}" data-lng="{{ place.lng }}" data-label="{{ place.label }}"
                  data-api-key="{{ maps_api_key }}" data-nonce="{{ csp_nonce }}">
-                <div class="building3d-loading text-muted small" id="building3dStatus" role="status">Caricamento del modello 3D…</div>
+                <div class="building3d-loading text-muted small" id="building3dOverlay">
+                    <div class="text-center p-3">
+                        <p class="mb-2" id="building3dStatus" role="status" aria-live="polite">La vista invia a Google le coordinate mostrate e i dati di connessione. Caricala solo se vuoi usare il servizio 3D.</p>
+                        <button type="button" class="btn btn-primary" id="building3dLoad">Carica vista 3D Google</button>
+                    </div>
+                </div>
             </div>
+            <p class="small text-muted mb-3">La mappa di Google non viene contattata finché non premi “Carica vista 3D Google”.</p>
             <div class="d-flex flex-wrap gap-2 mb-2">
-                <button type="button" class="btn btn-outline-primary btn-sm" data-click="building3d.orbit">
+                <button type="button" class="btn btn-outline-primary" data-click="building3d.orbit" disabled>
                     <i class="fas fa-rotate me-2" aria-hidden="true"></i>Giro attorno all’edificio
                 </button>
-                <button type="button" class="btn btn-outline-secondary btn-sm" data-click="building3d.stop">
+                <button type="button" class="btn btn-outline-secondary" data-click="building3d.stop" disabled>
                     <i class="fas fa-stop me-2" aria-hidden="true"></i>Ferma
                 </button>
-                <button type="button" class="btn btn-outline-secondary btn-sm" data-click="building3d.reset">
+                <button type="button" class="btn btn-outline-secondary" data-click="building3d.reset" disabled>
                     <i class="fas fa-crosshairs me-2" aria-hidden="true"></i>Ricentra
                 </button>
-                <button type="button" class="btn btn-outline-secondary btn-sm" data-click="building3d.toggleMode">
+                <button type="button" class="btn btn-outline-secondary" data-click="building3d.toggleMode" disabled>
                     <i class="fas fa-layer-group me-2" aria-hidden="true"></i>Etichette on/off
                 </button>
             </div>
@@ -174,7 +187,7 @@
 {% block extra_js %}
 {{ super() }}
 {% if place and maps_api_key %}
-<script src="/static/js/building_3d.js?v=20261016a" nonce="{{ csp_nonce }}" defer></script>
+<script src="/static/js/building_3d.js?v=20261030a" nonce="{{ csp_nonce }}" defer></script>
 {% endif %}
 {% if place %}
 <script type="module" src="/static/js/building_kmz_viewer.js?v=20261017a" nonce="{{ csp_nonce }}"></script>

@@ -1,6 +1,7 @@
 import json
 from contextlib import suppress
 from datetime import datetime, timedelta
+from types import SimpleNamespace
 
 import pytest
 
@@ -172,6 +173,41 @@ async def test_health_check_exposes_runtime_metrics(main_module):
     assert payload["cached_responses"] == 1
     assert payload["response_ttl_seconds"] == 123
     assert payload["response_max_items"] == 456
+
+
+@pytest.mark.asyncio
+async def test_health_reports_optional_data_degradation(monkeypatch):
+    from sister import routes, web
+
+    async def _empty_db_stats():
+        return {"total_requests": 0}
+
+    monkeypatch.setattr(routes, "count_responses", _empty_db_stats)
+    monkeypatch.setattr(web, "_OPTIONAL_DATA_DEGRADATIONS", {"adjacent_parcels": 2})
+    monkeypatch.setattr(web, "_OPTIONAL_DATA_ACTIVE_FAILURES", {"adjacent_parcels"})
+    service = SimpleNamespace(
+        auth_ready=True,
+        auth_status={"state": "ready"},
+        browser_manager=SimpleNamespace(authenticated=True),
+        request_queue=SimpleNamespace(qsize=lambda: 0),
+        pending_request_ids=set(),
+        response_store={},
+        response_ttl_seconds=60,
+        response_max_items=100,
+        queue_max_size=10,
+        response_cleanup_interval_seconds=30,
+    )
+
+    response = await routes.health_check(service)
+    payload = json.loads(response.body)
+
+    assert payload["status"] == "degraded"
+    assert payload["optional_data_degradations"] == {
+        "since_process_start": True,
+        "total": 2,
+        "by_component": {"adjacent_parcels": 2},
+        "active_components": ["adjacent_parcels"],
+    }
 
 
 def test_invalid_response_env_values_fall_back_to_defaults(monkeypatch, main_module):

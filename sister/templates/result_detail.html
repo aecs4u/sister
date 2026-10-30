@@ -1,4 +1,5 @@
 {% extends "_base.html" %}
+{% from "_doc_macros.html" import document_favorite_action, documents_favorites_js, optional_data_notice %}
 {% from "components/index.html" import card, data_table_assets %}
 {% from "components/badges.html" import badge %}
 {% from "components/job.html" import status_badge %}
@@ -7,7 +8,7 @@
                                 doc_accordion, render_workflow_steps %}
 {% from "components/related_links.html" import related_pages %}
 {% from "land_registry/components/document_parcel_map.html" import document_parcel_map_assets, document_parcel_map_scripts, document_parcel_map %}
-{% block page_title %}Result {{ request_id[:20] }}{% endblock %}
+{% block page_title %}Risultato {{ request_id[:20] }}{% endblock %}
 
 {% block extra_css %}
 {{ super() }}
@@ -24,23 +25,23 @@
 <div class="row g-4">
   <div class="col-lg-6">
     <div class="mb-3">
-      <div class="detail-label">Request ID</div>
+      <div class="detail-label">ID richiesta</div>
       <div class="detail-value d-flex align-items-center gap-2">
         <code class="user-select-all" id="req-id-text">{{ result.request_id }}</code>
         <button class="btn btn-sm btn-outline-secondary copy-btn" type="button"
-                id="btn-copy-request-id" title="Copy to clipboard">
+                id="btn-copy-request-id" title="Copia negli appunti" aria-label="Copia l'ID della richiesta">
           <i class="fas fa-copy"></i>
         </button>
       </div>
     </div>
     <div class="row g-3">
-      <div class="col-6">{{ param_label('Request Type', result.request_type or '-') }}</div>
+      <div class="col-6">{{ param_label('Tipo di richiesta', result.request_type or '-') }}</div>
       <div class="col-6">
         <div class="detail-label">Catasto</div>
         <div class="detail-value">{{ catasto_badge(result.tipo_catasto) }}</div>
       </div>
-      <div class="col-6">{{ param_label('Requested', result.requested_at_display or '-') }}</div>
-      <div class="col-6">{{ param_label('Responded', result.responded_at_display or '-') }}</div>
+      <div class="col-6">{{ param_label('Richiesta il', result.requested_at_display or '-') }}</div>
+      <div class="col-6">{{ param_label('Risposta il', result.responded_at_display or '-') }}</div>
     </div>
     {% if result.tags %}
     <div class="d-flex flex-wrap align-items-center gap-2 mt-3" aria-label="Record tags">
@@ -76,12 +77,18 @@
   {# Breadcrumb #}
   <nav class="mb-3" aria-label="breadcrumb">
     <ol class="breadcrumb">
-      <li class="breadcrumb-item"><a href="/results">Results</a></li>
+      <li class="breadcrumb-item"><a href="/results">Risultati</a></li>
       <li class="breadcrumb-item active" title="{{ request_id }}">
         {{ request_id[:30] }}{% if request_id|length > 30 %}&hellip;{% endif %}
       </li>
     </ol>
   </nav>
+
+  {% if result.document_id %}
+  <div class="d-flex justify-content-end mb-3 no-print">
+    {{ document_favorite_action(result.document_id, result.document_is_favorite, result.document_favorites_enabled|default(false)) }}
+  </div>
+  {% endif %}
 
   {% if result %}
 
@@ -92,18 +99,18 @@
                              else result.db_properties|default([], true)|length %}
   {% set extracted_owners = payload.total_intestati if payload.total_intestati is defined and payload.total_intestati is not none
                             else result.db_owners|default([], true)|length %}
-  {% call card("Extracted response", subtitle="Normalized data returned by the executed job", class="border-0 shadow-sm mb-4") %}
+  {% call card("Risposta estratta", subtitle="Dati normalizzati restituiti dalla richiesta eseguita", class="border-0 shadow-sm mb-4") %}
     <div class="d-flex flex-wrap align-items-center gap-3">
-      {{ badge(extracted_results ~ ' results', variant='success', icon='fas fa-table-list') }}
-      {{ badge(extracted_owners ~ ' owners', variant='info', dark=true, icon='fas fa-users') }}
-      {% if result.sections %}<span class="text-muted small">{{ result.sections|length }} response sections</span>{% endif %}
+      {{ badge(extracted_results ~ (' risultato' if extracted_results == 1 else ' risultati'), variant='success', icon='fas fa-table-list') }}
+      {{ badge(extracted_owners ~ (' intestatario' if extracted_owners == 1 else ' intestatari'), variant='info', dark=true, icon='fas fa-users') }}
+      {% if result.sections %}<span class="text-muted small">{{ result.sections|length }} sezioni della risposta</span>{% endif %}
     </div>
   {% endcall %}
 
   {# ── Request Details card ──────────────────────────────────────────────── #}
   <div class="card border-0 shadow-sm mb-4">
     <div class="card-header d-flex justify-content-between align-items-center">
-      <h4 class="mb-0"><i class="fas fa-info-circle text-primary me-2"></i>Request Details</h4>
+      <h4 class="mb-0"><i class="fas fa-info-circle text-primary me-2"></i>Dettagli della richiesta</h4>
       {{ status_badge(result.status, large=True) }}
     </div>
     <div class="card-body">
@@ -112,11 +119,12 @@
   </div>
 
   {{ document_parcel_map(result.land_registry_map) }}
+  {{ optional_data_notice(result.land_registry_map) }}
 
   {% if result.status == 'pending' %}
   <div class="alert alert-info border-0 shadow-sm">
     <i class="fas fa-hourglass-half me-2"></i>
-    This request exists but no response has been stored yet. Check back later.
+    La richiesta esiste, ma non è ancora stata salvata una risposta. Riprova più tardi.
   </div>
 
   {% elif result.data %}
@@ -203,7 +211,7 @@
     <div class="card-header">
       <h5 class="mb-0">
         <i class="fas fa-file-alt text-danger me-2"></i>
-        Downloaded Documents ({{ result.documents|length }})
+        Documenti scaricati ({{ result.documents|length }})
       </h5>
     </div>
     <div class="card-body p-0">
@@ -221,7 +229,7 @@
     <div class="card-header">
       <h5 class="mb-0">
         <i class="fas fa-route text-warning me-2"></i>
-        Page Visits ({{ result.page_visit_rows|length }})
+        Accessi alle pagine ({{ result.page_visit_rows|length }})
       </h5>
     </div>
     <div class="card-body p-0">
@@ -274,7 +282,7 @@
           <h5 class="modal-title" id="modal-queue-subunit-label">
             <i class="fas fa-layer-group me-2 text-primary"></i>Accoda visure per subalterni
           </h5>
-          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Chiudi"></button>
         </div>
         <div class="modal-body">
           <p id="queue-count-msg" class="mb-3 text-muted small"></p>
@@ -337,15 +345,15 @@
   {# ── Raw JSON ──────────────────────────────────────────────────────────── #}
   <div class="card border-0 shadow-sm">
     <div class="card-header d-flex justify-content-between align-items-center">
-      <h5 class="mb-0"><i class="fas fa-code text-muted me-2"></i>Raw JSON</h5>
+      <h5 class="mb-0"><i class="fas fa-code text-muted me-2"></i>JSON originale</h5>
       <div class="d-flex gap-2">
         <button class="btn btn-sm btn-outline-secondary" type="button"
-                id="btn-copy-json" title="Copy JSON">
-          <i class="fas fa-copy me-1"></i>Copy
+                id="btn-copy-json" title="Copia JSON" aria-label="Copia JSON negli appunti">
+          <i class="fas fa-copy me-1"></i>Copia
         </button>
         <button class="btn btn-sm btn-outline-secondary" type="button"
                 data-bs-toggle="collapse" data-bs-target="#raw-json">
-          <i class="fas fa-eye me-1"></i>Toggle
+          <i class="fas fa-eye me-1"></i>Mostra/nascondi
         </button>
       </div>
     </div>
@@ -359,19 +367,19 @@
   </div>
   {% endif %}{# /result.data #}
 
-  {{ related_pages("Related pages", [
-      ("/results", "All results", "Return to the filtered list of executed requests.", "fa-database"),
-      ("/documents", "Documents", "Browse downloaded files linked to responses.", "fa-folder-tree"),
-      ("/dossiers", "Dossiers", "Review the complete saved query payloads.", "fa-folder-open"),
-      ("/forms", "Submit another query", "Open the single-step and workflow forms.", "fa-clipboard-list")
+  {{ related_pages("Collegamenti correlati", [
+      ("/results", "Tutti i risultati", "Torna all'elenco filtrato delle richieste eseguite.", "fa-database"),
+      ("/documents", "Documenti", "Consulta i file scaricati associati alle risposte.", "fa-folder-tree"),
+      ("/dossiers", "Dossier", "Consulta i dati completi delle richieste salvate.", "fa-folder-open"),
+      ("/forms", "Invia un'altra richiesta", "Apri i moduli per una singola richiesta o un workflow.", "fa-clipboard-list")
   ]) }}
 
   {% else %}
   <div class="alert alert-warning">
     <i class="fas fa-exclamation-triangle me-2"></i>
-    Request not found for ID <code>{{ request_id }}</code>.
+    Richiesta con ID <code>{{ request_id }}</code> non trovata.
   </div>
-  <a href="/results" class="btn btn-primary">Back to Results</a>
+  <a href="/results" class="btn btn-primary">Torna ai risultati</a>
   {% endif %}{# /result #}
 
 </div>
@@ -379,6 +387,7 @@
 
 {% block extra_js %}
 {{ super() }}
+{% if result and result.document_id %}{{ documents_favorites_js(csp_nonce) }}{% endif %}
 {{ document_parcel_map_scripts(result.land_registry_map if result else none, nonce=csp_nonce) }}
 <script nonce="{{ csp_nonce }}">
 (function() {
@@ -391,7 +400,7 @@
         copyBtn.addEventListener("click", function() {
             navigator.clipboard.writeText(jsonPre.textContent).then(function() {
                 copyBtn.innerHTML = '<i class="fas fa-check me-1"></i>Copied';
-                setTimeout(function() { copyBtn.innerHTML = '<i class="fas fa-copy me-1"></i>Copy'; }, 1500);
+                setTimeout(function() { copyBtn.innerHTML = '<i class="fas fa-copy me-1"></i>Copia'; }, 1500);
             });
         });
     }
@@ -415,7 +424,7 @@
         paginationSize: 25,
         paginationSizeSelector: [10, 25, 50, 100],
         movableColumns: true,
-        placeholder: "No data",
+        placeholder: "Nessun dato",
         // no maxHeight: pagination already bounds the rows, and an inner scrollbar hides most of a 25-row page
         height: "auto",
     };

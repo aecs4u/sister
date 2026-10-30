@@ -50,10 +50,25 @@
 
   EVENTS.forEach(function (name) { document.addEventListener(name, dispatch); });
 
+  // data-confirm="message" on a <form> (or a submit button) asks before sending; replaces onsubmit="return confirm(...)".
+  document.addEventListener('submit', function (event) {
+    var form = event.target;
+    var submitter = event.submitter;
+    var message = (submitter && submitter.getAttribute('data-confirm')) || (form.getAttribute && form.getAttribute('data-confirm'));
+    if (message && !window.confirm(message)) event.preventDefault();
+  });
+
   // Small helpers for the handlers that used to be inline statements.
   window.sisterActions = {
     print: function () { window.print(); },
     click: function (id) { var el = document.getElementById(id); if (el) el.click(); },
+    copyValue: function (id) {
+      var el = document.getElementById(id);
+      if (!el) return;
+      el.select();
+      if (navigator.clipboard) navigator.clipboard.writeText(el.value).catch(function () { document.execCommand('copy'); });
+      else document.execCommand('copy');
+    },
     clear: function (id) { var el = document.getElementById(id); if (el) el.innerHTML = ''; },
     dropOver: function (event, el) { event.preventDefault(); el.classList.add('border-primary', 'bg-light'); },
     dropLeave: function (el) { el.classList.remove('border-primary', 'bg-light'); },

@@ -1,10 +1,29 @@
 {% extends "base.html" %}
+{# The left sidebar (and its toggle) is an operator tool: only admins get it. Everyone else navigates from the top bar. #}
+{% set sidebar_enabled = sidebar_enabled|default(true) and can_admin(user) %}
 
 {% block title %}SISTER - {% block page_title %}{% endblock %}{% endblock %}
 
 {% block extra_css %}
 <meta name="csrf-token" content="{{ csrf_token(request) }}">
-<link rel="stylesheet" href="/static/css/sister.css?v=20261009a">
+    <link rel="stylesheet" href="/static/css/sister.css?v=20261030d">
+{% endblock %}
+
+{# SISTER is Italian-only (docs/ui_audit_2026-10-09.md G7): no language switcher that changes only the menu. #}
+{% block language_switcher %}{% endblock %}
+
+{% block navbar_center %}
+{% if user and not can_admin(user) %}
+<nav class="sister-topnav d-flex flex-wrap flex-grow-1 mx-3 gap-1" aria-label="Navigazione principale">
+    <a class="btn btn-sm btn-link{% if request.url.path == '/forms' %} active{% endif %}" href="/forms"{% if request.url.path == '/forms' %} aria-current="page"{% endif %}><i class="fas fa-clipboard-list me-1" aria-hidden="true"></i>Query</a>
+    <a class="btn btn-sm btn-link{% if request.url.path.startswith('/documents') %} active{% endif %}" href="/documents"{% if request.url.path.startswith('/documents') %} aria-current="page"{% endif %}><i class="fas fa-file-lines me-1" aria-hidden="true"></i>Documenti</a>
+    <a class="btn btn-sm btn-link{% if request.url.path == '/favorites' %} active{% endif %}" href="/favorites"{% if request.url.path == '/favorites' %} aria-current="page"{% endif %}><i class="fas fa-heart me-1" aria-hidden="true"></i>Preferiti</a>
+    <a class="btn btn-sm btn-link{% if request.url.path == '/valuation' %} active{% endif %}" href="/valuation"><i class="fas fa-scale-balanced me-1" aria-hidden="true"></i>Metodo di valutazione</a>
+    <a class="btn btn-sm btn-link{% if request.url.path == '/guide' %} active{% endif %}" href="/guide"><i class="fas fa-book-open me-1" aria-hidden="true"></i>Guida</a>
+</nav>
+{% else %}
+<div class="d-none d-md-block flex-grow-1 mx-4">{% block search %}{% endblock %}</div>
+{% endif %}
 {% endblock %}
 
 {% block sidebar_content %}
@@ -141,7 +160,7 @@
     <ul class="footer-links">
         <li><a href="/about"><i class="fas fa-info-circle"></i>Informazioni</a></li>
         <li><a href="/privacy"><i class="fas fa-shield-alt"></i>Informativa privacy</a></li>
-        <li><a href="/docs"><i class="fas fa-book"></i>API Documentation</a></li>
+        <li><a href="/docs"><i class="fas fa-book"></i>Documentazione API</a></li>
     </ul>
 </div>
 {% endblock %}
@@ -149,7 +168,8 @@
 {% block extra_js %}
 <!-- SheetJS loaded on demand by sister_forms.js when XLSX file is dropped -->
 <script src="/static/js/sister_csrf.js?v=20261009a" defer></script>
-<script src="/static/js/sister_actions.js?v=20261009a" defer></script>
+<script src="/static/js/sister_actions.js?v=20261029b" defer></script>
 <script src="/static/js/sister_forms.js?v=20261009d" defer></script>
 <script src="/static/js/sister_a11y.js?v=20261009f" defer></script>
+<script src="/static/js/sister_enhance.js?v=20261029b" defer></script>
 {% endblock %}

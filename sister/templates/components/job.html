@@ -12,8 +12,14 @@
     {% elif normalized in ('running', 'pending') %}
         {{ theme_badge('In corso' if normalized == 'running' else 'In attesa', variant='info' if normalized == 'running' else 'secondary', pill=large,
                        icon='fas fa-spinner fa-spin' if normalized == 'running' else 'fas fa-hourglass-half') }}
+    {% elif normalized == 'no_match' %}
+        {{ theme_badge('Nessuna corrispondenza', variant='secondary', pill=large, icon='fas fa-circle-question') }}
+    {% elif normalized in ('cancelled', 'canceled') %}
+        {{ theme_badge('Annullata', variant='secondary', pill=large, icon='fas fa-ban') }}
+    {% elif normalized in ('needs_human', 'needs_captcha') %}
+        {{ theme_badge('Serve un intervento', variant='warning', dark=true, pill=large, icon='fas fa-hand') }}
     {% else %}
-        {{ theme_badge((status or '-')|replace('_', ' ')|title, variant='secondary', pill=large) }}
+        {{ theme_badge((status or '-')|replace('_', ' ')|capitalize, variant='secondary', pill=large) }}
     {% endif %}
 {% endmacro %}
 
@@ -28,14 +34,14 @@
     {% set owner_count = job.total_intestati if job.total_intestati is defined and job.total_intestati is not none
                          else payload.total_intestati if payload.total_intestati is defined and payload.total_intestati is not none
                          else job.owner_count|default(0, true) %}
-    <span class="text-muted small" title="Extracted response">
+    <span class="text-muted small" title="Risposta estratta">
         <i class="fas fa-table-list me-1 text-primary"></i>
         {% if not has_result_count and job.data is defined and job.data %}
-            response available
+            risposta disponibile
         {% elif not has_result_count %}
-            response pending
+            risposta in attesa
         {% elif compact %}
-            {{ result_count }} estratti
+            {{ result_count }} {{ 'estratto' if result_count == 1 else 'estratti' }}
         {% else %}
             {{ result_count }} risultati · {{ owner_count }} intestati
         {% endif %}

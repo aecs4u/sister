@@ -1,5 +1,7 @@
 """The authenticated UI dependency must fail closed (docs/ui_audit_2026-10-09.md, A1/A2)."""
 
+from decimal import Decimal
+
 import pytest
 from fastapi import HTTPException
 from starlette.requests import Request
@@ -109,7 +111,8 @@ class _User:
 def test_admin_gating_is_opt_in(monkeypatch):
     monkeypatch.setenv("REQUIRE_AUTHENTICATION", "true")
     monkeypatch.delenv("SISTER_ADMIN_USERS", raising=False)
-    assert web._is_admin(_User()) is True  # nobody configured: every authenticated user (documented in main.py)
+    assert web._is_admin(_User()) is False  # nobody configured: nobody is an admin (fail closed)
+    assert web._is_admin(_User(role="admin")) is True
 
 
 def test_admin_gating_when_configured(monkeypatch):
@@ -150,6 +153,129 @@ def test_operational_routes_require_admin():
             if web._require_admin in calls:
                 found.add(route.path)
     assert found == admin_only
+
+
+def test_paid_query_routes_require_login_but_not_admin():
+    paid_query_routes = {
+        "/forms",
+        "/api/ui/batch",
+        "/api/ui/workflow/stream",
+        "/api/ui/{endpoint:path}",
+        "/api/ui/visura/{request_id}",
+        "/api/ui/query-billing",
+        "/api/ui/query-quote",
+    }
+    found = {}
+    for route in web.router.routes:
+        if getattr(route, "path", None) in paid_query_routes:
+            found[route.path] = route
+    assert set(found) == paid_query_routes
+    for path, route in found.items():
+        calls = [dependency.call for dependency in route.dependant.dependencies]
+        assert web._require_auth in calls, path
+        assert web._require_admin not in calls, path
+
+
+@pytest.mark.asyncio
+async def test_query_access_requires_configured_price_wallet_and_result_secret(monkeypatch):
+    from types import SimpleNamespace
+
+    from sister import purchases_billing
+
+    monkeypatch.setenv("REQUIRE_AUTHENTICATION", "true")
+    monkeypatch.setenv("SECRET_KEY", "test-secret")
+    monkeypatch.setattr(purchases_billing, "wallet_backend", lambda: "memory")
+    async def _prices():
+        return {"/visura/soggetto": Decimal("25")}
+
+    monkeypatch.setattr(web, "_query_product_prices", _prices)
+    user = SimpleNamespace(id="buyer", role="user")
+    assert await web._query_access_error(user) is None
+
+    monkeypatch.delenv("SECRET_KEY")
+    assert (await web._query_access_error(user)).status_code == 503
+
+    async def _no_prices():
+        return None
+
+    monkeypatch.setattr(web, "_query_product_prices", _no_prices)
+    monkeypatch.setenv("SECRET_KEY", "test-secret")
+    assert (await web._query_access_error(user)).status_code == 503
+    assert await web._query_access_error(_User(role="admin")) is None
+
+
+@pytest.mark.asyncio
+async def test_query_price_lookup_uses_command_price_then_shared_fallback(monkeypatch):
+    monkeypatch.setattr(web, "_query_price_cache", None)
+    monkeypatch.setattr(web, "_query_price_cache_until", 0)
+
+    class _Response:
+        status_code = 200
+
+        def json(self):
+            return {
+                "pricing": [
+                    {"endpoint": "POST /visura/soggetto", "customer_credits": 27},
+                    {"endpoint": "POST /visura/query", "customer_credits": 8},
+                ]
+            }
+
+    async def _opendata_get(path):
+        assert path == "/api/pricing"
+        return _Response()
+
+    monkeypatch.setattr(web, "_opendata_get", _opendata_get)
+    assert await web._query_product_cost("/visura/soggetto") == Decimal("27")
+    assert await web._query_product_cost("/visura/nota", allow_shared_fallback=True) == Decimal("8")
+    assert await web._query_product_price("/visura/nota", allow_shared_fallback=True) == (
+        Decimal("8"), "/visura/query"
+    )
+    assert await web._query_product_cost("/visura/nota") is None
+
+
+def test_query_submission_requires_the_exact_confirmed_price(monkeypatch):
+    from types import SimpleNamespace
+
+    monkeypatch.setenv("REQUIRE_AUTHENTICATION", "true")
+    monkeypatch.delenv("SISTER_ADMIN_USERS", raising=False)
+    user = SimpleNamespace(id="buyer", role="user")
+    body = {
+        "_query_confirmed_price_path": "/visura/query",
+        "_query_confirmed_unit_cost": "8",
+        "_query_confirmed_units": 3,
+    }
+    assert web._query_price_confirmation_error(user, body, 3, Decimal("8"), "/visura/query") is None
+    assert body == {}
+
+    changed_price = {
+        "_query_confirmed_price_path": "/visura/query",
+        "_query_confirmed_unit_cost": "8",
+        "_query_confirmed_units": 3,
+    }
+    response = web._query_price_confirmation_error(user, changed_price, 3, Decimal("9"), "/visura/query")
+    assert response.status_code == 409
+
+    changed_batch = {
+        "_query_confirmed_price_path": "/visura/query",
+        "_query_confirmed_unit_cost": "8",
+        "_query_confirmed_units": 2,
+    }
+    response = web._query_price_confirmation_error(user, changed_batch, 3, Decimal("8"), "/visura/query")
+    assert response.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_non_admin_cannot_poll_an_unscoped_request_id(monkeypatch):
+    from types import SimpleNamespace
+
+    monkeypatch.setenv("REQUIRE_AUTHENTICATION", "true")
+    monkeypatch.delenv("SISTER_ADMIN_USERS", raising=False)
+    response = await web.web_api_poll(
+        "someone-elses-request",
+        _request(method="GET", accept="application/json", path="/api/ui/visura/someone-elses-request"),
+        user=SimpleNamespace(id="buyer", role="user"),
+    )
+    assert response.status_code == 404
 
 
 def test_api_docs_are_behind_the_same_authentication():

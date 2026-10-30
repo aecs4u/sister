@@ -237,6 +237,25 @@
 </button>
 {% endmacro %}
 
+{% macro document_favorite_action(document_id, favorite=False, enabled=True) %}
+<button type="button" class="btn btn-sm document-favorite-toggle document-favorite-action {{ 'btn-danger' if favorite else 'btn-outline-danger' }}"
+        data-favorite-id="{{ document_id }}" aria-pressed="{{ 'true' if favorite else 'false' }}"
+        aria-label="{{ 'Rimuovi dai preferiti' if favorite else 'Aggiungi ai preferiti' }}"
+        title="{{ 'Rimuovi dai preferiti' if favorite else 'Aggiungi ai preferiti' }}"
+        {% if not enabled %}disabled title="Accedi per salvare i preferiti"{% endif %}>
+    <i class="{{ 'fas' if favorite else 'far' }} fa-heart me-1" aria-hidden="true"></i>
+    <span data-favorite-label>{{ 'Nei preferiti' if favorite else 'Aggiungi ai preferiti' }}</span>
+</button>
+{% endmacro %}
+
+{% macro optional_data_notice(map_context) %}
+{% if map_context and map_context.adjacent_lookup_status == 'unavailable' %}
+<div class="alert alert-warning py-2 small mt-2" role="status" aria-live="polite">
+    Le particelle confinanti non sono disponibili al momento; la mappa della particella resta consultabile.
+</div>
+{% endif %}
+{% endmacro %}
+
 {% macro document_href(d, prefix='/documents') -%}
 {% set subject_code = d.cf or d.vat or d.fiscal_code %}
 {% if prefix == '/documents' and subject_code and subject_code|length == 11 %}/companies/{{ subject_code }}
@@ -381,13 +400,20 @@
 
     function updateButton(button, favorite) {
         var icon = button.querySelector('i');
-        button.classList.toggle('text-danger', favorite);
-        button.classList.toggle('text-secondary', !favorite);
+        var visibleLabel = button.querySelector('[data-favorite-label]');
+        if (visibleLabel) {
+            button.classList.toggle('btn-danger', favorite);
+            button.classList.toggle('btn-outline-danger', !favorite);
+            visibleLabel.textContent = favorite ? 'Nei preferiti' : 'Aggiungi ai preferiti';
+        } else {
+            button.classList.toggle('text-danger', favorite);
+            button.classList.toggle('text-secondary', !favorite);
+        }
         button.setAttribute('aria-pressed', favorite ? 'true' : 'false');
         var label = favorite ? 'Rimuovi dai preferiti' : 'Aggiungi ai preferiti';
         button.setAttribute('aria-label', label);
         button.title = label;
-        if (icon) icon.className = (favorite ? 'fas' : 'far') + ' fa-heart';
+        if (icon) icon.className = (favorite ? 'fas' : 'far') + ' fa-heart' + (visibleLabel ? ' me-1' : '');
     }
 
     function applyFilter() {

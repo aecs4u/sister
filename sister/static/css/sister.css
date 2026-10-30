@@ -164,10 +164,9 @@
 /* E4 · bigger hit areas for compact controls and footer links */
 .form-check-input { width: 1.15rem; height: 1.15rem; }
 footer a { display: inline-block; padding: .2rem 0; min-height: 24px; }
-.tabulator-cell a { display: inline-block; padding: .15rem 0; }
-
-/* B2 · the theme's user menu links to pages SISTER does not have */
-.dropdown-item[href="/notifications"], .dropdown-item[href="/settings"] { display: none; }
+.breadcrumb .breadcrumb-item > a,
+.leaflet-control-attribution a { display: inline-flex; align-items: center; min-height: 24px; }
+.tabulator-cell a { display: inline-flex; align-items: center; min-width: 24px; min-height: 24px; padding-block: .15rem; }
 
 /* D2/D4 · long unbreakable titles must not stretch the grid (Dossiers) */
 .dossier-card, .dossier-card .card-body, .dossier-entry, .q-section-body .row > *, .q-sub-body .row > * { min-width: 0; }
@@ -199,7 +198,14 @@ body.sidebar-hidden:has(#loginForm) #sidebarToggle { display: none; }
 a.feature-card:hover { border-color: var(--bs-primary); }
 
 /* E4 · links inside tables get a 24px-high hit area */
-.doc-table td a:not(.btn), .dossier-card a:not(.btn) { display: inline-block; padding: .2rem 0; min-height: 24px; }
+.doc-table td a:not(.btn), .dossier-card a:not(.btn), .table td a[href]:not(.btn) {
+    display: inline-flex; align-items: center; min-width: 24px; min-height: 24px; padding-block: .2rem;
+}
+.badge[href] { display: inline-flex; align-items: center; min-width: 24px; min-height: 24px; }
+.form-check:not(.form-switch) .form-check-input[type="checkbox"],
+.form-check:not(.form-switch) .form-check-input[type="radio"] { width: 1.5rem; height: 1.5rem; }
+.leaflet-control-layers label { display: flex; align-items: center; gap: .35rem; min-height: 24px; }
+.leaflet-control-layers-selector { width: 1.5rem; height: 1.5rem; flex: 0 0 auto; }
 
 /* D7 · scroll cue for wide tables: edge shadows appear while there is more to scroll (see sister_a11y.js) */
 .scroll-hint-wrap { position: relative; }
@@ -231,3 +237,128 @@ a.feature-card:hover { border-color: var(--bs-primary); }
 }
 /* F1 · dark theme: the default link colour is too dark on the dark page for the small breadcrumb text (3.4:1) */
 [data-bs-theme="dark"] .page-hero .breadcrumb a, [data-bs-theme="dark"] .page-hero .text-white-50 { color: #9fb1ff !important; }
+
+/* ==========================================================================
+   2026-10-29 audit · dark mode, contrast, top navigation, small-screen overflow
+   ========================================================================== */
+
+/* DM1 · surfaces that kept a hard-coded light colour in dark mode (glossary, cheat sheet, guide, favourites,
+   documents, dossier viewer, property dossier, archive tables). Tokens, not literals, so both themes follow. */
+[data-bs-theme="dark"] .term-dt,
+[data-bs-theme="dark"] .identifier-chip,
+[data-bs-theme="dark"] .chip-other { background: rgba(255, 255, 255, .08); color: var(--bs-body-color); border-color: var(--bs-border-color); }
+[data-bs-theme="dark"] .alert-2026,
+[data-bs-theme="dark"] .chip-ter { background: rgba(255, 193, 7, .14); color: var(--bs-body-color); border-color: rgba(255, 193, 7, .6); }
+[data-bs-theme="dark"] .chip-plan { background: rgba(220, 53, 69, .18); color: var(--bs-body-color); border-color: rgba(220, 53, 69, .55); }
+[data-bs-theme="dark"] .kpi,
+[data-bs-theme="dark"] .summary-tile,
+[data-bs-theme="dark"] .section-nav,
+[data-bs-theme="dark"] .plan-sidebar,
+[data-bs-theme="dark"] .report-note { background: var(--bs-tertiary-bg); color: var(--bs-body-color); border-color: var(--bs-border-color); }
+[data-bs-theme="dark"] .btbl thead th { background: var(--bs-tertiary-bg); color: var(--bs-body-color); }
+[data-bs-theme="dark"] .btbl tbody tr:hover { background: rgba(255, 255, 255, .06); }
+[data-bs-theme="dark"] .btbl tbody tr.selected { background: rgba(255, 193, 7, .18) !important; }
+[data-bs-theme="dark"] .card-header.bg-white,
+[data-bs-theme="dark"] .card.bg-white,
+[data-bs-theme="dark"] .bg-light:not(.leaflet-container):not(.leaflet-control) { background-color: var(--bs-tertiary-bg) !important; color: var(--bs-body-color) !important; }
+[data-bs-theme="dark"] .text-bg-light,
+[data-bs-theme="dark"] .btn-light { background-color: var(--bs-secondary-bg) !important; color: var(--bs-body-color) !important; border-color: var(--bs-border-color) !important; }
+[data-bs-theme="dark"] .table-light { --bs-table-bg: var(--bs-tertiary-bg); --bs-table-color: var(--bs-body-color); --bs-table-border-color: var(--bs-border-color); }
+[data-bs-theme="dark"] .documents-hub .form-control,
+[data-bs-theme="dark"] .documents-hub .form-select,
+[data-bs-theme="dark"] .documents-hub .nav-link:not(.active) { background-color: var(--bs-body-bg); color: var(--bs-body-color); border-color: var(--bs-border-color); }
+[data-bs-theme="dark"] .documents-hub .nav-link.active { background-color: var(--bs-primary-bg-subtle, #1e3a8a); color: var(--bs-body-color); }
+/* Keep the document view tabs readable when theme CSS has higher-specificity tab colors. */
+[data-bs-theme="dark"] .documents-hub .documents-view-tabs .nav-link { color: #e2e8f0 !important; border-color: var(--bs-border-color) !important; }
+[data-bs-theme="dark"] .documents-hub .documents-view-tabs .nav-link:not(.active) { background-color: var(--bs-body-bg) !important; }
+[data-bs-theme="dark"] .documents-hub .documents-view-tabs .nav-link.active { background-color: var(--bs-tertiary-bg) !important; }
+[data-bs-theme="dark"] .card-header.bg-warning,
+[data-bs-theme="dark"] .card-header.bg-info { color: #000 !important; }
+
+/* DM2 · outline buttons and links need a lighter hue on the dark page (they measured 3.4–3.9:1). */
+[data-bs-theme="dark"] {
+    --bs-link-color: #8fb3ff; --bs-link-hover-color: #b6cdff;
+    --bs-link-color-rgb: 143, 179, 255; --bs-link-hover-color-rgb: 182, 205, 255;
+}
+[data-bs-theme="dark"] .btn-outline-primary { --bs-btn-color: #8fb3ff; --bs-btn-border-color: #8fb3ff; --bs-btn-hover-bg: #3b6ff0; --bs-btn-hover-border-color: #3b6ff0; --bs-btn-hover-color: #fff; --bs-btn-active-bg: #3b6ff0; --bs-btn-active-color: #fff; }
+[data-bs-theme="dark"] .btn-outline-secondary { --bs-btn-color: #c7d0dc; --bs-btn-border-color: #8b97a8; --bs-btn-hover-bg: #4b5563; --bs-btn-hover-border-color: #8b97a8; --bs-btn-hover-color: #fff; --bs-btn-active-bg: #4b5563; --bs-btn-active-color: #fff; }
+[data-bs-theme="dark"] .btn-outline-danger { --bs-btn-color: #ff9aa5; --bs-btn-border-color: #ff9aa5; --bs-btn-hover-bg: #dc3545; --bs-btn-hover-border-color: #dc3545; --bs-btn-hover-color: #fff; }
+[data-bs-theme="dark"] .btn-outline-success { --bs-btn-color: #7be0a8; --bs-btn-border-color: #7be0a8; --bs-btn-hover-bg: #198754; --bs-btn-hover-border-color: #198754; --bs-btn-hover-color: #fff; }
+[data-bs-theme="dark"] .btn-outline-warning { --bs-btn-color: #f5c451; --bs-btn-border-color: #f5c451; --bs-btn-hover-color: #000; }
+[data-bs-theme="dark"] .btn-outline-info { --bs-btn-color: #6fd0ec; --bs-btn-border-color: #6fd0ec; --bs-btn-hover-color: #000; }
+[data-bs-theme="dark"] code { color: #f0b3d4; background: rgba(255, 255, 255, .07); }
+[data-bs-theme="dark"] a > code, [data-bs-theme="dark"] code a { color: inherit; }
+[data-bs-theme="dark"] .text-muted, [data-bs-theme="dark"] .stat-label { color: #aeb8c5 !important; }
+[data-bs-theme="dark"] #last-update { color: #aeb8c5; }
+
+/* DM3 · light mode: muted table headers on the archive tables (#9ca3af on #f9fafb = 2.4:1) and the info/warning
+   card headers (white on cyan = 2.4:1). */
+.cat-compact-table th { color: var(--bs-secondary-color, #4b5563); }
+.card-header.bg-info, .card-header.bg-warning, .badge.bg-info, .badge.bg-warning { color: #000 !important; }
+[data-bs-theme="light"] .btn-sm.btn-outline-secondary { --bs-btn-color: #4b5563; }
+[data-bs-theme="light"] .stat-label { color: #4b5563 !important; }
+[data-bs-theme="light"] .cat-compact-table th { color: #4b5563 !important; }
+[data-bs-theme="light"] a.link-primary { color: #1d4ed8 !important; }
+/* solid-colour badges: white on the theme's #10b981 is 2.5:1 */
+.badge.text-bg-success, .badge.bg-success { background-color: #0b7a55 !important; color: #fff !important; }
+.badge[class*="-subtle"] { color: #1f2937 !important; }
+[data-bs-theme="dark"] .badge[class*="-subtle"] { color: var(--bs-body-color) !important; background-color: rgba(255, 255, 255, .12) !important; }
+
+/* Top navigation for non-admin roles (they have no sidebar) */
+.sister-topnav .btn-link { text-decoration: none; color: var(--bs-body-color); border-radius: .5rem; white-space: nowrap; }
+.sister-topnav .btn-link:hover, .sister-topnav .btn-link.active { background: var(--bs-tertiary-bg); color: var(--bs-link-color); }
+[data-bs-theme="dark"] .user-menu-btn,
+[data-bs-theme="dark"] .user-menu-name { color: #f8fafc !important; }
+[data-bs-theme="dark"] .sister-topnav .btn-link,
+[data-bs-theme="dark"] .sister-topnav .btn-link:hover,
+[data-bs-theme="dark"] .sister-topnav .btn-link:focus,
+[data-bs-theme="dark"] .sister-topnav .btn-link.active { color: #cfe0ff !important; }
+[data-bs-theme="dark"] .sister-topnav .btn-link:hover,
+[data-bs-theme="dark"] .sister-topnav .btn-link:focus,
+[data-bs-theme="dark"] .sister-topnav .btn-link.active { background-color: #334155 !important; }
+[data-bs-theme="dark"] .page-hero .btn-outline-light { color: #f8fafc !important; border-color: #aeb8c5 !important; }
+[data-bs-theme="dark"] .page-hero .btn-outline-light:hover,
+[data-bs-theme="dark"] .page-hero .btn-outline-light:focus,
+[data-bs-theme="dark"] .page-hero .btn-outline-light:active { color: #fff !important; background-color: #334155 !important; border-color: #cbd5e1 !important; }
+[data-bs-theme="dark"] .settings-nav .nav-link { color: #cfe0ff !important; }
+[data-bs-theme="dark"] .settings-nav .nav-link.active { color: #e2e8f0 !important; background-color: #334155 !important; }
+[data-bs-theme="dark"] .settings-nav .nav-link:hover,
+[data-bs-theme="dark"] .settings-nav .nav-link:focus-visible { color: #fff !important; background-color: #475569 !important; }
+@media (max-width: 767.98px) { .sister-topnav { order: 3; flex-basis: 100%; margin: .25rem 0 0 !important; } }
+.profile-card { max-width: 40rem; }
+
+/* L1–L4 · overflow on small screens: long ids wrap, nested JSON tables scroll inside their box */
+code#req-id-text, .request-id { overflow-wrap: anywhere; word-break: break-all; }
+.d-flex:has(> code#req-id-text) { flex-wrap: wrap; min-width: 0; }
+.nested-scroll { max-width: 100%; overflow: auto; }
+.nested-scroll table { max-width: none; }
+.navbar-actions { flex-wrap: wrap; min-width: 0; }
+@media (max-width: 575.98px) { .navbar-actions { gap: .5rem !important; } .navbar-actions .user-menu-btn { padding-inline: .25rem; } }
+.table-responsive > table, .tabulator { max-width: 100%; }
+
+/* P1 · long lists paint lazily (the rows stay in the DOM for find-in-page, print and CSV) */
+.documents-hub .tab-pane:not(.active):not(.show) { content-visibility: auto; contain-intrinsic-size: auto 800px; }
+
+/* Round 2 (verified with a headless browser): the theme sets the outline-button colour directly, so the variables above
+   were not enough; state selectors keep hover/active/disabled looking like buttons. */
+[data-bs-theme="dark"] .btn-outline-primary:not(:hover):not(:active):not(.active):not(:disabled) { color: #8fb3ff !important; border-color: #8fb3ff !important; }
+[data-bs-theme="dark"] .btn-outline-secondary:not(:hover):not(:active):not(.active):not(:disabled) { color: #c7d0dc !important; border-color: #8b97a8 !important; }
+[data-bs-theme="dark"] .btn-outline-danger:not(:hover):not(:active):not(.active):not(:disabled) { color: #ff9aa5 !important; border-color: #ff9aa5 !important; }
+[data-bs-theme="dark"] .btn-outline-success:not(:hover):not(:active):not(.active):not(:disabled) { color: #7be0a8 !important; border-color: #7be0a8 !important; }
+[data-bs-theme="dark"] .btn-outline-warning:not(:hover):not(:active):not(.active):not(:disabled) { color: #f5c451 !important; border-color: #f5c451 !important; }
+[data-bs-theme="dark"] .btn-outline-info:not(:hover):not(:active):not(.active):not(:disabled) { color: #6fd0ec !important; border-color: #6fd0ec !important; }
+[data-bs-theme="dark"] .btn-outline-primary:hover, [data-bs-theme="dark"] .btn-outline-primary.active { background-color: #3b6ff0 !important; border-color: #3b6ff0 !important; color: #fff !important; }
+[data-bs-theme="dark"] .btn-outline-secondary:hover, [data-bs-theme="dark"] .btn-outline-secondary.active { background-color: #4b5563 !important; color: #fff !important; }
+[data-bs-theme="dark"] .gl-section h3, [data-bs-theme="dark"] .gl-section h2, [data-bs-theme="dark"] .gl-section h4 { color: var(--bs-body-color); }
+[data-bs-theme="dark"] main .nav-pills .nav-link.active, [data-bs-theme="dark"] main .list-group-item.active { color: #fff !important; }
+.badge.text-bg-primary, .badge.bg-primary { background-color: #1d4ed8 !important; color: #fff !important; }
+.badge.text-bg-danger, .badge.bg-danger { background-color: #c62828 !important; color: #fff !important; }
+[data-bs-theme="light"] a.attach { color: #1f2937 !important; }
+[data-bs-theme="dark"] a.attach { color: var(--bs-body-color) !important; }
+[data-bs-theme="dark"] .tree-pt-meta { color: #aeb8c5; }
+[data-bs-theme="dark"] .stat-value { color: #8fb3ff; }
+[data-bs-theme="dark"] main .nav-link.active { color: #cfe0ff !important; }
+[data-bs-theme="dark"] .text-danger { color: #ff8a94 !important; }
+[data-bs-theme="dark"] .cat-compact-table th { color: #aeb8c5 !important; }
+/* visually-hidden labels are position:absolute: without a positioned scroller they escape its overflow and widen the page */
+.table-responsive, .tabulator { position: relative; }

@@ -8,7 +8,7 @@
     overflow: hidden;
     border: 1px solid var(--bs-border-color, #dee2e6);
     border-radius: .75rem;
-    background: #e9ecef;
+    background: var(--bs-tertiary-bg, #e9ecef);
 }
 
 .documents-cadastral-map-page .leaflet-map-canvas {

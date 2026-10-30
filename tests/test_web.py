@@ -108,6 +108,34 @@ async def test_web_results_passes_extended_filters_and_urls(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_manual_valuation_failure_is_flagged_for_the_page_and_health(monkeypatch):
+    from sister import database
+
+    monkeypatch.setattr(web, "_OPTIONAL_DATA_DEGRADATIONS", {})
+    monkeypatch.setattr(web, "_OPTIONAL_DATA_ACTIVE_FAILURES", set())
+
+    async def _saved_values(_user_key, _asset_keys):
+        return {}
+
+    async def _fail_to_save(_user_key, _defaults):
+        raise RuntimeError("database unavailable")
+
+    monkeypatch.setattr(database, "get_user_manual_property_valuations", _saved_values)
+    monkeypatch.setattr(database, "ensure_user_property_omi_selections", _fail_to_save)
+    kpis = {"table_estimates": [{"buildings": [{"asset_identity": {"asset_key": "asset-1"}}], "lands": []}]}
+
+    result = await web._apply_user_manual_valuations(kpis, SimpleNamespace(id="demo@example.com"))
+
+    assert result["manual_valuation_unavailable"] is True
+    assert web.optional_data_degradation_summary() == {
+        "since_process_start": True,
+        "total": 1,
+        "by_component": {"manual_property_valuations": 1},
+        "active_components": ["manual_property_valuations"],
+    }
+
+
+@pytest.mark.asyncio
 async def test_web_result_detail_renders_pending_request(monkeypatch):
     request = _fake_request()
 

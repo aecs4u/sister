@@ -553,7 +553,7 @@ const CatastoForms = {
             'evasa': { class: 'bg-success', icon: 'fa-check', text: 'Completed' },
             'pending': { class: 'bg-warning', icon: 'fa-clock', text: 'Pending' },
             'in_corso': { class: 'bg-info', icon: 'fa-spinner fa-spin', text: 'Processing' },
-            'errore': { class: 'bg-danger', icon: 'fa-times', text: 'Error' },
+            'errore': { class: 'bg-danger', icon: 'fa-times', text: 'Errore' },
             'failed': { class: 'bg-danger', icon: 'fa-times', text: 'Failed' }
         };
         const config = statusConfig[status] || { class: 'bg-secondary', icon: 'fa-question', text: status };

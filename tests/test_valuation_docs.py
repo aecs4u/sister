@@ -72,12 +72,12 @@ def test_page_renders_publicly_with_every_section_and_the_computed_figures():
 
     response = TestClient(app, raise_server_exceptions=False).get("/valuation")
     assert response.status_code == 200
-    html = response.text
+    html = response.text.replace("\xa0", " ").replace("&nbsp;", " ")
     for anchor in ("panoramica", "valore-catastale", "stima-omi", "terreni", "lettura", "limiti", "fonti"):
         assert f'id="{anchor}"' in html, anchor
-    assert "€ 168.000" in html and "€ 1.687,50" in html and "€ 140.000 – € 180.000" in html
+    assert "€ 168.000" in html and "€ 1.687,50" in html and "€ 140.000–€ 180.000" in html
     assert "non una perizia" in html and "Non esistono quotazioni OMI per i terreni agricoli" in html
-    assert 'href="/valuation"' in html  # sidebar entry
+    assert 'href="/valuation"' in html  # sidebar entry (with authentication off every reader is an operator)
 
 
 def test_residential_categories_follow_the_agenzia_entrate_correspondence():

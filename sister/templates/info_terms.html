@@ -1,0 +1,14 @@
+{% extends "info_page.html" %}
+{% block info_body %}
+<h2 class="h5">Uso del servizio</h2>
+<p>SISTER è uno strumento interno di AECS4U per la consultazione dei dati catastali dell’Agenzia delle Entrate. L’accesso è riservato agli utenti autorizzati e ai documenti che l’amministratore ha reso disponibili al loro account.</p>
+<h2 class="h5">Documenti acquistati</h2>
+<p>Ogni documento è collegato all’acquisto o alla concessione registrati per l’utente. L’accesso può avere una scadenza e può essere revocato; lo storico delle concessioni e delle revoche viene conservato.</p>
+<h2 class="h5">Dati personali</h2>
+<p>Visure e ispezioni contengono dati personali. Usali solo per la finalità per cui sono stati richiesti e non condividerli con terzi. Il trattamento è descritto nell’<a href="/privacy">informativa sulla privacy</a>.</p>
+<h2 class="h5">Servizi di terzi</h2>
+<p>Quando visualizzi una scheda persona o azienda, SISTER può inviare in background a OpenStreetMap Nominatim gli indirizzi associati a particelle prive di geometria catastale, per mostrarle come marcatori approssimativi. Nella pagina 3D, la ricerca invia l’indirizzo a Nominatim dopo che premi <strong>Mostra</strong> o apri una vista collegata a un immobile. Le risposte vengono conservate sul server e riutilizzate. Le mappe caricano le tessere da OpenStreetMap, Esri e OpenTopoMap: i loro server vedono l’area visualizzata. Nella pagina 3D, Google riceve le coordinate e i dati tecnici della richiesta solo dopo che scegli <strong>Carica vista 3D Google</strong>. L’amministratore può disattivare la geocodifica esterna (<code>SISTER_GEOCODING=off</code>).</p>
+<h2 class="h5">Responsabilità</h2>
+<p>I dati sono riportati come pubblicati dal catasto, con le stime indicative descritte in <a href="/valuation">Metodo di valutazione</a>; non sostituiscono una perizia o un atto ufficiale.</p>
+<p class="text-muted small mb-0">Per domande scrivi a <a href="mailto:info@aecs4u.com">info@aecs4u.com</a>.</p>
+{% endblock %}

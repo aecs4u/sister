@@ -7,10 +7,11 @@
 {% from "components/cadastral_assets.html" import cadastral_asset_kpis, cadastral_table_scripts, cadastral_asset_enrichment_data, cadastral_asset_enrichment_scripts %}
 {% from "components/subject_document_archive.html" import subject_document_archive %}
 {% from "components/subject_favorites.html" import subject_favorite_button, subject_favorites_js %}
+{% from "_doc_macros.html" import document_favorite_action, documents_favorites_js, optional_data_notice %}
 {% from "components/subject_notes.html" import subject_note_panel, subject_notes_js %}
 {% from "land_registry/components/document_parcel_map.html" import document_parcel_map_assets, document_parcel_map_scripts, document_parcel_map %}
 {% set subject_documents = subject_documents|default([], true) %}
-{% set subject_fiscal_code = subject_fiscal_code|default('') %}
+{% set subject_fiscal_code = subject_fiscal_code|default('', true) %}
 {% set subject_route_prefix = subject_route_prefix|default('/persons') %}
 {% set subject_document_id = subject_document_id|default(none) %}
 {% set subject_portfolio = subject_portfolio|default(none) %}
@@ -84,6 +85,11 @@
 {%- endmacro %}
 
 {% macro manual_property_valuation_panel(kpis) -%}
+{% if manual_valuation_enabled and kpis and kpis.manual_valuation_unavailable %}
+<div class="alert alert-warning py-2 small" role="status" aria-live="polite">
+    Le valutazioni personalizzate non sono disponibili al momento; le stime ufficiali restano visibili.
+</div>
+{% endif %}
 {% if manual_valuation_enabled and kpis and kpis.manual_valuation_assets %}
 <section class="card border-0 shadow-sm mb-4" aria-labelledby="manual-property-valuations-heading" data-manual-property-valuations-root>
     <div class="card-body">
@@ -140,12 +146,17 @@
 {% block extra_css %}
 {{ super() }}
 {{ document_parcel_map_assets(land_registry_map, include_layout=land_map_slot == 'sidecar' and land_registry_kpis) }}
-<link rel="stylesheet" href="/static/css/pages/document_visura.css?v=20261027b">
+<link rel="stylesheet" href="/static/css/pages/document_visura.css?v=20261030a">
 <link rel="stylesheet" href="/static/css/pages/subject_notes.css?v=20261029a">
 {% endblock %}
 
 {# Layouts that end in a single `content` block get the map after it ... #}
 {% block content %}
+{% if doc and doc.id %}
+<div class="container-fluid pt-3 no-print" aria-label="Azioni del documento">
+    {{ document_favorite_action(doc.id, doc.is_favorite|default(false), doc.favorites_enabled|default(false)) }}
+</div>
+{% endif %}
 {% if subject_fiscal_code and subject_route_prefix in ['/persons', '/companies'] %}
 <div class="container-fluid pt-3 no-print" aria-label="Azioni del soggetto">
     <div class="d-flex flex-wrap align-items-start gap-2">
@@ -184,6 +195,7 @@
         {{ adjusted_omi_summary(land_registry_kpis) }}
         {% endif %}
         {{ document_parcel_map(land_registry_map, labels=subject_map_labels) }}
+        {{ optional_data_notice(land_registry_map) }}
     </aside>
 </div>
 {% else %}
@@ -194,6 +206,7 @@
 {% if land_map_slot == 'content' %}
 <div class="container-fluid py-3">
     {{ document_parcel_map(land_registry_map, labels=subject_map_labels) }}
+    {{ optional_data_notice(land_registry_map) }}
 </div>
 {% endif %}
 {% if subject_documents %}{{ subject_visure_list(subject_documents, subject_fiscal_code, subject_route_prefix, subject_document_id, subject_portfolio) }}{% endif %}
@@ -205,11 +218,13 @@
 {{ super() }}
 {% if land_map_slot == 'after_query' %}
 {{ document_parcel_map(land_registry_map, labels=subject_map_labels) }}
+{{ optional_data_notice(land_registry_map) }}
 {% endif %}
 {% endblock %}
 
 {% block extra_js %}
 {{ super() }}
+{% if doc and doc.id %}{{ documents_favorites_js(csp_nonce) }}{% endif %}
 {% if subject_fiscal_code and subject_route_prefix in ['/persons', '/companies'] %}
 {{ subject_favorites_js(csp_nonce) }}
 {{ subject_notes_js(csp_nonce) }}
@@ -245,11 +260,12 @@
 {% set pdf_url = '' %}
 {% endif %}
 {% if pdf_url %}
+<script src="/static/js/document_share.js?v=20261030b" nonce="{{ csp_nonce }}" defer></script>
 <script nonce="{{ csp_nonce }}">
 (function () {
     if (document.querySelector('[data-document-pdf]')) return;
     var printButton = document.querySelector('button[onclick="window.print()"], button[data-aecs4u-print]');
-    var completeSubjectReport = {{ (subject_fiscal_code|length > 0 or (doc and doc.query_only))|tojson }};
+    var completeSubjectReport = {{ (subject_fiscal_code|length > 0 or (doc.query_only|default(false, true) if doc else false))|tojson }};
     var link = document.createElement('a');
     link.className = printButton ? printButton.className : 'btn btn-outline-light';
     link.href = {{ pdf_url|tojson }};
@@ -263,49 +279,28 @@
     socialButton.type = 'button';
     socialButton.className = link.className;
     socialButton.dataset.documentShare = 'true';
+    socialButton.dataset.aecs4uShare = 'native';
     socialButton.title = 'Condividi il link del report sui social';
     socialButton.innerHTML = '<i class="fas fa-share-nodes me-2" aria-hidden="true"></i>Social';
-    socialButton.addEventListener('click', async function () {
-      var heading = document.querySelector('.page-hero h1, .page-hero .display-6');
-      var shareTitle = heading ? heading.textContent.trim() : document.title;
-      var shareData = { title: shareTitle, text: shareTitle, url: window.location.href };
-      if (navigator.share) {
-        try {
-          await navigator.share(shareData);
-          return;
-        } catch (error) {
-          if (error && error.name === 'AbortError') return;
-          console.warn('Report sharing failed:', error);
-        }
-      }
-      try {
-        await navigator.clipboard.writeText(shareData.url);
-        socialButton.innerHTML = '<i class="fas fa-check me-2" aria-hidden="true"></i>Link copied';
-        window.setTimeout(function () {
-          socialButton.innerHTML = '<i class="fas fa-share-nodes me-2" aria-hidden="true"></i>Social';
-        }, 1800);
-      } catch (error) {
-        window.prompt('Copy this report link to share it:', shareData.url);
-      }
-    });
 
-    var emailLink = document.createElement('a');
-    emailLink.className = link.className;
-    emailLink.dataset.documentEmail = 'true';
-    emailLink.title = 'Invia il link del report via email';
-    emailLink.innerHTML = '<i class="fas fa-envelope me-2" aria-hidden="true"></i>Send email';
+    var emailButton = document.createElement('button');
+    emailButton.type = 'button';
+    emailButton.className = link.className;
+    emailButton.dataset.documentEmail = 'true';
+    emailButton.dataset.aecs4uShare = 'email';
+    emailButton.title = 'Invia il link del report via email';
+    emailButton.innerHTML = '<i class="fas fa-envelope me-2" aria-hidden="true"></i>Invia email';
     var emailHeading = document.querySelector('.page-hero h1, .page-hero .display-6');
     var emailTitle = emailHeading ? emailHeading.textContent.trim() : document.title;
-    var emailSubject = (completeSubjectReport ? 'Report: ' : 'Visura: ') + emailTitle;
-    var emailBody = 'Ciao,\n\npuoi consultare il documento qui: ' + window.location.href;
-    emailLink.href = 'mailto:?subject=' + encodeURIComponent(emailSubject) + '&body=' + encodeURIComponent(emailBody);
+    socialButton.dataset.shareTitle = emailTitle;
+    emailButton.dataset.shareTitle = emailTitle || (completeSubjectReport ? 'Subject report' : 'Cadastral report');
 
     var host = printButton || document.querySelector('.page-hero .d-flex .btn');
     if (host) {
-      host.before(link, socialButton, emailLink);
+      host.before(link, socialButton, emailButton);
       return;
     }
-    (document.querySelector('.page-hero') || document.body).append(link, socialButton, emailLink);
+    (document.querySelector('.page-hero') || document.body).append(link, socialButton, emailButton);
 })();
 </script>
 {% endif %}

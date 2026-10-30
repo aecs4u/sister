@@ -14,7 +14,7 @@ import logging
 import os
 import re
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from threading import Lock
@@ -67,6 +67,10 @@ from .visura_view import build_visura_view
 # Opendata API URL — workflow runs/steps are owned by opendata, not sister.
 # Sister's web UI proxies workflow list/detail requests to opendata.
 _OPENDATA_API_URL = os.getenv("OPENDATA_API_URL", "http://localhost:8024")
+_QUERY_SHARED_PRICE_PATH = os.getenv("SISTER_QUERY_SHARED_PRICE_PATH", "/visura/query")
+_QUERY_PRICE_CACHE_SECONDS = 60.0
+_query_price_cache_until = 0.0
+_query_price_cache: dict[str, Decimal] | None = None
 
 
 # Base directory for the document browser (/documents).
@@ -87,6 +91,36 @@ def _ispezione_group_key(filename: str) -> str:
 
 
 logger = logging.getLogger("sister")
+
+_OPTIONAL_DATA_DEGRADATIONS_LOCK = Lock()
+_OPTIONAL_DATA_DEGRADATIONS: dict[str, int] = {}
+_OPTIONAL_DATA_ACTIVE_FAILURES: set[str] = set()
+
+
+def _record_optional_data_degradation(component: str) -> None:
+    """Count optional-data failures without retaining identifiers or error text."""
+    with _OPTIONAL_DATA_DEGRADATIONS_LOCK:
+        _OPTIONAL_DATA_DEGRADATIONS[component] = _OPTIONAL_DATA_DEGRADATIONS.get(component, 0) + 1
+        _OPTIONAL_DATA_ACTIVE_FAILURES.add(component)
+
+
+def _clear_optional_data_degradation(component: str) -> None:
+    """Clear the active failure after a later successful lookup; keep the process-lifetime count."""
+    with _OPTIONAL_DATA_DEGRADATIONS_LOCK:
+        _OPTIONAL_DATA_ACTIVE_FAILURES.discard(component)
+
+
+def optional_data_degradation_summary() -> dict[str, Any]:
+    """Return process-lifetime counts for optional data used in privileged health details."""
+    with _OPTIONAL_DATA_DEGRADATIONS_LOCK:
+        counts = dict(_OPTIONAL_DATA_DEGRADATIONS)
+        active = sorted(_OPTIONAL_DATA_ACTIVE_FAILURES)
+    return {
+        "since_process_start": True,
+        "total": sum(counts.values()),
+        "by_component": counts,
+        "active_components": active,
+    }
 
 # The UI is authored in Italian: pin <html lang="it"> and the theme's own strings to Italian unless the visitor chose
 # a language explicitly (?lang= or the language cookie). Without this the theme follows Accept-Language.
@@ -838,7 +872,7 @@ def _build_document_tree(docs: list[dict]) -> list[dict]:
         classified_types.update(type_codes)
         if items or always:
             category = leaf(key, label, icon, color, items)
-            category["empty_message"] = "Nessun documento indicizzato in questa categoria."
+            category["empty_message"] = "Nessun documento in questa categoria."
             tree.append(category)
 
     # ── Visura per Immobile ────────────────────────────────────────────────
@@ -1707,16 +1741,33 @@ def _favorite_user_key(user) -> Optional[str]:
     return None
 
 
+def _principal_keys(user) -> list[str]:
+    """Every account key one signed-in principal can be known by (``id:``, ``username:``, ``email:``).
+
+    Purchases are matched against all of them, case-insensitively, so a grant typed as ``email:a@b.it`` and one
+    typed as ``id:a@b.it`` reach the same person.
+    """
+    keys: list[str] = []
+    user_id = getattr(user, "id", None)
+    if user_id is not None and str(user_id).strip():
+        keys.append(f"id:{str(user_id).strip()}")
+    for attr in ("username", "email"):
+        value = getattr(user, attr, None)
+        if isinstance(value, str) and value.strip():
+            keys.append(f"{attr}:{value.strip().casefold()}")
+    return keys
+
+
 async def _visible_document_ids(user) -> set[int] | None:
     """Return the documents visible to this principal, or None for an explicit admin."""
     if _is_admin(user):
         return None
-    user_key = _favorite_user_key(user)
-    if not user_key:
+    keys = _principal_keys(user)
+    if not keys:
         return set()
     from .database import get_document_purchase_ids
 
-    return await get_document_purchase_ids(user_key)
+    return await get_document_purchase_ids(keys)
 
 
 async def _filter_purchased_documents(user, documents: list[dict]) -> list[dict]:
@@ -1732,12 +1783,12 @@ async def _require_document_access(user, document_id: int) -> None:
 
     if _is_admin(user):
         return
-    user_key = _favorite_user_key(user)
-    if not user_key:
+    keys = _principal_keys(user)
+    if not keys:
         raise HTTPException(status_code=404, detail="Document not found")
     from .database import has_document_purchase
 
-    if not await has_document_purchase(user_key, document_id):
+    if not await has_document_purchase(keys, document_id):
         # Avoid confirming the existence of a document that belongs to another customer.
         raise HTTPException(status_code=404, detail="Document not found")
 
@@ -1762,32 +1813,77 @@ async def _require_document_path_access(user, target: Path) -> None:
     await _require_document_access(user, next(iter(matching_ids)))
 
 
+_PG_BIGINT_MAX = 2**63 - 1
+
+PURCHASE_MESSAGES = {
+    "bad_key": "Chiave utente non valida: usa id:…, email:… oppure username:… (scegli un utente dall’elenco).",
+    "key_too_long": "La chiave utente supera i 320 caratteri.",
+    "bad_document": "ID documento non valido: indica un numero intero positivo.",
+    "document_not_found": "Documento non trovato nel catalogo.",
+    "bad_date": "Data di acquisto non valida.",
+    "future_date": "La data di acquisto non può essere nel futuro.",
+    "bad_expiry": "Data di scadenza non valida o precedente all’acquisto.",
+    "note_too_long": "La nota supera i 2000 caratteri.",
+    "reason_too_long": "Il motivo supera i 500 caratteri.",
+    "duplicate": "Questo utente ha già accesso a questo documento.",
+    "duplicate_payment": "Questo pagamento è già stato registrato.",
+    "not_found": "Acquisto non trovato.",
+    "bad_amount": "Importo non valido: indica un numero maggiore di zero (massimo 100000).",
+    "credits_off": "I crediti prepagati non sono attivi (imposta SISTER_DOCUMENT_CREDITS e un wallet durevole).",
+    "failed": "Operazione non riuscita. Riprova o controlla il registro accessi.",
+}
+
+
 def _purchase_identity(raw: str) -> str:
     """Validate and normalize the stable principal key used by document favorites and purchases."""
+    from .database import PurchaseError
+
     value = str(raw or "").strip()
     if len(value) > 320:
-        raise ValueError("The user key must be 320 characters or fewer")
+        raise PurchaseError("key_too_long")
     prefix, separator, identifier = value.partition(":")
     if not separator or prefix.casefold() not in {"id", "email", "username"} or not identifier.strip():
-        raise ValueError("Use a user key such as id:123 or email:name@example.com")
+        raise PurchaseError("bad_key")
     prefix = prefix.casefold()
     identifier = identifier.strip()
+    if any(ch.isspace() for ch in identifier):
+        raise PurchaseError("bad_key")
     if prefix in {"email", "username"}:
         identifier = identifier.casefold()
     return f"{prefix}:{identifier}"
 
 
-def _purchase_datetime(raw: str) -> datetime:
+def _purchase_document_id(raw: object) -> int:
+    from .database import PurchaseError
+
+    text_value = str(raw or "").strip()
+    if not text_value.isascii() or not text_value.isdigit():
+        raise PurchaseError("bad_document")
+    value = int(text_value)
+    if not 1 <= value <= _PG_BIGINT_MAX:
+        raise PurchaseError("bad_document")
+    return value
+
+
+def _purchase_datetime(raw: str, *, allow_future: bool = False, error: str = "bad_date") -> datetime:
     """Interpret admin-entered local times in Rome and persist timestamps in UTC."""
     from zoneinfo import ZoneInfo
+
+    from .database import PurchaseError
 
     value = str(raw or "").strip()
     if not value:
         return datetime.now(timezone.utc)
-    parsed = datetime.fromisoformat(value)
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=ZoneInfo("Europe/Rome"))
-    return parsed.astimezone(timezone.utc)
+    try:
+        parsed = datetime.fromisoformat(value)
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=ZoneInfo("Europe/Rome"))
+        parsed = parsed.astimezone(timezone.utc)
+    except (ValueError, OverflowError):
+        raise PurchaseError(error) from None
+    if not allow_future and parsed > datetime.now(timezone.utc) + timedelta(minutes=5):
+        raise PurchaseError("future_date")
+    return parsed
 
 
 async def _apply_user_manual_valuations(kpis: dict[str, Any] | None, user) -> dict[str, Any] | None:
@@ -1803,6 +1899,7 @@ async def _apply_user_manual_valuations(kpis: dict[str, Any] | None, user) -> di
         if identity.get("asset_key")
     }
     saved_values = {}
+    manual_valuation_unavailable = False
     user_key = _favorite_user_key(user)
     if user_key and asset_keys:
         try:
@@ -1827,11 +1924,17 @@ async def _apply_user_manual_valuations(kpis: dict[str, Any] | None, user) -> di
                         "legacy_zone_code": legacy_zone_code,
                     })
             await ensure_user_property_omi_selections(user_key, guessed_selections)
+            _clear_optional_data_degradation("manual_property_valuations")
         except Exception as exc:  # The official valuation page remains available if this optional data is unavailable.
             logger.warning("Manual property valuations unavailable: %s", type(exc).__name__)
+            _record_optional_data_degradation("manual_property_valuations")
+            manual_valuation_unavailable = True
     from .land_registry_kpis import apply_user_manual_valuations
 
-    return apply_user_manual_valuations(kpis, saved_values)
+    decorated = apply_user_manual_valuations(kpis, saved_values)
+    if manual_valuation_unavailable:
+        return {**decorated, "manual_valuation_unavailable": True}
+    return decorated
 
 
 _LAND_REGISTRY_CALCULATION_TYPE = "subject_land_registry_kpis"
@@ -1934,6 +2037,12 @@ def _audited(action: str):
             user = kwargs.get("user")
             params = {k: v for k, v in kwargs.items() if k not in {"request", "user"} and isinstance(v, (str, int, float, bool))}
             started = datetime.now(timezone.utc)
+
+            def _with_details() -> dict:
+                # Handlers that read a form put the facts worth auditing (who/what/why) in request.state.audit_params.
+                extra = getattr(getattr(request, "state", None), "audit_params", None)
+                return {**params, **extra} if isinstance(extra, dict) else params
+
             try:
                 response = await handler(*args, **kwargs)
             except Exception as exc:  # noqa: BLE001
@@ -1944,7 +2053,7 @@ def _audited(action: str):
                     action,
                     actor=_actor(user),
                     status="rejected" if rejected else "error",
-                    params=params,
+                    params=_with_details(),
                     error=str(getattr(exc, "detail", None) or exc),
                     started_at=started,
                     client_ip=_client_ip(request),
@@ -1966,7 +2075,7 @@ def _audited(action: str):
                     if code >= 500
                     else "success"
                 ),
-                params=params,
+                params=_with_details(),
                 result=_summary(response),
                 started_at=started,
                 client_ip=_client_ip(request),
@@ -2528,7 +2637,9 @@ def _get_auth_status() -> dict:
 
 @router.get("/", response_class=HTMLResponse)
 async def web_index(request: Request, user=Depends(_require_auth)):
-    """Dashboard — service health and recent activity."""
+    """Dashboard — service health and recent activity (operators); regular users land on their documents."""
+    if not _is_admin(user):
+        return RedirectResponse(url="/documents", status_code=303)
     theme = _get_theme(request)
     stats = await count_result_rows()
     recent = await find_result_rows(limit=5)
@@ -2719,22 +2830,49 @@ async def web_retrieve_missing_pairs(request: Request, user=Depends(_require_adm
 
 
 @router.get("/documents/retrieve-missing-pairs/status", response_class=JSONResponse)
-async def web_retrieve_missing_pairs_status(request: Request, user=Depends(_require_auth)):
+async def web_retrieve_missing_pairs_status(request: Request, user=Depends(_require_admin)):
     async with _missing_pair_job_lock:
         return JSONResponse(_missing_pair_job_view(_missing_pair_job))
+
+
+def _examples_as_placeholders(groups):
+    """Show a parameter's example as a grey placeholder, never as a pre-filled value.
+
+    The shared form template writes ``example`` into the input's ``value`` (the Due Diligence form therefore opened with
+    ``Roma / ROMA / 100 / 50`` filled in, one click away from a real portal query for a made-up parcel). Hidden inputs
+    and selects keep theirs: those values are part of the request.
+    """
+    import dataclasses
+
+    fixed = []
+    for group in groups:
+        params = []
+        for param in group.params:
+            if param.example and param.input_type not in {"hidden", "select", "checkbox", "radio"} and not param.options:
+                param = dataclasses.replace(param, placeholder=param.placeholder or f"es. {param.example}", example=None)
+            params.append(param)
+        fixed.append(dataclasses.replace(group, params=params))
+    return fixed
 
 
 @router.get("/forms", response_class=HTMLResponse)
 async def web_forms(request: Request, user=Depends(_require_auth)):
     """Query submission forms."""
+    access_error = await _query_access_error(user)
+    if access_error is not None:
+        raise access_error
+    from . import purchases_billing
+
     theme = _get_theme(request)
+    prices = await _query_product_prices()
     return theme.render(
         "catasto/forms.html",
         request,
         user=user,
-        form_groups=get_available_form_groups(),
-        single_step_groups=get_single_step_groups(),
-        workflow_groups=get_workflow_groups(),
+        form_groups=_examples_as_placeholders(get_available_form_groups()),
+        single_step_groups=_examples_as_placeholders(get_single_step_groups()),
+        workflow_groups=_examples_as_placeholders(get_workflow_groups()),
+        query_credits_enabled=purchases_billing.query_credits_enabled(bool(prices)),
     )
 
 
@@ -2795,7 +2933,7 @@ async def web_results_refresh(request: Request, user=Depends(_require_admin)):
 @router.get("/results", response_class=HTMLResponse)
 async def web_results(
     request: Request,
-    user=Depends(_require_auth),
+    user=Depends(_require_admin),
     provincia: Optional[str] = None,
     comune: Optional[str] = None,
     foglio: Optional[str] = None,
@@ -3032,6 +3170,52 @@ async def _opendata_get(path: str, params: Optional[dict] = None, *, client_fact
         return None
 
 
+async def _query_product_prices() -> dict[str, Decimal] | None:
+    """Load the active SISTER query product prices from OpenData, with a brief in-process cache.
+
+    OpenData remains the price source of truth. A missing or unreachable catalogue is represented by ``None`` and
+    causes paid queries to fail closed; a successful but empty catalogue is returned as an empty mapping.
+    """
+    global _query_price_cache, _query_price_cache_until
+    now = time.monotonic()
+    if _query_price_cache is not None and now < _query_price_cache_until:
+        return dict(_query_price_cache)
+
+    response = await _opendata_get("/api/pricing")
+    if response is None or response.status_code != 200:
+        return None
+    try:
+        from . import purchases_billing
+
+        prices = purchases_billing.parse_query_price_catalog(response.json())
+    except Exception as exc:  # noqa: BLE001 - invalid price data must never turn into a free query
+        logger.warning("OpenData query price catalogue invalid: %s", type(exc).__name__)
+        return None
+    _query_price_cache = prices
+    _query_price_cache_until = now + _QUERY_PRICE_CACHE_SECONDS
+    return dict(prices)
+
+
+async def _query_product_price(path: str, *, allow_shared_fallback: bool = False) -> tuple[Decimal | None, str | None]:
+    from . import purchases_billing
+
+    prices = await _query_product_prices()
+    if prices is None:
+        return None, None
+    requested_path = purchases_billing.normalize_query_price_path(path)
+    cost = prices.get(requested_path)
+    if cost is not None:
+        return cost, requested_path
+    shared_path = purchases_billing.normalize_query_price_path(_QUERY_SHARED_PRICE_PATH)
+    if allow_shared_fallback and shared_path in prices:
+        return prices[shared_path], shared_path
+    return None, None
+
+
+async def _query_product_cost(path: str, *, allow_shared_fallback: bool = False) -> Decimal | None:
+    return (await _query_product_price(path, allow_shared_fallback=allow_shared_fallback))[0]
+
+
 async def get_workflow_result_record(request_id: str) -> Optional[dict]:
     """Fetch a workflow run from opendata (returns None on miss or error)."""
     resp = await _opendata_get(f"/catasto/workflow/runs/{request_id}")
@@ -3041,7 +3225,7 @@ async def get_workflow_result_record(request_id: str) -> Optional[dict]:
 
 
 @router.get("/results/{request_id}", response_class=HTMLResponse)
-async def web_result_detail(request: Request, request_id: str, user=Depends(_require_auth)):
+async def web_result_detail(request: Request, request_id: str, user=Depends(_require_admin)):
     """Single result detail page."""
     theme = _get_theme(request)
     result = await get_result_record(request_id)
@@ -3156,7 +3340,7 @@ async def find_workflow_runs(status: Optional[str] = None, limit: int = 50, offs
 @router.get("/workflows", response_class=HTMLResponse)
 async def web_workflows(
     request: Request,
-    user=Depends(_require_auth),
+    user=Depends(_require_admin),
     status: Optional[str] = None,
     limit: int = 50,
     offset: int = 0,
@@ -3186,7 +3370,7 @@ async def web_workflows(
 
 
 @router.get("/workflows/{workflow_id}", response_class=HTMLResponse)
-async def web_workflow_detail(request: Request, workflow_id: str, user=Depends(_require_auth)):
+async def web_workflow_detail(request: Request, workflow_id: str, user=Depends(_require_admin)):
     """Workflow detail page — proxied from opendata."""
     theme = _get_theme(request)
 
@@ -3233,7 +3417,16 @@ async def web_workflow_detail(request: Request, workflow_id: str, user=Depends(_
 async def web_profile(request: Request, user=Depends(_require_auth)):
     """Signed-in user's profile (target of the header user menu)."""
     theme = _get_theme(request)
-    return theme.render("profile.html", request, user=user or _get_user(request))
+    user = user or _get_user(request)
+    from . import purchases_billing
+
+    balance = None
+    if purchases_billing.credit_grants_enabled() and _principal_keys(user):
+        try:
+            balance = await purchases_billing.credit_balance(_favorite_user_key(user) or _principal_keys(user)[0])
+        except Exception as exc:  # noqa: BLE001 - the profile must open even if the wallet is unreachable
+            logger.warning("Credit balance unavailable: %s", type(exc).__name__)
+    return theme.render("profile.html", request, user=user, account_keys=_principal_keys(user), credit_balance=balance)
 
 
 @router.get("/settings", response_class=HTMLResponse)
@@ -3242,7 +3435,7 @@ async def web_settings(request: Request, user=Depends(_require_auth)):
     user = user or _get_user(request)
     is_admin = _is_admin(user)
     return _get_theme(request).render(
-        "account/settings.html",
+        "settings.html",
         request,
         user=user,
         page_title="Impostazioni",
@@ -3328,108 +3521,204 @@ async def web_admin_activity(request: Request, user=Depends(_require_admin)):
     return _get_theme(request).render("admin/activity.html", request, user=user, events=events)
 
 
+def _numeric_text(value: str | None) -> str:
+    """A number from a query string, or '' (the manager never prints free text that came from a link)."""
+    from decimal import Decimal, InvalidOperation
+
+    try:
+        return format(Decimal(str(value)).normalize(), "f") if value not in (None, "") else ""
+    except InvalidOperation:
+        return ""
+
+
+def _purchase_redirect(*, status: str = "", error: str = "") -> RedirectResponse:
+    """Back to the purchase manager with a status or an error *code* (never free text from the request)."""
+    query = {"error": error} if error else {"status": status}
+    return RedirectResponse(url=f"/admin/document-purchases?{urlencode(query)}", status_code=303)
+
+
+def _purchase_audit(request: Request, **details: Any) -> None:
+    """Facts for the activity log (picked up by ``@_audited``): who got access to what, and why."""
+    current = getattr(request.state, "audit_params", None) or {}
+    request.state.audit_params = {**current, **{k: v for k, v in details.items() if v not in (None, "")}}
+
+
 @router.get("/admin/document-purchases", response_class=HTMLResponse)
 async def web_admin_document_purchases(
     request: Request,
     q: str = "",
     status: str = "",
     error: str = "",
+    state: str = "active",
     document_id: int | None = None,
     user=Depends(_require_admin),
 ):
     """List and manage the purchase records that grant document access."""
-    from .database import list_document_purchases
     from zoneinfo import ZoneInfo
 
-    purchases = await list_document_purchases(q)
+    from .database import list_document_purchases
+
+    state = state if state in {"active", "revoked", "all"} else "active"
+    purchases = await list_document_purchases(q, status=state)
+    rome = ZoneInfo("Europe/Rome")
     for purchase in purchases:
-        purchased_at = purchase.get("purchased_at")
-        if purchased_at is not None:
-            purchase["purchased_at_local"] = purchased_at.astimezone(ZoneInfo("Europe/Rome")).strftime(
-                "%Y-%m-%dT%H:%M"
-            )
+        for source_key, target_key in (("purchased_at", "purchased_at_local"), ("expires_at", "expires_at_local")):
+            moment = purchase.get(source_key)
+            purchase[target_key] = moment.astimezone(rome).strftime("%Y-%m-%dT%H:%M") if moment else ""
+        revoked_at = purchase.get("revoked_at")
+        purchase["revoked_at_local"] = revoked_at.astimezone(rome).strftime("%Y-%m-%d %H:%M") if revoked_at else ""
+    known_users = sorted(
+        {p["user_id"] for p in purchases} | set(getattr(request.app.state, "local_user_keys", []) or [])
+    )
+    from . import purchases_billing
+    all_query_prices = await _query_product_prices() or {}
+    query_prices = {
+        path: cost for path, cost in all_query_prices.items() if path == "/visura" or path.startswith("/visura/")
+    }
+
+    purchase_link = ""
+    if document_id:
+        try:
+            purchase_link = str(request.base_url).rstrip("/") + "/buy/" + purchases_billing.purchase_link_token(document_id)
+        except RuntimeError:  # no SECRET_KEY: links cannot be signed
+            purchase_link = ""
     return _get_theme(request).render(
         "admin/document_purchases.html",
         request,
         user=user,
         purchases=purchases,
         query=q,
+        state=state,
         selected_document_id=document_id or "",
         status=status,
-        error=error,
+        error_message=PURCHASE_MESSAGES.get(error, PURCHASE_MESSAGES["failed"]) if error else "",
+        known_users=known_users,
+        purchase_link=purchase_link,
+        link_days=purchases_billing.LINK_TTL_SECONDS // 86400,
+        card_enabled=purchases_billing.billing_configured(),
+        card_price=purchases_billing.document_price_label(),
+        credits_enabled=purchases_billing.credits_enabled(),
+        credit_cost=purchases_billing.credit_cost(),
+        query_credits_enabled=purchases_billing.query_credits_enabled(bool(query_prices)),
+        query_price_list=[
+            {"endpoint": path, "credits": str(cost)}
+            for path, cost in sorted(query_prices.items())
+        ],
+        wallet_enabled=purchases_billing.credit_grants_enabled(),
+        credit_balance=_numeric_text(request.query_params.get("balance")),
     )
+
+
+def _purchase_form_values(form) -> tuple[str, int, str]:
+    note = str(form.get("note", "")).strip()
+    if len(note) > 2000:
+        from .database import PurchaseError
+
+        raise PurchaseError("note_too_long")
+    return _purchase_identity(str(form.get("user_id", ""))), _purchase_document_id(form.get("document_id")), note
+
+
+def _purchase_expiry(form, purchased_at: datetime | None) -> datetime | None:
+    from .database import PurchaseError
+
+    raw = str(form.get("expires_at", "")).strip()
+    if not raw:
+        return None
+    expires_at = _purchase_datetime(raw, allow_future=True, error="bad_expiry")
+    if purchased_at is not None and expires_at <= purchased_at:
+        raise PurchaseError("bad_expiry")
+    return expires_at
 
 
 @router.post("/admin/document-purchases/create")
 @_audited("admin.document_purchase.create")
 async def web_admin_document_purchase_create(request: Request, user=Depends(_require_admin)):
-    from .database import create_document_purchase
+    from .database import PurchaseError, create_document_purchase
 
     form = await request.form()
     try:
-        user_key = _purchase_identity(str(form.get("user_id", "")))
-        document_id = int(str(form.get("document_id", "")).strip())
-        if document_id < 1:
-            raise ValueError("Document ID must be positive")
+        user_key, document_id, note = _purchase_form_values(form)
+        _purchase_audit(request, user_id=user_key, document_id=document_id, note=note[:200])
         purchased_at = _purchase_datetime(str(form.get("purchased_at", "")))
-        note = str(form.get("note", "")).strip()
-        if len(note) > 2000:
-            raise ValueError("The note must be 2000 characters or fewer")
+        expires_at = _purchase_expiry(form, purchased_at)
         await create_document_purchase(
-            user_key, document_id, purchased_at, _favorite_user_key(user) or _actor(user), note
+            user_key,
+            document_id,
+            purchased_at,
+            _favorite_user_key(user) or _actor(user),
+            note,
+            source="admin_grant",
+            expires_at=expires_at,
         )
-    except (TypeError, ValueError) as exc:
-        return RedirectResponse(
-            url=f"/admin/document-purchases?{urlencode({'error': str(exc)})}", status_code=303
-        )
-    return RedirectResponse(url="/admin/document-purchases?status=created", status_code=303)
+    except PurchaseError as exc:
+        _purchase_audit(request, error_code=exc.code)
+        return _purchase_redirect(error=exc.code)
+    return _purchase_redirect(status="created")
 
 
 @router.post("/admin/document-purchases/update")
 @_audited("admin.document_purchase.update")
 async def web_admin_document_purchase_update(request: Request, user=Depends(_require_admin)):
-    from .database import update_document_purchase
+    from .database import PurchaseError, update_document_purchase
 
     form = await request.form()
     try:
         old_user_id = _purchase_identity(str(form.get("old_user_id", "")))
-        old_document_id = int(str(form.get("old_document_id", "")).strip())
-        user_key = _purchase_identity(str(form.get("user_id", "")))
-        document_id = int(str(form.get("document_id", "")).strip())
-        if old_document_id < 1 or document_id < 1:
-            raise ValueError("Document IDs must be positive")
-        purchased_at = _purchase_datetime(str(form.get("purchased_at", "")))
-        note = str(form.get("note", "")).strip()
-        if len(note) > 2000:
-            raise ValueError("The note must be 2000 characters or fewer")
+        old_document_id = _purchase_document_id(form.get("old_document_id"))
+        user_key, document_id, note = _purchase_form_values(form)
+        _purchase_audit(
+            request,
+            user_id=user_key,
+            document_id=document_id,
+            old_user_id=old_user_id if old_user_id != user_key else None,
+            old_document_id=old_document_id if old_document_id != document_id else None,
+            note=note[:200],
+        )
+        posted = str(form.get("purchased_at", "")).strip()
+        # The input has minute precision: when it is unchanged keep the stored instant (and its seconds).
+        purchased_at = None if posted == str(form.get("purchased_at_orig", "")).strip() else _purchase_datetime(posted)
+        expires_at = _purchase_expiry(form, purchased_at)
         await update_document_purchase(
-            old_user_id, old_document_id, user_key, document_id, purchased_at, note
+            old_user_id, old_document_id, user_key, document_id, purchased_at, note, expires_at
         )
-    except (TypeError, ValueError) as exc:
-        return RedirectResponse(
-            url=f"/admin/document-purchases?{urlencode({'error': str(exc)})}", status_code=303
-        )
-    return RedirectResponse(url="/admin/document-purchases?status=updated", status_code=303)
+    except PurchaseError as exc:
+        _purchase_audit(request, error_code=exc.code)
+        return _purchase_redirect(error=exc.code)
+    return _purchase_redirect(status="updated")
 
 
-@router.post("/admin/document-purchases/delete")
-@_audited("admin.document_purchase.delete")
-async def web_admin_document_purchase_delete(request: Request, user=Depends(_require_admin)):
-    from .database import delete_document_purchase
+async def _revoke_purchase(request: Request) -> RedirectResponse:
+    from .database import PurchaseError, revoke_document_purchase
 
     form = await request.form()
     try:
         user_key = _purchase_identity(str(form.get("user_id", "")))
-        document_id = int(str(form.get("document_id", "")).strip())
-        if document_id < 1:
-            raise ValueError("Document ID must be positive")
-        deleted = await delete_document_purchase(user_key, document_id)
-    except (TypeError, ValueError) as exc:
-        return RedirectResponse(
-            url=f"/admin/document-purchases?{urlencode({'error': str(exc)})}", status_code=303
-        )
-    status = "deleted" if deleted else "not_found"
-    return RedirectResponse(url=f"/admin/document-purchases?status={status}", status_code=303)
+        document_id = _purchase_document_id(form.get("document_id"))
+        reason = str(form.get("reason", "")).strip()
+        if len(reason) > 500:
+            raise PurchaseError("reason_too_long")
+        _purchase_audit(request, user_id=user_key, document_id=document_id, reason=reason[:200])
+        actor = getattr(request.state, "audit_user", None)
+        revoked = await revoke_document_purchase(user_key, document_id, _favorite_user_key(actor) or _actor(actor), reason)
+    except PurchaseError as exc:
+        _purchase_audit(request, error_code=exc.code)
+        return _purchase_redirect(error=exc.code)
+    return _purchase_redirect(status="deleted" if revoked else "not_found")
+
+
+@router.post("/admin/document-purchases/revoke")
+@_audited("admin.document_purchase.revoke")
+async def web_admin_document_purchase_revoke(request: Request, user=Depends(_require_admin)):
+    request.state.audit_user = user
+    return await _revoke_purchase(request)
+
+
+@router.post("/admin/document-purchases/delete")
+@_audited("admin.document_purchase.revoke")
+async def web_admin_document_purchase_delete(request: Request, user=Depends(_require_admin)):
+    """Backward-compatible alias: access is revoked (soft), never physically deleted from the UI."""
+    request.state.audit_user = user
+    return await _revoke_purchase(request)
 
 
 @router.get("/about", response_class=HTMLResponse)
@@ -3446,6 +3735,43 @@ async def web_privacy(request: Request):
     theme = _get_theme(request)
     user = await _optional_user(request)
     return theme.render("legal_privacy.html", request, user=user)
+
+
+_INFO_PAGES = {
+    "terms": ("info_terms.html", "Termini di servizio", "fa-file-contract", True),
+    "help": ("info_help.html", "Centro assistenza", "fa-circle-question", True),
+    "contact": ("info_contact.html", "Contatti", "fa-envelope", True),
+    "notifications": ("info_notifications.html", "Notifiche", "fa-bell", False),
+}
+
+
+async def _render_info_page(request: Request, key: str, user):
+    template, heading, icon, _public = _INFO_PAGES[key]
+    return _get_theme(request).render(template, request, user=user, page_heading=heading, page_icon=icon)
+
+
+@router.get("/terms", response_class=HTMLResponse)
+async def web_terms(request: Request):
+    """Terms of service (public: the sign-in page links to it)."""
+    return await _render_info_page(request, "terms", await _optional_user(request))
+
+
+@router.get("/help", response_class=HTMLResponse)
+async def web_help(request: Request):
+    """Help centre (public)."""
+    return await _render_info_page(request, "help", await _optional_user(request))
+
+
+@router.get("/contact", response_class=HTMLResponse)
+async def web_contact(request: Request):
+    """Contact page (public)."""
+    return await _render_info_page(request, "contact", await _optional_user(request))
+
+
+@router.get("/notifications", response_class=HTMLResponse)
+async def web_notifications(request: Request, user=Depends(_require_auth)):
+    """Notifications inbox (target of the header user menu; empty until notifications exist)."""
+    return await _render_info_page(request, "notifications", user)
 
 
 @router.get("/guide", response_class=HTMLResponse)
@@ -3492,12 +3818,47 @@ _GEOCODE_LOCK = asyncio.Lock()
 _GEOCODE_LAST_REQUEST_AT = 0.0
 
 
+# Addresses are sent to a third party (Nominatim/OpenStreetMap) only on a cache miss, and the answer is kept on disk so a
+# restart (uvicorn --reload restarts often) does not repeat it. ``SISTER_GEOCODING=off`` keeps the cache but never calls out.
+_GEOCODING_ENABLED = os.getenv("SISTER_GEOCODING", "on").strip().lower() not in {"0", "false", "no", "off"}
+_GEOCODE_CACHE_FILE = Path(os.getenv("SISTER_GEOCODE_CACHE", "data/geocode_cache.json"))
+_geocode_cache_loaded = False
+
+
+def _load_geocode_cache() -> None:
+    global _geocode_cache_loaded
+    if _geocode_cache_loaded:
+        return
+    _geocode_cache_loaded = True
+    try:
+        stored = json.loads(_GEOCODE_CACHE_FILE.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return
+    if isinstance(stored, dict):
+        for key, value in stored.items():
+            if isinstance(key, str) and (value is None or isinstance(value, dict)):
+                _GEOCODE_CACHE.setdefault(key, value)
+
+
+def _save_geocode_cache() -> None:
+    try:
+        _GEOCODE_CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        tmp = _GEOCODE_CACHE_FILE.with_suffix(".tmp")
+        tmp.write_text(json.dumps(_GEOCODE_CACHE, ensure_ascii=False), encoding="utf-8")
+        tmp.replace(_GEOCODE_CACHE_FILE)
+    except OSError as exc:  # a read-only data directory must not break the page
+        logger.debug("Geocode cache not saved: %s", type(exc).__name__)
+
+
 async def _geocode_address(query: str) -> dict[str, Any] | None:
     """Resolve an address with Nominatim, caching results and spacing requests at one per second."""
     global _GEOCODE_LAST_REQUEST_AT
+    _load_geocode_cache()
     key = re.sub(r"\s+", " ", query).strip().casefold()
     if key in _GEOCODE_CACHE:
         return _GEOCODE_CACHE[key]
+    if not _GEOCODING_ENABLED:
+        return None
     import httpx
 
     async with _GEOCODE_LOCK:
@@ -3533,13 +3894,14 @@ async def _geocode_address(query: str) -> dict[str, Any] | None:
                         "kind": rows[0].get("type", ""),
                     }
         _GEOCODE_CACHE[key] = hit
+        _save_geocode_cache()
         return hit
 
 
 @router.get("/3d", response_class=HTMLResponse)
 async def web_building_3d(
     request: Request,
-    q: str = "Via El Alamein 2, 48124 Ravenna",
+    q: str = "",
     lat: Optional[float] = None,
     lng: Optional[float] = None,
     user=Depends(_require_auth),
@@ -3614,6 +3976,19 @@ def _human_size(n: int) -> str:
     return f"{n:.1f} TB"
 
 
+async def _load_document_favorite_state(doc: dict, user, *, as_pdf: bool = False) -> bool:
+    """Attach the signed-in user's saved state for a single document."""
+    favorite_user = _favorite_user_key(user)
+    enabled = bool(favorite_user) and not as_pdf
+    doc["favorites_enabled"] = enabled
+    doc["is_favorite"] = False
+    if enabled and doc.get("id") is not None:
+        from .database import get_document_favorite_ids
+
+        doc["is_favorite"] = int(doc["id"]) in await get_document_favorite_ids(favorite_user)
+    return enabled
+
+
 async def _render_doc_from_db(
     doc: dict,
     request,
@@ -3638,6 +4013,8 @@ async def _render_doc_from_db(
     the auto-selection — used by ``?template=`` on the document route to render the
     generic, exhaustive view of any document.
     """
+    document_favorites_enabled = await _load_document_favorite_state(doc, user, as_pdf=as_pdf)
+
     doc["xml_parsed"] = _parse_xml_to_dict(doc.get("xml_content", ""))
     if subject_asset_documents:
         doc["xml_parsed"] = _merge_subject_visura_asset_groups(
@@ -3699,6 +4076,7 @@ async def _render_doc_from_db(
             user=user,
             result=result,
             request_id=str(doc.get("id") or doc.get("filename") or ""),
+            document_favorites_enabled=document_favorites_enabled,
         )
 
     if any(
@@ -3734,6 +4112,7 @@ async def _render_doc_from_db(
             user=user,
             result=result,
             request_id=str(doc.get("id") or doc.get("filename") or ""),
+            document_favorites_enabled=document_favorites_enabled,
         )
     land_registry_kpis = None
     land_registry_history = None
@@ -3742,13 +4121,18 @@ async def _render_doc_from_db(
 
         # the groups only the elenco lists carry its ownership, so the valuation covers them too
         xml_shown = _subject_tree_with_elenco(xml_p, subject_hub)
-        land_registry_kpis = await _subject_land_registry_calculation(
-            xml_shown, map_lookup, user, scope_type="document", scope_id=doc.get("id") or doc.get("filename")
-        )
-        land_registry_history = (
-            await subject_land_registry_history(xml_p, max_events=None)
-            if as_pdf
-            else await subject_land_registry_history(xml_p)
+
+        async def _no_hub_map():
+            return None
+
+        # The valuation, the ownership history and the hub map do not depend on each other: they used to run one after
+        # the other (3-4 s each on a large subject), now they overlap.
+        land_registry_kpis, land_registry_history, hub_map = await asyncio.gather(
+            _subject_land_registry_calculation(
+                xml_shown, map_lookup, user, scope_type="document", scope_id=doc.get("id") or doc.get("filename")
+            ),
+            subject_land_registry_history(xml_p, max_events=None) if as_pdf else subject_land_registry_history(xml_p),
+            _hub_parcel_map(subject_hub) if (subject_hub and not as_pdf) else _no_hub_map(),
         )
     from .display import merge_identifiers, readable_owners, subject_for_theme
 
@@ -3784,7 +4168,7 @@ async def _render_doc_from_db(
         )
     if land_map_kind == "soggetto" and subject_hub:
         # every parcel of the elenco is on the map, not only the ones the visura lists
-        doc["land_registry_map"] = await _hub_parcel_map(subject_hub) or doc.get("land_registry_map")
+        doc["land_registry_map"] = hub_map or doc.get("land_registry_map")
     return theme.render(
         "catasto/entity.html",
         request,
@@ -3802,6 +4186,7 @@ async def _render_doc_from_db(
         subject_archive=subject_archive,
         subject_favorite_enabled=subject_favorite_enabled,
         subject_is_favorite=subject_is_favorite,
+        document_favorites_enabled=document_favorites_enabled,
         subject_document_id=doc.get("id") if subject_fiscal_code else None,
         manual_valuation_enabled=bool(_favorite_user_key(user)),
         **_land_map_layout(land_map_kind, theme),
@@ -4154,8 +4539,114 @@ async def _read_subject_map_features_from_sister_views(
     return parcel_rows, sheet_rows
 
 
-async def _google_maps_context(doc: dict) -> dict[str, Any] | None:
-    """Build verified parcel coordinates plus Google Maps and Street View links."""
+_MAP_REFRESH_INFLIGHT: set[int] = set()
+_MAP_REFRESH_LAST: dict[int, float] = {}
+_MAP_REFRESH_MIN_INTERVAL = float(os.getenv("SISTER_MAP_REFRESH_SECONDS", "600"))
+
+
+def _schedule_map_refresh(doc: dict) -> None:
+    """Re-run the cadastral lookup for ``doc`` in the background (one at a time per document, at most every 10 min).
+
+    The page is served from the cache that already exists; the lookup used to run inside the request every time a single
+    parcel was missing or unchecked, which made subject pages wait 5-10 s on the geometry source for the same answer.
+    """
+    document_id = doc.get("id")
+    if document_id is None:
+        return
+    document_id = int(document_id)
+    now = time.monotonic()
+    if document_id in _MAP_REFRESH_INFLIGHT or now - _MAP_REFRESH_LAST.get(document_id, -1e9) < _MAP_REFRESH_MIN_INTERVAL:
+        return
+    _MAP_REFRESH_INFLIGHT.add(document_id)
+    _MAP_REFRESH_LAST[document_id] = now
+
+    async def _refresh() -> None:
+        try:
+            await _google_maps_context(doc, refresh_only=True)
+        except Exception as exc:  # noqa: BLE001 - a refresh must never surface in a page
+            logger.debug("Map refresh for document %s failed: %s", document_id, type(exc).__name__)
+        finally:
+            _MAP_REFRESH_INFLIGHT.discard(document_id)
+
+    try:
+        asyncio.get_running_loop().create_task(_refresh())
+    except RuntimeError:  # no running loop (sync caller): skip, the next view schedules it
+        _MAP_REFRESH_INFLIGHT.discard(document_id)
+
+
+_ADJACENT_MEMO: dict[str, tuple[float, list]] = {}
+_ADJACENT_INFLIGHT: set[str] = set()
+_ADJACENT_UNAVAILABLE: set[str] = set()
+_ADJACENT_TTL = float(os.getenv("SISTER_ADJACENT_PARCELS_SECONDS", "86400"))
+
+
+def _adjacent_parcels_memo(reference: str, dsn: str, options: str, sql: str) -> list:
+    """Adjacent-parcel rows already known for ``reference`` ([] when not yet); schedules the lookup when missing or stale."""
+    entry = _ADJACENT_MEMO.get(reference)
+    if entry and time.monotonic() - entry[0] < _ADJACENT_TTL:
+        return entry[1]
+    if reference not in _ADJACENT_INFLIGHT:
+        _ADJACENT_INFLIGHT.add(reference)
+
+        async def _fetch() -> None:
+            import psycopg
+
+            rows: list = []
+            try:
+                async with await psycopg.AsyncConnection.connect(
+                    dsn, connect_timeout=2, options=options.replace("statement_timeout=2500", "statement_timeout=15000")
+                ) as connection:
+                    cursor = await connection.execute(sql, (reference, reference))
+                    rows = await cursor.fetchall()
+                    _ADJACENT_UNAVAILABLE.discard(reference)
+                    _clear_optional_data_degradation("adjacent_parcels")
+            except Exception as exc:  # noqa: BLE001 - optional data: remember the miss so it is not retried on every view
+                logger.warning("Adjacent cadastral parcels unavailable: %s", type(exc).__name__)
+                _ADJACENT_UNAVAILABLE.add(reference)
+                _record_optional_data_degradation("adjacent_parcels")
+            finally:
+                _ADJACENT_MEMO[reference] = (time.monotonic(), rows)
+                _ADJACENT_INFLIGHT.discard(reference)
+
+        try:
+            asyncio.get_running_loop().create_task(_fetch())
+        except RuntimeError:
+            _ADJACENT_INFLIGHT.discard(reference)
+    return entry[1] if entry else []
+
+
+_MAP_CONTEXT_CACHE: dict[int, tuple[float, dict]] = {}
+_MAP_CONTEXT_TTL = float(os.getenv("SISTER_MAP_CONTEXT_SECONDS", "600"))
+
+
+async def _google_maps_context(doc: dict, *, refresh_only: bool = False) -> dict[str, Any] | None:
+    """``_google_maps_context_uncached`` with a short in-memory memo per document.
+
+    A property visura has no persistent polygon cache (only subject visure do), so every view of the same document asked the
+    geometry source again (~5 s). The answer for one document does not change within minutes: reuse it for ``SISTER_MAP_CONTEXT_SECONDS``.
+    """
+    import copy
+
+    document_id = doc.get("id")
+    if refresh_only or document_id is None or _MAP_CONTEXT_TTL <= 0:
+        return await _google_maps_context_uncached(doc, refresh_only=refresh_only)
+    cached = _MAP_CONTEXT_CACHE.get(int(document_id))
+    if cached and time.monotonic() - cached[0] < _MAP_CONTEXT_TTL:
+        return copy.deepcopy(cached[1])
+    context = await _google_maps_context_uncached(doc)
+    if isinstance(context, dict) and context.get("lookup_status") in {"matched", "not_found"}:
+        if len(_MAP_CONTEXT_CACHE) > 500:
+            _MAP_CONTEXT_CACHE.clear()
+        _MAP_CONTEXT_CACHE[int(document_id)] = (time.monotonic(), copy.deepcopy(context))
+    return context
+
+
+async def _google_maps_context_uncached(doc: dict, *, refresh_only: bool = False) -> dict[str, Any] | None:
+    """Build verified parcel coordinates plus Google Maps and Street View links.
+
+    ``refresh_only`` is the background re-check (see ``_schedule_map_refresh``): it skips the cache shortcuts, queries the
+    cadastral source and rewrites the cache; its context is discarded.
+    """
     view = doc.get("view") or {}
     units = view.get("units") or []
     unit = units[0] if units and isinstance(units[0], dict) else {}
@@ -4430,6 +4921,7 @@ async def _google_maps_context(doc: dict) -> dict[str, Any] | None:
         "lookup_message": "",
         "related_subunits": [],
         "adjacent_parcels": [],
+        "adjacent_lookup_status": "not_requested",
         "parcel_markers": [],
         "parcel_features": [],
         "sheet_features": [],
@@ -4611,8 +5103,14 @@ async def _google_maps_context(doc: dict) -> dict[str, Any] | None:
             cached_map_rows = await _read_visura_cadastral_map_cache(int(document_id))
         except (TypeError, ValueError):
             cached_map_rows = []
-        if use_cached_map_features(cached_map_rows, require_fresh=True):
-            return context
+        if not refresh_only:
+            if use_cached_map_features(cached_map_rows, require_fresh=True):
+                return context
+            # Some parcels were never confirmed (or are older than 30 days) but earlier answers exist: show those now and
+            # complete them in the background instead of making the visitor wait for the geometry source.
+            if cached_map_rows and use_cached_map_features(cached_map_rows, require_fresh=False):
+                _schedule_map_refresh(doc)
+                return context
 
     # Resolve hub keys in the cadastral database directly: its indexed regional
     # views serve parcel lookups quickly. The FDW views in SISTER remain a
@@ -4996,11 +5494,16 @@ async def _google_maps_context(doc: dict) -> dict[str, Any] | None:
                             sheet_lookup_failed = True
                             logger.warning("Cadastral sheet geometries unavailable: %s: %s", type(exc).__name__, exc)
             if len(rows) == 1 and rows[0][0]:
-                try:
-                    adjacent_cursor = await connection.execute(adjacent_sql, (rows[0][0], rows[0][0]))
-                    adjacent_rows = await adjacent_cursor.fetchall()
-                except Exception as exc:
-                    logger.warning("Adjacent cadastral parcels unavailable: %s", type(exc).__name__)
+                # Neighbouring parcels are optional decoration and the query can run for seconds (it unions the target's
+                # geometry): serve what an earlier view found and let a background task fill the memo for the next one.
+                adjacent_reference = rows[0][0]
+                adjacent_rows = _adjacent_parcels_memo(adjacent_reference, dsn, connection_options, adjacent_sql)
+                if adjacent_reference in _ADJACENT_UNAVAILABLE:
+                    context["adjacent_lookup_status"] = "unavailable"
+                elif adjacent_reference in _ADJACENT_INFLIGHT:
+                    context["adjacent_lookup_status"] = "loading"
+                else:
+                    context["adjacent_lookup_status"] = "available"
     except Exception as exc:
         logger.warning("Cadastral map lookup unavailable: %s", type(exc).__name__)
         if use_cached_map_features(cached_map_rows, require_fresh=False):
@@ -5423,6 +5926,9 @@ def _doc_as_result(doc: dict) -> dict:
     return {
         "status": "completed",
         "request_id": str(doc.get("id") or ""),
+        "document_id": doc.get("id"),
+        "document_is_favorite": bool(doc.get("is_favorite")),
+        "document_favorites_enabled": bool(doc.get("favorites_enabled")),
         "request_type": doc.get("document_type") or "document",
         "tipo_catasto": doc.get("tipo_catasto") or "-",
         "requested_at_display": doc.get("richiesta_del") or "-",
@@ -7185,6 +7691,121 @@ async def web_documents_import(request: Request, force: bool = False, user=Depen
     return JSONResponse({"indexed": indexed, "xml": xml, "force": force})
 
 
+@router.get("/documents/purchased", response_class=HTMLResponse)
+async def web_document_purchased(request: Request, user=Depends(_require_auth)):
+    """Where Stripe Checkout returns after a payment (the webhook grants the access)."""
+    template, _heading, icon, _public = "info_purchase_done.html", "", "fa-circle-check", False
+    return _get_theme(request).render(
+        template, request, user=user, page_heading="Pagamento ricevuto", page_icon=icon
+    )
+
+
+@router.get("/buy/{token}", response_class=HTMLResponse)
+async def web_buy_document(request: Request, token: str, user=Depends(_require_auth)):
+    """Purchase page opened from a signed link an admin created: one document, its price and the ways to pay."""
+    from fastapi import HTTPException
+
+    from . import purchases_billing
+    from .database import get_document_by_id, has_document_purchase
+
+    document_id = purchases_billing.document_id_from_token(token)
+    doc = await get_document_by_id(document_id) if document_id else None
+    if doc is None:
+        raise HTTPException(status_code=404, detail="Link di acquisto non valido o scaduto")
+    keys = _principal_keys(user)
+    owned = _is_admin(user) or bool(keys and await has_document_purchase(keys, document_id))
+    credits_on = purchases_billing.credits_enabled()
+    balance = None
+    if credits_on and keys:
+        try:
+            balance = await purchases_billing.credit_balance(_favorite_user_key(user) or keys[0])
+        except Exception as exc:  # noqa: BLE001 - the page still works with cards if the wallet is unreachable
+            logger.warning("Credit balance unavailable: %s", type(exc).__name__)
+            credits_on = False
+    return _get_theme(request).render(
+        "buy.html",
+        request,
+        user=user,
+        doc=doc,
+        document_id=document_id,
+        owned=owned,
+        card_enabled=purchases_billing.billing_configured(),
+        card_price=purchases_billing.document_price_label(),
+        credits_enabled=credits_on,
+        credit_cost=purchases_billing.credit_cost(),
+        credit_balance=balance,
+        error=request.query_params.get("error", ""),
+    )
+
+
+@router.post("/documents/{doc_id}/purchase")
+@_audited("document.purchase.start")
+async def web_document_purchase(request: Request, doc_id: int, user=Depends(_require_auth)):
+    """Buy one document: ``method=card`` starts Stripe Checkout, ``method=credits`` pays from the prepaid wallet."""
+    from fastapi import HTTPException
+
+    from . import purchases_billing
+    from .database import get_document_by_id, has_document_purchase
+
+    form = await request.form()
+    method = str(form.get("method") or "card")
+    keys = _principal_keys(user)
+    user_key = _favorite_user_key(user)
+    if not keys or not user_key:
+        raise HTTPException(status_code=403, detail="Account non identificabile")
+    if await get_document_by_id(doc_id) is None:
+        raise HTTPException(status_code=404, detail="Document not found")
+    if _is_admin(user) or await has_document_purchase(keys, doc_id):
+        return RedirectResponse(url=f"/documents/{doc_id}", status_code=303)
+    _purchase_audit(request, document_id=doc_id, user_id=user_key, reason=method)
+    if method == "credits":
+        if not purchases_billing.credits_enabled():
+            raise HTTPException(status_code=503, detail="Pagamento con crediti non attivo")
+        outcome = await purchases_billing.pay_with_credits(user_key, doc_id)
+        if outcome == "insufficient":
+            raise HTTPException(status_code=402, detail="Crediti insufficienti per questo documento")
+        return RedirectResponse(url=f"/documents/{doc_id}", status_code=303)
+    if not purchases_billing.billing_configured():
+        raise HTTPException(status_code=503, detail="Pagamenti non configurati")
+    try:
+        url = await purchases_billing.start_document_checkout(request, user_key, getattr(user, "email", None), doc_id)
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001 - Stripe/network problems are shown as a clean 502, details stay in the log
+        logger.error("Document checkout failed: %s", type(exc).__name__)
+        raise HTTPException(status_code=502, detail="Pagamento non disponibile al momento") from None
+    return RedirectResponse(url=url, status_code=303)
+
+
+@router.post("/admin/credits/grant")
+@_audited("admin.credits.grant")
+async def web_admin_credits_grant(request: Request, user=Depends(_require_admin)):
+    """Load prepaid credits on an account (the wallet is shared by the person's id:/email:/username: keys)."""
+    from decimal import Decimal, InvalidOperation
+
+    from . import purchases_billing
+    from .database import PurchaseError
+
+    if not purchases_billing.credit_grants_enabled():
+        return _purchase_redirect(error="credits_off")
+    form = await request.form()
+    try:
+        user_key = _purchase_identity(str(form.get("user_id", "")))
+        try:
+            amount = Decimal(str(form.get("amount", "")).replace(",", ".").strip())
+        except InvalidOperation:
+            raise PurchaseError("bad_amount") from None
+        if not (Decimal("0") < amount <= Decimal("100000")):
+            raise PurchaseError("bad_amount")
+        reason = str(form.get("reason", "")).strip()[:200]
+        _purchase_audit(request, user_id=user_key, reason=reason, amount=str(amount))
+        balance = await purchases_billing.grant_credits(user_key, amount, reason, _actor(user))
+    except PurchaseError as exc:
+        _purchase_audit(request, error_code=exc.code)
+        return _purchase_redirect(error=exc.code)
+    return RedirectResponse(url=f"/admin/document-purchases?status=credits&balance={balance}", status_code=303)
+
+
 @router.get("/documents", response_class=HTMLResponse)
 @router.get("/documents/{path:path}", response_class=HTMLResponse)
 async def web_documents(
@@ -7212,7 +7833,10 @@ async def web_documents(
     if path and path.isdigit():
         doc = await get_document_by_id(int(path))
         if doc is None:
-            return theme.render("result_detail.html", request, user=user, result=None, request_id=path, not_found=True)
+            from fastapi import HTTPException
+
+            # Same answer as a document the caller may not see: never a 200 for "not found".
+            raise HTTPException(status_code=404, detail="Document not found")
         await _require_document_access(user, int(path))
         if not template and (doc.get("document_type") or "") == "visura_soggetto":
             fiscal_code = _document_subject_fiscal_code(doc)
@@ -7236,6 +7860,7 @@ async def web_documents(
                 gj_result = _read_planimetria_geojson(str(fp))
                 if gj_result is not None:
                     map_lookup = await _google_maps_context(doc)
+                    await _load_document_favorite_state(doc, user)
                     return theme.render(
                         "planimetria_land_map.html",
                         request,
@@ -7319,6 +7944,7 @@ async def web_documents(
             inspection_documents = await asyncio.gather(*(_parse_sibling(path) for path in siblings))
             ocular_extraction = await get_document_structured_extraction(int(doc["id"]))
             map_lookup = await _google_maps_context(doc)
+            await _load_document_favorite_state(doc, user)
             return theme.render(
                 "catasto/entity.html",
                 request,
@@ -8150,6 +8776,10 @@ async def _subject_query_profile(
 _HUB_MAP_CACHE: dict[str, tuple[float, dict | None]] = {}
 _HUB_MAP_DATA: dict[str, dict] = {}  # map_key -> {"chunks": [map JSON per chunk], "done", "total"}, served by .../parcel-map.json?k=&after=
 _HUB_MAP_CACHE_SECONDS = 3600
+# A lookup that lost chunks is not trusted for an hour, but rebuilding it on every page view (3-4 s of timeouts against the same
+# geometry source) helped nobody: reuse what it found for a few minutes, then try again.
+_HUB_MAP_PARTIAL: dict[str, tuple[float, dict | None]] = {}
+_HUB_MAP_PARTIAL_SECONDS = float(os.getenv("SISTER_HUB_MAP_PARTIAL_SECONDS", "300"))
 _HUB_MAP_CACHE_ENTRIES = 64
 
 
@@ -8319,7 +8949,7 @@ def _subject_tree_with_elenco(xml_parsed: dict, profile: dict | None) -> dict:
 
 _HUB_MAP_CHUNK_PARCELS = 120  # parcels per spatial lookup: one query over thousands of parcels outlives its timeout
 _HUB_MAP_FIRST_CHUNK_PARCELS = 40  # a small first chunk: something is on the map within seconds
-_HUB_MAP_WAIT_SECONDS = 4  # how long the page waits for the whole map before it shows up as "loading" (and fills in)
+_HUB_MAP_WAIT_SECONDS = float(os.getenv("SISTER_HUB_MAP_WAIT_SECONDS", "2"))  # how long the page waits for the whole map before it shows up as "loading" (and fills in)
 _HUB_MAP_TASKS: dict[str, asyncio.Task] = {}
 
 
@@ -8663,6 +9293,10 @@ async def _build_hub_map(map_key: str, parcels: list[dict], data_url: str) -> di
         if len(_HUB_MAP_CACHE) >= _HUB_MAP_CACHE_ENTRIES:
             _HUB_MAP_CACHE.pop(next(iter(_HUB_MAP_CACHE)))
         _HUB_MAP_CACHE[map_key] = (time.monotonic(), parcel_map)
+    elif parcel_map is not None:
+        if len(_HUB_MAP_PARTIAL) >= _HUB_MAP_CACHE_ENTRIES:
+            _HUB_MAP_PARTIAL.pop(next(iter(_HUB_MAP_PARTIAL)))
+        _HUB_MAP_PARTIAL[map_key] = (time.monotonic(), parcel_map)
     return parcel_map
 
 
@@ -8714,6 +9348,9 @@ async def _hub_parcel_map(profile: dict) -> dict | None:
     cached = _HUB_MAP_CACHE.get(map_key)
     if cached and time.monotonic() - cached[0] < _HUB_MAP_CACHE_SECONDS and (_HUB_MAP_DATA.get(map_key) or {}).get("done"):
         return cached[1]
+    partial = _HUB_MAP_PARTIAL.get(map_key)
+    if partial and time.monotonic() - partial[0] < _HUB_MAP_PARTIAL_SECONDS and (_HUB_MAP_DATA.get(map_key) or {}).get("done"):
+        return partial[1]
     task = _HUB_MAP_TASKS.get(map_key)
     if task is None:
         task = _HUB_MAP_TASKS[map_key] = asyncio.create_task(_build_hub_map(map_key, parcels, data_url))
@@ -9278,7 +9915,7 @@ def _safe_dossier_path(path: str) -> "Path":
 
 
 @router.get("/dossiers/view/{path:path}", response_class=HTMLResponse)
-async def web_dossier_view(request: Request, path: str, user=Depends(_require_auth)):
+async def web_dossier_view(request: Request, path: str, user=Depends(_require_admin)):
     """Render a single dossier JSON via the result_detail template."""
     import json as _json
 
@@ -9307,7 +9944,7 @@ async def web_dossier_view(request: Request, path: str, user=Depends(_require_au
 
 @router.get("/dossiers", response_class=HTMLResponse)
 @router.get("/dossiers/{path:path}", response_class=HTMLResponse)
-async def web_dossiers(request: Request, path: str = "", download: str = "", user=Depends(_require_auth)):
+async def web_dossiers(request: Request, path: str = "", download: str = "", user=Depends(_require_admin)):
     """Dossiers hub — multi-step (workflow) and single-step query responses.
 
     Root lists the dossier JSON files; a file path serves the raw JSON
@@ -9379,7 +10016,7 @@ async def web_browser(request: Request, user=Depends(_require_admin)):
 
 
 @router.get("/browser/status", response_class=JSONResponse)
-async def web_browser_status(request: Request, user=Depends(_require_auth)):
+async def web_browser_status(request: Request, user=Depends(_require_admin)):
     """JSON status for live polling from the control panel."""
     from .main import visura_service
 
@@ -9545,111 +10182,121 @@ async def web_browser_launch_chrome(request: Request, user=Depends(_require_admi
 
 @router.post("/api/ui/batch", response_class=JSONResponse)
 async def web_api_batch(request: Request, user=Depends(_require_auth)):
-    """Parse CSV text and submit each row as a separate API request."""
-    import csv
-    import io
-
+    """Parse a CSV and bill each accepted row for non-admin users."""
     import httpx
 
-    from .query_forms import QUERY_FORMS
+    from .query_forms import command_for_path
 
-    body = await request.json()
-    csv_data = body.get("csv_data", "")
-    command = body.get("command", "search")
+    try:
+        body = await request.json()
+        command, api_path, rows, generic_commands = _parse_batch_rows(body)
+    except (ValueError, TypeError) as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+    paid_user = not _is_admin(user)
+    form_command = command_for_path(api_path)
+    if paid_user and form_command is None:
+        return JSONResponse({"detail": "Tipo di query non disponibile"}, status_code=422)
+    if paid_user and len(rows) > 100:
+        return JSONResponse({"detail": "Un batch può contenere al massimo 100 righe"}, status_code=422)
+    unit_cost, price_path = await _query_product_price(api_path, allow_shared_fallback=True) if paid_user else (None, None)
+    access_error = await _query_access_error(user)
+    if access_error is not None:
+        return JSONResponse({"detail": access_error.detail}, status_code=access_error.status_code)
+    if paid_user and unit_cost is None:
+        return JSONResponse({"detail": "Il prezzo per questo comando non è configurato"}, status_code=503)
+    confirmation_error = _query_price_confirmation_error(user, body, len(rows), unit_cost, price_path)
+    if confirmation_error is not None:
+        return confirmation_error
 
-    # Parse CSV
-    lines = [line for line in csv_data.strip().split("\n") if line.strip() and not line.strip().startswith("#")]
-    if len(lines) < 2:
-        return JSONResponse({"error": "CSV must have a header row and at least one data row"}, status_code=400)
-
-    reader = csv.DictReader(io.StringIO("\n".join(lines)))
-    rows = [{k.strip().lower(): v.strip() for k, v in row.items() if v and v.strip()} for row in reader]
-
-    if not rows:
-        return JSONResponse({"error": "No valid data rows found"}, status_code=400)
-
-    # Map common CSV column aliases to API field names
-    _COLUMN_ALIASES = {
-        "p.iva": "identificativo",
-        "piva": "identificativo",
-        "partita_iva": "identificativo",
-        "vat": "identificativo",
-        "organization": "identificativo",
-        "company": "identificativo",
-        "denominazione": "identificativo",
-        "ragione_sociale": "identificativo",
-        "cf": "codice_fiscale",
-        "tax_code": "codice_fiscale",
-        "province": "provincia",
-        "municipality": "comune",
-        "city": "comune",
-        "sheet": "foglio",
-        "parcel": "particella",
-        "sub": "subalterno",
-        "type": "tipo_catasto",
-        "catasto": "tipo_catasto",
-        "address": "indirizzo",
-        "via": "indirizzo",
-    }
-    for row in rows:
-        for alias, canonical in _COLUMN_ALIASES.items():
-            if alias in row and canonical not in row:
-                row[canonical] = row.pop(alias)
-
-    # Map command to API endpoint
-    endpoint_map = {
-        "search": "/visura",
-        "intestati": "/visura/intestati",
-        "soggetto": "/visura/soggetto",
-        "persona-giuridica": "/visura/persona-giuridica",
-        "elenco-immobili": "/visura/elenco-immobili",
-        "indirizzo": "/visura/indirizzo",
-        "partita": "/visura/partita",
-    }
-    api_path = endpoint_map.get(command, f"/visura/{command}")
-    base = f"http://localhost:{request.url.port or 8025}"
-    generic_commands = {
-        form.command for form in QUERY_FORMS.values() if form.method == "generic_search"
-    }
-
-    results = []
-    async with httpx.AsyncClient(timeout=120) as client:
-        for i, row in enumerate(rows):
-            try:
-                if command in generic_commands:
-                    resp = await client.post(f"{base}{api_path}", params=row, headers=_internal_api_headers())
-                else:
-                    resp = await client.post(f"{base}{api_path}", json=row, headers=_internal_api_headers())
-                result = {
-                    "row": i + 1,
-                    "status": "submitted" if resp.is_success else "error",
-                    "data": resp.json(),
-                }
-                if not resp.is_success:
-                    result["http_status"] = resp.status_code
-                results.append(result)
-            except Exception as e:
-                results.append({"row": i + 1, "status": "error", "error": str(e)})
-
-    return JSONResponse(
-        {
-            "command": command,
-            "total_rows": len(rows),
-            "results": results,
-        }
+    charge, error_response = await _charge_portal_query(
+        request, user, len(rows), uuid4().hex, unit_cost, price_path
     )
+    if error_response is not None:
+        return error_response
+
+    base = f"http://localhost:{request.url.port or 8025}"
+    results = []
+    failed_rows = 0
+    user_key = _favorite_user_key(user) if paid_user else None
+    try:
+        async with httpx.AsyncClient(timeout=120) as client:
+            for i, row in enumerate(rows):
+                try:
+                    if form_command in generic_commands or command in generic_commands:
+                        resp = await client.post(f"{base}{api_path}", params=row, headers=_internal_api_headers())
+                    else:
+                        resp = await client.post(f"{base}{api_path}", json=row, headers=_internal_api_headers())
+                    data = resp.json()
+                    if resp.is_success and user_key:
+                        data = _query_poll_tokens(data, user_key)
+                    if not resp.is_success:
+                        failed_rows += 1
+                    results.append(
+                        {
+                            "row": i + 1,
+                            "status": "submitted" if resp.is_success else "error",
+                            "data": data,
+                            **({"http_status": resp.status_code} if not resp.is_success else {}),
+                        }
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    failed_rows += 1
+                    results.append(
+                        {"row": i + 1, "status": "error", "error": "Richiesta non completata" if paid_user else str(exc)}
+                    )
+    except Exception as exc:  # noqa: BLE001 - client construction/teardown must not consume unsubmitted row charges
+        pending = len(rows) - len(results)
+        failed_rows += pending
+        logger.warning("Portal batch client failed: %s", type(exc).__name__)
+        for i in range(len(results), len(rows)):
+            results.append(
+                {"row": i + 1, "status": "error", "error": "Richiesta non completata" if paid_user else str(exc)}
+            )
+    await _refund_portal_query(charge, failed_rows, "batch-rejected-rows")
+    return JSONResponse({"command": command, "total_rows": len(rows), "results": results})
 
 
 @router.post("/api/ui/workflow/stream")
 async def web_api_workflow_stream(request: Request, user=Depends(_require_auth)):
-    """Run a multi-step workflow through Sister's own query API and stream progress."""
+    """Run a workflow; paid users reserve one product price per planned step."""
     body = await request.json()
+    confirmed_quote = {
+        key: body.pop(key, None)
+        for key in ("_query_confirmed_price_path", "_query_confirmed_unit_cost", "_query_confirmed_units")
+    } if isinstance(body, dict) else {}
     try:
-        from .workflows import prepare_workflow
+        from .workflows import _missing_required_fields, prepare_workflow
 
         plan = prepare_workflow(body)
     except ValueError as exc:
         return JSONResponse({"detail": str(exc)}, status_code=422)
+
+    missing = _missing_required_fields(plan.workflow)
+    if missing:
+        return JSONResponse({"detail": f"Campi obbligatori mancanti: {', '.join(missing)}"}, status_code=422)
+    paid_user = not _is_admin(user)
+    if paid_user and plan.workflow.include_paid_steps:
+        return JSONResponse(
+            {"detail": "I passaggi ipotecari a pagamento richiedono l’amministratore"}, status_code=403
+        )
+    if not plan.steps:
+        return JSONResponse({"detail": "La richiesta non contiene query da eseguire"}, status_code=422)
+    unit_cost, price_path = await _query_product_price(_QUERY_SHARED_PRICE_PATH) if paid_user else (None, None)
+    access_error = await _query_access_error(user)
+    if access_error is not None:
+        return JSONResponse({"detail": access_error.detail}, status_code=access_error.status_code)
+    if paid_user and unit_cost is None:
+        return JSONResponse({"detail": "Il prezzo condiviso per i workflow non è configurato"}, status_code=503)
+    body.update(confirmed_quote)
+    confirmation_error = _query_price_confirmation_error(user, body, len(plan.steps), unit_cost, price_path)
+    if confirmation_error is not None:
+        return confirmation_error
+
+    charge, error_response = await _charge_portal_query(
+        request, user, len(plan.steps), uuid4().hex, unit_cost, price_path
+    )
+    if error_response is not None:
+        return error_response
 
     from .workflows import run_workflow_stream
 
@@ -9657,8 +10304,18 @@ async def web_api_workflow_stream(request: Request, user=Depends(_require_auth))
     api_key = os.getenv("VISURA_API_KEY") or os.getenv("API_KEY")
 
     async def stream_events():
-        async for event in run_workflow_stream(plan, base_url=base_url, api_key=api_key):
-            yield f"data: {event}\n\n"
+        completed_steps = 0
+        try:
+            async for event in run_workflow_stream(plan, base_url=base_url, api_key=api_key):
+                try:
+                    parsed = json.loads(event)
+                except (TypeError, ValueError):
+                    parsed = {}
+                if parsed.get("event") == "step" and parsed.get("status") == "completed":
+                    completed_steps += 1
+                yield f"data: {event}\n\n"
+        finally:
+            await _refund_portal_query(charge, len(plan.steps) - completed_steps, "workflow-uncompleted-steps")
 
     return StreamingResponse(stream_events(), media_type="text/event-stream")
 
@@ -9676,29 +10333,351 @@ def _web_query_command(endpoint: str) -> Optional[str]:
     return command_for_path("/visura/" + endpoint.strip("/")) if endpoint.strip("/") else "search"
 
 
+async def _query_access_error(user):
+    """Return a safe response when a non-admin cannot use the paid query product."""
+    from fastapi import HTTPException
+
+    from . import purchases_billing
+
+    if _is_admin(user):
+        return None
+    if not _favorite_user_key(user):
+        return HTTPException(status_code=403, detail="Account non identificabile")
+    if purchases_billing.wallet_backend() == "none":
+        return HTTPException(status_code=503, detail="Le query a pagamento non sono configurate")
+    prices = await _query_product_prices()
+    if not prices or not any(path == "/visura" or path.startswith("/visura/") for path in prices):
+        return HTTPException(status_code=503, detail="Il listino delle query non è disponibile")
+    if not (os.getenv("SISTER_LINK_SECRET") or os.getenv("SECRET_KEY")):
+        return HTTPException(status_code=503, detail="La consultazione dei risultati non è configurata")
+    return None
+
+
+async def _charge_portal_query(
+    request: Request, user, units: int, reference: str, unit_cost: Decimal | None, price_path: str | None = None
+):
+    """Reserve credits for a non-admin query action, returning (charge, error response)."""
+    from . import purchases_billing
+
+    if _is_admin(user):
+        return None, None
+    access_error = await _query_access_error(user)
+    if access_error is not None:
+        return None, JSONResponse({"detail": access_error.detail}, status_code=access_error.status_code)
+    if unit_cost is None:
+        return None, JSONResponse({"detail": "Il prezzo per questa query non è configurato"}, status_code=503)
+    try:
+        outcome, charge, available = await purchases_billing.charge_query_credits(
+            _favorite_user_key(user), units, reference, unit_cost=unit_cost
+        )
+    except Exception as exc:  # noqa: BLE001 - fail closed if the wallet is unavailable
+        logger.error("Portal query charge failed: %s", type(exc).__name__)
+        return None, JSONResponse({"detail": "Il pagamento con crediti non è disponibile"}, status_code=503)
+    request.state.audit_params = {
+        **(getattr(request.state, "audit_params", None) or {}),
+        "query_units": units,
+        "credits_per_unit": str(unit_cost),
+        "credits_available_before": str(available),
+        "billing_reference": reference,
+        "price_path": price_path or "",
+    }
+    if outcome == "insufficient":
+        return None, JSONResponse(
+            {
+                "error": "insufficient_credits",
+                "detail": f"Saldo insufficiente: servono {unit_cost * units} crediti; disponibili {available}.",
+                "required": str(unit_cost * units),
+                "available": str(available),
+            },
+            status_code=402,
+        )
+    return charge, None
+
+
+def _query_price_confirmation_error(user, body: dict, units: int, unit_cost: Decimal | None, price_path: str | None):
+    """Require the client to acknowledge the exact quote; never trust its price as the charge amount."""
+    confirmed_path = body.pop("_query_confirmed_price_path", None)
+    confirmed_cost = body.pop("_query_confirmed_unit_cost", None)
+    confirmed_units = body.pop("_query_confirmed_units", None)
+    if _is_admin(user):
+        return None
+    from . import purchases_billing
+
+    try:
+        confirmed_cost = Decimal(str(confirmed_cost))
+    except (InvalidOperation, TypeError, ValueError):
+        confirmed_cost = None
+    try:
+        confirmed_units = int(confirmed_units)
+    except (TypeError, ValueError):
+        confirmed_units = None
+    if (
+        unit_cost is None
+        or price_path is None
+        or confirmed_cost != unit_cost
+        or confirmed_units != units
+        or not confirmed_path
+        or purchases_billing.normalize_query_price_path(confirmed_path)
+        != purchases_billing.normalize_query_price_path(price_path)
+    ):
+        return JSONResponse(
+            {
+                "error": "query_price_changed",
+                "detail": "Il prezzo è cambiato o il preventivo non è più valido. Verifica di nuovo il costo prima di inviare.",
+                "units": units,
+                "unit_cost": str(unit_cost) if unit_cost is not None else None,
+                "price_path": price_path,
+            },
+            status_code=409,
+        )
+    return None
+
+
+async def _refund_portal_query(charge, units: int, reference: str) -> None:
+    if charge is None:
+        return
+    from . import purchases_billing
+
+    await purchases_billing.refund_query_credits(charge, units, reference)
+
+
+def _query_poll_tokens(content: dict, user_key: str | None) -> dict:
+    """Attach user-bound poll capabilities while leaving the upstream request ids intact."""
+    if not user_key:
+        return content
+    from . import purchases_billing
+
+    request_ids = content.get("request_ids") or ([content.get("request_id")] if content.get("request_id") else [])
+    if not request_ids:
+        return content
+    updated = dict(content)
+    updated["poll_tokens"] = {
+        str(request_id): purchases_billing.query_result_token(str(request_id), user_key)
+        for request_id in dict.fromkeys(request_ids)
+        if str(request_id)
+    }
+    return updated
+
+
+def _parse_batch_rows(body: dict) -> tuple[str, str, list[dict], set[str]]:
+    """Validate and normalize the CSV envelope shared by billing quotes and batch submission."""
+    import csv
+    import io
+
+    from .query_forms import QUERY_FORMS
+
+    csv_data = str(body.get("csv_data") or "")
+    command = str(body.get("command") or "search").strip().lower()
+    lines = [line for line in csv_data.strip().splitlines() if line.strip() and not line.strip().startswith("#")]
+    if len(lines) < 2:
+        raise ValueError("Il CSV deve contenere un’intestazione e almeno una riga di dati")
+    reader = csv.DictReader(io.StringIO("\n".join(lines)))
+    rows = [
+        {str(k).strip().lower(): str(v).strip() for k, v in row.items() if k and v and str(v).strip()}
+        for row in reader
+    ]
+    if not rows:
+        raise ValueError("Nessuna riga valida nel CSV")
+
+    aliases = {
+        "p.iva": "identificativo", "piva": "identificativo", "partita_iva": "identificativo",
+        "vat": "identificativo", "organization": "identificativo", "company": "identificativo",
+        "denominazione": "identificativo", "ragione_sociale": "identificativo", "cf": "codice_fiscale",
+        "tax_code": "codice_fiscale", "province": "provincia", "municipality": "comune", "city": "comune",
+        "sheet": "foglio", "parcel": "particella", "sub": "subalterno", "type": "tipo_catasto",
+        "catasto": "tipo_catasto", "address": "indirizzo", "via": "indirizzo",
+    }
+    for row in rows:
+        for alias, canonical in aliases.items():
+            if alias in row and canonical not in row:
+                row[canonical] = row.pop(alias)
+
+    endpoint_map = {
+        "search": "/visura", "intestati": "/visura/intestati", "soggetto": "/visura/soggetto",
+        "persona-giuridica": "/visura/persona-giuridica", "elenco-immobili": "/visura/elenco-immobili",
+        "indirizzo": "/visura/indirizzo", "partita": "/visura/partita",
+    }
+    api_path = endpoint_map.get(command, f"/visura/{command}")
+    generic_commands = {form.command for form in QUERY_FORMS.values() if form.method == "generic_search"}
+    return command, api_path, rows, generic_commands
+
+
+@router.get("/api/ui/query-billing", response_class=JSONResponse)
+async def web_api_query_billing(request: Request, user=Depends(_require_auth)):
+    """The forms page uses this to explain query prices and the current wallet balance."""
+    from . import purchases_billing
+
+    is_admin = _is_admin(user)
+    prices = await _query_product_prices()
+    access_error = None if is_admin else await _query_access_error(user)
+    enabled = is_admin or access_error is None
+    key = _favorite_user_key(user)
+    balance = None
+    if enabled and key and not is_admin:
+        try:
+            balance = str(await purchases_billing.credit_balance(key))
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Query-credit balance unavailable: %s", type(exc).__name__)
+    return JSONResponse(
+        {
+            "enabled": enabled,
+            "admin": is_admin,
+            "detail": access_error.detail if access_error is not None else None,
+            "prices": {
+                path: str(cost) for path, cost in (prices or {}).items() if path.startswith("/visura")
+            },
+            "shared_fallback_path": purchases_billing.normalize_query_price_path(_QUERY_SHARED_PRICE_PATH),
+            "shared_fallback_cost": str(
+                (prices or {}).get(purchases_billing.normalize_query_price_path(_QUERY_SHARED_PRICE_PATH))
+            ) if (prices or {}).get(purchases_billing.normalize_query_price_path(_QUERY_SHARED_PRICE_PATH)) is not None else None,
+            "balance": balance,
+            "batch_basis": "per_row_command_price_or_shared_fallback",
+            "workflow_basis": "shared_fallback_per_planned_step",
+        }
+    )
+
+
+@router.post("/api/ui/query-quote", response_class=JSONResponse)
+async def web_api_query_quote(request: Request, user=Depends(_require_auth)):
+    """Validate the form shape and quote the credits before its paid submission."""
+    from . import purchases_billing
+
+    cost_path = None
+    allow_shared_fallback = False
+    try:
+        body = await request.json()
+        if not isinstance(body, dict):
+            raise ValueError("La richiesta deve essere un oggetto JSON")
+        kind = str(body.get("kind") or "single")
+        if kind == "batch":
+            _command, _api_path, rows, _generic = _parse_batch_rows(body)
+            from .query_forms import command_for_path
+
+            if not _is_admin(user) and command_for_path(_api_path) is None:
+                raise ValueError("Tipo di query non disponibile")
+            if not _is_admin(user) and len(rows) > 100:
+                raise ValueError("Un batch può contenere al massimo 100 righe")
+            units = len(rows)
+            cost_path = _api_path
+            allow_shared_fallback = True
+        elif kind == "workflow":
+            from .workflows import _missing_required_fields, prepare_workflow
+
+            plan = prepare_workflow(body.get("payload") or {})
+            missing = _missing_required_fields(plan.workflow)
+            if missing:
+                raise ValueError(f"Campi obbligatori mancanti: {', '.join(missing)}")
+            if not _is_admin(user) and plan.workflow.include_paid_steps:
+                return JSONResponse(
+                    {"detail": "I passaggi ipotecari a pagamento richiedono l’amministratore"}, status_code=403
+                )
+            units = len(plan.steps)
+            cost_path = _QUERY_SHARED_PRICE_PATH
+        else:
+            endpoint = str(body.get("path") or "")
+            endpoint = endpoint.removeprefix("/api/ui/").removeprefix("/visura/").removeprefix("/visura").strip("/")
+            command = _web_query_command(endpoint)
+            if not _is_admin(user) and command is None:
+                raise ValueError("Tipo di query non disponibile")
+            if command:
+                from .query_forms import QUERY_FORMS
+
+                cost_path = QUERY_FORMS[command].path
+            units = 1
+        if not units:
+            raise ValueError("La richiesta non contiene query da eseguire")
+    except (ValueError, TypeError) as exc:
+        return JSONResponse({"detail": str(exc)}, status_code=422)
+
+    access_error = await _query_access_error(user)
+    if access_error is not None:
+        return JSONResponse({"detail": access_error.detail}, status_code=access_error.status_code)
+    cost, matched_price_path = (
+        await _query_product_price(cost_path, allow_shared_fallback=allow_shared_fallback) if cost_path else (None, None)
+    )
+    balance = None
+    if not _is_admin(user):
+        try:
+            balance = await purchases_billing.credit_balance(_favorite_user_key(user))
+        except Exception as exc:  # noqa: BLE001
+            logger.error("Portal query quote failed: %s", type(exc).__name__)
+            return JSONResponse({"detail": "Il saldo crediti non è disponibile"}, status_code=503)
+        if cost is None:
+            return JSONResponse({"detail": "Il prezzo della query non è configurato"}, status_code=503)
+    return JSONResponse(
+        {
+            "admin": _is_admin(user),
+            "units": units,
+            "unit_cost": str(cost) if cost is not None else "0",
+            "total_cost": str(cost * units) if cost is not None else "0",
+            "price_path": matched_price_path,
+            "balance": str(balance) if balance is not None else None,
+        }
+    )
+
+
 @router.post("/api/ui/{endpoint:path}", response_class=JSONResponse)
 async def web_api_proxy(endpoint: str, request: Request, user=Depends(_require_auth)):
-    """Submit /forms requests: single-step queries go through the CLI's client code, the rest is proxied."""
+    """Submit a supported query; non-admin requests are charged and only receive owner-bound poll tokens."""
     import os
 
     import httpx
 
     from .client import VisuraAPIError, VisuraClient
 
-    body = await request.json()
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"detail": "Corpo JSON non valido"}, status_code=400)
+    if not isinstance(body, dict):
+        return JSONResponse({"detail": "La richiesta deve essere un oggetto JSON"}, status_code=400)
     base = f"http://localhost:{request.url.port or 8025}"
     api_key = os.getenv("API_KEY") or os.getenv("VISURA_API_KEY") or ""
 
     command = _web_query_command(endpoint)
     if command:
+        from .query_forms import QUERY_FORMS
+
+        paid_user = not _is_admin(user)
+        product_path = QUERY_FORMS[command].path
+        unit_cost, matched_price_path = await _query_product_price(product_path) if paid_user else (None, None)
+        access_error = await _query_access_error(user)
+        if access_error is not None:
+            return JSONResponse({"detail": access_error.detail}, status_code=access_error.status_code)
+        if paid_user and unit_cost is None:
+            return JSONResponse({"detail": "Il prezzo per questo comando non è configurato"}, status_code=503)
+        confirmation_error = _query_price_confirmation_error(user, body, 1, unit_cost, matched_price_path)
+        if confirmation_error is not None:
+            return confirmation_error
+        charge, error_response = await _charge_portal_query(
+            request, user, 1, uuid4().hex, unit_cost, matched_price_path
+        )
+        if error_response is not None:
+            return error_response
         force = str(body.pop("force", "")).lower() in ("1", "true", "yes")
         try:
             content = await VisuraClient(base_url=base, api_key=api_key).submit(command, body, force=force)
         except ValueError as exc:
+            await _refund_portal_query(charge, 1, "single-validation-failed")
             return JSONResponse({"detail": str(exc)}, status_code=422)
         except VisuraAPIError as exc:
+            await _refund_portal_query(charge, 1, "single-upstream-rejected")
             return JSONResponse({"detail": exc.detail}, status_code=exc.status_code)
+        except Exception as exc:  # noqa: BLE001 - charge is refunded when the local API call cannot complete
+            logger.error("Portal query proxy failed: %s", type(exc).__name__)
+            await _refund_portal_query(charge, 1, "single-proxy-failed")
+            return JSONResponse({"detail": "La richiesta non è stata completata"}, status_code=502)
+        if paid_user:
+            try:
+                content = _query_poll_tokens(content, _favorite_user_key(user))
+            except Exception as exc:  # noqa: BLE001 - do not leave a paid request without a private result path
+                logger.error("Portal result token creation failed: %s", type(exc).__name__)
+                await _refund_portal_query(charge, 1, "single-result-access-failed")
+                return JSONResponse({"detail": "Impossibile rendere disponibile il risultato"}, status_code=503)
         return JSONResponse(content=content)
+
+    if not _is_admin(user):
+        return JSONResponse({"detail": "Tipo di query non disponibile"}, status_code=403)
 
     async with httpx.AsyncClient(timeout=300, follow_redirects=True) as client:
         resp = await client.post(
@@ -9715,13 +10694,24 @@ async def web_api_proxy(endpoint: str, request: Request, user=Depends(_require_a
 
 @router.get("/api/ui/visura/{request_id}", response_class=JSONResponse)
 async def web_api_poll(request_id: str, request: Request, user=Depends(_require_auth)):
-    """Poll for result status (proxy)."""
+    """Poll a result by admin request id or by the signed token returned to its owner."""
     import httpx
+
+    if _is_admin(user):
+        upstream_request_id = request_id
+    else:
+        from . import purchases_billing
+
+        user_key = _favorite_user_key(user)
+        upstream_request_id = purchases_billing.request_id_from_query_token(request_id, user_key) if user_key else None
+        if upstream_request_id is None:
+            # Do not reveal whether an arbitrary request id exists.
+            return JSONResponse({"detail": "Risultato non trovato"}, status_code=404)
 
     base = f"http://localhost:{request.url.port or 8025}"
 
     async with httpx.AsyncClient(timeout=120, follow_redirects=True) as client:
-        resp = await client.get(f"{base}/visura/{request_id}", headers=_internal_api_headers() or None)
+        resp = await client.get(f"{base}/visura/{upstream_request_id}", headers=_internal_api_headers() or None)
     try:
         content = resp.json()
     except Exception:

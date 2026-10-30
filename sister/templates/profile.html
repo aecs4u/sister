@@ -1,24 +1,33 @@
 {% extends "_base.html" %}
-{% block page_title %}Profile{% endblock %}
+{% block page_title %}Profilo{% endblock %}
 
 {% block content %}
 <div class="container-fluid py-4">
-    <h1 class="h2 mb-4"><i class="fas fa-user text-primary me-2"></i>Profile</h1>
-    <div class="card border-0 shadow-sm" style="max-width: 40rem;">
+    <h1 class="h2 mb-4"><i class="fas fa-user text-primary me-2" aria-hidden="true"></i>Profilo</h1>
+    <div class="card border-0 shadow-sm profile-card">
         <div class="card-body">
             <dl class="row mb-0">
-                <dt class="col-sm-4">Username</dt>
+                <dt class="col-sm-4">Nome utente</dt>
                 <dd class="col-sm-8">{{ user.username or user.email or '—' }}</dd>
-                <dt class="col-sm-4">Email</dt>
+                <dt class="col-sm-4">E-mail</dt>
                 <dd class="col-sm-8">{{ user.email or '—' }}</dd>
-                <dt class="col-sm-4">Name</dt>
-                <dd class="col-sm-8">{{ user.full_name or '—' }}</dd>
-                <dt class="col-sm-4">Role</dt>
-                <dd class="col-sm-8">{{ user.role or 'user' }}</dd>
+                <dt class="col-sm-4">Nome</dt>
+                <dd class="col-sm-8">{{ user.full_name or user.name or '—' }}</dd>
+                <dt class="col-sm-4">Ruolo</dt>
+                <dd class="col-sm-8">{{ 'Amministratore' if can_admin(user) else 'Utente' }}</dd>
+                <dt class="col-sm-4" id="account-keys-label">Chiavi account</dt>
+                <dd class="col-sm-8" aria-labelledby="account-keys-label">
+                    {% for key in account_keys %}<code class="d-block">{{ key }}</code>{% else %}—{% endfor %}
+                    <span class="form-text">Comunica una di queste chiavi all’amministratore per ricevere l’accesso a un documento.</span>
+                </dd>
+                {% if credit_balance is not none %}
+                <dt class="col-sm-4">Crediti</dt>
+                <dd class="col-sm-8">{{ credit_balance }}</dd>
+                {% endif %}
             </dl>
         </div>
         <div class="card-footer bg-transparent">
-            <a class="btn btn-outline-danger btn-sm" href="/auth/logout"><i class="fas fa-sign-out-alt me-2"></i>Logout</a>
+            <a class="btn btn-outline-danger btn-sm" href="/auth/logout"><i class="fas fa-sign-out-alt me-2" aria-hidden="true"></i>Esci</a>
         </div>
     </div>
 </div>

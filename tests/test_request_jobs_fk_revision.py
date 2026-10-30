@@ -33,7 +33,7 @@ def test_links_jobs_to_requests_and_is_repeatable(pg_test_schema):
             for name in ("sister_request_jobs_request_id_fkey", "sister_request_jobs_request_type_fkey"):
                 conn.execute(text(f"ALTER TABLE sister_request_jobs DROP CONSTRAINT IF EXISTS {name}"))
             conn.execute(text("DELETE FROM sister_request_jobs"))
-            conn.execute(text("INSERT INTO request_type (code) VALUES ('visura') ON CONFLICT DO NOTHING"))
+            conn.execute(text("INSERT INTO request_type (code, label, description) VALUES ('visura', 'Visura', 'Visura') ON CONFLICT DO NOTHING"))
             conn.execute(text("INSERT INTO request (request_ref, request_type, created_at) VALUES ('r1', 'visura', now())"))
             for ref in ("r1", "orphan"):
                 conn.execute(text("INSERT INTO sister_request_jobs (request_id, request_type, payload_json) VALUES (:r, 'visura', '{}')"), {"r": ref})

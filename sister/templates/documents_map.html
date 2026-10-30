@@ -6,7 +6,7 @@
 {% block extra_css %}
 {{ super() }}
 {{ cadastral_map_assets(leaflet_css_url='/static/vendor/leaflet/leaflet.css', static_base=land_registry_static_base|default('/land-registry/static', true)) }}
-<link rel="stylesheet" href="/static/css/pages/documents_map_view.css?v=20261021a">
+<link rel="stylesheet" href="/static/css/pages/documents_map_view.css?v=20261030a">
 {% endblock %}
 
 {% block content %}
@@ -33,7 +33,7 @@
     </div>
 </div>
 
-<main class="container-fluid documents-cadastral-map-page">
+<div class="container-fluid documents-cadastral-map-page">
     <p class="text-muted small mb-2">Attiva o disattiva i fogli e le particelle dal controllo livelli. I confini catastali compaiono ai livelli di zoom supportati.</p>
     {{ cadastral_layer_control(map_id="documents-cadastral-map", sheets_label="Fogli catastali", parcels_label="Particelle") }}
     {{ cadastral_map_view(
@@ -59,7 +59,7 @@
     <div class="documents-map-attribution small text-muted mt-2">
         Cartografia di base: OpenStreetMap, Esri e OpenTopoMap. Confini catastali: Land Registry.
     </div>
-</main>
+</div>
 {% endblock %}
 
 {% block extra_js %}

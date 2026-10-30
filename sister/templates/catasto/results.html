@@ -71,8 +71,8 @@
 
         {# Text filters #}
         {% set text_filters = [
-          ('provincia', 'Provincia', 'e.g. Trieste', 'col-lg col-md-4 col-6'),
-          ('comune',    'Comune',    'e.g. TRIESTE',  'col-lg col-md-4 col-6'),
+          ('provincia', 'Provincia', 'es. Trieste', 'col-lg col-md-4 col-6'),
+          ('comune',    'Comune',    'es. TRIESTE',  'col-lg col-md-4 col-6'),
           ('fiscal_code', 'Codice fiscale / P.IVA', 'Codice fiscale o P.IVA, anche parziale', 'col-lg-2 col-md-4 col-6'),
           ('person', 'Persona', 'Cognome, nome o dati di nascita', 'col-lg-2 col-md-4 col-6'),
           ('company', 'Azienda', 'Ragione sociale', 'col-lg-2 col-md-4 col-6'),
@@ -190,26 +190,34 @@
     </div>
   </div>
 
-  {# Pagination #}
+  {# Pagination: first / previous / page N of M / next / last #}
   {% if prev_url or next_url %}
-  <nav>
-    <ul class="pagination justify-content-center">
+  {% set page_count = ((total_count + limit - 1) // limit) if total_count and limit else 1 %}
+  {% set page_no = (offset // limit) + 1 %}
+  <nav aria-label="Paginazione dei risultati">
+    <ul class="pagination justify-content-center flex-wrap">
       <li class="page-item{% if not prev_url %} disabled{% endif %}">
-        <a class="page-link" href="{{ prev_url or '#' }}">&laquo; Previous</a>
+        {% if prev_url %}<a class="page-link" href="{{ request.url.include_query_params(offset=0) }}" aria-label="Prima pagina">&laquo;&laquo;</a>{% else %}<span class="page-link" aria-hidden="true">&laquo;&laquo;</span>{% endif %}
       </li>
-      <li class="page-item disabled">
-        <span class="page-link">Page {{ (offset // limit) + 1 }}</span>
+      <li class="page-item{% if not prev_url %} disabled{% endif %}">
+        {% if prev_url %}<a class="page-link" href="{{ prev_url }}" rel="prev">&lsaquo; Precedente</a>{% else %}<span class="page-link" aria-disabled="true">&lsaquo; Precedente</span>{% endif %}
+      </li>
+      <li class="page-item active" aria-current="page">
+        <span class="page-link">Pagina {{ page_no }} di {{ page_count }}</span>
       </li>
       <li class="page-item{% if not next_url %} disabled{% endif %}">
-        <a class="page-link" href="{{ next_url or '#' }}">Next &raquo;</a>
+        {% if next_url %}<a class="page-link" href="{{ next_url }}" rel="next">Successiva &rsaquo;</a>{% else %}<span class="page-link" aria-disabled="true">Successiva &rsaquo;</span>{% endif %}
+      </li>
+      <li class="page-item{% if not next_url %} disabled{% endif %}">
+        {% if next_url %}<a class="page-link" href="{{ request.url.include_query_params(offset=(page_count - 1) * limit) }}" aria-label="Ultima pagina">&raquo;&raquo;</a>{% else %}<span class="page-link" aria-hidden="true">&raquo;&raquo;</span>{% endif %}
       </li>
     </ul>
   </nav>
   {% endif %}
 
   {% else %}
-  {{ no_results("No executed jobs", "No jobs match the selected filters.") }}
-  <div class="text-center"><a href="/forms" class="btn btn-primary">Submit a Query</a></div>
+  {{ no_results("Nessuna richiesta eseguita", "Nessuna richiesta corrisponde ai filtri selezionati.") }}
+  <div class="text-center"><a href="/forms" class="btn btn-primary">Invia una query</a></div>
   {% endif %}
 
   {{ related_pages("Continua da un risultato", [
@@ -296,7 +304,7 @@
             if (d.request_id) window.location.href = base + encodeURIComponent(d.request_id);
         },
         columns: [
-            {title: "#", field: "row_num", sorter: "number", width: 55, hozAlign: "center"},
+            {title: "#", field: "row_num", sorter: "number", width: 55, hozAlign: "center", frozen: true},
             {title: "Rif. richiesta", field: "request_id_short",
              headerFilter: "input", headerFilterPlaceholder: "filtra…",
              formatter: function(cell) {
@@ -309,7 +317,39 @@
                  code.textContent = d.request_id_short + "...";
                  link.appendChild(code);
                  return link;
+             }, cellClick: function(e) { e.stopPropagation(); }, frozen: true},
+            {title: "Stato", field: "status", width: 170, hozAlign: "center",
+             headerFilter: "list",
+             headerFilterParams: {values: {"":"Tutti","completed":"Completata","partial":"Parziale","failed":"Fallita","error":"Errore","pending":"In attesa","running":"In corso","no_match":"Nessuna corrispondenza","cancelled":"Annullata"}},
+             formatter: function(cell) {
+                 var v = cell.getValue();
+                 var link = document.createElement("a");
+                 var span = document.createElement("span");
+                 link.href = filterUrl("status", v || "pending");
+                 var map = {completed:["bg-success","Completata"],failed:["bg-danger","Fallita"],error:["bg-danger","Fallita"],partial:["bg-warning text-dark","Parziale"],running:["bg-info text-dark","In corso"],no_match:["bg-secondary","Nessuna corrispondenza"],cancelled:["bg-secondary","Annullata"]};
+                 var m = map[v] || ["bg-secondary","In attesa"];
+                 span.className = "badge " + m[0];
+                 span.textContent = m[1];
+                 link.appendChild(span);
+                 return link;
              }, cellClick: function(e) { e.stopPropagation(); }},
+            {title: "Data", field: "requested_at", sorter: "string",
+             headerFilter: "input", headerFilterPlaceholder: "filtra…",
+             formatter: function(cell) {
+                 var d = cell.getRow().getData();
+                 var wrap = document.createElement("div");
+                 var req = document.createElement("small");
+                 req.textContent = d.requested_at || "-";
+                 wrap.appendChild(req);
+                 if (d.responded_at) {
+                     wrap.appendChild(document.createElement("br"));
+                     var resp = document.createElement("small");
+                     resp.className = "text-muted";
+                     resp.textContent = "Risp. " + d.responded_at;
+                     wrap.appendChild(resp);
+                 }
+                 return wrap;
+             }},
             {title: "Origine", field: "source", width: 150, hozAlign: "center",
              headerFilter: "list",
              headerFilterParams: {values: {"": "Tutte", "single": "Singola", "workflow": "Workflow"}},
@@ -381,7 +421,7 @@
                  text.textContent = value || "—";
                  return text;
              }},
-            {title: "Persona", field: "person_details", minWidth: 220,
+            {title: "Persona", field: "person_details", minWidth: 220, maxWidth: 340, maxWidth: 340,
              headerFilter: "input", headerFilterPlaceholder: "nome, cognome, nascita…",
              formatter: function(cell) {
                  var value = cell.getValue();
@@ -390,7 +430,7 @@
                  text.textContent = value || "—";
                  return text;
              }},
-            {title: "Azienda", field: "company_details", minWidth: 220,
+            {title: "Azienda", field: "company_details", minWidth: 220, maxWidth: 340, maxWidth: 340,
              headerFilter: "input", headerFilterPlaceholder: "ragione sociale…",
              formatter: function(cell) {
                  var value = cell.getValue();
@@ -437,38 +477,6 @@
                  wrap.className = "small text-muted";
                  wrap.innerHTML = '<i class="fas fa-table-list text-primary me-1"></i>' +
                      d.extracted_results + ' risultati · ' + d.extracted_owners + ' intestati';
-                 return wrap;
-             }},
-            {title: "Stato", field: "status", width: 130, hozAlign: "center",
-             headerFilter: "list",
-             headerFilterParams: {values: {"":"Tutti","completed":"Completata","partial":"Parziale","failed":"Fallita","error":"Errore","pending":"In attesa","running":"In corso"}},
-             formatter: function(cell) {
-                 var v = cell.getValue();
-                 var link = document.createElement("a");
-                 var span = document.createElement("span");
-                 link.href = filterUrl("status", v || "pending");
-                 var map = {completed:["bg-success","Completata"],failed:["bg-danger","Fallita"],error:["bg-danger","Fallita"],partial:["bg-warning text-dark","Parziale"],running:["bg-info text-dark","In corso"]};
-                 var m = map[v] || ["bg-secondary","In attesa"];
-                 span.className = "badge " + m[0];
-                 span.textContent = m[1];
-                 link.appendChild(span);
-                 return link;
-             }, cellClick: function(e) { e.stopPropagation(); }},
-            {title: "Data", field: "requested_at", sorter: "string",
-             headerFilter: "input", headerFilterPlaceholder: "filtra…",
-             formatter: function(cell) {
-                 var d = cell.getRow().getData();
-                 var wrap = document.createElement("div");
-                 var req = document.createElement("small");
-                 req.textContent = d.requested_at || "-";
-                 wrap.appendChild(req);
-                 if (d.responded_at) {
-                     wrap.appendChild(document.createElement("br"));
-                     var resp = document.createElement("small");
-                     resp.className = "text-muted";
-                     resp.textContent = "Risp. " + d.responded_at;
-                     wrap.appendChild(resp);
-                 }
                  return wrap;
              }},
         ],

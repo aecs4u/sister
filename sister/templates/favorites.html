@@ -32,7 +32,7 @@
     </div>
 </div>
 
-<main class="container-fluid py-3" data-favorites-management>
+<div class="container-fluid py-3" data-favorites-management>
     {% if company_favorites %}
     <div class="card border-0 shadow-sm mb-3" data-subject-favorites-section>
         <div class="card-header bg-white"><h2 class="h6 mb-0">Aziende salvate</h2></div>
@@ -115,7 +115,7 @@
         <a href="/documents" class="btn btn-sm btn-outline-primary">Esplora i documenti</a>
     </div>
     <p class="small text-muted mt-2 mb-0"><span data-favorites-count>{{ favorite_total }}</span> preferiti salvati nel tuo account.</p>
-</main>
+</div>
 {% endblock %}
 
 {% block extra_js %}

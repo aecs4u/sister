@@ -3,7 +3,7 @@
 {% block page_title %}Registro accessi · Amministrazione{% endblock %}
 
 {% block content %}
-<main class="container-fluid py-4">
+<div class="container-fluid py-4">
     <nav aria-label="breadcrumb" class="mb-3">
         <ol class="breadcrumb">
             <li class="breadcrumb-item"><a href="/admin">Amministrazione</a></li>
@@ -45,7 +45,7 @@
                         <td>
                             {% if event.action == 'admin.document_purchase.create' %}Registrazione acquisto
                             {% elif event.action == 'admin.document_purchase.update' %}Modifica acquisto
-                            {% elif event.action == 'admin.document_purchase.delete' %}Revoca accesso
+                            {% elif event.action == 'admin.document_purchase.delete' or event.action == 'admin.document_purchase.revoke' %}Revoca accesso
                             {% else %}{{ event.action }}{% endif %}
                         </td>
                         <td>
@@ -53,11 +53,16 @@
                             {% elif event.status == 'rejected' %}<span class="badge text-bg-warning">Rifiutata</span>
                             {% else %}<span class="badge text-bg-danger">Errore</span>{% endif %}
                         </td>
-                        <td>
-                            {% if event.error %}<span class="small text-danger">{{ event.error }}</span>
-                            {% elif event.status == 'rejected' %}<span class="small text-muted">Richiesta non eseguita</span>
-                            {% elif event.result and event.result.http_status %}<span class="small text-muted">HTTP {{ event.result.http_status }}</span>
-                            {% else %}<span class="text-muted">—</span>{% endif %}
+                        <td class="small">
+                            {% set p = event.params or {} %}
+                            {% if p.user_id %}<div><span class="text-muted">Utente</span> <code>{{ p.user_id }}</code>{% if p.old_user_id %} <span class="text-muted">(prima</span> <code>{{ p.old_user_id }}</code><span class="text-muted">)</span>{% endif %}</div>{% endif %}
+                            {% if p.document_id %}<div><span class="text-muted">Documento</span> <a href="/documents/{{ p.document_id }}">#{{ p.document_id }}</a>{% if p.old_document_id %} <span class="text-muted">(prima #{{ p.old_document_id }})</span>{% endif %}</div>{% endif %}
+                            {% if p.reason %}<div><span class="text-muted">Motivo</span> {{ p.reason }}</div>{% elif p.note %}<div><span class="text-muted">Nota</span> {{ p.note }}</div>{% endif %}
+                            {% if p.error_code %}<div class="text-danger">Rifiutata: {{ {'bad_key':'chiave utente non valida','bad_document':'ID documento non valido','document_not_found':'documento inesistente','bad_date':'data non valida','future_date':'data futura','bad_expiry':'scadenza non valida','duplicate':'accesso già presente','not_found':'acquisto inesistente','note_too_long':'nota troppo lunga'}.get(p.error_code, p.error_code) }}</div>{% endif %}
+                            {% if event.error %}<div class="text-danger">{{ event.error }}</div>{% endif %}
+                            {% if not (p.user_id or p.document_id or event.error) %}
+                                {% if event.result and event.result.http_status %}<span class="text-muted">HTTP {{ event.result.http_status }}</span>{% else %}<span class="text-muted">—</span>{% endif %}
+                            {% endif %}
                         </td>
                     </tr>
                 {% else %}
@@ -70,5 +75,5 @@
         <p class="small text-muted p-3 mb-0">Visualizzate le 100 operazioni più recenti.</p>
         {% endif %}
     </section>
-</main>
+</div>
 {% endblock %}

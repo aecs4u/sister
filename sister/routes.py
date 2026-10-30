@@ -253,9 +253,12 @@ async def richiedi_intestati_immobile(request: VisuraIntestatiInput, service: Vi
 async def health_check(service: VisuraService):
     """Controlla lo stato del servizio"""
     db_stats = await count_responses()
+    from .web import optional_data_degradation_summary
+
+    optional_data_degradations = optional_data_degradation_summary()
     return JSONResponse(
         {
-            "status": "healthy" if service.auth_ready else "degraded",
+            "status": "healthy" if service.auth_ready and not optional_data_degradations["active_components"] else "degraded",
             "auth": service.auth_status,
             "auth_ready": service.auth_ready,
             "authenticated": service.browser_manager.authenticated,
@@ -266,6 +269,7 @@ async def health_check(service: VisuraService):
             "response_max_items": service.response_max_items,
             "queue_max_size": service.queue_max_size,
             "response_cleanup_interval_seconds": service.response_cleanup_interval_seconds,
+            "optional_data_degradations": optional_data_degradations,
             "database": db_stats,
         }
     )

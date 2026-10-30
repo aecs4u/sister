@@ -27,7 +27,7 @@
             <div>
                 <h1 class="display-6 fw-bold mb-2"><i class="fas fa-folder-tree me-3"></i>Documenti</h1>
                 <p class="lead mb-0 opacity-75">
-                    <strong>{{ total }}</strong> {% if can_admin(user) %}documenti indicizzati{% else %}documenti acquistati disponibili{% endif %}
+                    <strong>{{ total }}</strong> {% if can_admin(user) %}{{ 'documento indicizzato' if total == 1 else 'documenti indicizzati' }}{% else %}{{ 'documento disponibile' if total == 1 else 'documenti disponibili' }}{% endif %}
                     {% if document_file_count and document_file_count != total %}<span class="opacity-75">· {{ document_file_count }} file (PDF allegati inclusi)</span>{% endif %}
                 </p>
             </div>
@@ -58,13 +58,16 @@
 
 <div id="export-toast-container" style="position:fixed;top:1.2rem;right:1.2rem;z-index:9999;min-width:320px"></div>
 
-<main class="container-fluid documents-hub py-3">
+<div class="container-fluid documents-hub py-3">
     <div class="d-flex justify-content-end mb-2 no-print">
         <button type="button" class="btn btn-sm btn-outline-danger" data-favorites-filter aria-pressed="false">
             <i class="far fa-heart me-1" aria-hidden="true"></i>
             <span data-favorites-filter-label>Solo preferiti</span>
         </button>
     </div>
+    {% if total == 0 and not can_admin(user) %}
+    <div class="alert alert-info" role="status"><i class="fas fa-circle-info me-2" aria-hidden="true"></i>Non hai ancora documenti disponibili. Per ottenere l’accesso a un documento <a class="alert-link" href="/contact">contatta l’amministratore</a> indicando le chiavi account del tuo <a class="alert-link" href="/profile">profilo</a> e l’ID o il nome del documento.</div>
+    {% endif %}
     <ul class="nav nav-tabs documents-view-tabs mb-3" id="documents-view-tabs" role="tablist" aria-label="Viste documenti">
         <li class="nav-item" role="presentation">
             <button class="nav-link {{ 'active' if active_view == 'categories' else '' }}" id="documents-tab-categories"
@@ -98,9 +101,12 @@
     <div class="tab-content" id="documents-tab-panes">
         <section class="tab-pane fade {{ 'show active' if active_view == 'categories' else '' }}" id="documents-pane-categories"
                  role="tabpanel" aria-labelledby="documents-tab-categories" tabindex="0">
+            {% if active_view != 'categories' %}
+            <p class="text-muted py-4" data-lazy-view="categories"><a href="/documents">Apri la vista per categoria</a></p>
+            {% else %}
             {{ document_category_navigation(tree) }}
             {% if not tree %}
-            <div class="alert alert-info"><i class="fas fa-circle-info me-2"></i>{% if can_admin(user) %}Nessun documento indicizzato.{% else %}Nessun documento acquistato è associato a questo account.{% endif %}</div>
+            <div class="alert alert-info"><i class="fas fa-circle-info me-2"></i>{% if can_admin(user) %}Nessun documento indicizzato.{% else %}Non hai ancora documenti disponibili. Per ottenere l’accesso a un documento <a class="alert-link" href="/contact">contatta l’amministratore</a> indicando le chiavi account del tuo <a class="alert-link" href="/profile">profilo</a> e l’ID o il nome del documento.{% endif %}</div>
             {% else %}
             {% for g in tree %}
             {% call query_section(g) %}
@@ -118,16 +124,19 @@
             {% endcall %}
             {% endfor %}
             {% endif %}
+            {% endif %}
         </section>
 
         <section class="tab-pane fade {{ 'show active' if active_view == 'location' else '' }}" id="documents-pane-location"
                  role="tabpanel" aria-labelledby="documents-tab-location" tabindex="0">
-            {{ location_view(prop_map, favorites_enabled) }}
+            {% if active_view == 'location' %}{{ location_view(prop_map, favorites_enabled) }}
+            {% else %}<p class="text-muted py-4" data-lazy-view="location"><a href="/documents?view=map">Apri la vista per ubicazione</a></p>{% endif %}
         </section>
 
         <section class="tab-pane fade {{ 'show active' if active_view == 'files' else '' }}" id="documents-pane-files"
                  role="tabpanel" aria-labelledby="documents-tab-files" tabindex="0">
-            {{ files_view(files, favorites_enabled) }}
+            {% if active_view == 'files' %}{{ files_view(files, favorites_enabled) }}
+            {% else %}<p class="text-muted py-4" data-lazy-view="files"><a href="/documents?view=files">Apri la vista per file</a></p>{% endif %}
         </section>
     </div>
 
@@ -137,7 +146,7 @@
         ("/forms", "Query", "Inviare una nuova ricerca catastale.", "fa-clipboard-list"),
         ("/glossary#formati-file", "Formati e tipi", "Capire le etichette e le coppie PDF, P7M e XML.", "fa-book")
     ]) }}
-</main>
+</div>
 {% endblock %}
 
 {% block extra_js %}
@@ -233,7 +242,24 @@ function showExportToast(type, html) {
         bootstrap.Tab.getOrCreateInstance(trigger).show();
     }
 
+    function lazyViewUrl(view) {
+        var url = new URL(window.location.href);
+        url.pathname = '/documents';
+        url.searchParams.delete('view');
+        if (view === 'location') url.searchParams.set('view', 'map');
+        if (view === 'files') url.searchParams.set('view', 'files');
+        return url;
+    }
+
     document.querySelectorAll('[data-documents-view]').forEach(function (trigger) {
+        // Only the active view is rendered (the full page was 5 MB / 58,000 nodes); the others load on demand.
+        trigger.addEventListener('show.bs.tab', function (event) {
+            var view = trigger.dataset.documentsView;
+            if (document.querySelector('#documents-tab-panes [data-lazy-view="' + view + '"]')) {
+                event.preventDefault();
+                window.location.href = lazyViewUrl(view).toString();
+            }
+        });
         trigger.addEventListener('shown.bs.tab', function () {
             if (restoringHistory) {
                 restoringHistory = false;
@@ -248,7 +274,10 @@ function showExportToast(type, html) {
             window.history.pushState({documentsView: view}, '', url);
         });
     });
-    window.addEventListener('popstate', function () { activateView(selectedView()); });
+    window.addEventListener('popstate', function () {
+        if (document.querySelector('#documents-tab-panes [data-lazy-view="' + selectedView() + '"]')) { window.location.reload(); return; }
+        activateView(selectedView());
+    });
 
     var filter = document.getElementById('files-filter');
     var table = document.getElementById('files-table');

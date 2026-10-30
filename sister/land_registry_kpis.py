@@ -1970,7 +1970,10 @@ async def subject_land_registry_kpis(
             row_estimate["note"] = "Categoria catastale assente."
             continue
         if not building.get("omi_area"):
-            row_estimate["note"] = "Superficie catastale assente."
+            # A category without an OMI typology (F/x, D/x) stays "senza una tipologia OMI": that is the real
+            # obstacle (see _initial_omi_note), a missing surface only matters for categories OMI can quote.
+            if omi_quotes.OMI_TYPOLOGY_BY_CATEGORY.get(normalize_category(building.get("category"))):
+                row_estimate["note"] = "Superficie catastale assente."
             continue
         parcel_key = (
             building["municipality_code"], building["section"], building["sheet"], building["parcel"]

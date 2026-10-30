@@ -11,6 +11,29 @@
   const POLL_TIMEOUT = 120000;  // ms
   const _abortControllers = {};  // groupId → AbortController
 
+  // Non-admins pay from prepaid credits; show the price basis and balance before they submit.
+  fetch('/api/ui/query-billing', { headers: { 'Accept': 'application/json' } })
+    .then(function (res) { return res.ok ? res.json() : null; })
+    .then(function (data) {
+      if (!data) return;
+      if (!data.enabled || data.admin) return;
+      const firstForm = document.querySelector('.sister-form');
+      const main = document.querySelector('main') || (firstForm && firstForm.parentElement);
+      if (!main) return;
+      const notice = document.createElement('div');
+      notice.className = 'alert alert-info';
+      notice.setAttribute('role', 'status');
+      notice.setAttribute('data-query-billing-notice', '');
+      const balance = data.balance === null ? 'saldo non disponibile' : 'saldo: ' + data.balance + ' crediti';
+      const shared = data.shared_fallback_cost
+        ? ' Prezzo condiviso: ' + data.shared_fallback_cost + ' crediti per riga batch senza prezzo dedicato e per passaggio workflow.'
+        : '';
+      notice.textContent = 'Il prezzo dipende dal comando ed è mostrato prima dell’invio. I batch sono addebitati per riga; i workflow usano il prezzo condiviso per passaggio.' + shared + ' ' + balance + '.';
+      if (firstForm) main.insertBefore(notice, firstForm);
+      else main.prepend(notice);
+    })
+    .catch(function () { /* The server still enforces billing if the balance banner cannot load. */ });
+
   // CSV placeholder templates per query type
   const BATCH_CSV_TEMPLATES = {
     'search':              'provincia,comune,foglio,particella,tipo_catasto\nRoma,ROMA,100,50,T\nTrieste,TRIESTE,9,166,F',
@@ -174,6 +197,33 @@
     const statusDiv = document.getElementById('response-status-' + groupId);
     const contentDiv = document.getElementById('response-content-' + groupId);
 
+    try {
+      const kind = path === '/visura/workflow' ? 'workflow' : (path === '/api/ui/batch' ? 'batch' : 'single');
+      const quoteResponse = await fetch('/api/ui/query-quote', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+        body: JSON.stringify({ kind: kind, path: path, payload: body, command: body.command, csv_data: body.csv_data }),
+      });
+      const quote = await quoteResponse.json();
+      if (!quoteResponse.ok) {
+        responseDiv.style.display = 'block';
+        statusDiv.textContent = quote.detail || 'Impossibile verificare il costo della richiesta.';
+        statusDiv.className = 'alert alert-danger';
+        return;
+      }
+      if (!quote.admin && !window.confirm('Questa richiesta userà ' + quote.total_cost + ' crediti (' + quote.units + ' unità a ' + quote.unit_cost + ' crediti ciascuna; ' + quote.price_path + '). Saldo attuale: ' + quote.balance + ' crediti. Continuare?')) {
+        return;
+      }
+      body._query_confirmed_price_path = quote.price_path;
+      body._query_confirmed_unit_cost = quote.unit_cost;
+      body._query_confirmed_units = quote.units;
+    } catch (err) {
+      responseDiv.style.display = 'block';
+      statusDiv.textContent = 'Impossibile verificare il costo della richiesta.';
+      statusDiv.className = 'alert alert-danger';
+      return;
+    }
+
     responseDiv.style.display = 'block';
     statusDiv.innerHTML = '<div class="alert alert-info"><i class="fas fa-spinner fa-spin me-2"></i>Invio della richiesta…</div>';
     contentDiv.textContent = '';
@@ -218,9 +268,24 @@
       if (data.total_rows !== undefined && data.results) {
         const submitted = data.results.filter(r => r.status === 'submitted').length;
         const errors = data.results.filter(r => r.status === 'error').length;
+        statusDiv.innerHTML = '<div class="alert alert-info"><i class="fas fa-spinner fa-spin me-2"></i>Batch: ' + submitted + ' inviate, ' + errors + ' errori su ' + data.total_rows + ' righe. Attendo i risultati…</div>';
+        const pending = data.results.filter(function (row) {
+          const payload = row.data || {};
+          return row.status === 'submitted' && (payload.request_id || (payload.request_ids && payload.request_ids.length));
+        });
+        for (let i = 0; i < pending.length; i += 5) {
+          await Promise.all(pending.slice(i, i + 5).map(async function (row) {
+            const payload = row.data || {};
+            const ids = payload.request_ids || [payload.request_id].filter(Boolean);
+            const tokens = payload.poll_tokens || {};
+            row.responses = await Promise.all(ids.map(function (rid) {
+              return pollForResult(tokens[rid] || rid, null, ac.signal);
+            }));
+          }));
+        }
         const alertClass = errors > 0 ? 'alert-warning' : 'alert-success';
         const icon = errors > 0 ? 'fa-exclamation-triangle' : 'fa-check-circle';
-        statusDiv.innerHTML = '<div class="alert ' + alertClass + '"><i class="fas ' + icon + ' me-2"></i>Batch: ' + submitted + ' inviate, ' + errors + ' errori su ' + data.total_rows + ' rows</div>';
+        statusDiv.innerHTML = '<div class="alert ' + alertClass + '"><i class="fas ' + icon + ' me-2"></i>Batch completato: ' + submitted + ' inviate, ' + errors + ' errori su ' + data.total_rows + ' righe.</div>';
         contentDiv.textContent = JSON.stringify(data, null, 2);
         return;
       }
@@ -246,7 +311,7 @@
       // Poll each request_id
       const allResults = {};
       for (const rid of requestIds) {
-        const result = await pollForResult(rid, statusDiv, ac.signal);
+        const result = await pollForResult((data.poll_tokens || {})[rid] || rid, statusDiv, ac.signal);
         allResults[rid] = result;
       }
 
@@ -269,7 +334,7 @@
 
     while (true) {
       try {
-        const res = await fetch('/api/ui/visura/' + requestId, { signal: signal });
+        const res = await fetch('/api/ui/visura/' + encodeURIComponent(requestId), { signal: signal });
         const data = await res.json();
 
         if (data.status === 'completed' || data.status === 'error' || data.status === 'expired' || data.status === 'needs_human') {
@@ -278,7 +343,7 @@
 
         // Still processing
         const elapsed = Math.round((Date.now() - start) / 1000);
-        statusDiv.innerHTML = '<div class="alert alert-info"><i class="fas fa-spinner fa-spin me-2"></i>Processing... (' + elapsed + 's elapsed, polling ' + requestId.substring(0, 16) + '...)</div>';
+        if (statusDiv) statusDiv.innerHTML = '<div class="alert alert-info"><i class="fas fa-spinner fa-spin me-2"></i>Processing... (' + elapsed + 's elapsed)</div>';
 
         if (Date.now() - start > POLL_TIMEOUT) {
           return { status: 'timeout', message: 'Polling timeout after ' + (POLL_TIMEOUT / 1000) + 's' };
@@ -822,30 +887,66 @@
   };
 
   // --- Field validation rules ---
-  // Validator for P.IVA / VAT number: must be exactly 11 digits
+  const CF_ODD_VALUES = {
+    '0': 1, '1': 0, '2': 5, '3': 7, '4': 9, '5': 13, '6': 15, '7': 17, '8': 19, '9': 21,
+    A: 1, B: 0, C: 5, D: 7, E: 9, F: 13, G: 15, H: 17, I: 19, J: 21,
+    K: 2, L: 4, M: 18, N: 20, O: 11, P: 3, Q: 6, R: 8, S: 12, T: 14,
+    U: 16, V: 10, W: 22, X: 25, Y: 24, Z: 23,
+  };
+
+  function validCodiceFiscale(code) {
+    if (!/^[A-Z0-9]{16}$/.test(code)) return false;
+    let total = 0;
+    for (let i = 0; i < 15; i++) {
+      const char = code.charAt(i);
+      const evenValue = /\d/.test(char) ? parseInt(char, 10) : char.charCodeAt(0) - 65;
+      total += i % 2 === 0 ? CF_ODD_VALUES[char] : evenValue;
+    }
+    return String.fromCharCode(65 + total % 26) === code.charAt(15);
+  }
+
+  function validPartitaIva(code) {
+    if (!/^\d{11}$/.test(code)) return false;
+    let total = 0;
+    for (let i = 0; i < 10; i++) {
+      let digit = parseInt(code.charAt(i), 10);
+      if (i % 2 === 1) digit = digit > 4 ? digit * 2 - 9 : digit * 2;
+      total += digit;
+    }
+    return (10 - total % 10) % 10 === parseInt(code.charAt(10), 10);
+  }
+
+  // Validator for P.IVA / VAT number: verify the final check digit too.
   function validatePIVA(val) {
     if (!val) return { valid: false, msg: 'Obbligatorio — la P.IVA deve avere 11 cifre' };
     const cleaned = val.replace(/[\s\-\.]/g, '');
-    if (/^\d{11}$/.test(cleaned)) return { valid: true, cleaned: cleaned };
+    if (validPartitaIva(cleaned)) return { valid: true, cleaned: cleaned };
+    if (/^\d{11}$/.test(cleaned)) return { valid: false, msg: 'La P.IVA non supera il controllo della cifra finale' };
     if (/^\d+$/.test(cleaned) && cleaned.length !== 11) return { valid: false, msg: 'La P.IVA deve avere esattamente 11 cifre (trovate ' + cleaned.length + ')' };
     return { valid: false, msg: 'La P.IVA deve avere 11 cifre, trovato: "' + val + '"' };
   }
 
-  // Validator for CF: 16-char alphanumeric
+  // Validator for CF: 16 characters and a valid final control letter.
   function validateCF(val) {
-    if (!val) return { valid: false, msg: 'Required' };
+    if (!val) return { valid: false, msg: 'Obbligatorio — inserisci il codice fiscale' };
     const cleaned = val.replace(/[\s\-]/g, '').toUpperCase();
-    if (/^[A-Z]{6}\d{2}[A-Z]\d{2}[A-Z]\d{3}[A-Z]$/.test(cleaned)) return { valid: true, cleaned: cleaned };
-    if (/^\d{11}$/.test(cleaned)) return { valid: true, cleaned: cleaned }; // P.IVA also accepted as CF
-    return { valid: false, msg: 'Formato non valido (atteso CF di 16 caratteri, es. RSSMRI85E28H501E, o P.IVA di 11 cifre)' };
+    if (validCodiceFiscale(cleaned)) return { valid: true, cleaned: cleaned };
+    if (/^[A-Z0-9]{16}$/.test(cleaned)) return { valid: false, msg: 'Il codice fiscale non supera il controllo della lettera finale' };
+    if (validPartitaIva(cleaned)) return { valid: true, cleaned: cleaned }; // P.IVA also accepted as CF
+    if (/^\d{11}$/.test(cleaned)) return { valid: false, msg: 'La P.IVA non supera il controllo della cifra finale' };
+    return { valid: false, msg: 'Formato non valido (atteso CF di 16 caratteri, es. RSSMRA85T10A562S, o P.IVA di 11 cifre)' };
   }
 
   // Validator for identificativo: P.IVA, CF, or company name
   function validateIdentificativo(val) {
     if (!val) return { valid: false, msg: 'Obbligatorio — inserisci P.IVA, CF o denominazione' };
     const cleaned = val.replace(/[\s\-\.]/g, '');
-    if (/^\d{11}$/.test(cleaned)) return { valid: true, cleaned: cleaned };
-    if (/^[A-Z0-9]{16}$/i.test(cleaned)) return { valid: true, cleaned: cleaned.toUpperCase() };
+    if (/^\d{11}$/.test(cleaned)) return validatePIVA(cleaned);
+    if (/^[A-Z0-9]{16}$/i.test(cleaned)) {
+      return validCodiceFiscale(cleaned.toUpperCase())
+        ? { valid: true, cleaned: cleaned.toUpperCase() }
+        : { valid: false, msg: 'Il codice fiscale non supera il controllo della lettera finale' };
+    }
     if (val.length >= 3) return { valid: true, cleaned: val.trim() }; // company name
     return { valid: false, msg: 'Deve essere una P.IVA (11 cifre), un CF (16 caratteri) o una denominazione (almeno 3 caratteri)' };
   }

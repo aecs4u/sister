@@ -22,16 +22,19 @@
 
     <!-- Stats -->
     <div class="row g-4 mb-4">
-        <div class="col-md-3 col-6">
+        <div class="col-lg col-md-4 col-6">
             {{ stat_card("Richieste eseguite", stats.total_requests, icon="fa-list-check", color="primary", href="/results") }}
         </div>
-        <div class="col-md-3 col-6">
+        <div class="col-lg col-md-4 col-6">
             {{ stat_card("Riuscite", stats.successful, icon="fa-check-circle", color="success", href="/results?status=completed") }}
         </div>
-        <div class="col-md-3 col-6">
+        <div class="col-lg col-md-4 col-6">
             {{ stat_card("Fallite", stats.failed, icon="fa-times-circle", color="danger", href="/results?status=failed") }}
         </div>
-        <div class="col-md-3 col-6">
+        <div class="col-lg col-md-4 col-6">
+            {{ stat_card("Senza corrispondenza", stats.no_match, icon="fa-circle-question", color="warning", href="/results?status=no_match") }}
+        </div>
+        <div class="col-lg col-md-4 col-6">
             {{ stat_card("Risposte estratte", stats.total_responses, icon="fa-database", color="info", href="/results?status=completed") }}
         </div>
     </div>

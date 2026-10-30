@@ -283,7 +283,7 @@ def test_get_expired(monkeypatch):
     )
 
     result = runner.invoke(app, ["get", "req_F_exp"])
-    assert result.exit_code == 0
+    assert result.exit_code == 1  # an expired request is a failure for scripts: the exit status says so
     assert "expired" in result.output
 
 
@@ -299,8 +299,15 @@ def test_get_error_status(monkeypatch):
     )
 
     result = runner.invoke(app, ["get", "req_F_err"])
-    assert result.exit_code == 0
+    assert result.exit_code == 1
     assert "Session lost" in result.output
+
+
+def test_get_needs_human_exits_nonzero(monkeypatch):
+    _patch_client(monkeypatch, "get_result", {"request_id": "req_F_cap", "status": "needs_human"})
+
+    result = runner.invoke(app, ["get", "req_F_cap"])
+    assert result.exit_code == 1
 
 
 def test_get_writes_output(monkeypatch, tmp_path):

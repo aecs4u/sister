@@ -62,16 +62,21 @@ console = Console()
 
 def _handle_api_error(e: VisuraAPIError) -> None:
     """Print a styled error from the sister and exit."""
-    console.print(f"[bold red]Error:[/bold red] sister returned HTTP {e.status_code}: {e.detail}")
+    console.print(f"[bold red]Error:[/bold red] sister returned HTTP {e.status_code}: {escape(str(e.detail))}")
     raise typer.Exit(1)
 
 
 def _write_output(data: dict | list, path: str) -> None:
-    """Write data to a file, auto-detecting format from the extension."""
+    """Write JSON output, creating parent directories when needed."""
     p = Path(path)
     content = json.dumps(data, indent=2, ensure_ascii=False)
-    p.write_text(content, encoding="utf-8")
-    console.print(f"[dim]Output written to {p}[/dim]")
+    try:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(content, encoding="utf-8")
+    except OSError as exc:
+        console.print(f"[bold red]Cannot write output to {escape(str(p))}:[/bold red] {escape(str(exc))}")
+        raise typer.Exit(1) from None
+    console.print(f"[dim]Output written to {escape(str(p))}[/dim]")
 
 
 @app.command("floor-plan-validate")
@@ -234,6 +239,7 @@ def _report_submission(client: VisuraClient, params: dict, result: dict, wait: b
         return
 
     all_results = {}
+    failed = False
     for rid in request_ids:
         console.print(f"\n[dim]Waiting for {rid}...[/dim]")
         try:
@@ -242,12 +248,19 @@ def _report_submission(client: VisuraClient, params: dict, result: dict, wait: b
             _print_result(res)
         except TimeoutError as e:
             console.print(f"[yellow]{e}[/yellow]")
+            failed = True
         except VisuraAPIError as e:
             if len(request_ids) == 1:
                 _handle_api_error(e)
             console.print(f"[red]{rid}: HTTP {e.status_code}: {e.detail}[/red]")
+            failed = True
+    failed = failed or any(
+        res.get("status") in {"error", "expired", "needs_human"} for res in all_results.values()
+    )
     if output and all_results:
         _write_output(all_results if len(all_results) > 1 else next(iter(all_results.values())), output)
+    if failed:
+        raise typer.Exit(1)
 
 
 def _interactive() -> bool:
@@ -436,8 +449,11 @@ def _ipotecaria_command(
             _write_output(res, output)
     except TimeoutError as e:
         console.print(f"[yellow]{e}[/yellow]")
+        raise typer.Exit(1) from None
     except VisuraAPIError as e:
         _handle_api_error(e)
+    if res.get("status") in {"error", "expired", "needs_human"}:
+        raise typer.Exit(1)
 
 
 @query_app.command("ipotecaria-immobile")
@@ -1374,6 +1390,9 @@ def get_result(
     if output:
         _write_output(result, output)
 
+    if result.get("status") in {"error", "expired", "needs_human"}:
+        raise typer.Exit(1)
+
 
 @app.command("wait")
 def wait_cmd(
@@ -1418,6 +1437,9 @@ def wait_cmd(
     if output:
         _write_output(result, output)
 
+    if status in {"error", "expired", "needs_human"}:
+        raise typer.Exit(1)
+
 
 @app.command()
 def requests(
@@ -1427,8 +1449,8 @@ def requests(
     particella: Optional[str] = typer.Option(None, "--particella", "-p", help="Filtra per particella"),
     tipo_catasto: Optional[str] = typer.Option(None, "--tipo-catasto", "-t", help="Filtra per tipo (T/F)"),
     status: Optional[str] = typer.Option(None, "--status", "-s", help="Filtro: completed, pending, failed"),
-    limit: int = typer.Option(50, "--limit", "-n", help="Numero massimo di risultati"),
-    offset: int = typer.Option(0, "--offset", help="Offset per la paginazione"),
+    limit: int = typer.Option(50, "--limit", "-n", min=1, max=200, help="Numero massimo di risultati (1–200)"),
+    offset: int = typer.Option(0, "--offset", min=0, help="Offset per la paginazione"),
     output: Optional[str] = typer.Option(None, "--output", "-o", help="Percorso del file di output (.json)"),
 ):
     """Elenca tutte le richieste e il loro stato dal database.
@@ -1440,43 +1462,55 @@ def requests(
     if status and status.lower() not in _VALID_STATUSES:
         console.print(f"[red]Invalid --status '{status}'. Must be one of: {', '.join(sorted(_VALID_STATUSES))}[/red]")
         raise typer.Exit(1)
+    if status:
+        status = status.lower()
 
     client = VisuraClient()
 
+    async def fetch_requests():
+        filters = {
+            "provincia": provincia,
+            "comune": comune,
+            "foglio": foglio,
+            "particella": particella,
+            "tipo_catasto": tipo_catasto,
+        }
+        if not status:
+            result = await client.history(**filters, limit=limit, offset=offset)
+            return result.get("results", [])
+
+        # The API has no status filter, so scan its 200-row pages until enough matching rows are found.
+        wanted = offset + limit
+        matches = []
+        page_offset = 0
+        while len(matches) < wanted:
+            page = (await client.history(**filters, limit=200, offset=page_offset)).get("results", [])
+            for row in page:
+                success = row.get("success")
+                responded = row.get("responded_at")
+                if (
+                    (status == "completed" and success is True)
+                    or (status == "failed" and success is False)
+                    or (status == "pending" and responded is None)
+                ):
+                    matches.append(row)
+                    if len(matches) >= wanted:
+                        break
+            page_offset += len(page)
+            if len(page) < 200:
+                break
+        return matches[offset : offset + limit]
+
     try:
-        result = asyncio.run(
-            client.history(
-                provincia=provincia,
-                comune=comune,
-                foglio=foglio,
-                particella=particella,
-                tipo_catasto=tipo_catasto,
-                limit=limit,
-                offset=offset,
-            )
-        )
+        items = asyncio.run(fetch_requests())
     except VisuraAPIError as e:
         _handle_api_error(e)
         return
 
-    items = result.get("results", [])
-
-    if status:
-        status_lower = status.lower()
-        filtered = []
-        for r in items:
-            success = r.get("success")
-            responded = r.get("responded_at")
-            if status_lower == "completed" and success is True:
-                filtered.append(r)
-            elif status_lower == "failed" and success is False:
-                filtered.append(r)
-            elif status_lower == "pending" and responded is None:
-                filtered.append(r)
-        items = filtered
-
     if not items:
         console.print("[dim]No requests found.[/dim]")
+        if output:
+            _write_output({"count": 0, "results": []}, output)
         return
 
     table = Table(title=f"Requests ({len(items)} shown)", header_style="bold cyan")
@@ -1532,8 +1566,8 @@ def history(
     foglio: Optional[str] = typer.Option(None, "--foglio", "-F", help="Filtra per foglio"),
     particella: Optional[str] = typer.Option(None, "--particella", "-p", help="Filtra per particella"),
     tipo_catasto: Optional[str] = typer.Option(None, "--tipo-catasto", "-t", help="Filtra per tipo (T/F)"),
-    limit: int = typer.Option(50, "--limit", "-n", help="Numero massimo di risultati"),
-    offset: int = typer.Option(0, "--offset", help="Offset per la paginazione"),
+    limit: int = typer.Option(50, "--limit", "-n", min=1, max=200, help="Numero massimo di risultati (1–200)"),
+    offset: int = typer.Option(0, "--offset", min=0, help="Offset per la paginazione"),
     output: Optional[str] = typer.Option(None, "--output", "-o", help="Percorso del file di output (.json)"),
 ):
     """Interroga lo storico delle risposte di visura nel database."""
@@ -1560,6 +1594,8 @@ def history(
 
     if not items:
         console.print("[dim]No history records found.[/dim]")
+        if output:
+            _write_output(result, output)
         return
 
     table = Table(title=f"Visura history ({count} results)", header_style="bold cyan")
@@ -1639,6 +1675,8 @@ def health():
 
     console.print(table)
     console.print(f"[dim]Service URL: {client.base_url}[/dim]")
+    if status != "healthy" or not authenticated:
+        raise typer.Exit(1)
 
 
 # =============================================================================

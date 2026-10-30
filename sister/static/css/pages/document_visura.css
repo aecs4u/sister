@@ -88,7 +88,7 @@ button[data-bs-target="#complete-data"][aria-expanded="true"] {
 /* ── Touch targets ────────────────────────────────────────────────────────────
    Category links, the "Mappa" link, layer checkboxes and the "senza geometria" summary were 14-22 px high. */
 table.cat-compact-table td a, table.cat-compact-table td button { display: inline-block; min-height: 24px; line-height: 24px; }
-.document-parcel-map-card input[type="checkbox"] { width: 1.1rem; height: 1.1rem; }
+.document-parcel-map-card input[type="checkbox"] { width: 24px; height: 24px; }
 .document-parcel-map-card summary, .assessment-method summary, .land-map-ownership-details summary {
     min-height: 24px; display: list-item; cursor: pointer;
 }

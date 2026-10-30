@@ -72,3 +72,6 @@ documents
 inputs
 dossiers
 results
+data/geocode_cache.json*
+# Resumable batch inputs, extracted cadastral results, and logs
+/--resume/

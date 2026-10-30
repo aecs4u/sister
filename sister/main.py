@@ -1,6 +1,7 @@
 import asyncio  # noqa: F401 (used by tests via main_module.asyncio)
 import inspect
 import logging
+import json
 import os
 import secrets
 from contextlib import asynccontextmanager
@@ -62,7 +63,7 @@ from .routes import (
     resume_section_extraction,
     visura_history,
 )
-from .passwords import is_hashed_password, verify_local_password
+from .passwords import plaintext_users_allowed, require_hashed_passwords, verify_local_password
 from .services import PageLogger, VisuraService
 
 # ---------------------------------------------------------------------------
@@ -519,11 +520,21 @@ try:
             return users
 
         _local_users = _load_local_users()
-        _plain = [name for name, (_, pw) in _local_users.items() if not is_hashed_password(pw)]
-        if _plain:
+        # Account keys (never passwords) the admin purchase form offers: purchases match on ``id:<username>``.
+        app.state.local_user_keys = sorted({f"id:{name}" for name, _ in _local_users.values()})
+        _allow_plaintext = plaintext_users_allowed(os.getenv("ALLOW_PLAINTEXT_USERS"))
+        try:
+            plaintext_count = require_hashed_passwords(
+                (password for _, password in _local_users.values()),
+                allow_plaintext=_allow_plaintext,
+            )
+        except ValueError as exc:
+            logger.critical("Refusing local authentication startup: %s", exc)
+            raise RuntimeError(str(exc)) from exc
+        if plaintext_count:
             logger.warning(
                 "%d local user(s) have a plain-text password in %s (use scripts/hash_local_password.py)",
-                len(_plain),
+                plaintext_count,
                 _local_users_path.name,
             )
         if _local_users:
@@ -698,9 +709,26 @@ try:
     app.mount("/outputs", StaticFiles(directory=str(_outputs_dir)), name="outputs")
 
     # Include web routes
-    from .web import router as web_router
+    from .web import _require_auth, router as web_router
+
+    try:
+        from aecs4u_email import create_report_sharing_router
+    except ImportError as e:
+        # Older shared-venv installs may not include report sharing yet; keep the
+        # rest of SISTER's web UI available in that case.
+        logger.warning("Email report-sharing routes non disponibili: %s", e)
+    else:
+        # Register these before the web router's /api/ui/{path} proxy.
+        app.include_router(create_report_sharing_router(auth_dependency=_require_auth, app_name="SISTER"))
 
     app.include_router(web_router)
+
+    try:
+        from .purchases_billing import mount_billing
+
+        mount_billing(app)  # dormant unless STRIPE_API_KEY, STRIPE_WEBHOOK_SECRET and SISTER_DOCUMENT_PRICE_ID are set
+    except Exception as exc:  # noqa: BLE001 - a payment setup problem must not take the rest of the UI down
+        logger.error("Pagamenti documenti non attivati: %s", exc)
 
     try:
         from .feedback_admin import router as feedback_admin_router
@@ -712,7 +740,10 @@ try:
 
     logger.info("Web UI inizializzata")
 except ImportError as exc:
-    logger.warning("aecs4u-theme non disponibile: web UI disabilitata (%s)", exc)
+    # A missing import used to switch the whole web UI off silently (every page 404 while /health stayed green).
+    logger.error("Web UI non disponibile: %s", exc)
+    if os.getenv("SISTER_ALLOW_NO_WEB_UI", "").strip().lower() not in {"1", "true", "yes"}:
+        raise
 
 
 @app.post("/visura")
@@ -894,10 +925,35 @@ async def _richiedi_generic(
     )
 
 
-@app.get("/health")
-async def _health_check():
+async def _health_is_privileged(request: Request, x_api_key: Optional[str]) -> bool:
+    """Detail (queue sizes, DB totals, auth mode) only for the API key or a signed-in admin; probes get the status."""
+    configured = os.getenv("API_KEY") or ""
+    if configured and x_api_key and secrets.compare_digest(x_api_key, configured):
+        return True
+    try:
+        from .web import _is_admin, _optional_user
+
+        user = await _optional_user(request)
+        return bool(user) and _is_admin(user)
+    except Exception:  # noqa: BLE001 - a broken auth backend must not take the probe down
+        return False
+
+
+@app.api_route("/health", methods=["GET", "HEAD"])
+async def _health_check(request: Request, x_api_key: Optional[str] = Header(default=None, alias="X-API-Key")):
+    privileged = await _health_is_privileged(request, x_api_key)
     if visura_service is not None:
-        return await health_check(visura_service)
+        response = await health_check(visura_service)
+        if privileged:
+            return response
+        try:
+            payload = response if isinstance(response, dict) else json.loads(response.body)
+            status = payload.get("status", "degraded")
+        except (ValueError, TypeError, AttributeError):
+            status = "degraded"
+        return JSONResponse({"status": status})
+    if not privileged:
+        return JSONResponse({"status": "degraded"})
     db_stats = await count_responses()
     return JSONResponse(
         {

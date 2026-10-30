@@ -2,8 +2,15 @@
 
 {% block page_title %}Acquisti documenti{% endblock %}
 
+{% macro state_badge(state) -%}
+    {%- if state == 'active' %}<span class="badge text-bg-success">Attivo</span>
+    {%- elif state == 'revoked' %}<span class="badge text-bg-secondary">Revocato</span>
+    {%- elif state == 'expired' %}<span class="badge text-bg-warning">Scaduto</span>
+    {%- else %}<span class="badge text-bg-info">Programmato</span>{% endif -%}
+{%- endmacro %}
+
 {% block content %}
-<main class="container-fluid py-4">
+<div class="container-fluid py-4" id="purchases-page">
     <nav aria-label="breadcrumb" class="mb-3">
         <ol class="breadcrumb">
             <li class="breadcrumb-item"><a href="/admin">Amministrazione</a></li>
@@ -13,7 +20,7 @@
     <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
         <div>
             <h1 class="h2 mb-1">Acquisti documenti</h1>
-            <p class="text-muted mb-0">Ogni riga concede a un utente l’accesso al documento indicato.</p>
+            <p class="text-muted mb-0">Ogni riga concede a un utente l’accesso al documento indicato. Una revoca conserva lo storico.</p>
         </div>
         <div class="d-flex gap-2">
             <a class="btn btn-outline-primary" href="/admin/documents">Catalogo documenti</a>
@@ -21,76 +28,132 @@
         </div>
     </div>
 
+    <div id="purchase-feedback" tabindex="-1">
     {% if status == 'created' %}<div class="alert alert-success" role="status">Acquisto registrato.</div>
     {% elif status == 'updated' %}<div class="alert alert-success" role="status">Acquisto aggiornato.</div>
     {% elif status == 'deleted' %}<div class="alert alert-success" role="status">Accesso revocato.</div>
-    {% elif status == 'not_found' %}<div class="alert alert-info" role="status">L’acquisto era già stato rimosso.</div>{% endif %}
-    {% if error %}<div class="alert alert-danger" role="alert">{{ error }}</div>{% endif %}
+    {% elif status == 'credits' %}<div class="alert alert-success" role="status">Crediti accreditati.{% if credit_balance %} Nuovo saldo: <strong>{{ credit_balance }}</strong>.{% endif %}</div>
+    {% elif status == 'not_found' %}<div class="alert alert-info" role="status">L’acquisto era già stato revocato o non esiste.</div>{% endif %}
+    {% if error_message %}<div class="alert alert-danger" role="alert">{{ error_message }}</div>{% endif %}
+    </div>
 
     <section class="card mb-4" aria-labelledby="new-purchase-heading">
         <div class="card-body">
-            <h2 class="h5" id="new-purchase-heading">Registra un acquisto</h2>
-            <p class="small text-muted">Usa la chiave dell’account: <code>id:123</code>, <code>email:nome@example.com</code> oppure <code>username:nome</code>.</p>
+            <h2 class="h5" id="new-purchase-heading">Concedi accesso a un documento</h2>
+            <p class="small text-muted">Scegli l’utente dall’elenco o digita la sua chiave: <code>id:nome</code>, <code>email:nome@example.com</code> oppure <code>username:nome</code>. L’account riconosce tutte e tre le forme; la propria chiave è nella pagina <a href="/profile">Profilo</a>.</p>
             <form method="post" action="/admin/document-purchases/create" class="row g-3 align-items-end">
                 {{ csrf_input() }}
-                <div class="col-12 col-lg-4">
+                <div class="col-12 col-lg-3">
                     <label class="form-label" for="new-user-id">Utente</label>
-                    <input class="form-control" id="new-user-id" name="user_id" required maxlength="320" placeholder="id:123 o email:nome@example.com">
+                    <input class="form-control" id="new-user-id" name="user_id" list="known-users" required maxlength="320" autocomplete="off" placeholder="id:nome o email:nome@example.com">
                 </div>
                 <div class="col-6 col-lg-2">
                     <label class="form-label" for="new-document-id">ID documento</label>
-                    <input class="form-control" id="new-document-id" name="document_id" type="number" min="1" value="{{ selected_document_id }}" required>
+                    <input class="form-control" id="new-document-id" name="document_id" type="number" min="1" inputmode="numeric" value="{{ selected_document_id }}" required>
                     <a class="small" href="/admin/documents">Trova nel catalogo</a>
                 </div>
                 <div class="col-6 col-lg-2">
                     <label class="form-label" for="new-purchased-at">Acquistato il</label>
-                    <input class="form-control" id="new-purchased-at" name="purchased_at" type="datetime-local">
+                    <input class="form-control" id="new-purchased-at" name="purchased_at" type="datetime-local" aria-describedby="new-purchased-help">
+                    <span class="form-text" id="new-purchased-help">Vuoto = adesso</span>
                 </div>
-                <div class="col-12 col-lg-3">
+                <div class="col-6 col-lg-2">
+                    <label class="form-label" for="new-expires-at">Scade il</label>
+                    <input class="form-control" id="new-expires-at" name="expires_at" type="datetime-local" aria-describedby="new-expires-help">
+                    <span class="form-text" id="new-expires-help">Facoltativo</span>
+                </div>
+                <div class="col-12 col-lg-2">
                     <label class="form-label" for="new-note">Nota</label>
                     <input class="form-control" id="new-note" name="note" maxlength="2000">
                 </div>
-                <div class="col-12 col-lg-1">
-                    <button class="btn btn-primary w-100" type="submit">Crea</button>
+                <div class="col-6 col-lg-1">
+                    <button class="btn btn-primary w-100" type="submit">Concedi</button>
                 </div>
+            </form>
+            <datalist id="known-users">{% for key in known_users %}<option value="{{ key }}">{% endfor %}</datalist>
+        </div>
+    </section>
+
+    {% if selected_document_id %}
+    <section class="card mb-4" aria-labelledby="buy-link-heading">
+        <div class="card-body">
+            <h2 class="h5" id="buy-link-heading">Link di acquisto del documento #{{ selected_document_id }}</h2>
+            {% if purchase_link %}
+            <p class="small text-muted mb-2">Invialo all’acquirente: apre la pagina con prezzo e modalità di pagamento (carta{% if credits_enabled %}, crediti{% endif %}), richiede l’accesso con il suo account e scade dopo {{ link_days }} giorni. {% if card_price %}Prezzo con carta: <strong>{{ card_price }}</strong>.{% endif %}{% if credits_enabled %} Costo in crediti: <strong>{{ credit_cost }}</strong>.{% endif %}{% if not card_enabled and not credits_enabled %} I pagamenti online non sono attivi: la pagina inviterà a contattare l’amministratore.{% endif %}</p>
+            <div class="input-group">
+                <label class="visually-hidden" for="buy-link">Link di acquisto</label>
+                <input class="form-control font-monospace" id="buy-link" readonly value="{{ purchase_link }}" data-select-on-focus>
+                <button class="btn btn-outline-primary" type="button" data-click="sisterActions.copyValue" data-args='["buy-link"]'>Copia</button>
+            </div>
+            {% else %}
+            <p class="small text-muted mb-0">Imposta <code>SECRET_KEY</code> (o <code>SISTER_LINK_SECRET</code>) per firmare i link di acquisto.</p>
+            {% endif %}
+        </div>
+    </section>
+    {% endif %}
+
+    {% if wallet_enabled %}
+    <section class="card mb-4" aria-labelledby="credits-heading">
+        <div class="card-body">
+            <h2 class="h5" id="credits-heading">Crediti prepagati</h2>
+            <p class="small text-muted">Accredita crediti a un utente{% if credits_enabled %} (un documento costa {{ credit_cost }} crediti){% endif %}{% if query_credits_enabled %}{% if credits_enabled %};{% endif %} le query usano i prezzi per comando del listino OpenData{% endif %}. Il saldo è condiviso dalle chiavi <code>id:</code>, <code>email:</code> e <code>username:</code> della stessa persona.</p>
+            {% if query_price_list %}<details class="small mb-3"><summary>Prezzi query attivi</summary><ul class="mt-2">{% for price in query_price_list %}<li><code>{{ price.endpoint }}</code>: {{ price.credits }} crediti</li>{% endfor %}</ul></details>{% endif %}
+            <form method="post" action="/admin/credits/grant" class="row g-3 align-items-end">
+                {{ csrf_input() }}
+                <div class="col-12 col-lg-4"><label class="form-label" for="credit-user">Utente</label><input class="form-control" id="credit-user" name="user_id" list="known-users" required maxlength="320" autocomplete="off"></div>
+                <div class="col-6 col-lg-2"><label class="form-label" for="credit-amount">Crediti</label><input class="form-control" id="credit-amount" name="amount" inputmode="decimal" required></div>
+                <div class="col-12 col-lg-4"><label class="form-label" for="credit-reason">Motivo</label><input class="form-control" id="credit-reason" name="reason" maxlength="200"></div>
+                <div class="col-6 col-lg-2"><button class="btn btn-outline-primary w-100" type="submit">Accredita</button></div>
             </form>
         </div>
     </section>
+    {% endif %}
 
     <section class="card" aria-labelledby="purchase-list-heading">
         <div class="card-body border-bottom">
             <div class="d-flex flex-wrap justify-content-between align-items-center gap-3">
                 <h2 class="h5 mb-0" id="purchase-list-heading">Acquisti registrati <span class="badge text-bg-secondary">{{ purchases|length }}</span></h2>
-                <form method="get" action="/admin/document-purchases" class="d-flex gap-2">
+                <form method="get" action="/admin/document-purchases" class="d-flex flex-wrap gap-2">
+                    <label class="visually-hidden" for="purchase-state">Stato</label>
+                    <select class="form-select w-auto" id="purchase-state" name="state">
+                        <option value="active"{% if state == 'active' %} selected{% endif %}>Attivi</option>
+                        <option value="revoked"{% if state == 'revoked' %} selected{% endif %}>Revocati</option>
+                        <option value="all"{% if state == 'all' %} selected{% endif %}>Tutti</option>
+                    </select>
                     <label class="visually-hidden" for="purchase-search">Cerca</label>
-                    <input class="form-control" id="purchase-search" name="q" value="{{ query }}" placeholder="Utente, ID o nome file">
+                    <input class="form-control w-auto" id="purchase-search" name="q" value="{{ query }}" placeholder="Utente, ID o nome file">
                     <button class="btn btn-outline-primary" type="submit">Cerca</button>
                 </form>
             </div>
         </div>
         <div class="table-responsive">
             <table class="table table-striped table-hover align-middle mb-0">
-                <thead><tr><th>Utente</th><th>Documento</th><th>Acquistato il</th><th>Nota</th><th class="text-end">Azioni</th></tr></thead>
+                <thead><tr><th scope="col">Utente</th><th scope="col">Documento</th><th scope="col">Acquistato il</th><th scope="col">Scade il</th><th scope="col">Nota</th><th scope="col" class="text-end">Azioni</th></tr></thead>
                 <tbody>
                 {% for purchase in purchases %}
                     {% set row_id = loop.index %}
                     <tr>
-                        <td colspan="5" class="p-0">
+                        <td colspan="6" class="p-0">
                             <form method="post" action="/admin/document-purchases/update" class="row g-2 align-items-center m-0 p-2">
                                 {{ csrf_input() }}
                                 <input type="hidden" name="old_user_id" value="{{ purchase.user_id }}">
                                 <input type="hidden" name="old_document_id" value="{{ purchase.document_id }}">
+                                <input type="hidden" name="purchased_at_orig" value="{{ purchase.purchased_at_local }}">
                                 <div class="col-12 col-xl-3">
                                     <label class="visually-hidden" for="user-{{ row_id }}">Utente</label>
-                                    <input class="form-control form-control-sm" id="user-{{ row_id }}" name="user_id" value="{{ purchase.user_id }}" required maxlength="320">
+                                    <input class="form-control form-control-sm" id="user-{{ row_id }}" name="user_id" value="{{ purchase.user_id }}" list="known-users" required maxlength="320">
                                 </div>
                                 <div class="col-6 col-xl-1">
                                     <label class="visually-hidden" for="doc-{{ row_id }}">ID documento</label>
-                                    <input class="form-control form-control-sm" id="doc-{{ row_id }}" name="document_id" type="number" min="1" value="{{ purchase.document_id }}" required>
+                                    <input class="form-control form-control-sm" id="doc-{{ row_id }}" name="document_id" type="number" min="1" inputmode="numeric" value="{{ purchase.document_id }}" required>
                                 </div>
                                 <div class="col-6 col-xl-2">
                                     <label class="visually-hidden" for="date-{{ row_id }}">Acquistato il</label>
                                     <input class="form-control form-control-sm" id="date-{{ row_id }}" name="purchased_at" type="datetime-local" value="{{ purchase.purchased_at_local }}" required>
+                                </div>
+                                <div class="col-6 col-xl-2">
+                                    <label class="visually-hidden" for="exp-{{ row_id }}">Scade il</label>
+                                    <input class="form-control form-control-sm" id="exp-{{ row_id }}" name="expires_at" type="datetime-local" value="{{ purchase.expires_at_local }}">
                                 </div>
                                 <div class="col-12 col-xl-3">
                                     <span class="small d-block text-truncate" title="{{ purchase.title }}">#{{ purchase.document_id }} · {{ purchase.title }}</span>
@@ -103,23 +166,45 @@
                         </td>
                     </tr>
                     <tr class="table-light">
-                        <td colspan="4" class="small text-muted pt-0">{{ purchase.filename }}{% if purchase.document_type %} · {{ purchase.document_type }}{% endif %} · registrato da {{ purchase.created_by or '—' }}</td>
+                        <td colspan="5" class="small text-muted pt-0">
+                            {{ state_badge(purchase.state) }}
+                            {{ purchase.filename }}{% if purchase.document_type %} · {{ purchase.document_type }}{% endif %}
+                            · fonte {{ {'admin_grant': 'concessione admin', 'stripe': 'Stripe', 'wallet': 'credito'}.get(purchase.source, purchase.source) }}
+                            {% if purchase.amount_cents is not none %}· {{ '%.2f'|format(purchase.amount_cents / 100) }} {{ purchase.currency or 'EUR' }}{% endif %}
+                            {% if purchase.payment_ref %}· pagamento {{ purchase.payment_ref }}{% endif %}
+                            · registrato da {{ purchase.created_by or '—' }}
+                            {% if purchase.revoked_at_local %}· revocato il {{ purchase.revoked_at_local }} da {{ purchase.revoked_by or '—' }}{% if purchase.revoked_reason %} ({{ purchase.revoked_reason }}){% endif %}{% endif %}
+                        </td>
                         <td class="text-end pt-0">
-                            <form method="post" action="/admin/document-purchases/delete" onsubmit="return confirm('Revocare l’accesso a questo documento?')">
+                            {% if purchase.state != 'revoked' %}
+                            <form method="post" action="/admin/document-purchases/revoke" class="d-inline-flex gap-1 justify-content-end" data-confirm="Revocare l’accesso a questo documento?">
                                 {{ csrf_input() }}
                                 <input type="hidden" name="user_id" value="{{ purchase.user_id }}">
                                 <input type="hidden" name="document_id" value="{{ purchase.document_id }}">
+                                <label class="visually-hidden" for="reason-{{ row_id }}">Motivo della revoca</label>
+                                <input class="form-control form-control-sm" id="reason-{{ row_id }}" name="reason" maxlength="500" placeholder="Motivo (facoltativo)">
                                 <button class="btn btn-sm btn-outline-danger" type="submit">Revoca</button>
                             </form>
+                            {% endif %}
                         </td>
                     </tr>
                 {% else %}
-                    <tr><td colspan="5" class="text-center text-muted py-4">Nessun acquisto trovato.</td></tr>
+                    <tr><td colspan="6" class="text-center text-muted py-4">Nessun acquisto trovato.</td></tr>
                 {% endfor %}
                 </tbody>
             </table>
         </div>
         {% if purchases|length >= 500 %}<p class="small text-muted p-3 mb-0">Visualizzati al massimo 500 record. Usa la ricerca per restringere l’elenco.</p>{% endif %}
     </section>
-</main>
+</div>
+<script nonce="{{ csp_nonce }}">
+(function () {
+  // Move focus to the result message so keyboard and screen-reader users hear it after the redirect.
+  // (after load: the theme restores focus/scroll state on its own schedule and would win a parse-time call)
+  var feedback = document.getElementById('purchase-feedback');
+  if (feedback && feedback.querySelector('.alert')) {
+    window.addEventListener('load', function () { setTimeout(function () { feedback.focus({ preventScroll: false }); }, 60); });
+  }
+})();
+</script>
 {% endblock %}

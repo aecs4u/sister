@@ -13,7 +13,7 @@ depends_on = None
 
 
 def upgrade() -> None:
-    schema = os.getenv("DATABASE_SCHEMA", "sister")
+    schema = op.get_context().opts.get("sister_schema") or os.getenv("DATABASE_SCHEMA", "sister")
     inspector = sa.inspect(op.get_bind())
     if inspector.has_table("subject_note", schema=schema):
         return
@@ -33,5 +33,5 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    schema = os.getenv("DATABASE_SCHEMA", "sister")
+    schema = op.get_context().opts.get("sister_schema") or os.getenv("DATABASE_SCHEMA", "sister")
     op.drop_table("subject_note", schema=schema)

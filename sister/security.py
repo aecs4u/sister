@@ -10,6 +10,7 @@ nonce. Interactive API docs (Swagger UI / ReDoc, third-party bundles loaded from
 from __future__ import annotations
 
 import secrets
+from urllib.parse import parse_qs
 
 # Swagger UI / ReDoc are third-party bundles that need the relaxed policy.
 _DOCS_PREFIXES = ("/docs", "/redoc", "/openapi.json")
@@ -20,6 +21,8 @@ _STRICT_DIRECTIVES = {
     "style-src": "'self' 'unsafe-inline'",
     "font-src": "'self' data:",
     "connect-src": "'self'",
+    # UI imagery is either same-origin, embedded data, or explicitly widened on pages that need a map.
+    "img-src": "'self' data: blob:",
 }
 
 
@@ -29,6 +32,7 @@ _GOOGLE_3D_PATHS = ("/3d",)
 _GOOGLE_3D_SOURCES = {
     "script-src": "https://maps.googleapis.com https://*.gstatic.com 'wasm-unsafe-eval'",
     "connect-src": "https://*.googleapis.com https://*.gstatic.com https://*.google.com data: blob:",
+    "img-src": "https://*.google.com https://*.googleapis.com https://*.gstatic.com",
     "worker-src": "blob:",
 }
 
@@ -37,7 +41,7 @@ _GOOGLE_3D_SOURCES = {
 _CADASTRAL_MAP_SOURCES = {
     "script-src": "https://cdnjs.cloudflare.com",
     "style-src": "'self' 'unsafe-inline'",
-    "img-src": "'self' data: blob: https://img.clerk.com https://*.tile.openstreetmap.org https://server.arcgisonline.com https://*.tile.opentopomap.org",
+    "img-src": "https://*.tile.openstreetmap.org https://server.arcgisonline.com https://*.tile.opentopomap.org",
 }
 
 
@@ -47,7 +51,21 @@ _CLERK_AUTH_PATHS = ("/auth/login", "/auth/clerk/callback")
 _CLERK_SOURCES = {
     "script-src": "https://cdn.jsdelivr.net",
     "connect-src": "https://*.clerk.accounts.dev https://clerk-telemetry.com",
+    "img-src": "https://img.clerk.com",
 }
+
+
+def _uses_cadastral_map(path: str, query_string: str) -> bool:
+    """Return whether a rendered UI route can request cadastral base-map tiles."""
+    if path == "/documents" and "cadastral-map" in parse_qs(query_string).get("view", []):
+        return True
+    parts = path.strip("/").split("/")
+    if len(parts) == 2 and parts[0] in {"persons", "companies", "results"}:
+        return True
+    return parts[0] == "documents" and (
+        (len(parts) == 2 and parts[1].isdigit())
+        or (len(parts) == 3 and parts[1].isdigit() and parts[2] == "plan")
+    )
 
 
 def strip_unsafe_eval(csp: str) -> str:
@@ -116,9 +134,7 @@ class CspNonceMiddleware:
             extra = _GOOGLE_3D_SOURCES
         elif document_path in _CLERK_AUTH_PATHS:
             extra = _CLERK_SOURCES
-        elif scope["path"] == "/documents" and "view=cadastral-map" in query.split("&"):
-            extra = _CADASTRAL_MAP_SOURCES
-        elif document_path.startswith("/documents/") and document_path[len("/documents/"):].isdigit():
+        elif _uses_cadastral_map(scope["path"], query):
             extra = _CADASTRAL_MAP_SOURCES
         else:
             extra = None

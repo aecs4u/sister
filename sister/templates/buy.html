@@ -1,0 +1,45 @@
+{% extends "_base.html" %}
+{% block page_title %}Acquista documento{% endblock %}
+
+{% block content %}
+<div class="container py-5">
+    <h1 class="h2 mb-4"><i class="fas fa-cart-shopping text-primary me-2" aria-hidden="true"></i>Acquista documento</h1>
+    <div class="row">
+        <div class="col-lg-7">
+            <div class="card border-0 shadow-sm">
+                <div class="card-body">
+                    <h2 class="h5 mb-1">{{ doc.subject_text or doc.title or doc.file_name }}</h2>
+                    <p class="text-muted small mb-3">{{ doc.document_type or 'documento' }}{% if doc.file_format %} · {{ doc.file_format }}{% endif %} · ID {{ document_id }}</p>
+                    {% if error %}<div class="alert alert-danger" role="alert">{{ {'credits': 'Crediti insufficienti per questo documento.'}.get(error, 'Pagamento non riuscito.') }}</div>{% endif %}
+                    {% if owned %}
+                    <div class="alert alert-success" role="status">Hai già accesso a questo documento.</div>
+                    <a class="btn btn-primary" href="/documents/{{ document_id }}">Apri il documento</a>
+                    {% elif not card_enabled and not credits_enabled %}
+                    <div class="alert alert-info" role="status">I pagamenti online non sono attivi. Scrivi all’<a class="alert-link" href="/contact">amministratore</a> indicando l’ID {{ document_id }} e le chiavi del tuo <a class="alert-link" href="/profile">profilo</a>.</div>
+                    {% else %}
+                    <ul class="list-unstyled mb-3">
+                        {% if card_enabled %}<li class="mb-1"><i class="fas fa-credit-card me-2 text-muted" aria-hidden="true"></i>Carta (Stripe): <strong>{{ card_price or 'prezzo al checkout' }}</strong></li>{% endif %}
+                        {% if credits_enabled %}<li class="mb-1"><i class="fas fa-coins me-2 text-muted" aria-hidden="true"></i>Crediti: <strong>{{ credit_cost }}</strong>{% if credit_balance is not none %} · saldo <strong>{{ credit_balance }}</strong>{% endif %}</li>{% endif %}
+                    </ul>
+                    <div class="d-flex flex-wrap gap-2">
+                        {% if card_enabled %}
+                        <form method="post" action="/documents/{{ document_id }}/purchase">
+                            {{ csrf_input() }}<input type="hidden" name="method" value="card">
+                            <button class="btn btn-primary" type="submit"><i class="fas fa-credit-card me-2" aria-hidden="true"></i>Paga con carta{% if card_price %} ({{ card_price }}){% endif %}</button>
+                        </form>
+                        {% endif %}
+                        {% if credits_enabled %}
+                        <form method="post" action="/documents/{{ document_id }}/purchase" data-confirm="Usare {{ credit_cost }} crediti per questo documento?">
+                            {{ csrf_input() }}<input type="hidden" name="method" value="credits">
+                            <button class="btn btn-outline-primary" type="submit"{% if credit_balance is not none and credit_balance < credit_cost %} disabled aria-describedby="credits-low"{% endif %}><i class="fas fa-coins me-2" aria-hidden="true"></i>Paga con crediti ({{ credit_cost }})</button>
+                        </form>
+                        {% if credit_balance is not none and credit_balance < credit_cost %}<p class="form-text w-100" id="credits-low">Saldo insufficiente: chiedi all’amministratore di ricaricare i crediti.</p>{% endif %}
+                        {% endif %}
+                    </div>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

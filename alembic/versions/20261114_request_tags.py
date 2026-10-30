@@ -13,7 +13,7 @@ depends_on = None
 
 
 def _schema() -> str:
-    return os.getenv("DATABASE_SCHEMA", "sister")
+    return op.get_context().opts.get("sister_schema") or os.getenv("DATABASE_SCHEMA", "sister")
 
 
 def upgrade() -> None:
