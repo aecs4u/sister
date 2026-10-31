@@ -1,8 +1,9 @@
 import asyncio  # noqa: F401 (used by tests via main_module.asyncio)
 import inspect
-import logging
 import json
+import logging
 import os
+import re
 import secrets
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -331,10 +332,15 @@ class StaticCacheMiddleware(BaseHTTPMiddleware):
         response = await call_next(request)
         if request.url.path.startswith("/static/"):
             if response.status_code < 400:
-                versioned = "v=" in str(request.url)
-                long_lived = versioned and request.url.path.startswith(
+                cache_busted = bool(request.query_params.get("v"))
+                versioned_vendor = request.url.path.startswith("/static/vendor/") and any(
+                    re.match(r"^[^/]+-\d+(?:\.\d+)+(?:[-+][^/]*)?$", part)
+                    for part in request.url.path.removeprefix("/static/vendor/").split("/")
+                )
+                versioned_theme_asset = cache_busted and request.url.path.startswith(
                     ("/static/aecs4u-theme/", "/static/aecs4u-auth/")
                 )
+                long_lived = versioned_vendor or versioned_theme_asset
                 # Unversioned files (sister.css, sister_forms.js...) are revalidated via ETag so edits show up at once.
                 response.headers.setdefault(
                     "Cache-Control", "public, max-age=31536000, immutable" if long_lived else "no-cache"
@@ -368,7 +374,7 @@ async def swagger_ui(_user=Depends(_docs_auth)):
     html = html.replace("    <html>", '    <html lang="it">', 1)
     html = html.replace(
         "    </head>",
-        '    <link rel="stylesheet" href="/static/css/swagger_ui.css?v=20261030a">\n    </head>',
+        '    <link rel="stylesheet" href="/static/css/swagger_ui.css?v=20261030c">\n    </head>',
         1,
     )
     html = html.replace(
@@ -386,7 +392,7 @@ async def swagger_ui(_user=Depends(_docs_auth)):
     html = html.replace('    <script src="', '    </main>\n    <script src="', 1)
     html = html.replace(
         "    </body>",
-        '    <script src="/static/js/swagger_ui.js?v=20261030a" defer></script>\n    </body>',
+        '    <script src="/static/js/swagger_ui.js?v=20261030c" defer></script>\n    </body>',
         1,
     )
     return HTMLResponse(

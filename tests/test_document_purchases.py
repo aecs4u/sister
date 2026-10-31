@@ -1,5 +1,6 @@
 """Document purchases: identity matching, validation, soft revocation, expiry and idempotent fulfilment."""
 
+import asyncio
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from types import SimpleNamespace
@@ -105,6 +106,43 @@ async def test_duplicate_grant_is_refused_and_a_revoked_one_is_reactivated(doc_i
     assert row["state"] == "active" and row["revoked_at"] is None and row["revoked_reason"] == ""
 
 
+async def test_concurrent_grants_for_equivalent_identity_are_serialized(doc_id):
+    outcomes = await asyncio.gather(
+        database.create_document_purchase("email:demo@example.test", doc_id, NOW, "admin"),
+        database.create_document_purchase("id:Demo@Example.Test", doc_id, NOW, "admin"),
+        return_exceptions=True,
+    )
+
+    assert sum(outcome is None for outcome in outcomes) == 1
+    errors = [outcome for outcome in outcomes if isinstance(outcome, PurchaseError)]
+    assert len(errors) == 1 and errors[0].code == "duplicate"
+    assert len(await database.list_document_purchases(status="all")) == 1
+
+
+async def test_concurrent_fulfilments_do_not_reuse_a_payment_reference(doc_id):
+    async with database._get_session_factory()() as session:
+        other_document = Document(file_format="P7M", file_name="vi_sto_second.p7m")
+        session.add(other_document)
+        await session.commit()
+        other_document_id = other_document.id
+
+    outcomes = await asyncio.gather(
+        database.create_document_purchase(
+            "id:first", doc_id, NOW, "billing", source="stripe", payment_ref="cs_shared"
+        ),
+        database.create_document_purchase(
+            "id:second", other_document_id, NOW, "billing", source="stripe", payment_ref="cs_shared"
+        ),
+        return_exceptions=True,
+    )
+
+    assert sum(outcome is None for outcome in outcomes) == 1
+    errors = [outcome for outcome in outcomes if isinstance(outcome, PurchaseError)]
+    assert len(errors) == 1 and errors[0].code == "duplicate_payment"
+    purchases = await database.list_document_purchases(status="all")
+    assert len(purchases) == 1 and purchases[0]["payment_ref"] == "cs_shared"
+
+
 async def test_expired_and_scheduled_purchases_give_no_access(doc_id):
     await database.create_document_purchase(
         "id:expired", doc_id, NOW - timedelta(days=2), "admin", expires_at=NOW - timedelta(days=1)
@@ -196,12 +234,27 @@ async def test_a_paid_session_creates_the_access_once(doc_id):
     assert await database.has_document_purchase(["id:buyer@example.it"], doc_id)
 
 
-async def test_a_second_payment_for_an_owned_document_is_flagged_not_duplicated(doc_id):
+async def test_a_second_payment_for_an_owned_document_is_flagged_for_refund_not_duplicated(doc_id, monkeypatch):
     from sister import purchases_billing as pb
 
+    activity = []
+
+    async def _record_activity(action, **kwargs):
+        activity.append({"action": action, **kwargs})
+
+    monkeypatch.setattr(database, "record_activity", _record_activity)
     await pb.fulfil_checkout_session(_session(doc_id))
     assert await pb.fulfil_checkout_session(_session(doc_id, id="cs_test_other")) == "already_owned"
     assert len(await database.list_document_purchases()) == 1
+    assert activity == [{
+        "action": "admin.document_purchase.refund_required",
+        "actor": "Stripe",
+        "source": "stripe_webhook",
+        "status": "review",
+        "target": f"document:{doc_id}",
+        "params": {"document_id": doc_id, "payment_ref": "cs_test_other"},
+        "result": {"refund_required": True, "amount_cents": 1290, "currency": "EUR"},
+    }]
 
 
 @pytest.mark.parametrize(

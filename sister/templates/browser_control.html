@@ -2,7 +2,7 @@
 {% from "components/hero.html" import hero_section %}
 {% from "components/related_links.html" import related_pages %}
 
-{% block page_title %}Browser Control{% endblock %}
+{% block page_title %}Controllo browser{% endblock %}
 
 {% block extra_css %}
 {{ super() }}
@@ -11,8 +11,8 @@
 
 {% block content %}
 {# ── Hero ────────────────────────────────────────────────────────────────── #}
-{% call hero_section('Browser Control', 'fa-window-maximize', '/', 'Dashboard',
-                     breadcrumb_parent='Dashboard', breadcrumb_current='Browser Control') %}
+{% call hero_section('Controllo browser', 'fa-window-maximize', '/', 'Panoramica',
+                     breadcrumb_parent='Panoramica', breadcrumb_current='Controllo browser') %}
 Gestisci la sessione Playwright / autenticazione SISTER
 {% endcall %}
 
@@ -129,7 +129,7 @@ Gestisci la sessione Playwright / autenticazione SISTER
         ("/forms", "Query", "Invia una richiesta con la sessione attiva.", "fa-clipboard-list"),
         ("/results", "Risultati", "Segui lo stato e apri le risposte salvate.", "fa-database"),
         ("/guide", "Guida utente", "Consulta istruzioni e passaggi operativi.", "fa-book-open"),
-        ("/cheatsheet", "Cheat sheet", "Rivedi rapidamente i dati da preparare.", "fa-bolt")
+        ("/cheatsheet", "Scheda rapida", "Rivedi rapidamente i dati da preparare.", "fa-bolt")
     ]) }}
 </div>
 {% endblock %}

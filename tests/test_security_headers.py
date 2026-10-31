@@ -82,10 +82,17 @@ def test_swagger_ui_adds_italian_accessible_shell_and_local_theme_assets():
     assert '<html lang="it">' in html
     assert '<nav aria-label="Navigazione SISTER">' in html
     assert '<main id="main-content"' in html
-    assert 'href="/static/css/swagger_ui.css?v=20261030a"' in html
-    assert 'src="/static/js/swagger_ui.js?v=20261030a"' in html
+    assert 'href="/static/css/swagger_ui.css?v=20261030c"' in html
+    assert 'src="/static/js/swagger_ui.js?v=20261030c"' in html
     assert 'id="sister-swagger-theme" type="button" aria-pressed="false"' in html
     assert '</main>\n    <script src="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui-bundle.js">' in html
+
+    from pathlib import Path
+
+    css = (Path(__file__).parents[1] / "sister/static/css/swagger_ui.css").read_text()
+    assert '#swagger-ui [class^="json-schema-2020-12"]' in css
+    assert "#swagger-ui .json-schema-2020-12-expand-deep-button" in css
+    assert "#swagger-ui .info a .url" in css
 
 
 def test_root_security_metadata_and_app_icons_are_served(main_module):
@@ -124,6 +131,56 @@ def test_root_security_metadata_and_app_icons_are_served(main_module):
         assert 'rel="apple-touch-icon" sizes="180x180"' in page.text
         assert 'rel="shortcut icon" type="image/x-icon" href="/static/icons/favicon.ico"' in page.text
         assert "sister_font_preload.js?v=20261030a" in page.text
+
+
+def test_static_cache_headers_and_gzip_follow_asset_versioning(tmp_path):
+    from fastapi import FastAPI
+    from fastapi.staticfiles import StaticFiles
+    from starlette.middleware.gzip import GZipMiddleware
+    from starlette.testclient import TestClient
+
+    from sister.main import StaticCacheMiddleware
+
+    static = tmp_path / "static"
+    assets = {
+        "vendor/bootstrap-5.3.2/css/bootstrap.min.css": "body{color:#123456}\n" * 180,
+        "vendor/fonts/fonts.css": "@font-face{font-family:test}\n" * 80,
+        "aecs4u-theme/css/theme.css": "body{color:#123456}\n" * 80,
+        "js/sister_actions.js": "window.sisterActions = {};\n" * 120,
+    }
+    for relative_path, content in assets.items():
+        path = static / relative_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content)
+
+    app = FastAPI()
+    app.mount("/static", StaticFiles(directory=static), name="static")
+    app.add_middleware(GZipMiddleware, minimum_size=1024)
+    app.add_middleware(StaticCacheMiddleware)
+    client = TestClient(app)
+
+    vendor = client.get("/static/vendor/bootstrap-5.3.2/css/bootstrap.min.css")
+    assert vendor.status_code == 200
+    assert vendor.headers["cache-control"] == "public, max-age=31536000, immutable"
+    assert vendor.headers["content-encoding"] == "gzip"
+    assert vendor.text == assets["vendor/bootstrap-5.3.2/css/bootstrap.min.css"]
+
+    theme = client.get("/static/aecs4u-theme/css/theme.css?v=20261030a")
+    assert theme.headers["cache-control"] == "public, max-age=31536000, immutable"
+    assert theme.headers["content-encoding"] == "gzip"
+
+    unversioned_vendor = client.get("/static/vendor/fonts/fonts.css")
+    assert unversioned_vendor.headers["cache-control"] == "no-cache"
+
+    sister_asset = client.get("/static/js/sister_actions.js?v=20261030a")
+    assert sister_asset.headers["cache-control"] == "no-cache"
+    assert sister_asset.headers.get("etag")
+    revalidated = client.get(
+        "/static/js/sister_actions.js?v=20261030a",
+        headers={"If-None-Match": sister_asset.headers["etag"]},
+    )
+    assert revalidated.status_code == 304
+    assert revalidated.headers["cache-control"] == "no-cache"
 
 
 def test_server_errors_are_generic_and_include_a_request_id():

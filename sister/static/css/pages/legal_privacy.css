@@ -23,3 +23,27 @@
     align-items: center;
     min-height: 24px;
 }
+
+[data-bs-theme="dark"] .legal-page a:not(.btn) {
+    color: #a7c7ff !important;
+}
+
+[data-bs-theme="dark"] .legal-page a.btn-outline-primary {
+    color: #a7c7ff !important;
+    border-color: #a7c7ff !important;
+}
+
+[data-bs-theme="dark"] .legal-page a.btn-outline-primary:hover,
+[data-bs-theme="dark"] .legal-page a.btn-outline-primary:focus-visible {
+    background-color: #1d4ed8 !important;
+    border-color: #1d4ed8 !important;
+    color: #fff !important;
+}
+
+.back-to-top,
+.back-to-top:hover,
+.back-to-top:focus-visible {
+    background-color: #1d4ed8 !important;
+    border-color: #1d4ed8 !important;
+    color: #fff !important;
+}

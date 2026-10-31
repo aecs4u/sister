@@ -14,7 +14,7 @@
     <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
         <div>
             <h1 class="h2 mb-1">Registro accessi</h1>
-            <p class="text-muted mb-0">Ultime {{ events|length }} operazioni amministrative sui permessi dei documenti.</p>
+            <p class="text-muted mb-0">Ultime {{ events|length }} operazioni amministrative su permessi e pagamenti dei documenti.</p>
         </div>
         <div class="d-flex gap-2">
             <a class="btn btn-outline-primary" href="/admin/document-purchases">Gestisci acquisti</a>
@@ -24,7 +24,7 @@
 
     <section class="card" aria-labelledby="admin-activity-heading">
         <div class="card-body border-bottom">
-            <h2 class="h5 mb-0" id="admin-activity-heading">Modifiche ai permessi</h2>
+            <h2 class="h5 mb-0" id="admin-activity-heading">Attività su permessi e pagamenti</h2>
         </div>
         <div class="table-responsive">
             <table class="table table-striped table-hover align-middle mb-0">
@@ -46,17 +46,23 @@
                             {% if event.action == 'admin.document_purchase.create' %}Registrazione acquisto
                             {% elif event.action == 'admin.document_purchase.update' %}Modifica acquisto
                             {% elif event.action == 'admin.document_purchase.delete' or event.action == 'admin.document_purchase.revoke' %}Revoca accesso
+                            {% elif event.action == 'admin.document_purchase.refund_required' %}Rimborso da verificare
                             {% else %}{{ event.action }}{% endif %}
                         </td>
                         <td>
                             {% if event.status == 'success' %}<span class="badge text-bg-success">Completata</span>
                             {% elif event.status == 'rejected' %}<span class="badge text-bg-warning">Rifiutata</span>
+                            {% elif event.status == 'review' %}<span class="badge text-bg-warning">Da verificare</span>
                             {% else %}<span class="badge text-bg-danger">Errore</span>{% endif %}
                         </td>
                         <td class="small">
                             {% set p = event.params or {} %}
                             {% if p.user_id %}<div><span class="text-muted">Utente</span> <code>{{ p.user_id }}</code>{% if p.old_user_id %} <span class="text-muted">(prima</span> <code>{{ p.old_user_id }}</code><span class="text-muted">)</span>{% endif %}</div>{% endif %}
                             {% if p.document_id %}<div><span class="text-muted">Documento</span> <a href="/documents/{{ p.document_id }}">#{{ p.document_id }}</a>{% if p.old_document_id %} <span class="text-muted">(prima #{{ p.old_document_id }})</span>{% endif %}</div>{% endif %}
+                            {% if p.payment_ref %}<div><span class="text-muted">Riferimento pagamento</span> <code>{{ p.payment_ref }}</code></div>{% endif %}
+                            {% set r = event.result or {} %}
+                            {% if r.refund_required %}<div class="text-warning-emphasis fw-semibold">Rimborso manuale richiesto</div>{% endif %}
+                            {% if r.amount_cents is defined and r.amount_cents is not none %}<div><span class="text-muted">Importo</span> € {{ '%.2f'|format((r.amount_cents|int) / 100)|replace('.', ',') }} {{ r.currency|default('')|upper }}</div>{% endif %}
                             {% if p.reason %}<div><span class="text-muted">Motivo</span> {{ p.reason }}</div>{% elif p.note %}<div><span class="text-muted">Nota</span> {{ p.note }}</div>{% endif %}
                             {% if p.error_code %}<div class="text-danger">Rifiutata: {{ {'bad_key':'chiave utente non valida','bad_document':'ID documento non valido','document_not_found':'documento inesistente','bad_date':'data non valida','future_date':'data futura','bad_expiry':'scadenza non valida','duplicate':'accesso già presente','not_found':'acquisto inesistente','note_too_long':'nota troppo lunga'}.get(p.error_code, p.error_code) }}</div>{% endif %}
                             {% if event.error %}<div class="text-danger">{{ event.error }}</div>{% endif %}

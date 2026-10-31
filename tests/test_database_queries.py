@@ -8,6 +8,7 @@ import copy
 import gc
 import warnings
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 
 import pytest
 from sqlalchemy import update
@@ -97,6 +98,68 @@ async def test_find_parcel_document_ids_uses_normalized_mortgage_properties(monk
     sql = captured["sql"].lower()
     assert "join mortgage_inspection_property" in sql
     assert "join v_cadastral_unit" in sql
+
+
+@pytest.mark.asyncio
+async def test_iter_all_documents_streams_browse_metadata_in_configured_batches(monkeypatch):
+    class StreamResult:
+        def __init__(self, rows):
+            self.rows = iter(rows)
+            self.closed = False
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            try:
+                return next(self.rows)
+            except StopIteration:
+                raise StopAsyncIteration from None
+
+        async def close(self):
+            self.closed = True
+
+    document = SimpleNamespace(
+        id=321,
+        file_name="document-321.pdf",
+        document_type="other",
+        file_format="PDF",
+        file_size=128,
+        subject_text="Example document",
+        requested_at=None,
+        view_subtype=None,
+        reference_date=None,
+        protocol=None,
+        protocol_year=None,
+        subject_search_scope=None,
+        subject_search_province=None,
+        created_at=datetime(2026, 10, 30, 12, 0, 0),
+    )
+    result = StreamResult([(document, None, None, "request-321")])
+
+    class Session:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_exc):
+            return None
+
+        async def stream(self, statement):
+            self.statement = statement
+            return result
+
+    session = Session()
+    monkeypatch.setattr(database, "_get_session_factory", lambda: lambda: session)
+
+    rows = [row async for row in database.iter_all_documents(batch_size=7)]
+
+    assert len(rows) == 1
+    assert rows[0]["id"] == 321
+    assert rows[0]["response_id"] == "request-321"
+    assert rows[0]["xml_content"] == ""
+    assert session.statement.get_execution_options()["yield_per"] == 7
+    assert "document_content" not in str(session.statement).lower()
+    assert result.closed is True
 
 
 @pytest.mark.asyncio
@@ -222,6 +285,42 @@ async def test_find_subject_document_associations_uses_all_normalized_relationsh
         "subunit": "8",
     }]
     assert found[202] == {"sources": {"mortgage_party"}, "properties": []}
+
+
+@pytest.mark.asyncio
+async def test_get_document_group_siblings_uses_request_and_filename_stem(monkeypatch):
+    class Result:
+        def __init__(self, rows):
+            self.rows = rows
+
+        def all(self):
+            return self.rows
+
+    class Session:
+        def __init__(self):
+            self.statements = []
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_exc):
+            return None
+
+        async def execute(self, statement):
+            self.statements.append(statement)
+            if len(self.statements) == 1:
+                return Result([SimpleNamespace(request_id=17, file_name=r"archive\visura.p7m")])
+            return Result([])
+
+    session = Session()
+    monkeypatch.setattr(database, "_get_session_factory", lambda: lambda: session)
+
+    assert await database.get_document_group_siblings({101}) == []
+
+    assert len(session.statements) == 2
+    sibling_sql = str(session.statements[1]).lower()
+    assert "document.request_id in" in sibling_sql
+    assert "regexp_replace" in sibling_sql
 
 
 # ---------------------------------------------------------------------------

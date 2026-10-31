@@ -24,8 +24,16 @@ def _stub_unrelated_detail_queries(monkeypatch):
     async def _empty(*_args, **_kwargs):
         return []
 
+    async def _empty_document_owners(*_args, **_kwargs):
+        return {}
+
+    async def _empty_document_ids(*_args, **_kwargs):
+        return set()
+
     monkeypatch.setattr(web, "get_db_properties_for_response", _empty)
     monkeypatch.setattr(web, "get_db_owners_for_response", _empty)
+    monkeypatch.setattr(web, "get_document_owner_fiscal_codes", _empty_document_owners)
+    monkeypatch.setattr(web, "get_subject_document_ids_for_fiscal_codes", _empty_document_ids)
 
 
 def _fake_request():
@@ -74,18 +82,29 @@ def test_location_page_keeps_owner_visura_links_from_other_pages():
         "comune": "MILANO",
         "foglio": "1",
         "particella": "2",
-        "intestati_json": '[{"CF":"' + owner_cf + '"}]',
     }
     owner_document = {
         "id": 99,
         "document_type": "visura_soggetto",
-        "oggetto": f"Visura soggetto ({owner_cf})",
+        "filename": f"visura-soggetto-{owner_cf}.pdf",
     }
 
-    prop_map = web._build_property_map([property_document], owner_subject_docs=[owner_document])
+    prop_map = web._build_property_map(
+        [property_document],
+        owner_subject_docs=[owner_document],
+        owner_fiscal_codes_by_document_id={1: [owner_cf.lower()]},
+    )
     owner_links = prop_map["immobili"][0]["fogli"][0]["particelle"][0]["subalternos"][0]["docs"][0]["owner_docs"]
 
     assert [document["id"] for document in owner_links] == [99]
+
+    hidden_owner_map = web._build_property_map(
+        [dict(property_document)],
+        owner_subject_docs=[],
+        owner_fiscal_codes_by_document_id={1: [owner_cf]},
+    )
+    hidden_owner_links = hidden_owner_map["immobili"][0]["fogli"][0]["particelle"][0]["subalternos"][0]["docs"][0]["owner_docs"]
+    assert hidden_owner_links == []
 
 
 @pytest.mark.asyncio
@@ -104,7 +123,22 @@ async def test_documents_hub_paginates_and_filters_all_favorites_before_slicing(
         for document_id in range(1, 206)
     ]
 
-    async def _get_all_documents(**_kwargs):
+    streamed_catalog_calls = 0
+    purchased_document_calls = 0
+
+    async def _iter_all_documents():
+        nonlocal streamed_catalog_calls
+        streamed_catalog_calls += 1
+        for document in documents:
+            yield document
+
+    async def _visible_ids(user):
+        return None if user.role == "admin" else {document["id"] for document in documents}
+
+    async def _get_documents_by_ids(document_ids):
+        nonlocal purchased_document_calls
+        purchased_document_calls += 1
+        assert document_ids == {document["id"] for document in documents}
         return documents
 
     async def _visible_documents(_user, rows):
@@ -113,25 +147,259 @@ async def test_documents_hub_paginates_and_filters_all_favorites_before_slicing(
     async def _favorite_ids(_user_key):
         return {1, 101, 205}
 
-    monkeypatch.setattr(web, "get_all_documents", _get_all_documents)
+    async def _group_siblings(document_ids):
+        assert document_ids == {1, 101, 205}
+        return documents
+
+    monkeypatch.setattr(web, "iter_all_documents", _iter_all_documents)
+    monkeypatch.setattr(web, "_visible_document_ids", _visible_ids)
+    monkeypatch.setattr(web, "get_documents_by_ids", _get_documents_by_ids)
     monkeypatch.setattr(web, "_filter_purchased_documents", _visible_documents)
     monkeypatch.setattr(web, "_favorite_user_key", lambda _user: "id:buyer")
+    monkeypatch.setattr(web, "get_document_group_siblings", _group_siblings)
     monkeypatch.setattr(database, "get_document_favorite_ids", _favorite_ids)
 
-    paged = await web.web_documents(_fake_request(), page=2, user=SimpleNamespace(role="user"))
+    paged = await web.web_documents(_fake_request(), page=2, user=SimpleNamespace(role="admin"))
     paged_context = paged["context"]
+    assert paged_context["total"] == 205
+    assert paged_context["document_file_count"] == 205
     assert paged_context["page"] == 2
     assert paged_context["page_count"] == 3
     assert [document["id"] for document in paged_context["files"]] == list(range(105, 5, -1))
 
     favorites = await web.web_documents(
-        _fake_request(), page=2, favorites=True, user=SimpleNamespace(role="user")
+        _fake_request(), view="files", page=2, favorites=True, user=SimpleNamespace(role="user")
     )
     favorites_context = favorites["context"]
+    assert favorites_context["active_view"] == "files"
     assert favorites_context["favorites_only"] is True
     assert favorites_context["total"] == 3
+    assert favorites_context["document_file_count"] == 3
     assert favorites_context["page"] == favorites_context["page_count"] == 1
     assert [document["id"] for document in favorites_context["files"]] == [205, 101, 1]
+    assert streamed_catalog_calls == 1
+    assert purchased_document_calls == 0  # the favorites file view loads only favorite siblings
+
+
+@pytest.mark.asyncio
+async def test_streamed_document_collapse_matches_full_list_grouping():
+    rows = [
+        {
+            "id": 1,
+            "response_id": "property-request",
+            "document_type": "visura_fabbricati",
+            "filename": "parcel-1.p7m",
+            "file_format": "P7M",
+            "file_size": 120,
+            "created_at": "2026-10-30T00:00:00",
+            "provincia": "MI",
+            "comune": "MILANO",
+            "foglio": "1",
+            "particella": "2",
+        },
+        {
+            "id": 2,
+            "response_id": "separate-import",
+            "document_type": "visura_fabbricati",
+            "filename": "parcel-1.pdf",
+            "file_format": "PDF",
+            "file_size": 90,
+            "created_at": "2026-10-29T00:00:00",
+            "provincia": "MI",
+            "comune": "MILANO",
+            "foglio": "1",
+            "particella": "2",
+        },
+        {
+            "id": 3,
+            "response_id": "subject-request",
+            "document_type": "visura_soggetto",
+            "filename": "subject-RSSMRA85T10A562S.p7m",
+            "file_format": "P7M",
+            "file_size": 110,
+            "oggetto": "Visura soggetto (RSSMRA85T10A562S)",
+        },
+        {
+            "id": 4,
+            "response_id": "subject-import",
+            "document_type": "visura_soggetto",
+            "filename": "subject-RSSMRA85T10A562S.pdf",
+            "file_format": "PDF",
+            "file_size": 80,
+            "oggetto": "Visura soggetto (RSSMRA85T10A562S)",
+        },
+        {
+            "id": 5,
+            "response_id": "inspection-request",
+            "document_type": "ispezione_ipotecaria",
+            "filename": "report-1.pdf",
+            "file_format": "PDF",
+            "file_size": 40,
+        },
+        {
+            "id": 6,
+            "response_id": "inspection-request",
+            "document_type": "ispezione_ipotecaria",
+            "filename": "report-1.xml",
+            "file_format": "XML",
+            "file_size": 30,
+        },
+        {
+            "id": 7,
+            "response_id": "other-request-a",
+            "document_type": "other",
+            "filename": "shared.pdf",
+            "file_format": "PDF",
+            "file_size": 20,
+        },
+        {
+            "id": 8,
+            "response_id": "other-request-b",
+            "document_type": "other",
+            "filename": "shared.pdf",
+            "file_format": "PDF",
+            "file_size": 10,
+        },
+    ]
+
+    async def _rows():
+        for row in rows:
+            yield row
+
+    streamed, raw_count = await web._collapse_streamed_documents(_rows())
+
+    assert raw_count == len(rows)
+    assert streamed == web._collapse_to_logical_docs(rows)
+
+    logical = web._collapse_to_logical_docs(rows)
+    for requested_page in (1, 2):
+        expected, expected_page, expected_page_count, expected_offset = web._paginate_documents(
+            logical, requested_page, page_size=2
+        )
+        (
+            disk_page,
+            disk_page_number,
+            disk_page_count,
+            disk_offset,
+            disk_total,
+            disk_raw_count,
+        ) = await web._page_streamed_documents(_rows(), requested_page, page_size=2)
+        assert disk_page == expected
+        assert (disk_page_number, disk_page_count, disk_offset) == (
+            expected_page,
+            expected_page_count,
+            expected_offset,
+        )
+        assert disk_total == len(logical)
+        assert disk_raw_count == len(rows)
+
+
+@pytest.mark.asyncio
+async def test_documents_location_page_keeps_owner_links_after_catalog_release(monkeypatch):
+    owner_cf = "RSSMRA85T10A562S"
+    documents = [
+        {
+            "id": 1,
+            "document_type": "visura_fabbricati",
+            "filename": "property-1.p7m",
+            "file_format": "P7M",
+            "file_size": 1,
+            "created_at": "2026-10-30T00:00:00",
+            "provincia": "MI",
+            "comune": "MILANO",
+            "foglio": "1",
+            "particella": "2",
+        },
+        {
+            "id": 2,
+            "document_type": "visura_fabbricati",
+            "filename": "property-1.xml",
+            "file_format": "XML",
+            "file_size": 1,
+            "created_at": "2026-10-30T00:00:00",
+            "provincia": "MI",
+            "comune": "MILANO",
+            "foglio": "1",
+            "particella": "2",
+        },
+        *[
+            {
+                "id": document_id,
+                "document_type": "other",
+                "filename": f"document-{document_id}.pdf",
+                "file_format": "PDF",
+                "file_size": 1,
+                "created_at": "2026-10-29T00:00:00",
+            }
+            for document_id in range(3, 102)
+        ],
+        {
+            "id": 102,
+            "document_type": "visura_soggetto",
+            "filename": f"visura-soggetto-{owner_cf}.pdf",
+            "file_format": "PDF",
+            "file_size": 1,
+            "created_at": "2026-10-01T00:00:00",
+        },
+    ]
+
+    async def _iter_documents():
+        for document in documents:
+            yield document
+
+    async def _get_owner_fiscal_codes(document_ids, *, fiscal_codes=()):
+        requested_ids = set(document_ids)
+        if requested_ids == {102}:
+            assert set(fiscal_codes) == {owner_cf}
+            return {2: [owner_cf]}
+        assert requested_ids == {1, 2, *range(3, 102)}
+        assert not fiscal_codes
+        return {2: [owner_cf]}
+
+    async def _get_subject_document_ids(fiscal_codes):
+        assert set(fiscal_codes) == {owner_cf}
+        return {102}
+
+    async def _get_group_siblings(document_ids):
+        ids = set(document_ids)
+        if ids == {102}:
+            return [documents[-1]]
+        if ids == {2}:
+            return documents[:2]
+        return []
+
+    original_build_property_map = web._build_property_map
+    owner_subject_ids_by_page = []
+
+    def _capture_property_map(docs, **kwargs):
+        owner_subject_ids_by_page.append(
+            [document["id"] for document in kwargs.get("owner_subject_docs") or []]
+        )
+        return original_build_property_map(docs, **kwargs)
+
+    monkeypatch.setattr(web, "iter_all_documents", _iter_documents)
+    monkeypatch.setattr(web, "get_document_owner_fiscal_codes", _get_owner_fiscal_codes)
+    monkeypatch.setattr(web, "get_subject_document_ids_for_fiscal_codes", _get_subject_document_ids)
+    monkeypatch.setattr(web, "get_document_group_siblings", _get_group_siblings)
+    monkeypatch.setattr(web, "_build_property_map", _capture_property_map)
+
+    result = await web.web_documents(
+        _fake_request(), view="map", page=1, user=SimpleNamespace(role="admin")
+    )
+
+    context = result["context"]
+    assert context["total"] == 101
+    assert context["page_count"] == 2
+    property_doc = context["prop_map"]["immobili"][0]["fogli"][0]["particelle"][0]["subalternos"][0]["docs"][0]
+    assert [document["id"] for document in property_doc["owner_docs"]] == [102]
+    assert [document["id"] for document in property_doc["related_soggetto_docs"]] == [102]
+
+    later_result = await web.web_documents(
+        _fake_request(), view="map", page=2, user=SimpleNamespace(role="admin")
+    )
+    subject_doc = later_result["context"]["prop_map"]["soggetti"][0]["docs"][0]
+    assert [document["id"] for document in subject_doc["related_immobile_docs"]] == [1]
+    assert owner_subject_ids_by_page == [[102], []]
 
 
 @pytest.mark.asyncio
@@ -1170,3 +1438,116 @@ async def test_building_3d_kmz_route_returns_a_kmz_and_maps_errors(monkeypatch):
     with pytest.raises(HTTPException) as err:
         await web.web_building_3d_kmz(lat=99.0, lng=12.2, user=None)
     assert err.value.status_code == 422
+
+
+def test_admin_activity_shows_duplicate_stripe_payment_for_refund(main_module, monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from sister import database
+
+    admin = SimpleNamespace(role="admin", is_superuser=True)
+
+    async def _recent_activity(*, limit, action_prefix):
+        assert (limit, action_prefix) == (100, "admin.document_purchase.")
+        return [
+            {
+                "action": "admin.document_purchase.refund_required",
+                "actor": "Stripe",
+                "status": "review",
+                "started_at": "2026-10-30T10:00:00+00:00",
+                "params": {"document_id": 456, "payment_ref": "cs_test_ref"},
+                "result": {"refund_required": True, "amount_cents": 1290, "currency": "EUR"},
+            }
+        ]
+
+    monkeypatch.setitem(main_module.app.dependency_overrides, web._require_admin, lambda: admin)
+    monkeypatch.setattr(database, "get_recent_activity", _recent_activity)
+
+    response = TestClient(main_module.app).get("/admin/activity")
+
+    assert response.status_code == 200
+    assert "Rimborso da verificare" in response.text
+    assert "Da verificare" in response.text
+    assert "Rimborso manuale richiesto" in response.text
+    assert "cs_test_ref" in response.text
+    assert "€ 12,90 EUR" in response.text
+    assert "/documents/456" in response.text
+
+
+def test_favorites_breadcrumb_does_not_claim_the_page_is_only_documents(main_module, monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from sister import database
+
+    user = SimpleNamespace(id="favorite-test", role="user")
+
+    async def _empty_favorite_ids(_user_key):
+        return set()
+
+    async def _empty_subject_codes(_user_key, _subject_type):
+        return set()
+
+    async def _empty_documents(_document_ids):
+        return []
+
+    async def _visible_documents(_user, documents):
+        return documents
+
+    monkeypatch.setitem(main_module.app.dependency_overrides, web._require_auth, lambda: user)
+    monkeypatch.setattr(web, "_favorite_user_key", lambda _user: "id:favorite-test")
+    monkeypatch.setattr(web, "get_documents_by_ids", _empty_documents)
+    monkeypatch.setattr(web, "_filter_purchased_documents", _visible_documents)
+    monkeypatch.setattr(database, "get_document_favorite_ids", _empty_favorite_ids)
+    monkeypatch.setattr(database, "get_subject_favorite_codes", _empty_subject_codes)
+
+    response = TestClient(main_module.app).get("/favorites")
+
+    assert response.status_code == 200
+    assert 'aria-label="breadcrumb"' in response.text
+    breadcrumb = response.text.split('aria-label="breadcrumb"', 1)[1].split("</nav>", 1)[0]
+    assert ">Dashboard</a>" in breadcrumb
+    assert 'aria-current="page">I miei preferiti</li>' in breadcrumb
+    assert ">Documenti</a>" not in breadcrumb
+
+
+def test_quick_reference_help_and_browser_titles_are_italian(main_module, monkeypatch):
+    from fastapi.testclient import TestClient
+
+    admin = SimpleNamespace(role="admin", is_superuser=True)
+    monkeypatch.setitem(main_module.app.dependency_overrides, web._require_admin, lambda: admin)
+    client = TestClient(main_module.app)
+
+    quick_reference = client.get("/cheatsheet")
+    help_page = client.get("/help")
+    browser = client.get("/browser")
+
+    assert quick_reference.status_code == help_page.status_code == browser.status_code == 200
+    assert "Scheda rapida operativa SISTER" in quick_reference.text
+    assert 'href="/cheatsheet"' in help_page.text
+    assert "scheda rapida" in help_page.text.casefold()
+    assert "Controllo browser" in browser.text
+    assert "Cheat Sheet" not in quick_reference.text + help_page.text + browser.text
+    assert "Browser Control" not in browser.text
+
+
+def test_direct_theme_sister_pages_hide_unsupported_language_controls(main_module, monkeypatch):
+    from fastapi.testclient import TestClient
+
+    user = SimpleNamespace(id="language-test", role="user", is_superuser=False)
+    monkeypatch.setitem(main_module.app.dependency_overrides, web._require_auth, lambda: user)
+    client = TestClient(main_module.app)
+
+    landing = client.get("/landing")
+    privacy = client.get("/privacy")
+    settings = client.get("/settings")
+    settings_css = client.get("/static/css/sister.css?v=20261030e")
+
+    assert landing.status_code == privacy.status_code == settings.status_code == settings_css.status_code == 200
+    assert ">About</a>" not in landing.text
+    assert ">Informazioni</a>" in landing.text
+    for response in (landing, privacy, settings):
+        assert "Seleziona lingua" not in response.text
+        assert "?lang=" not in response.text
+    assert 'for="language"' in settings.text and 'id="language"' in settings.text
+    assert 'href="/static/css/sister.css?v=20261030e"' in settings.text
+    assert '#general .mb-3:has(> label[for="language"]) { display: none !important; }' in settings_css.text

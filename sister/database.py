@@ -16,11 +16,28 @@ from dataclasses import field as dc_field
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
-from typing import Any, Iterable, Optional
+from typing import Any, AsyncIterator, Iterable, Optional
 from zoneinfo import ZoneInfo
 
 from dotenv import load_dotenv
-from sqlalchemy import String, and_, cast, delete, distinct, func, inspect, or_, text
+from sqlalchemy import (
+    Boolean,
+    Date,
+    Integer,
+    Numeric,
+    String,
+    and_,
+    cast,
+    delete,
+    distinct,
+    func,
+    inspect,
+    literal,
+    null,
+    or_,
+    text,
+    union_all,
+)
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
@@ -34,8 +51,8 @@ from .db_models import (
     ActivityLog,
     ActivityLogAttribute,
     ActivityLogPayload,
-    CalculationSnapshot,
     CadastralUnit,
+    CalculationSnapshot,
     Document,
     DocumentContent,
     DocumentExtraction,
@@ -48,14 +65,14 @@ from .db_models import (
     MortgageInspectionParty,
     MortgageInspectionProperty,
     OwnershipRight,
-    PropertyAffrancationAmount,
-    PropertyOmiOverride,
-    PropertyOmiSelection,
     PageVisit,
     PageVisitError,
     PageVisitFormElement,
-    PropertyActualSize,
     Property,
+    PropertyActualSize,
+    PropertyAffrancationAmount,
+    PropertyOmiOverride,
+    PropertyOmiSelection,
     PropertyValuationPreference,
     Request,
     RequestPayload,
@@ -1713,8 +1730,8 @@ async def get_document_by_id(doc_id: int) -> dict | None:
     return _document_record(doc, unit, comune, request_ref=ref, content=content)
 
 
-async def get_documents_by_ids(document_ids: Iterable[int]) -> list[dict]:
-    """Fetch document metadata (without archived content) for an explicit set of IDs, in bounded SQL batches."""
+async def get_documents_by_ids(document_ids: Iterable[int], *, include_content: bool = False) -> list[dict]:
+    """Fetch explicit document IDs in bounded SQL batches; archived content is opt-in."""
     ids = sorted({int(document_id) for document_id in document_ids if document_id is not None})
     if not ids:
         return []
@@ -1722,13 +1739,106 @@ async def get_documents_by_ids(document_ids: Iterable[int]) -> list[dict]:
     async with _get_session_factory()() as session:
         for offset in range(0, len(ids), 2000):
             batch = ids[offset : offset + 2000]
-            stmt = _document_select(include_content=False).where(Document.id.in_(batch)).order_by(Document.id)
+            stmt = _document_select(include_content=include_content).where(Document.id.in_(batch)).order_by(Document.id)
             rows = (await session.execute(stmt)).all()
-            documents.extend(
-                _document_record(doc, unit, comune, request_ref=ref)
-                for doc, unit, comune, ref in rows
-            )
+            if include_content:
+                documents.extend(
+                    _document_record(doc, unit, comune, request_ref=ref, content=content)
+                    for doc, unit, comune, content, ref in rows
+                )
+            else:
+                documents.extend(
+                    _document_record(doc, unit, comune, request_ref=ref)
+                    for doc, unit, comune, ref in rows
+                )
     return documents
+
+
+async def get_document_owner_fiscal_codes(
+    document_ids: Iterable[int], *, fiscal_codes: Iterable[str] = ()
+) -> dict[int, list[str]]:
+    """Fetch owners for selected files and property files owned by selected subjects."""
+    ids = sorted({int(document_id) for document_id in document_ids if document_id is not None})
+    codes = sorted({str(code).strip().upper() for code in fiscal_codes if str(code or "").strip()})
+    if not ids and not codes:
+        return {}
+
+    stmt = text(
+        """
+        WITH selected_owners AS (
+            SELECT om.document_id, mo.subject_id
+            FROM ownership_mutation om
+            JOIN mutation_owner mo ON mo.mutation_id = om.id
+            WHERE om.document_id = ANY(CAST(:ids AS bigint[]))
+
+            UNION
+
+            SELECT om.document_id, mo.subject_id
+            FROM subject selected_subject
+            JOIN mutation_owner mo ON mo.subject_id = selected_subject.id
+            JOIN ownership_mutation om ON om.id = mo.mutation_id
+            WHERE selected_subject.fiscal_code = ANY(CAST(:codes AS text[]))
+        )
+        SELECT DISTINCT selected_owners.document_id, s.fiscal_code
+        FROM selected_owners
+        JOIN subject s ON s.id = selected_owners.subject_id
+        WHERE nullif(btrim(s.fiscal_code), '') IS NOT NULL
+        ORDER BY selected_owners.document_id, s.fiscal_code
+        """
+    )
+    async with _get_session_factory()() as session:
+        rows = (await session.execute(stmt, {"ids": ids, "codes": codes})).all()
+
+    owners_by_document: dict[int, list[str]] = {}
+    for row in rows:
+        owners_by_document.setdefault(int(row.document_id), []).append(str(row.fiscal_code))
+    return owners_by_document
+
+
+async def get_document_group_siblings(document_ids: Iterable[int]) -> list[dict]:
+    """Fetch metadata for files sharing a request or filename stem with the given documents.
+
+    Subject profiles use this to retain alternate P7M/XML/PDF files when loading
+    a subject-scoped archive, without scanning the complete document catalogue.
+    The caller must apply its document-visibility policy to the returned rows.
+    """
+    ids = sorted({int(document_id) for document_id in document_ids if document_id is not None})
+    if not ids:
+        return []
+
+    request_ids: set[int] = set()
+    filename_stems: set[str] = set()
+    async with _get_session_factory()() as session:
+        for offset in range(0, len(ids), 2000):
+            batch = ids[offset : offset + 2000]
+            rows = (
+                await session.execute(
+                    select(Document.request_id, Document.file_name).where(Document.id.in_(batch))
+                )
+            ).all()
+            for row in rows:
+                if row.request_id is not None:
+                    request_ids.add(int(row.request_id))
+                normalized_name = str(row.file_name or "").replace("\\", "/")
+                stem = Path(normalized_name).stem.casefold()
+                if stem:
+                    filename_stems.add(stem)
+
+        normalized_filename = func.replace(Document.file_name, "\\", "/")
+        filename = func.regexp_replace(normalized_filename, r"^.*/", "")
+        filename_stem = func.lower(func.regexp_replace(filename, r"\.[^.]*$", ""))
+        sibling_conditions = [Document.id.in_(ids)]
+        if request_ids:
+            sibling_conditions.append(Document.request_id.in_(sorted(request_ids)))
+        if filename_stems:
+            sibling_conditions.append(filename_stem.in_(sorted(filename_stems)))
+        sibling_stmt = _document_select(include_content=False).where(or_(*sibling_conditions)).order_by(Document.id)
+        rows = (await session.execute(sibling_stmt)).all()
+
+    return [
+        _document_record(doc, unit, comune, request_ref=ref)
+        for doc, unit, comune, ref in rows
+    ]
 
 
 def parcel_key(comune_id: Any, section: Any, sheet: Any, parcel: Any) -> tuple[int, str, str, str] | None:
@@ -2257,6 +2367,30 @@ async def get_subject_document_ids(fiscal_code: str) -> set[int]:
         return {int(document_id) for document_id in result.scalars().all() if document_id is not None}
 
 
+async def get_subject_document_ids_for_fiscal_codes(fiscal_codes: Iterable[str]) -> set[int]:
+    """Fetch all subject-visura IDs linked to any of the requested fiscal codes."""
+    codes = sorted(
+        {
+            normalized
+            for code in fiscal_codes
+            if (normalized := fiscal_code_key(code))
+        }
+    )
+    if not codes:
+        return set()
+    stmt = text(
+        """
+        SELECT DISTINCT ds.document_id
+        FROM document_subject ds
+        JOIN subject s ON s.id = ds.subject_id
+        WHERE s.fiscal_code = ANY(CAST(:codes AS text[]))
+        """
+    )
+    async with _get_session_factory()() as session:
+        rows = (await session.execute(stmt, {"codes": codes})).scalars().all()
+    return {int(document_id) for document_id in rows if document_id is not None}
+
+
 async def get_subject_fiscal_code_for_document(doc_id: int) -> str | None:
     """Return the canonical queried-subject fiscal code for one document, if indexed."""
     async with _get_session_factory()() as session:
@@ -2533,6 +2667,19 @@ async def get_all_documents(limit: int | None = 100, offset: int = 0) -> list[di
     return [_document_record(doc, unit, comune, request_ref=ref) for doc, unit, comune, ref in rows]
 
 
+async def iter_all_documents(batch_size: int = 500) -> AsyncIterator[dict]:
+    """Stream all document metadata in bounded DB batches, without archived XML content."""
+    stmt = _document_select(include_content=False).order_by(Document.created_at.desc())
+    stmt = stmt.execution_options(yield_per=max(1, int(batch_size)))
+    async with _get_session_factory()() as session:
+        result = await session.stream(stmt)
+        try:
+            async for doc, unit, comune, ref in result:
+                yield _document_record(doc, unit, comune, request_ref=ref)
+        finally:
+            await result.close()
+
+
 async def list_admin_documents(query: str = "", limit: int = 50, offset: int = 0) -> tuple[list[dict], int]:
     """Search indexed documents for the admin catalog, including their current owner counts."""
     search = str(query or "").strip()
@@ -2739,6 +2886,18 @@ async def create_document_purchase(
 ) -> None:
     """Record a purchase or grant; an already active one is refused, a revoked one is re-activated."""
     async with _get_session_factory()() as session:
+        # Serialize equivalent principal keys for this document and duplicate
+        # payment references before checking state. The INSERT below still
+        # uses ON CONFLICT as the database-level guard for the primary key.
+        lock_keys = [f"purchase:{document_id}:{_identity_part(user_id)}"]
+        if payment_ref:
+            lock_keys.append(f"payment:{payment_ref}")
+        for lock_key in sorted(lock_keys):
+            await session.execute(
+                text("SELECT pg_advisory_xact_lock(hashtextextended(:lock_key, 0))"),
+                {"lock_key": lock_key},
+            )
+
         if await session.get(Document, document_id) is None:
             raise PurchaseError("document_not_found")
         if payment_ref:
@@ -2761,20 +2920,43 @@ async def create_document_purchase(
         )
         if same_person.first() is not None:
             raise PurchaseError("duplicate")
+        purchase_values = {
+            "purchased_at": purchased_at,
+            "created_by": created_by,
+            "note": note or None,
+            "source": source or "admin_grant",
+            "amount_cents": amount_cents,
+            "currency": (currency or "").upper() or None,
+            "payment_ref": payment_ref or None,
+            "wallet_tx_id": wallet_tx_id or None,
+            "expires_at": expires_at,
+            "revoked_at": None,
+            "revoked_by": None,
+            "revoked_reason": None,
+            "updated_at": datetime.now(timezone.utc),
+        }
         if purchase is None:
-            purchase = DocumentPurchase(user_id=user_id, document_id=document_id)
-            session.add(purchase)
-        purchase.purchased_at = purchased_at
-        purchase.created_by = created_by
-        purchase.note = note or None
-        purchase.source = source or "admin_grant"
-        purchase.amount_cents = amount_cents
-        purchase.currency = (currency or "").upper() or None
-        purchase.payment_ref = payment_ref or None
-        purchase.wallet_tx_id = wallet_tx_id or None
-        purchase.expires_at = expires_at
-        purchase.revoked_at = purchase.revoked_by = purchase.revoked_reason = None
-        purchase.updated_at = datetime.now(timezone.utc)
+            inserted_user_id = (
+                await session.execute(
+                    pg_insert(DocumentPurchase)
+                    .values(user_id=user_id, document_id=document_id, **purchase_values)
+                    .on_conflict_do_nothing()
+                    .returning(DocumentPurchase.user_id)
+                )
+            ).scalar_one_or_none()
+            if inserted_user_id is None:
+                if payment_ref:
+                    duplicate_payment = await session.execute(
+                        select(DocumentPurchase.user_id).where(DocumentPurchase.payment_ref == payment_ref)
+                    )
+                    if duplicate_payment.first() is not None:
+                        raise PurchaseError("duplicate_payment")
+                raise PurchaseError("duplicate")
+            await session.commit()
+            return
+
+        for field, value in purchase_values.items():
+            setattr(purchase, field, value)
         await session.commit()
 
 
@@ -3039,77 +3221,120 @@ async def get_user_manual_property_valuations(user_id: str, asset_keys: Iterable
     keys = sorted({str(key) for key in asset_keys if re.fullmatch(r"[a-f0-9]{64}", str(key))})
     if not keys:
         return {}
+
+    empty_text = cast(null(), String())
+    empty_numeric = cast(null(), Numeric(14, 2))
+    empty_date = cast(null(), Date())
+    empty_integer = cast(null(), Integer())
+    empty_boolean = cast(null(), Boolean())
+    rows_by_kind = union_all(
+        select(
+            ManualPropertyValuation.asset_key.label("asset_key"),
+            literal("valuation", type_=String()).label("record_type"),
+            ManualPropertyValuation.provider.label("provider"),
+            ManualPropertyValuation.value_min.label("value_min"),
+            ManualPropertyValuation.value_max.label("value_max"),
+            ManualPropertyValuation.source_date.label("source_date"),
+            ManualPropertyValuation.source_url.label("source_url"),
+            ManualPropertyValuation.notes.label("notes"),
+            empty_text.label("preferred_source"),
+            empty_numeric.label("amount"),
+            empty_text.label("zone_code"),
+            empty_integer.label("typology_code"),
+            empty_boolean.label("is_manual"),
+        ).where(ManualPropertyValuation.user_id == user_id, ManualPropertyValuation.asset_key.in_(keys)),
+        select(
+            PropertyValuationPreference.asset_key,
+            literal("preference", type_=String()),
+            empty_text,
+            empty_numeric,
+            empty_numeric,
+            empty_date,
+            empty_text,
+            empty_text,
+            PropertyValuationPreference.preferred_source,
+            empty_numeric,
+            empty_text,
+            empty_integer,
+            empty_boolean,
+        ).where(PropertyValuationPreference.user_id == user_id, PropertyValuationPreference.asset_key.in_(keys)),
+        select(
+            PropertyAffrancationAmount.asset_key,
+            literal("affrancation", type_=String()),
+            empty_text,
+            empty_numeric,
+            empty_numeric,
+            empty_date,
+            empty_text,
+            empty_text,
+            empty_text,
+            PropertyAffrancationAmount.amount,
+            empty_text,
+            empty_integer,
+            empty_boolean,
+        ).where(PropertyAffrancationAmount.user_id == user_id, PropertyAffrancationAmount.asset_key.in_(keys)),
+        select(
+            PropertyOmiOverride.asset_key,
+            literal("omi_override", type_=String()),
+            empty_text,
+            PropertyOmiOverride.value_min,
+            PropertyOmiOverride.value_max,
+            empty_date,
+            empty_text,
+            empty_text,
+            empty_text,
+            empty_numeric,
+            empty_text,
+            empty_integer,
+            empty_boolean,
+        ).where(PropertyOmiOverride.user_id == user_id, PropertyOmiOverride.asset_key.in_(keys)),
+        select(
+            PropertyOmiSelection.asset_key,
+            literal("omi_selection", type_=String()),
+            empty_text,
+            empty_numeric,
+            empty_numeric,
+            empty_date,
+            empty_text,
+            empty_text,
+            empty_text,
+            empty_numeric,
+            PropertyOmiSelection.zone_code,
+            PropertyOmiSelection.typology_code,
+            PropertyOmiSelection.is_manual,
+        ).where(PropertyOmiSelection.user_id == user_id, PropertyOmiSelection.asset_key.in_(keys)),
+    ).subquery("user_property_valuation_rows")
+
     async with _get_session_factory()() as session:
-        valuations = (
+        rows = (
             await session.execute(
-                select(ManualPropertyValuation)
-                .where(
-                    ManualPropertyValuation.user_id == user_id,
-                    ManualPropertyValuation.asset_key.in_(keys),
-                )
-                .order_by(ManualPropertyValuation.provider)
+                select(rows_by_kind).order_by(rows_by_kind.c.record_type, rows_by_kind.c.provider)
             )
-        ).scalars().all()
-        preferences = (
-            await session.execute(
-                select(PropertyValuationPreference)
-                .where(
-                    PropertyValuationPreference.user_id == user_id,
-                    PropertyValuationPreference.asset_key.in_(keys),
-                )
-            )
-        ).scalars().all()
-        affrancation_amounts = (
-            await session.execute(
-                select(PropertyAffrancationAmount).where(
-                    PropertyAffrancationAmount.user_id == user_id,
-                    PropertyAffrancationAmount.asset_key.in_(keys),
-                )
-            )
-        ).scalars().all()
-        omi_overrides = (
-            await session.execute(
-                select(PropertyOmiOverride).where(
-                    PropertyOmiOverride.user_id == user_id,
-                    PropertyOmiOverride.asset_key.in_(keys),
-                )
-            )
-        ).scalars().all()
-        omi_selections = (
-            await session.execute(
-                select(PropertyOmiSelection).where(
-                    PropertyOmiSelection.user_id == user_id,
-                    PropertyOmiSelection.asset_key.in_(keys),
-                )
-            )
-        ).scalars().all()
+        ).mappings().all()
     result: dict[str, dict[str, Any]] = {}
-    for row in valuations:
-        result.setdefault(row.asset_key, {"valuations": [], "preferred_source": None})["valuations"].append({
-            "provider": row.provider,
-            "value_min": row.value_min,
-            "value_max": row.value_max,
-            "source_date": row.source_date,
-            "source_url": row.source_url,
-            "notes": row.notes,
-        })
-    for row in preferences:
-        result.setdefault(row.asset_key, {"valuations": [], "preferred_source": None})["preferred_source"] = row.preferred_source
-    for row in affrancation_amounts:
-        result.setdefault(row.asset_key, {"valuations": [], "preferred_source": None})[
-            "affrancation_amount"
-        ] = row.amount
-    for row in omi_overrides:
-        result.setdefault(row.asset_key, {"valuations": [], "preferred_source": None})["omi_override"] = {
-            "value_min": row.value_min,
-            "value_max": row.value_max,
-        }
-    for row in omi_selections:
-        result.setdefault(row.asset_key, {"valuations": [], "preferred_source": None})["omi_selection"] = {
-            "zone_code": row.zone_code,
-            "typology_code": row.typology_code,
-            "is_manual": row.is_manual,
-        }
+    for row in rows:
+        values = result.setdefault(row["asset_key"], {"valuations": [], "preferred_source": None})
+        if row["record_type"] == "valuation":
+            values["valuations"].append({
+                "provider": row["provider"],
+                "value_min": row["value_min"],
+                "value_max": row["value_max"],
+                "source_date": row["source_date"],
+                "source_url": row["source_url"],
+                "notes": row["notes"],
+            })
+        elif row["record_type"] == "preference":
+            values["preferred_source"] = row["preferred_source"]
+        elif row["record_type"] == "affrancation":
+            values["affrancation_amount"] = row["amount"]
+        elif row["record_type"] == "omi_override":
+            values["omi_override"] = {"value_min": row["value_min"], "value_max": row["value_max"]}
+        elif row["record_type"] == "omi_selection":
+            values["omi_selection"] = {
+                "zone_code": row["zone_code"],
+                "typology_code": row["typology_code"],
+                "is_manual": row["is_manual"],
+            }
     return result
 
 

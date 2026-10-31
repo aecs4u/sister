@@ -278,9 +278,20 @@ def test_metric_card_uses_italian_thousands_and_non_heading_markup(main_module):
 def test_privacy_page_discloses_sister_mapping_data_and_controls(main_module):
     from fastapi.testclient import TestClient
 
-    response = TestClient(main_module.app).get("/privacy")
+    client = TestClient(main_module.app)
+    response = client.get("/privacy")
+    privacy_css = client.get("/static/css/pages/legal_privacy.css?v=20261031c")
 
     assert response.status_code == 200
+    assert privacy_css.status_code == 200
+    assert 'href="/static/css/pages/legal_privacy.css?v=20261031c"' in response.text
+    assert '[data-bs-theme="dark"] .legal-page a:not(.btn)' in privacy_css.text
+    assert "color: #a7c7ff !important;" in privacy_css.text
+    assert '[data-bs-theme="dark"] .legal-page a.btn-outline-primary' in privacy_css.text
+    assert '[data-bs-theme="dark"] .legal-page a.btn-outline-primary:focus-visible' in privacy_css.text
+    assert "color: #fff !important;" in privacy_css.text
+    assert ".back-to-top:focus-visible" in privacy_css.text
+    assert "background-color: #1d4ed8 !important;" in privacy_css.text
     assert "OpenStreetMap Nominatim" in response.text
     assert "indirizzo, il comune e la provincia" in response.text
     assert "SISTER_GEOCODING=off" in response.text

@@ -31,33 +31,36 @@
   });
 
   // Non-admins pay from prepaid credits; show the price basis and balance before they submit.
-  fetch('/api/ui/query-billing', { headers: { 'Accept': 'application/json' } })
-    .then(function (res) { return res.ok ? res.json() : null; })
-    .then(function (data) {
-      if (!data) return;
-      if (!data.enabled || data.admin) return;
-      const firstForm = document.querySelector('.sister-form');
-      const main = document.querySelector('main') || (firstForm && firstForm.parentElement);
-      if (!main) return;
-      const notice = document.createElement('div');
-      notice.className = 'alert alert-info';
-      notice.setAttribute('role', 'status');
-      notice.setAttribute('data-query-billing-notice', '');
-      const balance = data.balance === null ? 'saldo non disponibile' : 'saldo: ' + data.balance + ' crediti';
-      const shared = data.shared_fallback_cost
-        ? ' Prezzo condiviso: ' + data.shared_fallback_cost + ' crediti per riga batch senza prezzo dedicato e per passaggio workflow.'
-        : '';
-      notice.textContent = 'Il prezzo dipende dal comando ed è mostrato prima dell’invio. I batch sono addebitati per riga; i workflow usano il prezzo condiviso per passaggio.' + shared + ' ' + balance + '.';
-      if (firstForm) main.insertBefore(notice, firstForm);
-      else main.prepend(notice);
-    })
-    .catch(function () { /* The server still enforces billing if the balance banner cannot load. */ });
+  // This script is also shared by public pages, where the authenticated endpoint would only 401.
+  if (document.querySelector('.sister-form')) {
+    fetch('/api/ui/query-billing', { headers: { 'Accept': 'application/json' } })
+      .then(function (res) { return res.ok ? res.json() : null; })
+      .then(function (data) {
+        if (!data) return;
+        if (!data.enabled || data.admin) return;
+        const firstForm = document.querySelector('.sister-form');
+        const main = document.querySelector('main') || (firstForm && firstForm.parentElement);
+        if (!main) return;
+        const notice = document.createElement('div');
+        notice.className = 'alert alert-info';
+        notice.setAttribute('role', 'status');
+        notice.setAttribute('data-query-billing-notice', '');
+        const balance = data.balance === null ? 'saldo non disponibile' : 'saldo: ' + data.balance + ' crediti';
+        const shared = data.shared_fallback_cost
+          ? ' Prezzo condiviso: ' + data.shared_fallback_cost + ' crediti per riga batch senza prezzo dedicato e per passaggio workflow.'
+          : '';
+        notice.textContent = 'Il prezzo dipende dal comando ed è mostrato prima dell’invio. I batch sono addebitati per riga; i workflow usano il prezzo condiviso per passaggio.' + shared + ' ' + balance + '.';
+        if (firstForm) main.insertBefore(notice, firstForm);
+        else main.prepend(notice);
+      })
+      .catch(function () { /* The server still enforces billing if the balance banner cannot load. */ });
+  }
 
   // CSV placeholder templates per query type
   const BATCH_CSV_TEMPLATES = {
     'search':              'provincia,comune,foglio,particella,tipo_catasto\nRoma,ROMA,100,50,T\nTrieste,TRIESTE,9,166,F',
     'intestati':           'provincia,comune,foglio,particella,tipo_catasto,subalterno\nRoma,ROMA,100,50,F,3\nTrieste,TRIESTE,9,166,F,1',
-    'soggetto':            'codice_fiscale,tipo_catasto,provincia\nRSSMRI85E28H501E,,\nBNCLRA90A41H501Z,F,Roma',
+    'soggetto':            'codice_fiscale,tipo_catasto,provincia\nRSSMRA85T10A562S,,\nCNNMNL74L04G273K,F,Roma',
     'persona-giuridica':   'vat_code,tipo_catasto,provincia\n02471840997,,\nTIGULLIO IMMOBILIARE SRL,,Torino',
     'elenco-immobili':     'provincia,comune,tipo_catasto,foglio\nRoma,ROMA,T,100\nTrieste,TRIESTE,F,',
     'indirizzo':           'provincia,comune,indirizzo,tipo_catasto\nRoma,ROMA,VIA ROMA,T\nTerni,TERNI,DEL RIVO,F',

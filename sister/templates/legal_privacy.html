@@ -1,13 +1,14 @@
 {% extends "legal/privacy.html" %}
-{# The theme's privacy policy plus two fixes it does not ship: wide tables scroll instead of overflowing small screens, and
-   heading levels are normalised (sister_a11y.js). #}
+{# The theme's privacy policy with SISTER fixes: remove its language selector, contain wide tables, and normalize
+   heading levels (sister_a11y.js). #}
+{% block language_switcher %}{% endblock %}
 {% block extra_head %}
 {{ super() }}
 {% include "components/sister_meta_links.html" %}
 {% endblock %}
 {% block extra_css %}
 {{ super() }}
-<link rel="stylesheet" href="/static/css/pages/legal_privacy.css?v=20261030b">
+<link rel="stylesheet" href="/static/css/pages/legal_privacy.css?v=20261031c">
 {% endblock %}
 {% block content %}
 {{ super() }}

@@ -1,5 +1,6 @@
 {% extends "account/settings.html" %}
 {# The shared settings page extends the theme shell directly: add SISTER's own stylesheet and helpers to it. #}
+{% block language_switcher %}{% endblock %}
 {% block extra_head %}
 {{ super() }}
 {% include "components/sister_meta_links.html" %}
@@ -7,7 +8,7 @@
 {% block extra_css %}
 {{ super() }}
 <meta name="csrf-token" content="{{ csrf_token(request) }}">
-<link rel="stylesheet" href="/static/css/sister.css?v=20261030d">
+<link rel="stylesheet" href="/static/css/sister.css?v=20261030e">
 {% endblock %}
 {% block extra_js %}
 {{ super() }}

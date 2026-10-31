@@ -18,7 +18,7 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from threading import Lock
-from typing import Any, Optional
+from typing import Any, AsyncIterable, Optional
 from urllib.parse import urlencode, urlsplit
 from uuid import uuid4
 
@@ -45,14 +45,18 @@ from .database import (
     get_db_owners_for_response,
     get_db_properties_for_response,
     get_document_by_id,
+    get_document_group_siblings,
+    get_document_owner_fiscal_codes,
     get_document_structured_extraction,
     get_documents_by_ids,
     get_documents_for_response,
     get_response,
     get_result_record,
     get_subject_document_ids,
+    get_subject_document_ids_for_fiscal_codes,
     get_subject_fiscal_code_for_document,
     get_subject_name,
+    iter_all_documents,
     parcel_key,
     record_activity,
     search_person_profiles,
@@ -286,6 +290,34 @@ def _extract_cf(d: dict) -> str | None:
     return None
 
 
+def _subject_visura_fiscal_code(doc: dict) -> str | None:
+    """Identify the queried subject without mistaking XML owner rows for the subject."""
+    queried_code = str(doc.get("queried_fiscal_code") or "").strip().upper()
+    if _CF_RE.fullmatch(queried_code):
+        return queried_code
+    for source in (doc.get("oggetto") or "", doc.get("filename") or ""):
+        match = _CF_RE.search(source.upper())
+        if match:
+            return match.group(1).upper()
+    return None
+
+
+def _legacy_document_owner_fiscal_codes(doc: dict) -> set[str]:
+    """Read owner codes from legacy metadata when a caller still supplies it."""
+    raw = doc.get("intestati_json")
+    try:
+        rows = json.loads(raw) if isinstance(raw, str) else raw
+    except (TypeError, ValueError):
+        return set()
+    if not isinstance(rows, list):
+        return set()
+    return {
+        str(row["CF"]).strip().upper()
+        for row in rows
+        if isinstance(row, dict) and row.get("CF") and str(row["CF"]).strip()
+    }
+
+
 def _document_subject_fiscal_code(doc: dict) -> str | None:
     """Return the queried subject's code from structured XML, with filename fallback."""
     content = doc.get("xml_content")
@@ -495,54 +527,538 @@ def _collapse_to_logical_docs(docs: list[dict]) -> list[dict]:
     return logical
 
 
-def _link_related_visura_docs(docs: list[dict]) -> None:
+class _LogicalDocumentAccumulator:
+    """Collapse document rows without retaining every raw row in memory.
+
+    The existing collapse rules use logical identity first, then join groups
+    sharing a basename when at least two file extensions occur. Keep only one
+    primary metadata row and compact attachment summaries while the DB cursor
+    streams the catalogue.
+    """
+
+    def __init__(self) -> None:
+        self._groups_by_identity: dict[object, int] = {}
+        self._groups: list[dict[str, Any]] = []
+        self._groups_by_basename: dict[str, set[int]] = {}
+        self._extensions_by_basename: dict[str, set[str]] = {}
+
+    @staticmethod
+    def _format_rank(document: dict) -> int:
+        return {"P7M": 0, "XML": 1}.get((document.get("file_format") or "").upper(), 2)
+
+    @staticmethod
+    def _logical_key(document: dict) -> object:
+        request_id = document.get("response_id")
+        document_type = document.get("document_type") or ""
+        filename = document.get("filename")
+        if document_type == "ispezione_ipotecaria":
+            return (request_id, document_type, Path(filename or str(document.get("id"))).stem.casefold())
+        if document_type == "visura_soggetto":
+            fiscal_code = _extract_cf(document)
+            if fiscal_code:
+                scope = _subject_search_scope(
+                    filename,
+                    stored_scope=document.get("subject_search_scope"),
+                    stored_province=document.get("subject_search_province"),
+                )
+                return (
+                    request_id,
+                    document_type,
+                    fiscal_code,
+                    _subject_cadastre_type(document) or "",
+                    document.get("visura_subtype") or "",
+                    document.get("situazione_al") or "",
+                    scope["search_scope_label"],
+                )
+        if document.get("foglio") or document.get("particella"):
+            return (
+                request_id,
+                document_type,
+                document.get("provincia"),
+                document.get("comune"),
+                document.get("foglio"),
+                document.get("particella"),
+                document.get("subalterno"),
+                document.get("sezione_urbana"),
+            )
+        return (request_id, document_type, document.get("oggetto") or filename or str(document.get("id")))
+
+    def add(self, document: dict) -> None:
+        identity = self._logical_key(document)
+        group_index = self._groups_by_identity.get(identity)
+        rank = self._format_rank(document)
+        sort_key = (rank, document.get("id") or 0)
+        if group_index is None:
+            group_index = len(self._groups)
+            self._groups_by_identity[identity] = group_index
+            self._groups.append(
+                {
+                    "primary": dict(document),
+                    "primary_sort_key": sort_key,
+                    "file_items": [],
+                }
+            )
+        group = self._groups[group_index]
+        if sort_key < group["primary_sort_key"]:
+            group["primary"] = dict(document)
+            group["primary_sort_key"] = sort_key
+
+        file_size = document.get("file_size") or 0
+        file_items = group["file_items"]
+        file_items.append(
+            (
+                sort_key,
+                {
+                    "id": document.get("id"),
+                    "file_format": (document.get("file_format") or "").upper(),
+                    "filename": document.get("filename") or "",
+                    "size_bytes": file_size,
+                    "size_human": _human_size(file_size) if file_size else "",
+                },
+                file_size,
+            )
+        )
+
+        filename = str(document.get("filename") or "")
+        file_path = Path(filename)
+        basename = file_path.stem.casefold()
+        extension = file_path.suffix.casefold()
+        if basename and extension:
+            self._groups_by_basename.setdefault(basename, set()).add(group_index)
+            self._extensions_by_basename.setdefault(basename, set()).add(extension)
+
+    def finish(self) -> list[dict]:
+        parents = list(range(len(self._groups)))
+
+        def _find_group(index: int) -> int:
+            while parents[index] != index:
+                parents[index] = parents[parents[index]]
+                index = parents[index]
+            return index
+
+        for basename, group_indexes in self._groups_by_basename.items():
+            if len(self._extensions_by_basename[basename]) < 2:
+                continue
+            first = next(iter(group_indexes))
+            for group_index in group_indexes:
+                first_root = _find_group(first)
+                group_root = _find_group(group_index)
+                if group_root != first_root:
+                    parents[group_root] = first_root
+
+        merged_groups: dict[int, dict[str, Any]] = {}
+        for group_index, source in enumerate(self._groups):
+            root = _find_group(group_index)
+            target = merged_groups.get(root)
+            if target is None:
+                merged_groups[root] = source
+                continue
+            if source["primary_sort_key"] < target["primary_sort_key"]:
+                target["primary"] = source["primary"]
+                target["primary_sort_key"] = source["primary_sort_key"]
+            target["file_items"].extend(source["file_items"])
+            source["file_items"] = []
+
+        logical: list[dict] = []
+        for group in merged_groups.values():
+            ordered = sorted(group["file_items"], key=lambda item: item[0])
+            primary = group["primary"]
+            logical.append(_finalize_logical_document(primary, [item[1] for item in ordered]))
+
+        self._groups.clear()
+        self._groups_by_identity.clear()
+        self._groups_by_basename.clear()
+        self._extensions_by_basename.clear()
+        return logical
+
+
+def _finalize_logical_document(primary: dict, ordered_files: list[dict]) -> dict:
+    """Add the same derived fields used by both in-memory and disk-backed grouping."""
+    primary["files"] = ordered_files
+    primary["n_files"] = len(ordered_files)
+    primary["n_pdf"] = sum(1 for item in ordered_files if item["file_format"] == "PDF")
+    primary["total_file_size"] = sum(item.get("size_bytes") or 0 for item in ordered_files)
+    primary["total_size_human"] = _human_size(primary["total_file_size"]) if primary["total_file_size"] else ""
+    primary["display_name"], primary["cadastral_display_name"] = _document_display_name(primary)
+    primary_structured = (primary.get("file_format") or "").upper() in ("P7M", "XML")
+    is_ispezione = (primary.get("document_type") or "") == "ispezione_ipotecaria"
+    primary["viewable"] = is_ispezione or (
+        primary_structured and (primary.get("document_type") or "") in _VIEWABLE_DOC_TYPES
+    )
+    if primary.get("document_type") == "visura_soggetto":
+        primary["tipo_catasto"] = _subject_cadastre_type(primary)
+        primary.update(
+            _subject_search_scope(
+                primary.get("filename"),
+                stored_scope=primary.get("subject_search_scope"),
+                stored_province=primary.get("subject_search_province"),
+            )
+        )
+        fiscal_code = _extract_cf(primary)
+        if fiscal_code and len(fiscal_code) == 16:
+            primary["cf"] = fiscal_code
+        elif fiscal_code and len(fiscal_code) == 11 and fiscal_code.isdigit():
+            primary["vat"] = fiscal_code
+    return primary
+
+
+async def _collapse_streamed_documents(documents: AsyncIterable[dict]) -> tuple[list[dict], int]:
+    accumulator = _LogicalDocumentAccumulator()
+    raw_count = 0
+    async for document in documents:
+        raw_count += 1
+        accumulator.add(document)
+    return accumulator.finish(), raw_count
+
+
+async def _page_streamed_documents(
+    documents: AsyncIterable[dict], page: int, page_size: int = _DOCUMENTS_PAGE_SIZE
+) -> tuple[list[dict], int, int, int, int, int]:
+    """Group a streamed catalogue on disk and materialize only one logical page."""
+    import sqlite3
+    import tempfile
+
+    page_size = max(1, int(page_size))
+    raw_count = 0
+    with tempfile.TemporaryDirectory(prefix="sister-documents-") as temp_dir:
+        connection = sqlite3.connect(Path(temp_dir) / "catalog.sqlite")
+        try:
+            connection.execute("PRAGMA journal_mode=OFF")
+            connection.execute("PRAGMA synchronous=OFF")
+            connection.execute("PRAGMA temp_store=FILE")
+            connection.execute("PRAGMA cache_size=-8192")
+            connection.executescript(
+                """
+                CREATE TABLE logical_groups (
+                    id INTEGER PRIMARY KEY,
+                    identity TEXT NOT NULL UNIQUE,
+                    primary_json TEXT NOT NULL,
+                    primary_rank INTEGER NOT NULL,
+                    primary_document_id INTEGER NOT NULL,
+                    primary_created_at TEXT NOT NULL,
+                    first_sequence INTEGER NOT NULL
+                );
+                CREATE TABLE catalog_files (
+                    group_id INTEGER NOT NULL,
+                    file_rank INTEGER NOT NULL,
+                    file_document_id INTEGER NOT NULL,
+                    sequence INTEGER NOT NULL,
+                    file_format TEXT NOT NULL,
+                    basename TEXT NOT NULL,
+                    extension TEXT NOT NULL,
+                    file_json TEXT NOT NULL
+                );
+                CREATE INDEX ix_catalog_files_group ON catalog_files(group_id);
+                CREATE TABLE basename_groups (
+                    basename TEXT NOT NULL,
+                    extension TEXT NOT NULL,
+                    group_id INTEGER NOT NULL,
+                    PRIMARY KEY (basename, extension, group_id)
+                );
+                CREATE INDEX ix_basename_groups_name ON basename_groups(basename);
+                CREATE TABLE group_parents (
+                    group_id INTEGER PRIMARY KEY,
+                    parent_id INTEGER NOT NULL
+                );
+                """
+            )
+
+            async for document in documents:
+                raw_count += 1
+                identity = json.dumps(
+                    _LogicalDocumentAccumulator._logical_key(document),
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                    default=str,
+                )
+                rank = _LogicalDocumentAccumulator._format_rank(document)
+                document_id = int(document.get("id") or 0)
+                existing = connection.execute(
+                    "SELECT id, primary_rank, primary_document_id FROM logical_groups WHERE identity = ?",
+                    (identity,),
+                ).fetchone()
+                if existing is None:
+                    cursor = connection.execute(
+                        """
+                        INSERT INTO logical_groups (
+                            identity, primary_json, primary_rank, primary_document_id,
+                            primary_created_at, first_sequence
+                        ) VALUES (?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            identity,
+                            json.dumps(document, ensure_ascii=False, default=str),
+                            rank,
+                            document_id,
+                            str(document.get("created_at") or ""),
+                            raw_count,
+                        ),
+                    )
+                    group_id = int(cursor.lastrowid)
+                    connection.execute(
+                        "INSERT INTO group_parents (group_id, parent_id) VALUES (?, ?)",
+                        (group_id, group_id),
+                    )
+                else:
+                    group_id = int(existing[0])
+                    if (rank, document_id) < (int(existing[1]), int(existing[2])):
+                        connection.execute(
+                            """
+                            UPDATE logical_groups
+                            SET primary_json = ?, primary_rank = ?, primary_document_id = ?, primary_created_at = ?
+                            WHERE id = ?
+                            """,
+                            (
+                                json.dumps(document, ensure_ascii=False, default=str),
+                                rank,
+                                document_id,
+                                str(document.get("created_at") or ""),
+                                group_id,
+                            ),
+                        )
+
+                file_size = document.get("file_size") or 0
+                filename = str(document.get("filename") or "")
+                file_path = Path(filename)
+                basename = file_path.stem.casefold()
+                extension = file_path.suffix.casefold()
+                file_format = (document.get("file_format") or "").upper()
+                file_item = {
+                    "id": document.get("id"),
+                    "file_format": file_format,
+                    "filename": filename,
+                    "size_bytes": file_size,
+                    "size_human": _human_size(file_size) if file_size else "",
+                }
+                connection.execute(
+                    """
+                    INSERT INTO catalog_files (
+                        group_id, file_rank, file_document_id, sequence, file_format,
+                        basename, extension, file_json
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        group_id,
+                        rank,
+                        document_id,
+                        raw_count,
+                        file_format,
+                        basename,
+                        extension,
+                        json.dumps(file_item, ensure_ascii=False, default=str),
+                    ),
+                )
+                if basename and extension:
+                    connection.execute(
+                        "INSERT OR IGNORE INTO basename_groups (basename, extension, group_id) VALUES (?, ?, ?)",
+                        (basename, extension, group_id),
+                    )
+
+            connection.commit()
+
+            def _find_root(group_id: int) -> int:
+                current = group_id
+                path = []
+                while True:
+                    row = connection.execute(
+                        "SELECT parent_id FROM group_parents WHERE group_id = ?", (current,)
+                    ).fetchone()
+                    if row is None or int(row[0]) == current:
+                        root = current
+                        break
+                    path.append(current)
+                    current = int(row[0])
+                if path:
+                    connection.executemany(
+                        "UPDATE group_parents SET parent_id = ? WHERE group_id = ?",
+                        [(root, child) for child in path],
+                    )
+                return root
+
+            for (basename,) in connection.execute(
+                """
+                SELECT basename
+                FROM basename_groups
+                GROUP BY basename
+                HAVING COUNT(DISTINCT extension) >= 2
+                ORDER BY basename
+                """
+            ):
+                first_root = None
+                for (group_id,) in connection.execute(
+                    "SELECT DISTINCT group_id FROM basename_groups WHERE basename = ? ORDER BY group_id",
+                    (basename,),
+                ):
+                    root = _find_root(int(group_id))
+                    if first_root is None:
+                        first_root = root
+                    elif root != first_root:
+                        connection.execute(
+                            "UPDATE group_parents SET parent_id = ? WHERE group_id = ?",
+                            (first_root, root),
+                        )
+
+            connection.execute(
+                "CREATE TABLE group_roots (group_id INTEGER PRIMARY KEY, root_id INTEGER NOT NULL)"
+            )
+            root_batch = []
+            for (group_id,) in connection.execute("SELECT id FROM logical_groups ORDER BY id"):
+                group_id = int(group_id)
+                root_batch.append((group_id, _find_root(group_id)))
+                if len(root_batch) >= 500:
+                    connection.executemany(
+                        "INSERT INTO group_roots (group_id, root_id) VALUES (?, ?)", root_batch
+                    )
+                    root_batch.clear()
+            if root_batch:
+                connection.executemany(
+                    "INSERT INTO group_roots (group_id, root_id) VALUES (?, ?)", root_batch
+                )
+            connection.execute("CREATE INDEX ix_group_roots_root ON group_roots(root_id)")
+
+            connection.executescript(
+                """
+                CREATE TABLE logical_documents (
+                    root_id INTEGER PRIMARY KEY,
+                    primary_json TEXT NOT NULL,
+                    primary_created_at TEXT NOT NULL,
+                    primary_document_id INTEGER NOT NULL,
+                    first_sequence INTEGER NOT NULL
+                );
+                """
+            )
+            connection.execute(
+                """
+                WITH ranked AS (
+                    SELECT
+                        roots.root_id,
+                        groups.primary_json,
+                        groups.primary_created_at,
+                        groups.primary_document_id,
+                        groups.first_sequence,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY roots.root_id
+                            ORDER BY groups.primary_rank, groups.primary_document_id, groups.first_sequence
+                        ) AS choice
+                    FROM logical_groups groups
+                    JOIN group_roots roots ON roots.group_id = groups.id
+                )
+                INSERT INTO logical_documents (
+                    root_id, primary_json, primary_created_at, primary_document_id, first_sequence
+                )
+                SELECT
+                    root_id,
+                    MAX(CASE WHEN choice = 1 THEN primary_json END),
+                    MAX(CASE WHEN choice = 1 THEN primary_created_at END),
+                    MAX(CASE WHEN choice = 1 THEN primary_document_id END),
+                    MIN(first_sequence)
+                FROM ranked
+                GROUP BY root_id
+                """
+            )
+            connection.execute(
+                "CREATE INDEX ix_logical_documents_order ON logical_documents(primary_created_at, primary_document_id)"
+            )
+
+            total = int(connection.execute("SELECT COUNT(*) FROM logical_documents").fetchone()[0])
+            page_count = max(1, (total + page_size - 1) // page_size)
+            page = min(max(1, int(page or 1)), page_count)
+            page_offset = (page - 1) * page_size
+            selected = connection.execute(
+                """
+                SELECT root_id, primary_json
+                FROM logical_documents
+                ORDER BY primary_created_at DESC, primary_document_id DESC, first_sequence
+                LIMIT ? OFFSET ?
+                """,
+                (page_size, page_offset),
+            ).fetchall()
+            roots = [int(row[0]) for row in selected]
+            files_by_root: dict[int, list[tuple[int, dict]]] = {root: [] for root in roots}
+            if roots:
+                placeholders = ", ".join("?" for _ in roots)
+                file_rows = connection.execute(
+                    f"""
+                    SELECT roots.root_id, files.file_rank, files.file_document_id, files.sequence, files.file_json
+                    FROM catalog_files files
+                    JOIN group_roots roots ON roots.group_id = files.group_id
+                    WHERE roots.root_id IN ({placeholders})
+                    ORDER BY roots.root_id, files.file_rank, files.file_document_id, files.sequence
+                    """,
+                    roots,
+                )
+                for root_id, file_rank, file_id, sequence, file_json in file_rows:
+                    files_by_root[int(root_id)].append(
+                        ((int(file_rank), int(file_id), int(sequence)), json.loads(file_json))
+                    )
+
+            page_documents = []
+            for root_id, primary_json in selected:
+                ordered_files = [item for _, item in sorted(files_by_root[int(root_id)], key=lambda row: row[0])]
+                page_documents.append(
+                    _finalize_logical_document(json.loads(primary_json), ordered_files)
+                )
+            return page_documents, page, page_count, page_offset, total, raw_count
+        finally:
+            connection.close()
+
+
+async def _load_visible_logical_document_groups(user, document_ids: set[int]) -> list[dict]:
+    """Load only visible logical groups containing one of the requested physical files."""
+    target_ids = {int(document_id) for document_id in document_ids if document_id is not None}
+    if not target_ids:
+        return []
+    sibling_rows = await get_document_group_siblings(target_ids)
+    visible_rows = await _filter_purchased_documents(user, sibling_rows)
+    groups = _collapse_to_logical_docs(visible_rows)
+    return [
+        document
+        for document in groups
+        if int(document.get("id") or 0) in target_ids
+        or any(int(file.get("id") or 0) in target_ids for file in document.get("files") or [])
+    ]
+
+
+def _link_related_visura_docs(
+    docs: list[dict],
+    *,
+    visible_subject_docs: list[dict] | None = None,
+    owner_fiscal_codes_by_document_id: dict[int, list[str]] | None = None,
+    property_docs_by_owner_cf: dict[str, list[dict]] | None = None,
+) -> None:
     """Attach reciprocal links between subject and property visure by CF/VAT.
 
-    A subject visura's ``intestati_json`` lists co-owners of its properties, so
-    the queried subject is identified only from the visura's object or filename.
-    Property visure identify their owners through ``intestati_json``.
+    The current page supplies property-owner codes from normalized ownership
+    rows and may link a page subject to property files elsewhere in the visible
+    catalogue. Legacy ``intestati_json`` remains a compatibility source.
     """
-    import json
-
     subjects_by_cf: dict[str, list[dict]] = {}
     properties_by_id: dict[int, dict] = {}
 
-    def _subject_cf(doc: dict) -> str | None:
-        for source in (doc.get("oggetto") or "", doc.get("filename") or ""):
-            match = _CF_RE.search(source.upper())
-            if match:
-                return match.group(1).upper()
-        return None
-
-    def _owner_cfs(raw: Any) -> set[str]:
-        if not raw:
-            return set()
-        try:
-            rows = json.loads(raw) if isinstance(raw, str) else raw
-        except (TypeError, ValueError):
-            return set()
-        if not isinstance(rows, list):
-            return set()
-        return {
-            str(row["CF"]).strip().upper()
-            for row in rows
-            if isinstance(row, dict) and row.get("CF")
-        }
-
-    for doc in docs:
+    for doc in [*docs, *(visible_subject_docs or [])]:
         doc_type = doc.get("document_type") or ""
         if doc_type == "visura_soggetto":
-            cf = _subject_cf(doc)
+            cf = _subject_visura_fiscal_code(doc)
             if cf:
-                subjects_by_cf.setdefault(cf, []).append(doc)
-        elif doc_type in _VISURA_TYPES and doc.get("id") is not None:
+                bucket = subjects_by_cf.setdefault(cf, [])
+                if all(subject.get("id") != doc.get("id") for subject in bucket):
+                    bucket.append(doc)
+
+    for doc in docs:
+        if (doc.get("document_type") or "") in _VISURA_TYPES and doc.get("id") is not None:
             properties_by_id[doc["id"]] = doc
 
     subject_links: dict[int, dict[int, dict[str, Any]]] = {}
     property_links: dict[int, dict[int, dict[str, Any]]] = {}
     for property_doc in properties_by_id.values():
         property_id = property_doc["id"]
-        for cf in _owner_cfs(property_doc.get("intestati_json")):
+        owner_codes = _legacy_document_owner_fiscal_codes(property_doc)
+        owner_codes.update(
+            str(code).strip().upper()
+            for code in (owner_fiscal_codes_by_document_id or {}).get(property_id, [])
+            if code and str(code).strip()
+        )
+        for cf in owner_codes:
             for subject_doc in subjects_by_cf.get(cf, []):
                 subject_id = subject_doc.get("id")
                 if subject_id is None:
@@ -570,18 +1086,36 @@ def _link_related_visura_docs(docs: list[dict]) -> None:
     for doc in docs:
         doc_id = doc.get("id")
         if doc.get("document_type") == "visura_soggetto":
-            doc["related_immobile_docs"] = list(subject_links.get(doc_id, {}).values())
+            related_properties = dict(subject_links.get(doc_id, {}))
+            subject_cf = _subject_visura_fiscal_code(doc)
+            for property_doc in (property_docs_by_owner_cf or {}).get(subject_cf or "", []):
+                property_id = property_doc.get("id")
+                if property_id is not None:
+                    related_properties.setdefault(
+                        property_id,
+                        {
+                            "id": property_id,
+                            "label": property_doc.get("label") or f"Doc {property_id}",
+                        },
+                    )
+            doc["related_immobile_docs"] = list(related_properties.values())
         elif (doc.get("document_type") or "") in _VISURA_TYPES:
             doc["related_soggetto_docs"] = list(property_links.get(doc_id, {}).values())
 
 
-def _build_property_map(docs: list[dict], *, owner_subject_docs: list[dict] | None = None) -> dict:
+def _build_property_map(
+    docs: list[dict],
+    *,
+    owner_subject_docs: list[dict] | None = None,
+    owner_fiscal_codes_by_document_id: dict[int, list[str]] | None = None,
+) -> dict:
     """Group documents by cadastral coordinates into a nested property map.
 
     Visura-soggetto documents are nested as owner children under property docs
-    (visura_storica / visura_fabbricati / visura_terreni) whose ``intestati_json``
-    lists their CF. Unlinked subject documents are grouped by person; documents
-    without a property or subject grouping are collected under ``altri``.
+    (visura_storica / visura_fabbricati / visura_terreni) using normalized owner
+    fiscal codes, with ``intestati_json`` retained for legacy callers. Unlinked
+    subject documents are grouped by person; other ungrouped documents go under
+    ``altri``.
 
     Returns:
       ``immobili``: provincia → foglio → particella → subalterno → docs
@@ -602,9 +1136,12 @@ def _build_property_map(docs: list[dict], *, owner_subject_docs: list[dict] | No
     def _decorate(items: list[dict]) -> list[dict]:
         return [_decorate_one(d) for d in items]
 
-    def _cf_from_oggetto(obj: str) -> Optional[str]:
-        m = re.search(r"\(([A-Z0-9]{11,16})\)", obj or "")
-        return m.group(1) if m else None
+    def _cf_from_subject_doc(doc: dict) -> Optional[str]:
+        for source in (doc.get("oggetto") or "", doc.get("filename") or ""):
+            match = _CF_RE.search(source.upper())
+            if match:
+                return match.group(1)
+        return None
 
     def _cfs_from_intestati(istr: str) -> list[str]:
         try:
@@ -612,8 +1149,9 @@ def _build_property_map(docs: list[dict], *, owner_subject_docs: list[dict] | No
             for row in json.loads(istr):
                 cf = row.get("CF")
                 if cf and cf not in seen:
-                    seen.add(cf)
-                    out.append(cf)
+                    normalized_cf = str(cf).strip().upper()
+                    seen.add(normalized_cf)
+                    out.append(normalized_cf)
             return out
         except Exception:
             return []
@@ -625,7 +1163,7 @@ def _build_property_map(docs: list[dict], *, owner_subject_docs: list[dict] | No
     subject_index: dict[str, dict[int | str, dict]] = {}
     for d in [*docs, *(owner_subject_docs or [])]:
         if (d.get("document_type") or "") == _SOGGETTO_TYPE:
-            cf = _cf_from_oggetto(d.get("oggetto") or "")
+            cf = _cf_from_subject_doc(d)
             if cf:
                 document_id = d.get("id")
                 identity = document_id if document_id is not None else f"{d.get('filename') or ''}:{id(d)}"
@@ -640,11 +1178,17 @@ def _build_property_map(docs: list[dict], *, owner_subject_docs: list[dict] | No
 
     def _owner_docs_for(property_doc: dict) -> list[dict]:
         """Return visura_soggetto docs for all owners in this property doc."""
-        istr = property_doc.get("intestati_json")
-        if not istr:
+        owner_codes = _cfs_from_intestati(property_doc.get("intestati_json"))
+        owner_codes.extend(
+            code.strip().upper()
+            for code in (owner_fiscal_codes_by_document_id or {}).get(property_doc.get("id"), [])
+            if code and code.strip()
+        )
+        owner_codes = list(dict.fromkeys(owner_codes))
+        if not owner_codes:
             return []
         result = []
-        for cf in _cfs_from_intestati(istr):
+        for cf in owner_codes:
             for od in cf_soggetti.get(cf, []):
                 did = od.get("id")
                 if did not in claimed_ids:
@@ -2201,6 +2745,7 @@ def _merge_subject_visura_asset_groups(parsed_documents: list[dict]) -> dict:
         return primary
 
     import json
+
     from .provinces import province_code
 
     all_groups = []
@@ -2702,8 +3247,8 @@ async def _wait_for_missing_pair_response(service, request_id: str, timeout_seco
 
 async def _run_missing_pair_batch(job: dict[str, Any], batch: dict[str, Any], service) -> None:
     """Submit each deduplicated free visura request, then fetch and index available documents."""
-    from .models import GenericSisterRequest
     from .missing_pairs import build_missing_pair_batch
+    from .models import GenericSisterRequest
 
     job["status"] = "running"
     requests = batch["requests"]
@@ -6005,8 +6550,6 @@ def _doc_as_result(doc: dict) -> dict:
 @router.get("/documents/view/{path:path}", response_class=HTMLResponse)
 async def web_document_view(request: Request, path: str, user=Depends(_require_auth)):
     """Parse a p7m/xml file from the data directory and render it in the matching visura template."""
-    from pathlib import Path
-
     theme = _get_theme(request)
     base = _files_base()
     target = (base / path).resolve()
@@ -6265,7 +6808,7 @@ def _extract_planimetria_zip(file_path: str) -> bytes | None:
     openssl). Returns raw ZIP bytes, or None if extraction fails or the payload
     is not a ZIP.
     """
-    from aecs4u_crypto import extract_p7m_payload, P7MError
+    from aecs4u_crypto import P7MError, extract_p7m_payload
 
     try:
         data = extract_p7m_payload(open(file_path, "rb").read())
@@ -6369,7 +6912,7 @@ def _classify_cad_label(label: str) -> str:
 
 
 def _parse_cxf_entities(content: str) -> list[dict]:
-    lines = [l.strip() for l in content.replace("\r", "").split("\n")]
+    lines = [line.strip() for line in content.replace("\r", "").split("\n")]
     entities: list[dict] = []
     i = 0
     while i < len(lines):
@@ -6390,8 +6933,10 @@ def _parse_cxf_entities(content: str) -> list[dict]:
         # read all n_total coordinate pairs then split outer/holes
         all_coords = []
         for _ in range(n_total):
-            x = float(lines[i]); i += 1
-            y = float(lines[i]); i += 1
+            x = float(lines[i])
+            i += 1
+            y = float(lines[i])
+            i += 1
             all_coords.append([x, y])
         n_outer = n_total - sum(hole_verts)
         coords = all_coords[:n_outer]
@@ -6466,7 +7011,7 @@ def _parse_dxf_entities(dxf_bytes: bytes) -> list[dict]:
         return []
 
     # Parse as (group_code, value) pairs — lines alternate code / value
-    raw = [l.strip() for l in content.replace("\r", "").split("\n") if l.strip()]
+    raw = [line.strip() for line in content.replace("\r", "").split("\n") if line.strip()]
     pairs: list[tuple[str, str]] = []
     i = 0
     while i + 1 < len(raw):
@@ -6556,7 +7101,6 @@ def _build_plan_data(file_path: str) -> dict | None:
     try:
         with _zf.ZipFile(_io.BytesIO(zip_bytes)) as z:
             names = z.namelist()
-            lower_names = {n.lower(): n for n in names}
 
             geojson_name = next((n for n in names if n.lower().endswith(".geojson")), None)
             cxf_name = next((n for n in names if n.lower().endswith(".cxf")), None)
@@ -8055,35 +8599,187 @@ async def web_documents(
         if view in ("map", "tree")
         else "categories"
     )
-    document_files = await _load_visible_documents(user)
-    logical = _collapse_to_logical_docs(document_files)
-    _link_related_visura_docs(logical)
     favorite_user = _favorite_user_key(user)
-    favorite_document_ids = set()
-    if favorite_user:
+    favorites_only = bool(favorites and favorite_user)
+    favorite_document_ids: set[int] = set()
+    # Favorite views need only favorite rows and their alternate-format
+    # siblings; cross-page links are loaded from normalized relations below.
+    if favorites_only:
         from .database import get_document_favorite_ids
 
         favorite_document_ids = await get_document_favorite_ids(favorite_user)
-    for document in logical:
-        logical_file_ids = {file.get("id") for file in document.get("files") or []}
-        if document.get("id") is not None:
-            logical_file_ids.add(document["id"])
-        document["is_favorite"] = bool(logical_file_ids & favorite_document_ids)
-    favorites_only = bool(favorites and favorite_user)
-    if favorites_only:
-        logical = [document for document in logical if document.get("is_favorite")]
-    document_file_count = (
-        sum(document.get("n_files") or 1 for document in logical)
-        if favorites_only
-        else len(document_files)
-    )
-    page_documents, page, page_count, page_offset = _paginate_documents(logical, page)
+        document_files = await get_document_group_siblings(favorite_document_ids)
+        document_files = await _filter_purchased_documents(user, document_files)
+        raw_document_file_count = len(document_files)
+        logical = _collapse_to_logical_docs(document_files)
+        del document_files
+    else:
+        visible_document_ids = await _visible_document_ids(user)
+        if visible_document_ids is None:
+            # Keep only one logical page in memory. The full-catalog grouping
+            # index is disk-backed so exact totals and file joins remain intact.
+            (
+                page_documents,
+                page,
+                page_count,
+                page_offset,
+                total,
+                raw_document_file_count,
+            ) = await _page_streamed_documents(iter_all_documents(), page)
+            logical = None
+        else:
+            document_files = await get_documents_by_ids(visible_document_ids)
+            raw_document_file_count = len(document_files)
+            logical = _collapse_to_logical_docs(document_files)
+            del document_files
+    if favorite_user and not favorites_only:
+        from .database import get_document_favorite_ids
+
+        favorite_document_ids = await get_document_favorite_ids(favorite_user)
+    if logical is None:
+        for document in page_documents:
+            logical_file_ids = {file.get("id") for file in document.get("files") or []}
+            if document.get("id") is not None:
+                logical_file_ids.add(document["id"])
+            document["is_favorite"] = bool(logical_file_ids & favorite_document_ids)
+        document_file_count = raw_document_file_count
+    else:
+        for document in logical:
+            logical_file_ids = {file.get("id") for file in document.get("files") or []}
+            if document.get("id") is not None:
+                logical_file_ids.add(document["id"])
+            document["is_favorite"] = bool(logical_file_ids & favorite_document_ids)
+        if favorites_only:
+            logical = [document for document in logical if document.get("is_favorite")]
+        document_file_count = (
+            sum(document.get("n_files") or 1 for document in logical)
+            if favorites_only
+            else raw_document_file_count
+        )
+        page_documents, page, page_count, page_offset = _paginate_documents(logical, page)
     tree = _build_document_tree(page_documents) if active_view == "categories" else []
-    prop_map = (
-        _build_property_map(page_documents, owner_subject_docs=logical)
-        if active_view == "location"
-        else {"immobili": [], "soggetti": [], "altri": []}
+    page_file_id_to_logical_id: dict[int, int] = {}
+    for document in page_documents:
+        logical_id = document.get("id")
+        if logical_id is None:
+            continue
+        page_file_id_to_logical_id[int(logical_id)] = int(logical_id)
+        for file in document.get("files") or []:
+            file_id = file.get("id")
+            if file_id is not None:
+                page_file_id_to_logical_id[int(file_id)] = int(logical_id)
+
+    page_subject_codes = {
+        code
+        for document in page_documents
+        if (document.get("document_type") or "") == "visura_soggetto"
+        if (code := _subject_visura_fiscal_code(document))
+    }
+    owner_codes_by_file_id = await get_document_owner_fiscal_codes(
+        page_file_id_to_logical_id,
+        fiscal_codes=page_subject_codes,
     )
+    owner_fiscal_codes_by_document_id: dict[int, list[str]] = {}
+    property_docs_by_owner_cf: dict[str, dict[int, dict[str, Any]]] = {}
+    page_logical_by_id = {
+        int(document["id"]): document for document in page_documents if document.get("id") is not None
+    }
+    property_file_ids_to_resolve = (
+        {int(file_id) for file_id in owner_codes_by_file_id} if page_subject_codes else set()
+    )
+    subject_codes_to_resolve: set[str] = set()
+
+    for file_id, fiscal_codes in owner_codes_by_file_id.items():
+        file_id = int(file_id)
+        page_logical_id = page_file_id_to_logical_id.get(file_id)
+        page_logical_doc = page_logical_by_id.get(page_logical_id) if page_logical_id is not None else None
+        if page_logical_doc and (page_logical_doc.get("document_type") or "") in _VISURA_TYPES:
+            combined = owner_fiscal_codes_by_document_id.setdefault(page_logical_id, [])
+            for fiscal_code in fiscal_codes:
+                if fiscal_code not in combined:
+                    combined.append(fiscal_code)
+
+    for document in page_documents:
+        if (document.get("document_type") or "") not in _VISURA_TYPES:
+            continue
+        subject_codes_to_resolve.update(_legacy_document_owner_fiscal_codes(document))
+        document_id = document.get("id")
+        if document_id is not None:
+            subject_codes_to_resolve.update(
+                str(code).strip().upper()
+                for code in owner_fiscal_codes_by_document_id.get(int(document_id), [])
+                if code and str(code).strip()
+            )
+
+    # Load only visible logical groups related to this page, rather than
+    # indexing every logical file in the catalogue a second time.
+    owner_subject_docs = []
+    if subject_codes_to_resolve:
+        owner_subject_ids = await get_subject_document_ids_for_fiscal_codes(subject_codes_to_resolve)
+        owner_subject_groups = await _load_visible_logical_document_groups(user, owner_subject_ids)
+        owner_subject_docs = [
+            document
+            for document in owner_subject_groups
+            if (document.get("document_type") or "") == "visura_soggetto"
+            and _subject_visura_fiscal_code(document) in subject_codes_to_resolve
+        ]
+
+    property_doc_by_file_id: dict[int, dict[str, Any]] = {}
+    if property_file_ids_to_resolve:
+        related_property_groups = await _load_visible_logical_document_groups(
+            user, property_file_ids_to_resolve
+        )
+        for document in related_property_groups:
+            if (document.get("document_type") or "") not in _VISURA_TYPES:
+                continue
+            document_id = document.get("id")
+            if document_id is not None:
+                property_doc_by_file_id[int(document_id)] = document
+            for file in document.get("files") or []:
+                file_id = file.get("id")
+                if file_id is not None:
+                    property_doc_by_file_id[int(file_id)] = document
+
+    if page_subject_codes:
+        for file_id, fiscal_codes in owner_codes_by_file_id.items():
+            property_doc = property_doc_by_file_id.get(int(file_id))
+            if not property_doc:
+                continue
+            property_id = property_doc.get("id")
+            if property_id is None:
+                continue
+            for fiscal_code in fiscal_codes:
+                if fiscal_code in page_subject_codes:
+                    property_docs_by_owner_cf.setdefault(fiscal_code, {})[int(property_id)] = {
+                        "id": int(property_id),
+                        "label": (
+                            property_doc.get("display_name")
+                            or property_doc.get("oggetto")
+                            or property_doc.get("filename")
+                            or f"Doc {property_id}"
+                        ),
+                    }
+
+    _link_related_visura_docs(
+        page_documents,
+        visible_subject_docs=owner_subject_docs,
+        owner_fiscal_codes_by_document_id=owner_fiscal_codes_by_document_id,
+        property_docs_by_owner_cf={
+            code: list(properties.values()) for code, properties in property_docs_by_owner_cf.items()
+        },
+    )
+
+    if active_view == "location":
+        prop_map = _build_property_map(
+            page_documents,
+            owner_subject_docs=owner_subject_docs,
+            owner_fiscal_codes_by_document_id=owner_fiscal_codes_by_document_id,
+        )
+    else:
+        prop_map = {"immobili": [], "soggetti": [], "altri": []}
+    if logical is not None:
+        total = len(logical)
+        del logical
     document_page_start = page_offset + 1 if page_documents else 0
     document_page_end = page_offset + len(page_documents)
     return theme.render(
@@ -8092,7 +8788,7 @@ async def web_documents(
         user=user,
         tree=tree,
         prop_map=prop_map,
-        total=len(logical),
+        total=total,
         document_file_count=document_file_count,
         active_view=active_view,
         files=page_documents,
@@ -8299,11 +8995,102 @@ def _subject_archive_property_label(prop: dict) -> str:
     return " · ".join(part for part in (location, " · ".join(identifiers)) if part)
 
 
+async def _load_subject_profile_files(
+    code: str,
+    seed_document_ids: set[int],
+    allowed_document_ids: set[int] | None,
+    *,
+    associations: dict[int, dict[str, Any]] | None = None,
+) -> tuple[dict[int, dict[str, Any]], list[dict]]:
+    """Load only documents linked to this subject and visible logical-file siblings."""
+    if associations is None:
+        associations = await find_subject_document_associations(code)
+    if allowed_document_ids is not None:
+        associations = {
+            document_id: value
+            for document_id, value in associations.items()
+            if document_id in allowed_document_ids
+        }
+
+    document_ids = set(associations) | {int(document_id) for document_id in seed_document_ids}
+    if allowed_document_ids is not None:
+        document_ids &= allowed_document_ids
+    rows, siblings = await asyncio.gather(
+        get_documents_by_ids(document_ids),
+        get_document_group_siblings(document_ids),
+    )
+    rows.extend(siblings)
+    visible_rows = {
+        int(item["id"]): item
+        for item in rows
+        if item.get("id") is not None
+        and (allowed_document_ids is None or int(item["id"]) in allowed_document_ids)
+    }
+    return associations, list(visible_rows.values())
+
+
+async def _subject_visura_candidates(
+    code: str, subject_document_ids: set[int], indexed_files: list[dict]
+) -> list[dict]:
+    """Build the subject's visura list with one bounded metadata read for any missing index rows."""
+    candidates = [
+        dict(item)
+        for item in indexed_files
+        if (item.get("document_type") or "") == "visura_soggetto"
+        and (item.get("id") in subject_document_ids or _extract_cf(item) == code)
+    ]
+    for item in candidates:
+        item["queried_fiscal_code"] = code
+    candidate_ids = {int(item["id"]) for item in candidates if item.get("id") is not None}
+    missing_ids = subject_document_ids - candidate_ids
+    if missing_ids:
+        for item in await get_documents_by_ids(missing_ids):
+            if (item.get("document_type") or "") == "visura_soggetto":
+                candidates.append(
+                    {
+                        **item,
+                        "response_id": None,
+                        "visura_subtype": None,
+                        "situazione_al": None,
+                        "queried_fiscal_code": code,
+                    }
+                )
+    return candidates
+
+
+async def _load_subject_asset_documents(peer_documents: list[dict]) -> list[dict]:
+    """Fetch peer XML visure together, preserving the selected profile's document order."""
+    document_ids = [int(item["id"]) for item in peer_documents if item.get("id") is not None]
+    if not document_ids:
+        return []
+    rows = await get_documents_by_ids(document_ids, include_content=True)
+    rows_by_id = {int(item["id"]): item for item in rows if item.get("id") is not None}
+    return [
+        rows_by_id[document_id]
+        for document_id in document_ids
+        if document_id in rows_by_id and rows_by_id[document_id].get("xml_content")
+    ]
+
+
+async def _load_subject_profile_indexes(code: str) -> tuple[set[int], dict[int, dict[str, Any]]]:
+    """Load the subject-visura IDs and full subject associations concurrently."""
+
+    async def subject_visura_ids() -> set[int]:
+        try:
+            return await get_subject_document_ids(code)
+        except Exception as exc:  # noqa: BLE001 - association-based navigation remains available without this index.
+            logger.debug("Subject document index unavailable: %s", type(exc).__name__)
+            return set()
+
+    return await asyncio.gather(subject_visura_ids(), find_subject_document_associations(code))
+
+
 async def _subject_document_archive(
     code: str,
     indexed_files: list[dict],
     cadastral_group_usage: dict[int, list[str]] | None = None,
     allowed_document_ids: set[int] | None = None,
+    associations: dict[int, dict[str, Any]] | None = None,
 ) -> dict:
     """Exhaustive, provenance-labelled document inventory for one entity page.
 
@@ -8313,7 +9100,7 @@ async def _subject_document_archive(
     complete logical document groups so alternate P7M/XML/PDF files remain
     individually accessible.
     """
-    associations = await find_subject_document_associations(code)
+    associations = associations if associations is not None else await find_subject_document_associations(code)
     if allowed_document_ids is not None:
         associations = {document_id: value for document_id, value in associations.items() if document_id in allowed_document_ids}
     complete_indexed = [dict(item) for item in indexed_files]
@@ -8323,16 +9110,24 @@ async def _subject_document_archive(
         complete_indexed.extend(await get_documents_by_ids(missing_associated_ids))
     all_logical = _collapse_to_logical_docs(complete_indexed)
     physical_by_id = {int(item["id"]): item for item in complete_indexed if item.get("id") is not None}
-    extracted_ids = await find_documents_with_extraction(physical_by_id)
     related_ids = set(associations)
     cadastral_group_usage = cadastral_group_usage or {}
 
-    documents = []
+    subject_logical: list[tuple[dict, set[int]]] = []
+    subject_group_file_ids: set[int] = set()
     for logical in all_logical:
         file_ids = {int(item["id"]) for item in logical.get("files") or [] if item.get("id") is not None}
-        if not file_ids & related_ids:
-            continue
+        if file_ids & related_ids:
+            subject_logical.append((logical, file_ids))
+            subject_group_file_ids.update(file_ids)
 
+    # Extraction presence is displayed only for the related logical groups.
+    # Querying it for every indexed document made the first subject-profile
+    # load scale with the entire catalogue even though unrelated results were
+    # never rendered.
+    extracted_ids = await find_documents_with_extraction(subject_group_file_ids)
+    documents = []
+    for logical, file_ids in subject_logical:
         sources: set[str] = set()
         properties: list[dict] = []
         for document_id in file_ids:
@@ -8598,6 +9393,7 @@ async def _subject_query_profile(
     page: int = 1,
     *,
     exhaustive_ownership: bool = False,
+    allowed_document_ids: set[int] | None = None,
 ) -> dict | None:
     """Hub of a subject built on its newest saved ``soggetto`` query (None when it was never queried).
 
@@ -8611,11 +9407,13 @@ async def _subject_query_profile(
         return None
     latest = queries[0]
     request_id = latest["request_id"]
-    record = await get_result_record(request_id)
-    response = await get_response(request_id)
+    record, response, properties, owners = await asyncio.gather(
+        get_result_record(request_id),
+        get_response(request_id),
+        get_db_properties_for_response(request_id),
+        get_db_owners_for_response(request_id),
+    )
     data = (response or {}).get("data") or {}
-    properties = await get_db_properties_for_response(request_id)
-    owners = await get_db_owners_for_response(request_id)
 
     own_rights = {o["result_id"]: o for o in owners if (o.get("fiscal_code") or "").upper() == code}
     name = next((o["nominativo"] for o in owners if o.get("fiscal_code") == code and o.get("nominativo")), None)
@@ -8624,21 +9422,34 @@ async def _subject_query_profile(
     indexed_by_id = {int(item["id"]): item for item in indexed_files if item.get("id") is not None}
     keys = {parcel_key(p.get("comune_id"), p.get("section"), p.get("sheet"), p.get("parcel")) for p in properties}
     keys.discard(None)
-    document_ids = await find_parcel_document_ids(keys)
-    subject_inspection_ids = await find_subject_inspection_document_ids(code)
-    if exhaustive_ownership:
-        related_ids = set(subject_inspection_ids)
-        for ids in document_ids.values():
-            related_ids.update(ids)
-        missing_ids = related_ids - set(indexed_by_id)
-        if missing_ids:
-            indexed_by_id.update({
+    document_ids, subject_inspection_ids = await asyncio.gather(
+        find_parcel_document_ids(keys),
+        find_subject_inspection_document_ids(code),
+    )
+    related_ids = set(subject_inspection_ids)
+    for ids in document_ids.values():
+        related_ids.update(ids)
+    missing_ids = related_ids - set(indexed_by_id)
+    if allowed_document_ids is not None:
+        missing_ids &= allowed_document_ids
+    if missing_ids:
+        related_rows, sibling_rows = await asyncio.gather(
+            get_documents_by_ids(missing_ids),
+            get_document_group_siblings(missing_ids),
+        )
+        related_rows.extend(sibling_rows)
+        indexed_by_id.update(
+            {
                 int(item["id"]): item
-                for item in await get_documents_by_ids(missing_ids)
+                for item in related_rows
                 if item.get("id") is not None
-            })
-    request_records = await find_parcel_request_records(keys)
-    with_map = await find_parcels_with_geometry(keys)
+                and (allowed_document_ids is None or int(item["id"]) in allowed_document_ids)
+            }
+        )
+    request_records, with_map = await asyncio.gather(
+        find_parcel_request_records(keys),
+        find_parcels_with_geometry(keys),
+    )
 
     parcels: dict[tuple, dict] = {}
     for prop in properties:
@@ -9607,40 +10418,17 @@ async def _web_subject_profile(
     # The subject relation provides a canonical match for imported XML. Filenames
     # remain a fallback for older/history documents that predate typed ingestion.
     visible_document_ids = await _visible_document_ids(user)
-    try:
-        subject_document_ids = await get_subject_document_ids(normalized_code)
-    except Exception as exc:  # noqa: BLE001 - retain filename based navigation if this optional index is unavailable.
-        logger.debug("Subject document index unavailable: %s", type(exc).__name__)
-        subject_document_ids = set()
+    subject_document_ids, subject_associations = await _load_subject_profile_indexes(normalized_code)
     if visible_document_ids is not None:
         subject_document_ids &= visible_document_ids
 
-    indexed_files = (
-        await get_all_documents(limit=None)
-        if visible_document_ids is None
-        else await get_documents_by_ids(visible_document_ids)
+    subject_associations, indexed_files = await _load_subject_profile_files(
+        normalized_code,
+        subject_document_ids,
+        visible_document_ids,
+        associations=subject_associations,
     )
-    candidates = [
-        dict(item)
-        for item in indexed_files
-        if (item.get("document_type") or "") == "visura_soggetto"
-        and (item.get("id") in subject_document_ids or _extract_cf(item) == normalized_code)
-    ]
-    for item in candidates:
-        item["queried_fiscal_code"] = normalized_code
-    candidate_ids = {item.get("id") for item in candidates}
-    for subject_document_id in sorted(subject_document_ids - candidate_ids):
-        item = await get_document_by_id(subject_document_id)
-        if item and (item.get("document_type") or "") == "visura_soggetto":
-            candidates.append(
-                {
-                    **item,
-                    "response_id": None,
-                    "visura_subtype": None,
-                    "situazione_al": None,
-                    "queried_fiscal_code": normalized_code,
-                }
-            )
+    candidates = await _subject_visura_candidates(normalized_code, subject_document_ids, indexed_files)
 
     subject_documents = _collapse_to_logical_docs(candidates)
     is_company = route_prefix == "/companies"
@@ -9653,6 +10441,7 @@ async def _web_subject_profile(
             indexed_files,
             1 if as_pdf else page,
             exhaustive_ownership=as_pdf,
+            allowed_document_ids=visible_document_ids,
         )
     favorite_user_key = _favorite_user_key(user)
     subject_type = "company" if is_company else "person"
@@ -9670,6 +10459,7 @@ async def _web_subject_profile(
             indexed_files,
             _subject_cadastral_group_usage(subject_hub),
             allowed_document_ids=visible_document_ids,
+            associations=subject_associations,
         )
         return await _render_query_only_subject(
             request,
@@ -9752,10 +10542,7 @@ async def _web_subject_profile(
                 and item.get("situazione_al") == selected.get("situazione_al")
                 and item.get("visura_subtype") == selected.get("visura_subtype")
             ]
-            for item in peer_documents:
-                source = await get_document_by_id(int(item["id"]))
-                if source and source.get("xml_content"):
-                    subject_asset_documents.append(source)
+            subject_asset_documents = await _load_subject_asset_documents(peer_documents)
             if subject_asset_documents:
                 provinces = sorted(
                     {
@@ -9795,6 +10582,7 @@ async def _web_subject_profile(
             indexed_files,
             cadastral_group_usage,
             allowed_document_ids=visible_document_ids,
+            associations=subject_associations,
         )
         return await _render_query_only_subject(
             request,
@@ -9820,6 +10608,7 @@ async def _web_subject_profile(
         indexed_files,
         cadastral_group_usage,
         allowed_document_ids=visible_document_ids,
+        associations=subject_associations,
     )
     return await _render_doc_from_db(
         doc,

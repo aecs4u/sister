@@ -327,6 +327,8 @@ a.feature-card:hover { border-color: var(--bs-primary); }
 [data-bs-theme="dark"] .page-hero .btn-outline-light:hover,
 [data-bs-theme="dark"] .page-hero .btn-outline-light:focus,
 [data-bs-theme="dark"] .page-hero .btn-outline-light:active { color: #fff !important; background-color: #334155 !important; border-color: #cbd5e1 !important; }
+#general .mb-3:has(> label[for="language"]) { display: none !important; }
+
 [data-bs-theme="dark"] .settings-nav .nav-link { color: #cfe0ff !important; }
 [data-bs-theme="dark"] .settings-nav .nav-link.active { color: #e2e8f0 !important; background-color: #334155 !important; }
 [data-bs-theme="dark"] .settings-nav .nav-link:hover,

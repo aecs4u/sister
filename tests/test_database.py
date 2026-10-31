@@ -3,11 +3,25 @@
 Run against an isolated throwaway PostgreSQL schema (see ``tests/pg_isolation.py``); skipped without a local PostgreSQL.
 """
 
+from datetime import date
+from decimal import Decimal
+
 import pytest
-from sqlalchemy import text
+from sqlalchemy import event, text
 
 import sister.database as database
-from sister.db_models import Document, DocumentContent
+from sister.db_models import (
+    Document,
+    DocumentContent,
+    ManualPropertyValuation,
+    PropertyAffrancationAmount,
+    PropertyOmiOverride,
+    PropertyOmiSelection,
+    PropertyValuationPreference,
+    Request,
+    Subject,
+)
+from sister.visura_xml_models import DocumentSubject, MutationOwner, OwnershipMutation
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -52,6 +66,7 @@ async def test_browse_metadata_select_does_not_load_archived_xml():
     browse_rows = await database.get_all_documents()
     unbounded_rows = await database.get_all_documents(limit=None)
     selected_rows = await database.get_documents_by_ids([document_id])
+    selected_with_content = await database.get_documents_by_ids([document_id], include_content=True)
     detail = await database.get_document_by_id(document_id)
 
     assert len(browse_rows) == 100
@@ -59,7 +74,218 @@ async def test_browse_metadata_select_does_not_load_archived_xml():
     unbounded_document = next(row for row in unbounded_rows if row["id"] == document_id)
     assert selected_rows[0]["id"] == document_id
     assert unbounded_document["xml_content"] == selected_rows[0]["xml_content"] == ""
+    assert selected_with_content[0]["xml_content"] == "<Sensitive>archived XML</Sensitive>"
     assert detail["xml_content"] == "<Sensitive>archived XML</Sensitive>"
+
+
+@pytest.mark.asyncio
+async def test_get_user_manual_property_valuations_reads_all_sources_in_one_result():
+    user_id = "valuation-reader@example.com"
+    asset_key = "a" * 64
+    async with database._get_session_factory()() as session:
+        session.add_all([
+            ManualPropertyValuation(
+                user_id=user_id,
+                asset_key=asset_key,
+                provider="immobiliare",
+                value_min=Decimal("180000.00"),
+                value_max=Decimal("210000.00"),
+                source_date=date(2026, 10, 1),
+                source_url="https://example.test/immobiliare",
+                notes="first source",
+            ),
+            ManualPropertyValuation(
+                user_id=user_id,
+                asset_key=asset_key,
+                provider="idealista",
+                value_min=Decimal("175000.00"),
+                value_max=None,
+            ),
+            PropertyValuationPreference(
+                user_id=user_id,
+                asset_key=asset_key,
+                preferred_source="idealista",
+            ),
+            PropertyAffrancationAmount(
+                user_id=user_id,
+                asset_key=asset_key,
+                amount=Decimal("12500.00"),
+            ),
+            PropertyOmiOverride(
+                user_id=user_id,
+                asset_key=asset_key,
+                value_min=Decimal("1900.00"),
+                value_max=Decimal("2200.00"),
+            ),
+            PropertyOmiSelection(
+                user_id=user_id,
+                asset_key=asset_key,
+                zone_code="B12",
+                typology_code=20,
+                is_manual=True,
+            ),
+        ])
+        await session.commit()
+
+    statements = []
+
+    def _record_query(_connection, _cursor, statement, _parameters, _context, _executemany):
+        statements.append(statement)
+
+    engine = database._get_engine().sync_engine
+    event.listen(engine, "before_cursor_execute", _record_query)
+    try:
+        values = await database.get_user_manual_property_valuations(user_id, [asset_key, "invalid"])
+    finally:
+        event.remove(engine, "before_cursor_execute", _record_query)
+
+    assert len(statements) == 1
+    assert "UNION ALL" in statements[0].upper()
+    assert values == {
+        asset_key: {
+            "valuations": [
+                {
+                    "provider": "idealista",
+                    "value_min": Decimal("175000.00"),
+                    "value_max": None,
+                    "source_date": None,
+                    "source_url": None,
+                    "notes": None,
+                },
+                {
+                    "provider": "immobiliare",
+                    "value_min": Decimal("180000.00"),
+                    "value_max": Decimal("210000.00"),
+                    "source_date": date(2026, 10, 1),
+                    "source_url": "https://example.test/immobiliare",
+                    "notes": "first source",
+                },
+            ],
+            "preferred_source": "idealista",
+            "affrancation_amount": Decimal("12500.00"),
+            "omi_override": {"value_min": Decimal("1900.00"), "value_max": Decimal("2200.00")},
+            "omi_selection": {"zone_code": "B12", "typology_code": 20, "is_manual": True},
+        }
+    }
+
+
+@pytest.mark.asyncio
+async def test_streamed_document_metadata_uses_bounded_cursor_and_omits_archived_xml():
+    async with database._get_session_factory()() as session:
+        document = Document(file_name="streamed-metadata.xml", file_size=24)
+        session.add(document)
+        await session.flush()
+        document_id = document.id
+        session.add(DocumentContent(document_id=document_id, content="<Private>archive</Private>"))
+        await session.commit()
+
+    streamed_rows = [row async for row in database.iter_all_documents(batch_size=1)]
+
+    assert len(streamed_rows) == 1
+    assert streamed_rows[0]["id"] == document_id
+    assert streamed_rows[0]["xml_content"] == ""
+
+
+@pytest.mark.asyncio
+async def test_document_group_siblings_loads_request_and_basename_matches_without_content():
+    async with database._get_session_factory()() as session:
+        request = Request(request_ref="subject-sibling-request")
+        other_request = Request(request_ref="other-sibling-request")
+        session.add_all([request, other_request])
+        await session.flush()
+        primary = Document(
+            request_id=request.id,
+            file_name="visura.p7m",
+            file_format="P7M",
+        )
+        same_request = Document(
+            request_id=request.id,
+            file_name="other-document.pdf",
+            file_format="PDF",
+        )
+        same_stem = Document(
+            request_id=other_request.id,
+            file_name="visura.pdf",
+            file_format="PDF",
+        )
+        session.add_all([primary, same_request, same_stem])
+        await session.flush()
+        primary_id = primary.id
+        same_request_id = same_request.id
+        same_stem_id = same_stem.id
+        session.add(DocumentContent(document_id=primary_id, content="<Sensitive>archived XML</Sensitive>"))
+        await session.commit()
+
+    siblings = await database.get_document_group_siblings({primary_id})
+
+    assert {item["id"] for item in siblings} == {primary_id, same_request_id, same_stem_id}
+    assert all(item["xml_content"] == "" for item in siblings)
+
+
+@pytest.mark.asyncio
+async def test_document_owner_fiscal_codes_uses_normalized_mutation_owners():
+    owner_code = "RSSMRA85T10A562S"
+    async with database._get_session_factory()() as session:
+        property_document = Document(file_name="owner-linked-property.xml")
+        unrelated_document = Document(file_name="owner-unlinked-property.xml")
+        other_property_document = Document(file_name="owner-linked-other-property.xml")
+        owner = Subject(name="Mario Rossi", fiscal_code=owner_code)
+        subject_without_code = Subject(name="Unknown owner")
+        session.add_all([property_document, unrelated_document, other_property_document, owner, subject_without_code])
+        await session.flush()
+        mutation = OwnershipMutation(document_id=property_document.id, is_current=True)
+        other_mutation = OwnershipMutation(document_id=other_property_document.id, is_current=True)
+        session.add_all([mutation, other_mutation])
+        await session.flush()
+        session.add_all(
+            [
+                MutationOwner(mutation_id=mutation.id, subject_id=owner.id),
+                MutationOwner(mutation_id=mutation.id, subject_id=subject_without_code.id),
+                MutationOwner(mutation_id=other_mutation.id, subject_id=owner.id),
+            ]
+        )
+        property_document_id = property_document.id
+        unrelated_document_id = unrelated_document.id
+        other_property_document_id = other_property_document.id
+        await session.commit()
+
+    owners = await database.get_document_owner_fiscal_codes(
+        [property_document_id, unrelated_document_id, property_document_id]
+    )
+
+    assert owners == {property_document_id: [owner_code]}
+    assert await database.get_document_owner_fiscal_codes([]) == {}
+    assert await database.get_document_owner_fiscal_codes([], fiscal_codes=[owner_code.lower()]) == {
+        property_document_id: [owner_code],
+        other_property_document_id: [owner_code],
+    }
+
+
+@pytest.mark.asyncio
+async def test_subject_document_ids_for_fiscal_codes_batches_normalized_codes():
+    owner_code = "RSSMRA85T10A562S"
+    other_code = "VRNGPP80A01F205X"
+    async with database._get_session_factory()() as session:
+        owner_document = Document(file_name="owner-subject.pdf")
+        other_document = Document(file_name="other-subject.pdf")
+        unrelated_document = Document(file_name="unrelated-subject.pdf")
+        owner = Subject(name="Mario Rossi", fiscal_code=owner_code)
+        other = Subject(name="Giuseppe Verdi", fiscal_code=other_code)
+        unrelated = Subject(name="Unrelated Person", fiscal_code="BNCLGU75A01H501Z")
+        session.add_all([owner_document, other_document, unrelated_document, owner, other, unrelated])
+        await session.flush()
+        session.add_all(
+            [
+                DocumentSubject(document_id=owner_document.id, subject_id=owner.id),
+                DocumentSubject(document_id=other_document.id, subject_id=other.id),
+                DocumentSubject(document_id=unrelated_document.id, subject_id=unrelated.id),
+            ]
+        )
+        expected_ids = {owner_document.id, other_document.id}
+        await session.commit()
+
+    assert await database.get_subject_document_ids_for_fiscal_codes([owner_code.lower(), other_code]) == expected_ids
+    assert await database.get_subject_document_ids_for_fiscal_codes([]) == set()
 
 
 @pytest.mark.asyncio

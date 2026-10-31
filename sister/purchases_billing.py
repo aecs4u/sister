@@ -64,7 +64,7 @@ async def fulfil_checkout_session(session: dict[str, Any]) -> str:
     for a manual refund) · ``ignored`` (not a document purchase, not paid or malformed). Raises only for conditions where
     a retry can help (database errors), so Stripe re-delivers.
     """
-    from .database import PurchaseError, create_document_purchase
+    from .database import PurchaseError, create_document_purchase, record_activity
 
     metadata = session.get("metadata") or {}
     if metadata.get("item_type") != ITEM_TYPE:
@@ -94,6 +94,19 @@ async def fulfil_checkout_session(session: dict[str, Any]) -> str:
             return "replay"
         if exc.code == "duplicate":
             logger.warning("Document %s paid again by %s (%s): refund it", reference, user_key, payment_ref)
+            await record_activity(
+                "admin.document_purchase.refund_required",
+                actor="Stripe",
+                source="stripe_webhook",
+                status="review",
+                target=f"document:{reference}",
+                params={"document_id": int(reference), "payment_ref": payment_ref},
+                result={
+                    "refund_required": True,
+                    "amount_cents": session.get("amount_total"),
+                    "currency": str(session.get("currency") or "").upper(),
+                },
+            )
             return "already_owned"
         logger.error("Document checkout %s not fulfilled: %s", payment_ref, exc.code)
         return "ignored"
