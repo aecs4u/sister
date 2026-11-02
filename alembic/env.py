@@ -138,7 +138,9 @@ def run_migrations_online() -> None:
             connection=connection,
             target_metadata=target_metadata,
             sister_schema=os.getenv("DATABASE_SCHEMA", "sister"),
-            istat_schema=os.getenv("DATABASE_ISTAT_SCHEMA", "istat"),
+            istat_schema=os.getenv(
+                "DATABASE_ISTAT_SCHEMA", os.getenv("DATABASE_SCHEMA", "sister")
+            ),
         )
         with context.begin_transaction():
             context.run_migrations()

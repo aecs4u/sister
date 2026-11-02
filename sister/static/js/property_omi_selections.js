@@ -118,6 +118,13 @@
         });
     }
 
+    function fillEstimateCell(cell, estimate) {
+        var value = estimate.range || estimate.missing || 'Stima OMI non disponibile';
+        cell.className = estimate.range ? 'text-end text-nowrap' : 'text-muted small';
+        cell.textContent = value;
+        cell.title = estimate.note || estimate.missing || 'Stima OMI non disponibile.';
+    }
+
     function ensureOmiEstimateColumn(table, rows, rowEstimates) {
         var header = table.querySelector('thead tr');
         if (!header) return;
@@ -139,10 +146,7 @@
         rows.forEach(function (row, index) {
             var estimate = rowEstimates[index] || {};
             var cell = document.createElement('td');
-            var value = estimate.range || estimate.missing || 'Stima OMI non disponibile';
-            cell.className = estimate.range ? 'text-end text-nowrap' : 'text-muted small';
-            cell.textContent = value;
-            cell.title = estimate.note || estimate.missing || 'Stima OMI non disponibile.';
+            fillEstimateCell(cell, estimate);
             var rowTarget = cadastralIndex >= 0 ? row.cells[cadastralIndex + 1] || null : null;
             row.insertBefore(cell, rowTarget);
         });
@@ -160,8 +164,7 @@
         }).then(function (response) {
             return response.json().catch(function () { return {}; }).then(function (result) {
                 if (!response.ok) throw new Error(result.detail || 'Salvataggio della superficie non riuscito.');
-                rememberAccordionState();
-                window.location.reload();
+                return applySavedChange().then(function () { input.disabled = false; });
             });
         }).catch(function (error) {
             input.disabled = false;
@@ -310,8 +313,9 @@
         }).then(function (response) {
             return response.json().catch(function () { return {}; }).then(function (result) {
                 if (!response.ok) throw new Error(result.detail || 'Salvataggio della selezione OMI non riuscito.');
-                rememberAccordionState();
-                window.location.reload();
+                return applySavedChange().then(function () {
+                    controls.forEach(function (control) { control.disabled = false; });
+                });
             });
         }).catch(function (error) {
             controls.forEach(function (control) { control.disabled = false; });
@@ -323,6 +327,180 @@
                 message.dataset.omiSelectionError = 'true';
             }
             message.textContent = error.message;
+        });
+    }
+
+    // The size, zone, typology and price cells for one building row. Built again after each save,
+    // from the refreshed estimate, so the row never needs a page reload.
+    function buildCells(estimate) {
+        var identity = estimate.asset_identity || {};
+        var cells = {size: addActualSizeCell(estimate), price: addOmiPriceRangeCell(estimate)};
+        if (!identity.asset_key || !estimate.omi_comune) {
+            cells.zone = document.createElement('td');
+            cells.typology = document.createElement('td');
+            if (!editable) {
+                cells.zone.textContent = estimate.omi_zona || '—';
+                cells.typology.textContent = estimate.omi_tipologia || estimate.omi_tipologia_default || '—';
+                cells.zone.title = cells.typology.title = 'Accedi per modificare la selezione OMI.';
+            }
+            return tagCells(cells);
+        }
+        var options = optionsByComune[estimate.omi_comune] || {zones: [], typologies_by_zone: {}, defaults_by_category: {}};
+
+        if (!editable) {
+            var zone = String(estimate.omi_zona || '');
+            var typologyCode = String(estimate.omi_tipologia || estimate.omi_tipologia_default || '');
+            var typology = (options.typologies_by_zone[zone] || []).find(function (item) {
+                return String(item.code) === typologyCode;
+            });
+            cells.zone = document.createElement('td');
+            cells.zone.textContent = zone || '—';
+            cells.zone.title = 'Accedi per modificare la selezione OMI.';
+            cells.typology = document.createElement('td');
+            cells.typology.textContent = typology ? typology.label : (typologyCode || '—');
+            cells.typology.title = 'Accedi per modificare la selezione OMI.';
+            return tagCells(cells);
+        }
+
+        var zoneCell = addSelectCell();
+        var zoneSelect = text(zoneCell.body, 'select', 'form-select form-select-sm');
+        zoneSelect.setAttribute('aria-label', 'Zona OMI per il fabbricato');
+        var guessedZone = String(estimate.omi_zona || '');
+        option(zoneSelect, '', guessedZone ? 'Automatica · ' + guessedZone : 'Automatica · zona non determinata');
+        var seenZones = {};
+        (options.zones || []).forEach(function (item) {
+            var code = String(item.code || '');
+            if (!code) return;
+            seenZones[code] = true;
+            option(zoneSelect, code, item.label || code);
+        });
+        if (guessedZone && !seenZones[guessedZone]) option(zoneSelect, guessedZone, guessedZone + ' · stima corrente');
+        if (estimate.omi_zone_selected && guessedZone) zoneSelect.value = guessedZone;
+        else zoneSelect.value = '';
+        var typologyCell = addSelectCell();
+        var typologySelect = text(typologyCell.body, 'select', 'form-select form-select-sm');
+        typologySelect.setAttribute('aria-label', 'Tipologia OMI per il fabbricato');
+        configureTypologies(typologySelect, estimate, options, zoneSelect.value, false);
+        cells.zone = zoneCell.body;
+        cells.typology = typologyCell.body;
+
+        zoneSelect.addEventListener('change', function () {
+            configureTypologies(typologySelect, estimate, options, zoneSelect.value, true);
+            saveSelection(estimate, zoneSelect, typologySelect, zoneCell.body, typologyCell.body);
+        });
+        typologySelect.addEventListener('change', function () {
+            saveSelection(estimate, zoneSelect, typologySelect, zoneCell.body, typologyCell.body);
+        });
+        return tagCells(cells);
+    }
+
+    function tagCells(cells) {
+        Object.keys(cells).forEach(function (name) { cells[name].dataset.omiCell = name; });
+        return cells;
+    }
+
+    function parseJson(node) {
+        try { return JSON.parse(node.textContent || 'null'); } catch (error) { return null; }
+    }
+
+    function estimatesByAssetKey(groups) {
+        var byKey = {};
+        (groups || []).forEach(function (group) {
+            (group.buildings || []).forEach(function (estimate) {
+                var key = estimate && estimate.asset_identity && estimate.asset_identity.asset_key;
+                if (key) byKey[key] = estimate;
+            });
+        });
+        return byKey;
+    }
+
+    function replaceFromFresh(fresh, selector, closestSelector) {
+        var live = document.querySelector(selector);
+        var next = fresh.querySelector(selector);
+        if (!live && !next) return;
+        if (!live || !next) throw new Error('Page structure changed: ' + selector);
+        if (closestSelector) { live = live.closest(closestSelector) || live; next = next.closest(closestSelector) || next; }
+        live.replaceWith(document.importNode(next, true));
+    }
+
+    function reloadScript(pattern) {
+        var old = Array.from(document.scripts).find(function (script) { return pattern.test(script.src); });
+        if (!old) return;
+        var script = document.createElement('script');
+        if (old.nonce) script.nonce = old.nonce;
+        script.async = false;
+        script.src = old.src.replace(/([?&])refresh=\d+&?/, '$1').replace(/[?&]$/, '') +
+            (old.src.indexOf('?') === -1 ? '?' : '&') + 'refresh=' + Date.now();
+        document.head.appendChild(script);
+    }
+
+    // Applies a saved choice without reloading: fetch the server-rendered page again and copy over only the
+    // parts that depend on the OMI estimate, leaving the map, scroll position and open sections alone.
+    function refreshInPlace() {
+        return fetch(window.location.href, {credentials: 'same-origin', headers: {Accept: 'text/html'}})
+            .then(function (response) {
+                if (!response.ok || response.redirected) throw new Error('Refresh failed');
+                return response.text();
+            })
+            .then(function (html) {
+                var fresh = new DOMParser().parseFromString(html, 'text/html');
+                var freshEstimates = fresh.querySelector('[data-land-map-omi-estimates]');
+                var freshOptions = fresh.querySelector('[data-land-map-omi-options]');
+                if (!freshEstimates || !freshOptions) throw new Error('Refresh returned no OMI data');
+                var nextEstimates = parseJson(freshEstimates);
+                var nextOptions = parseJson(freshOptions);
+                if (!Array.isArray(nextEstimates) || !nextOptions) throw new Error('Refresh returned invalid OMI data');
+
+                ['[data-land-map-omi-estimates]', '[data-land-map-omi-options]', '[data-land-map-owner-assessment]'].forEach(function (selector) {
+                    var live = document.querySelector(selector);
+                    var next = fresh.querySelector(selector);
+                    if (live && next) live.textContent = next.textContent;
+                });
+                estimates = nextEstimates;
+                optionsByComune = nextOptions;
+
+                Array.from(document.querySelectorAll('.document-land-map-kpis')).forEach(function (live, index) {
+                    var next = fresh.querySelectorAll('.document-land-map-kpis')[index];
+                    if (!next) throw new Error('Page structure changed: KPI cards');
+                    live.replaceWith(document.importNode(next, true));
+                });
+                replaceFromFresh(fresh, '#central-omi-heading', 'section');
+                replaceFromFresh(fresh, '#adjusted-omi-heading', 'section');
+
+                var byKey = estimatesByAssetKey(nextEstimates);
+                document.querySelectorAll('tr[data-omi-asset-key]').forEach(function (row) {
+                    var estimate = byKey[row.dataset.omiAssetKey];
+                    if (!estimate) return;
+                    var estimateCell = row.querySelector('[data-omi-cell="estimate"]');
+                    if (estimateCell) fillEstimateCell(estimateCell, estimate);
+                    var cells = buildCells(estimate);
+                    Object.keys(cells).forEach(function (name) {
+                        var old = row.querySelector('[data-omi-cell="' + name + '"]');
+                        if (old) old.replaceWith(cells[name]);
+                    });
+                });
+
+                // These sections are drawn by other scripts from the data swapped above, so draw them again.
+                var assessment = document.querySelector('[data-owner-financial-assessment]');
+                if (assessment) assessment.remove();
+                reloadScript(/cadastral_asset_enrichment\.js/);
+                var manualRoot = document.querySelector('[data-manual-property-valuations-root]');
+                var freshManualRoot = fresh.querySelector('[data-manual-property-valuations-root]');
+                if (manualRoot && freshManualRoot) {
+                    var liveManualData = document.querySelector('[data-manual-property-valuations]');
+                    var freshManualData = fresh.querySelector('[data-manual-property-valuations]');
+                    if (liveManualData && freshManualData) liveManualData.textContent = freshManualData.textContent;
+                    manualRoot.replaceWith(document.importNode(freshManualRoot, true));
+                    reloadScript(/manual_property_valuations\.js/);
+                }
+            });
+    }
+
+    // Prefer the in-place refresh; if anything in it fails, fall back to reloading so the page is never left stale.
+    function applySavedChange() {
+        return refreshInPlace().catch(function () {
+            rememberAccordionState();
+            window.location.reload();
         });
     }
 
@@ -375,67 +553,15 @@
 
             rows.forEach(function (row, rowIndex) {
                 var estimate = rowEstimates[rowIndex] || {};
-                var identity = estimate.asset_identity || {};
                 var targetCell = row.cells[targetIndex] || null;
-                var sizeCell = addActualSizeCell(estimate);
-                var priceCell = addOmiPriceRangeCell(estimate);
-                if (!identity.asset_key || !estimate.omi_comune) {
-                    var emptyZone = document.createElement('td');
-                    var emptyTypology = document.createElement('td');
-                    if (!editable) {
-                        emptyZone.textContent = estimate.omi_zona || '—';
-                        emptyTypology.textContent = estimate.omi_tipologia || estimate.omi_tipologia_default || '—';
-                        emptyZone.title = emptyTypology.title = 'Accedi per modificare la selezione OMI.';
-                    }
-                    insertCells(row, [sizeCell, emptyZone, emptyTypology, priceCell], targetCell);
-                    return;
+                var cells = buildCells(estimate);
+                if (estimate.asset_identity && estimate.asset_identity.asset_key) {
+                    row.dataset.omiAssetKey = estimate.asset_identity.asset_key;
                 }
-                var options = optionsByComune[estimate.omi_comune] || {zones: [], typologies_by_zone: {}, defaults_by_category: {}};
-
-                if (!editable) {
-                    var zone = String(estimate.omi_zona || '');
-                    var typologyCode = String(estimate.omi_tipologia || estimate.omi_tipologia_default || '');
-                    var typology = (options.typologies_by_zone[zone] || []).find(function (item) {
-                        return String(item.code) === typologyCode;
-                    });
-                    var zoneDisplayCell = document.createElement('td');
-                    zoneDisplayCell.textContent = zone || '—';
-                    zoneDisplayCell.title = 'Accedi per modificare la selezione OMI.';
-                    var typologyDisplayCell = document.createElement('td');
-                    typologyDisplayCell.textContent = typology ? typology.label : (typologyCode || '—');
-                    typologyDisplayCell.title = 'Accedi per modificare la selezione OMI.';
-                    insertCells(row, [sizeCell, zoneDisplayCell, typologyDisplayCell, priceCell], targetCell);
-                    return;
+                if (targetCell && targetHead && targetHead.textContent.trim() === 'Stima OMI indicativa') {
+                    targetCell.dataset.omiCell = 'estimate';
                 }
-
-                var zoneCell = addSelectCell();
-                var zoneSelect = text(zoneCell.body, 'select', 'form-select form-select-sm');
-                zoneSelect.setAttribute('aria-label', 'Zona OMI per il fabbricato');
-                var guessedZone = String(estimate.omi_zona || '');
-                option(zoneSelect, '', guessedZone ? 'Automatica · ' + guessedZone : 'Automatica · zona non determinata');
-                var seenZones = {};
-                (options.zones || []).forEach(function (item) {
-                    var code = String(item.code || '');
-                    if (!code) return;
-                    seenZones[code] = true;
-                    option(zoneSelect, code, item.label || code);
-                });
-                if (guessedZone && !seenZones[guessedZone]) option(zoneSelect, guessedZone, guessedZone + ' · stima corrente');
-                if (estimate.omi_zone_selected && guessedZone) zoneSelect.value = guessedZone;
-                else zoneSelect.value = '';
-                var typologyCell = addSelectCell();
-                var typologySelect = text(typologyCell.body, 'select', 'form-select form-select-sm');
-                typologySelect.setAttribute('aria-label', 'Tipologia OMI per il fabbricato');
-                configureTypologies(typologySelect, estimate, options, zoneSelect.value, false);
-                insertCells(row, [sizeCell, zoneCell.body, typologyCell.body, priceCell], targetCell);
-
-                zoneSelect.addEventListener('change', function () {
-                    configureTypologies(typologySelect, estimate, options, zoneSelect.value, true);
-                    saveSelection(estimate, zoneSelect, typologySelect, zoneCell.body, typologyCell.body);
-                });
-                typologySelect.addEventListener('change', function () {
-                    saveSelection(estimate, zoneSelect, typologySelect, zoneCell.body, typologyCell.body);
-                });
+                insertCells(row, [cells.size, cells.zone, cells.typology, cells.price], targetCell);
             });
             table.dataset.omiSelectionsAdded = 'true';
         });

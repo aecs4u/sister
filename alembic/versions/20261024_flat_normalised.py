@@ -14,6 +14,7 @@ Downgrade swaps the legacy layout back (``07_down.sql``); data written to the ne
 Design, mapping and application impact: ``docs/database_design.md``.
 """
 
+import os
 from pathlib import Path
 from typing import Sequence, Union
 
@@ -34,11 +35,16 @@ def _run(steps: Sequence[str]) -> None:
     bind = op.get_bind()
     if bind.dialect.name != "postgresql":
         raise RuntimeError("This SISTER schema migration requires PostgreSQL")
+    istat_schema = op.get_context().opts.get("istat_schema") or os.getenv(
+        "DATABASE_ISTAT_SCHEMA", os.getenv("DATABASE_SCHEMA", "sister")
+    )
+    quoted_istat_schema = bind.dialect.identifier_preparer.quote_schema(istat_schema)
     # A raw cursor sends each file as one simple-protocol query: several statements, DO blocks and a literal % all work.
     cursor = bind.connection.cursor()
     try:
         for name in steps:
-            cursor.execute((SQL_DIR / name).read_text(encoding="utf-8"))
+            sql = (SQL_DIR / name).read_text(encoding="utf-8")
+            cursor.execute(sql.replace("__ISTAT_SCHEMA__", quoted_istat_schema))
     finally:
         cursor.close()
 

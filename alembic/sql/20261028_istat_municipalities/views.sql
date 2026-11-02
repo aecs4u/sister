@@ -1,4 +1,4 @@
--- The canonical place keys are istat.municipalities.numeric_code. Names are rendered in the legacy uppercase form.
+-- The canonical place keys are the shared ISTAT municipality numeric_code values. Names use the legacy uppercase form.
 CREATE VIEW __SISTER_SCHEMA__.v_cadastral_unit AS
 SELECT u.id AS cadastral_unit_id,
        u.cadastre_type,

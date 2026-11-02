@@ -1,5 +1,6 @@
 """Use the shared ISTAT municipality foreign table for SISTER location keys."""
 
+import os
 from pathlib import Path
 from typing import Sequence, Union
 
@@ -16,7 +17,9 @@ SQL_DIR = Path(__file__).resolve().parent.parent / "sql" / revision
 def _schema_names() -> tuple[str, str]:
     options = op.get_context().opts
     sister_schema = options.get("sister_schema", "sister")
-    istat_schema = options.get("istat_schema", "istat")
+    istat_schema = options.get("istat_schema") or os.getenv(
+        "DATABASE_ISTAT_SCHEMA", os.getenv("DATABASE_SCHEMA", "sister")
+    )
     preparer = op.get_bind().dialect.identifier_preparer
     return preparer.quote_schema(sister_schema), preparer.quote_schema(istat_schema)
 

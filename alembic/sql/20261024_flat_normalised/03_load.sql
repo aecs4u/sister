@@ -131,13 +131,13 @@ SELECT DISTINCT pg_temp.cname(c) AS code FROM (
 CREATE TEMP TABLE _istat (name text, prov text, code text) ON COMMIT DROP;
 DO $$
 BEGIN
-    IF to_regclass('istat.municipalities') IS NOT NULL THEN
+    IF to_regclass('__ISTAT_SCHEMA__.municipalities') IS NOT NULL THEN
         -- ISTAT writes 'FORLÌ', the portal writes "FORLI'"
         EXECUTE $q$INSERT INTO _istat
                     SELECT replace(replace(replace(replace(replace(replace(pg_temp.cname(name),
                                'À', 'A'''), 'È', 'E'''), 'É', 'E'''), 'Ì', 'I'''), 'Ò', 'O'''), 'Ù', 'U'''),
                            pg_temp.cname(province_abbreviation), pg_temp.cname(cadastral_code)
-                    FROM istat.municipalities WHERE nullif(btrim(cadastral_code), '') IS NOT NULL$q$;
+                    FROM __ISTAT_SCHEMA__.municipalities WHERE nullif(btrim(cadastral_code), '') IS NOT NULL$q$;
     END IF;
 END $$;
 INSERT INTO _c_norm SELECT i.name, i.prov, i.code FROM _istat i

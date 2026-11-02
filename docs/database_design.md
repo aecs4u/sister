@@ -1,7 +1,8 @@
 # Flat, normalised database design
 
 Status: the normalized schema is live in the `sister` database. Revision `20261028_istat_municipalities` moves
-municipality lookups to the shared `istat.municipalities` foreign table; the application reads its `numeric_code` keys.
+municipality lookups to the shared ISTAT foreign table; its schema is configured by `DATABASE_ISTAT_SCHEMA` and
+defaults to `DATABASE_SCHEMA` (`sister`). The application reads its `numeric_code` keys.
 
 Files: `alembic/versions/20261024_flat_normalised.py` runs the SQL in `alembic/sql/20261024_flat_normalised/`
 (`01_dedup` → `02_schema` → `03_load` → `04_validate` → `05_views` → `06_swap`; `07_down` is the downgrade).
@@ -57,7 +58,7 @@ cache rows. These are counted in `04_validate.sql`.
 ## The new model
 
 ```
-istat.municipalities ◄── cadastral_unit ◄── request ──► request_result ──► result_owner ──► subject, ownership_right ──► right_kind
+sister.municipalities ◄── cadastral_unit ◄── request ──► request_result ──► result_owner ──► subject, ownership_right ──► right_kind
    ▲            ▲    ▲           ▲  ▲                           │
    │            │    └── property ┘  └── page_visit ──► form_element, error
    │            │
@@ -71,7 +72,7 @@ istat.municipalities ◄── cadastral_unit ◄── request ──► reques
 
 | Legacy | New |
 |---|---|
-| `cadastral_locations`, `geographic_places` | `cadastral_unit` + `istat.municipalities` (province abbreviation, Belfiore code) |
+| `cadastral_locations`, `geographic_places` | `cadastral_unit` + `sister.municipalities` (province abbreviation, Belfiore code) |
 | `cadastral_subjects`, `document_subjects`, mortgage party identity | `subject` (+ `document_subject`) |
 | `ownership_right_catalog`, `ownership_rights` | `right_kind`, `ownership_right` (share as numerator/denominator, real dates) |
 | `visura_requests` + `visura_responses` | `request` (response columns inline; `data` → `sister_archive.request_payload`) |
@@ -100,8 +101,8 @@ Read views: `v_cadastral_unit`, `v_property`, `v_result_owner`, `v_property_owne
 
 1. **Comuni.** Provinces appear as codes and names (`PA`/`PALERMO`); names map to codes, `NAZIONALE` (an office level) is
    not a province. A name seen with exactly one province gets it where the source left it blank. Belfiore codes come
-   from the data; where several names claim a code, and for codes the data never names, `istat.municipalities` decides
-   (used only if that schema exists; ISTAT spellings are converted to the portal's: `FORLÌ` → `FORLI'`). A comune seen
+   from the data; where several names claim a code, and for codes the data never names, `sister.municipalities` decides
+   (used only if the shared table exists; ISTAT spellings are converted to the portal's: `FORLÌ` → `FORLI'`). A comune seen
    under an old and a new province (Monza MI/MB) is one row under the province that holds its code. Result: 295 comuni,
    294 with a code (`OLBA (SV)` is the exception). Provinces that ISTAT now lists differently (MI→MB, SS→OT) keep the
    province the portal reported.
@@ -125,13 +126,13 @@ Read views: `v_cadastral_unit`, `v_property`, `v_result_owner`, `v_property_owne
 
 ## Application alignment
 
-The application models map municipality data to `istat.municipalities`; projection, XML ingestion, result queries,
+The application models map municipality data to `sister.municipalities` by default; projection, XML ingestion, result queries,
 document views, and map-cache writes all use ISTAT `numeric_code` values. Tests build an isolated copy of the shared
 municipality rows in a throwaway schema.
 
 ## Shared municipality reference
 
-SISTER stores `istat.municipalities.numeric_code` in the existing `comune_id` columns and joins to the shared foreign
+SISTER stores `sister.municipalities.numeric_code` in the existing `comune_id` columns and joins to the shared foreign
 table. PostgreSQL does not support foreign keys referencing foreign tables, so these integer columns are indexed but
 not constrained to that relation. Foreign and historical birthplaces that have no current ISTAT row are retained in
 `subject.birth_municipality_text` and `subject.birth_province_code`. The previous local dimension is retained as

@@ -1,4 +1,4 @@
--- Places are the shared ISTAT municipality table (`istat.municipalities`, a postgres_fdw foreign table), not a table of our
+-- Places are the shared ISTAT municipality foreign table, not a table of our
 -- own. Every `*_comune_id` column now holds ISTAT's `numeric_code`; PostgreSQL cannot reference a foreign table, so these
 -- columns have no foreign key and the views (views.sql) join the table explicitly.
 --
@@ -13,7 +13,7 @@
 DO $$
 BEGIN
     IF to_regclass('__ISTAT_SCHEMA__.municipalities') IS NULL THEN
-        RAISE EXCEPTION 'istat.municipalities is required: the shared ISTAT municipality table is the reference for places';
+        RAISE EXCEPTION '__ISTAT_SCHEMA__.municipalities is required: the shared ISTAT municipality table is the reference for places';
     END IF;
 END $$;
 

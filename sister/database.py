@@ -38,6 +38,7 @@ from sqlalchemy import (
     text,
     union_all,
 )
+from sqlalchemy.dialects import postgresql
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
@@ -129,10 +130,10 @@ load_dotenv(PROJECT_ROOT.parent / ".env", override=False)
 DATA_ROOT = Path(os.getenv("SISTER_DATA_ROOT", str(PROJECT_ROOT))).expanduser().resolve()
 DATABASE_DSN = os.getenv("DATABASE_DSN")
 DATABASE_SCHEMA = os.getenv("DATABASE_SCHEMA", "sister")
-DATABASE_ISTAT_SCHEMA = os.getenv("DATABASE_ISTAT_SCHEMA", "istat")
+DATABASE_ISTAT_SCHEMA = os.getenv("DATABASE_ISTAT_SCHEMA", DATABASE_SCHEMA)
 # raw payloads (response JSON, XML tree, extraction JSON) live in their own schema; tests point it at a throwaway one
 DATABASE_ARCHIVE_SCHEMA = os.getenv("DATABASE_ARCHIVE_SCHEMA", "sister_archive")
-DATABASE_REVISION = "20261119_billing_wallet_tables"
+DATABASE_REVISION = "20261120_wallet_env_endpoint"
 
 # ---------------------------------------------------------------------------
 # Engine and session
@@ -247,6 +248,19 @@ async def init_db() -> None:
         # We only need the names here. Reflecting full column types makes
         # SQLAlchemy warn about PostGIS's ``geometry`` columns in this shared
         # table, even though the application never maps those columns.
+        istat_table_result = await conn.execute(
+            text(
+                "SELECT 1 FROM information_schema.tables "
+                "WHERE table_schema = :schema AND table_name = 'municipalities'"
+            ),
+            {"schema": DATABASE_ISTAT_SCHEMA},
+        )
+        istat_table_exists = istat_table_result.scalar_one_or_none()
+        if istat_table_exists is None:
+            raise RuntimeError(
+                f"Shared ISTAT table {DATABASE_ISTAT_SCHEMA}.municipalities was not found. "
+                "Set DATABASE_ISTAT_SCHEMA to the schema containing the shared municipality table."
+            )
         istat_columns = set(
             (
                 await conn.execute(
@@ -1954,7 +1968,7 @@ async def get_comune_centroids(cadastral_codes: Iterable[str]) -> dict[str, tupl
     codes = sorted({str(c).strip().upper() for c in cadastral_codes if str(c or "").strip()})
     if not codes:
         return {}
-    schema = IstatMunicipality.__table_args__["schema"]
+    schema = postgresql.dialect().identifier_preparer.quote_schema(DATABASE_ISTAT_SCHEMA)
     stmt = text(
         "SELECT upper(btrim(m.cadastral_code)), "
         "COALESCE(avg(ST_Y(ST_Centroid(g.geom))), m.ci_latitude), "

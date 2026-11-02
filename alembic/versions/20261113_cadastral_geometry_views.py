@@ -1,5 +1,6 @@
 """Expose cadastral parcel and sheet geometries through SISTER views."""
 
+import os
 from pathlib import Path
 from typing import Sequence, Union
 
@@ -19,7 +20,9 @@ def _run(name: str) -> None:
         raise RuntimeError("Cadastral geometry views require PostgreSQL")
     options = op.get_context().opts
     sister_schema = options.get("sister_schema", "sister")
-    istat_schema = options.get("istat_schema", "istat")
+    istat_schema = options.get("istat_schema") or os.getenv(
+        "DATABASE_ISTAT_SCHEMA", os.getenv("DATABASE_SCHEMA", "sister")
+    )
     preparer = bind.dialect.identifier_preparer
     sql = (SQL_DIR / name).read_text(encoding="utf-8")
     sql = sql.replace("__SISTER_SCHEMA__", preparer.quote_schema(sister_schema))

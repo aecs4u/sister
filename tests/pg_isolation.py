@@ -77,6 +77,7 @@ def _apply_table_migrations(engine, schema: str, istat_schema: str) -> None:
         "20261117_subject_notes.py",
         "20261118_document_purchase_billing.py",
         "20261119_billing_wallet_tables.py",
+        "20261120_wallet_environment_endpoint.py",
     ):
         path = migration_dir / name
         spec = importlib.util.spec_from_file_location(f"_{path.stem}_migration", path)
@@ -139,6 +140,7 @@ def _apply_flat_schema(engine, schema: str, archive_schema: str, istat_schema: s
         return (
             sql.replace("sister_next", f'"{schema}"')
             .replace("sister_archive", f'"{archive_schema}"')
+            .replace("__ISTAT_SCHEMA__", f'"{istat_schema}"')
             .replace("istat.", f'"{istat_schema}".')
         )
 
@@ -167,7 +169,7 @@ def pg_test_schema():
     import sister.visura_xml_models  # noqa: F401
 
     url = _local_dsn()
-    source_istat_schema = os.getenv("DATABASE_ISTAT_SCHEMA", "istat")
+    source_istat_schema = database.DATABASE_ISTAT_SCHEMA
     sync_url = url.set(drivername="postgresql+psycopg")
     admin = create_engine(sync_url, isolation_level="AUTOCOMMIT")
     try:
