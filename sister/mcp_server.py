@@ -83,7 +83,7 @@ def _query_description(spec) -> dict[str, Any]:
     return {
         "command": spec.command,
         "description": spec.summary,
-        "api_path": spec.path,
+        "api_path": f"/api/v1{spec.path}",
         "parameters": fields,
         "required_any": [list(group) for group in spec.required_any],
     }
@@ -163,7 +163,7 @@ def create_server():
                 "valid": False,
                 "command": spec.command,
                 "description": spec.summary,
-                "api_path": spec.path,
+                "api_path": f"/api/v1{spec.path}",
                 "error": str(exc),
                 "requirements": {
                     "required": list(spec.required),
@@ -182,7 +182,7 @@ def create_server():
             "expires_in_seconds": PREVIEW_TTL_SECONDS,
             "command": spec.command,
             "description": spec.summary,
-            "api_path": spec.path,
+            "api_path": f"/api/v1{spec.path}",
             "parameters": normalized,
             "side_effects": _SIDE_EFFECT_WARNING,
             "submit_requires_explicit_confirmation": True,

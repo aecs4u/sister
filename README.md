@@ -46,12 +46,14 @@ Servizio REST + CLI + Web UI per l'estrazione automatizzata di dati catastali da
 
 SISTER permette di interrogare i dati catastali italiani tramite una semplice interfaccia HTTP o una CLI dedicata. Il flusso operativo è diviso in due fasi:
 
+Le API JSON di Catasto usano il prefisso `/api/v1`; le pagine HTML e i relativi URL restano invariati. Il probe operativo `/health` resta disponibile alla radice.
+
 | Fase | Endpoint | CLI | Descrizione |
 |------|----------|-----|-------------|
-| **1 — Immobili** | `POST /visura` | `sister query search` | Cerca gli immobili associati a foglio + particella |
-| **2 — Intestati** | `POST /visura/intestati` | `sister query intestati` | Recupera i titolari di uno specifico subalterno |
+| **1 — Immobili** | `POST /api/v1/visura` | `sister query search` | Cerca gli immobili associati a foglio + particella |
+| **2 — Intestati** | `POST /api/v1/visura/intestati` | `sister query intestati` | Recupera i titolari di uno specifico subalterno |
 
-Entrambe le richieste vengono accodate ed eseguite sequenzialmente su un singolo browser autenticato al portale SISTER. I risultati si recuperano in polling con `GET /visura/{request_id}` o con `sister wait`.
+Entrambe le richieste vengono accodate ed eseguite sequenzialmente su un singolo browser autenticato al portale SISTER. I risultati si recuperano in polling con `GET /api/v1/visura/{request_id}` o con `sister wait`.
 
 ### Funzionalità principali
 
@@ -244,7 +246,7 @@ ADE_SPID_PROVIDER=sielte          # sielte | aruba | poste | namirial
 # Opzionale — Applicazione
 API_KEY=una_chiave_operativa       # Protegge endpoint operativi via X-API-Key
 LOG_LEVEL=INFO                    # DEBUG | INFO | WARNING | ERROR
-SHUTDOWN_API_KEY=una_chiave_lunga # Protegge POST /shutdown via header X-API-Key
+SHUTDOWN_API_KEY=una_chiave_lunga # Protegge POST /api/v1/shutdown via header X-API-Key
 QUEUE_MAX_SIZE=100                # Capienza massima coda richieste
 RESPONSE_TTL_SECONDS=21600        # TTL cache risultati (default 6 ore)
 RESPONSE_MAX_ITEMS=5000           # Massimo risultati in memoria
@@ -283,7 +285,7 @@ non fa logout. Dettagli, livelli di ufficio (Nazionale/Provincia) e risoluzione 
 | `BROWSER_MFA_TIMEOUT` | | `120` | Timeout in secondi per approvazione MFA |
 | `API_KEY` | | non impostata | Se impostata, richiede `X-API-Key` sugli endpoint operativi |
 | `LOG_LEVEL` | | `INFO` | Livello di log su console e file |
-| `SHUTDOWN_API_KEY` | | non impostata | Se assente, endpoint `POST /shutdown` disabilitato |
+| `SHUTDOWN_API_KEY` | | non impostata | Se assente, endpoint `POST /api/v1/shutdown` disabilitato |
 | `QUEUE_MAX_SIZE` | | `100` | Numero massimo richieste accodabili prima di rispondere `429` |
 | `RESPONSE_TTL_SECONDS` | | `21600` | Tempo massimo (secondi) di retention risultati in memoria |
 | `RESPONSE_MAX_ITEMS` | | `5000` | Numero massimo di risultati mantenuti in cache |
@@ -682,7 +684,7 @@ GET /health
 ### Visura immobili (Fase 1)
 
 ```
-POST /visura
+POST /api/v1/visura
 ```
 
 Cerca tutti gli immobili su una particella catastale. Se `tipo_catasto` è omesso, vengono accodate **due** richieste (Terreni + Fabbricati).
@@ -703,7 +705,7 @@ Se `API_KEY` è configurata, richiede header `X-API-Key`.
 **Esempio con curl:**
 
 ```bash
-curl -X POST http://localhost:8025/visura \
+curl -X POST http://localhost:8025/api/v1/visura \
   -H "Content-Type: application/json" \
   -d '{
     "provincia": "Trieste",
@@ -736,7 +738,7 @@ uv run sister query search -P Trieste -C TRIESTE -F 9 -p 166 -t F
 ### Visura intestati (Fase 2)
 
 ```
-POST /visura/intestati
+POST /api/v1/visura/intestati
 ```
 
 Estrae i titolari (intestati) di uno specifico immobile. Per i Fabbricati è necessario specificare il `subalterno`.
@@ -758,7 +760,7 @@ Se `API_KEY` è configurata, richiede header `X-API-Key`.
 
 ```bash
 # curl
-curl -X POST http://localhost:8025/visura/intestati \
+curl -X POST http://localhost:8025/api/v1/visura/intestati \
   -H "Content-Type: application/json" \
   -d '{
     "provincia": "Trieste",
@@ -791,7 +793,7 @@ uv run sister query intestati -P Trieste -C TRIESTE -F 9 -p 166 -t F -sub 3
 ### Polling risultati
 
 ```
-GET /visura/{request_id}
+GET /api/v1/visura/{request_id}
 ```
 
 Recupera lo stato e i dati di una richiesta precedentemente accodata.
@@ -809,7 +811,7 @@ Se il risultato è scaduto, risponde con `410` e `status: "expired"`.
 
 ```bash
 # curl
-curl -s http://localhost:8025/visura/req_F_abc123 | jq .
+curl -s http://localhost:8025/api/v1/visura/req_F_abc123 | jq .
 
 # CLI — singolo poll
 uv run sister get req_F_abc123
@@ -877,7 +879,7 @@ uv run sister wait req_F_abc123 --timeout 600
 ### Storico visure
 
 ```
-GET /visura/history
+GET /api/v1/visura/history
 ```
 
 Consulta lo storico delle visure salvate nel database PostgreSQL.
@@ -894,7 +896,7 @@ Consulta lo storico delle visure salvate nel database PostgreSQL.
 
 ```bash
 # curl
-curl -s "http://localhost:8025/visura/history?provincia=Trieste&limit=20" | jq .
+curl -s "http://localhost:8025/api/v1/visura/history?provincia=Trieste&limit=20" | jq .
 
 # CLI
 uv run sister history --provincia Trieste --limit 20
@@ -905,7 +907,7 @@ uv run sister history --provincia Trieste --limit 20
 ### Sezioni territoriali
 
 ```
-POST /sezioni/extract
+POST /api/v1/sezioni/extract
 ```
 
 Estrae le sezioni censuarie per tutte le province e comuni d'Italia. **Operazione molto lenta** — può richiedere ore.
@@ -921,14 +923,14 @@ Se `API_KEY` è configurata, richiede header `X-API-Key`.
 ### Shutdown
 
 ```
-POST /shutdown
+POST /api/v1/shutdown
 ```
 
 Esegue un shutdown controllato: logout dal portale SISTER e chiusura del browser.
 Richiede header `X-API-Key` uguale a `SHUTDOWN_API_KEY`.
 
 ```bash
-curl -X POST http://localhost:8025/shutdown \
+curl -X POST http://localhost:8025/api/v1/shutdown \
   -H "X-API-Key: ${SHUTDOWN_API_KEY}"
 ```
 
@@ -1036,22 +1038,22 @@ Uso e stati del report sono descritti in [questa guida](docs/recrowd_immobile_st
 
 ```bash
 # 1. Avvia l'estrazione dei fabbricati
-curl -s -X POST http://localhost:8025/visura \
+curl -s -X POST http://localhost:8025/api/v1/visura \
   -H "Content-Type: application/json" \
   -d '{"provincia":"Roma","comune":"ROMA","foglio":"100","particella":"50","tipo_catasto":"F"}' \
   | jq .
 
 # 2. Polling risultati (ripeti fino a status != "processing")
-curl -s http://localhost:8025/visura/req_F_abc123 | jq .
+curl -s http://localhost:8025/api/v1/visura/req_F_abc123 | jq .
 
 # 3. Chiedi gli intestati per un subalterno specifico
-curl -s -X POST http://localhost:8025/visura/intestati \
+curl -s -X POST http://localhost:8025/api/v1/visura/intestati \
   -H "Content-Type: application/json" \
   -d '{"provincia":"Roma","comune":"ROMA","foglio":"100","particella":"50","tipo_catasto":"F","subalterno":"3"}' \
   | jq .
 
 # 4. Polling intestati
-curl -s http://localhost:8025/visura/intestati_F_xyz789 | jq .
+curl -s http://localhost:8025/api/v1/visura/intestati_F_xyz789 | jq .
 ```
 
 ### Scripting con CLI e jq
@@ -1126,7 +1128,7 @@ logs/pages/
 - Pausa di **2 secondi** tra una richiesta e l'altra
 - Pausa di **5 secondi** dopo un errore
 - I risultati restano in memoria (`response_store`) e nel **database PostgreSQL**
-- Il client fa polling su `GET /visura/{request_id}` — restituisce `"processing"` finché il risultato non è pronto
+- Il client fa polling su `GET /api/v1/visura/{request_id}` — restituisce `"processing"` finché il risultato non è pronto
 - Se il risultato non è in cache, viene cercato automaticamente nel database
 
 ### Graceful shutdown

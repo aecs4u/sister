@@ -237,7 +237,7 @@ def _poll(client: httpx.Client, request_id: str, timeout: int, interval: int) ->
     deadline = time.monotonic() + timeout
     terminal = {"completed", "cached", "error", "failed", "expired", "needs_human", "cancelled"}
     while time.monotonic() < deadline:
-        response = client.get(f"/visura/{request_id}")
+        response = client.get(f"/api/v1/visura/{request_id}")
         response.raise_for_status()
         data = response.json()
         if data.get("status") in terminal:
@@ -248,7 +248,7 @@ def _poll(client: httpx.Client, request_id: str, timeout: int, interval: int) ->
 
 def _submit(client: httpx.Client, code: str, timeout: int, interval: int) -> dict:
     response = client.post(
-        "/visura/soggetto-documento",
+        "/api/v1/visura/soggetto-documento",
         params={
             "provincia": "NAZIONALE",
             "tipo_catasto": "E",
@@ -269,7 +269,7 @@ def _submit(client: httpx.Client, code: str, timeout: int, interval: int) -> dic
 
 def _download_ready_documents(client: httpx.Client) -> dict:
     """Download ready documents; Sister's endpoint downloads all ready Richieste items, not only Recrowd items."""
-    response = client.post("/visura/download-documents")
+    response = client.post("/api/v1/visura/download-documents")
     response.raise_for_status()
     return response.json()
 

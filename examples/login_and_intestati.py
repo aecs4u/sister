@@ -2,7 +2,7 @@
 """Login via CIE, find immobili, then extract intestati for a specific subalterno.
 
 This demonstrates the full two-phase flow from the README:
-  Phase 1: POST /visura    -> find immobili on a particella
+  Phase 1: POST /api/v1/visura    -> find immobili on a particella
   Phase 2: POST /intestati -> get owners for a specific subalterno
 
 Usage:

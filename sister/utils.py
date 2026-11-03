@@ -5297,7 +5297,7 @@ async def run_soggetto_documento(
     """Request an analytical/synthetic Visura per Soggetto (XML, differita), once per province.
 
     vista: 'analitica' or 'sintetica'. The request is submitted after the user solves the CAPTCHA; the
-    document then appears under Richieste (download with POST /visura/download-documents).
+    document then appears under Richieste (download with POST /api/v1/visura/download-documents).
     azienda: ``codice_fiscale`` is a company tax code / VAT number, so search as a legal entity.
     """
     if isinstance(azienda, str):

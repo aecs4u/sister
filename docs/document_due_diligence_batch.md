@@ -35,7 +35,7 @@ Within a workflow run, identical free query submissions reuse the first response
 
 Property, subject, and request-page steps include captured `page_visits` alongside their structured results. The visit records include the visited page details and captured form fields or errors, and are stored through the normal response persistence path when database storage is enabled. This keeps the source-page context available with extracted data such as property rows.
 
-The Richieste lookup returns only requests with a `Salva` link, along with their request metadata and ID. It omits the session-bound download URL. Downloading is a separate action; the `/visura/download-documents` endpoint is not launched automatically by each workflow.
+The Richieste lookup returns only requests with a `Salva` link, along with their request metadata and ID. It omits the session-bound download URL. Downloading is a separate action; the `/api/v1/visura/download-documents` endpoint is not launched automatically by each workflow.
 
 ## Coverage limits
 

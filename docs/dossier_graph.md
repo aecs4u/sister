@@ -8,7 +8,7 @@ following it until no new node appears:
 * **property → owners**: every intestato of each of those immobili (identity, share), who become owners to
   expand in turn.
 
-It runs entirely through `POST /visura/soggetto-immobili?con_intestati=1` (`sister query soggetto-immobili
+It runs entirely through `POST /api/v1/visura/soggetto-immobili?con_intestati=1` (`sister query soggetto-immobili
 --con-intestati`): no document is requested and **no CAPTCHA** is involved, but the AdE session must be logged
 in (see `docs/portal_session.md`). Companies use the persona giuridica flow (`--azienda`).
 

@@ -92,7 +92,7 @@ When `API_KEY` is set the operational endpoints require `X-API-Key`. The CLI/`Vi
 
 ## Lessons from the bulk runs of 2026-10-27
 
-- **Check `request.cadastre_type` of a bulk run, not only the outcome.** The generic route `/visura/{search_type}` defaulted `tipo_catasto` to
+- **Check `request.cadastre_type` of a bulk run, not only the outcome.** The generic route `/api/v1/visura/{search_type}` defaulted `tipo_catasto` to
   `T`, so 380 `soggetto-immobili` requests (26-27/10) searched Terreni only; 335 subjects were redone-worthy (107 found without fabbricati,
   228 "nessuna corrispondenza" that was not final). Subject searches default to `E` now (`soggetto-immobili`, `soggetto-documento`), the
   cache key includes the cadastre type, `run_in_session.answered_codes` counts only answers with `E` (or none) and `prune_plan` writes

@@ -174,7 +174,7 @@ def _poll(client: httpx.Client, request_id: str, timeout: int, interval: int) ->
     deadline = time.monotonic() + timeout
     terminal = {"completed", "cached", "error", "failed", "expired", "needs_human", "cancelled", "not_found"}
     while time.monotonic() < deadline:
-        response = client.get(f"/visura/{request_id}")
+        response = client.get(f"/api/v1/visura/{request_id}")
         if response.status_code == 404:
             return {"status": "not_found", "request_id": request_id}
         response.raise_for_status()
@@ -196,7 +196,7 @@ def _fetch_properties(client: httpx.Client, tax_code: str, timeout: int, interva
     }
     if len(tax_code) == 11 and tax_code.isdigit():
         params["azienda"] = "true"
-    response = client.post("/visura/soggetto-immobili", params=params)
+    response = client.post("/api/v1/visura/soggetto-immobili", params=params)
     response.raise_for_status()
     payload = response.json()
     if payload.get("status") not in {"completed", "cached", "error", "failed", "needs_human"}:
@@ -446,7 +446,7 @@ def run(args: argparse.Namespace) -> int:
                             timeout=60,
                         ) as request_client:
                             response = request_client.post(
-                                "/visura/visura-storica",
+                                "/api/v1/visura/visura-storica",
                                 params=_property_request_params(location),
                             )
                             response.raise_for_status()

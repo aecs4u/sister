@@ -233,7 +233,7 @@ def download_ready_documents(port: int, since: str) -> int:
     if api_key:
         headers["X-API-Key"] = api_key
     request = urllib.request.Request(
-        f"http://127.0.0.1:{port}/visura/download-documents?{query}",
+        f"http://127.0.0.1:{port}/api/v1/visura/download-documents?{query}",
         data=b"",
         headers=headers,
         method="POST",

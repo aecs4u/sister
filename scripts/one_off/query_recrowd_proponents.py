@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Query SISTER /visura/soggetto for all Recrowd proponents fiscal codes."""
+"""Query SISTER /api/v1/visura/soggetto for all Recrowd proponents fiscal codes."""
 
 import json
 import os
@@ -61,7 +61,7 @@ def get_proponents() -> list[dict]:
 
 def submit(client: httpx.Client, vat_number: str) -> str | None:
     resp = client.post(
-        f"{SISTER_URL}/visura/persona-giuridica",
+        f"{SISTER_URL}/api/v1/visura/persona-giuridica",
         json={"identificativo": vat_number, "tipo_catasto": "E"},
         timeout=30,
     )
@@ -73,7 +73,7 @@ def submit(client: httpx.Client, vat_number: str) -> str | None:
 def poll(client: httpx.Client, request_id: str) -> dict:
     deadline = time.time() + TIMEOUT
     while time.time() < deadline:
-        resp = client.get(f"{SISTER_URL}/visura/{request_id}", timeout=30)
+        resp = client.get(f"{SISTER_URL}/api/v1/visura/{request_id}", timeout=30)
         resp.raise_for_status()
         data = resp.json()
         status = data.get("status")

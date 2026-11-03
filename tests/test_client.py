@@ -147,6 +147,36 @@ async def test_request_extracts_detail_from_plain_text(client):
     assert exc_info.value.detail == "Bad request body"
 
 
+@pytest.mark.parametrize(
+    ("path", "expected_path"),
+    [
+        ("/visura", "/api/v1/visura"),
+        ("/visura/history", "/api/v1/visura/history"),
+        ("/catasto/workflow/run", "/api/v1/catasto/workflow/run"),
+        ("/territorio", "/api/v1/territorio"),
+        ("/courts/1", "/api/v1/courts/1"),
+        ("/sezioni/extract", "/api/v1/sezioni/extract"),
+        ("/shutdown", "/api/v1/shutdown"),
+        ("/api/v1/visura", "/api/v1/visura"),
+        ("/health", "/health"),
+        ("/openapi.json", "/openapi.json"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_request_uses_versioned_namespace_only_for_json_api_paths(client, path, expected_path):
+    captured = {}
+
+    async def handler(request: httpx.Request):
+        captured["path"] = request.url.path
+        return httpx.Response(200, json={"status": "ok"})
+
+    _inject_transport(client, handler)
+
+    await client._request("GET", path)
+
+    assert captured["path"] == expected_path
+
+
 # ---------------------------------------------------------------------------
 # search
 # ---------------------------------------------------------------------------
@@ -175,7 +205,7 @@ async def test_search_sends_correct_payload(client):
     )
 
     assert captured["method"] == "POST"
-    assert captured["url"].endswith("/visura")
+    assert captured["url"].endswith("/api/v1/visura")
     assert captured["body"]["tipo_catasto"] == "T"
     assert captured["body"]["sezione"] == "A"
     assert captured["body"]["subalterno"] == "3"
@@ -244,7 +274,7 @@ async def test_get_result_calls_correct_url(client):
     _inject_transport(client, handler)
 
     result = await client.get_result("abc")
-    assert captured["url"].endswith("/visura/abc")
+    assert captured["url"].endswith("/api/v1/visura/abc")
     assert result["status"] == "completed"
 
 

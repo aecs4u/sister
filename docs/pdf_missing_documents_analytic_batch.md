@@ -28,7 +28,7 @@ The request for `vs_sto_SMLRRN65L66G273G_T296244_2026.pdf` is included in the an
 The request queue may pause for a human CAPTCHA. After the requests are ready in SISTER Richieste, fetch the available documents, including the five requests listed separately above:
 
 ```bash
-curl -sS -X POST http://localhost:8025/visura/download-documents \
+curl -sS -X POST http://localhost:8025/api/v1/visura/download-documents \
   -H "X-API-Key: ${VISURA_API_KEY}"
 ```
 

@@ -19,7 +19,7 @@ from starlette.responses import JSONResponse, Response
 HEADER_NAME = "X-CSRF-Token"
 FORM_FIELD = "csrf_token"
 UNSAFE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
-DEFAULT_EXEMPT = ("/visura", "/auth/", "/api/", "/webhooks/", "/sezioni", "/shutdown", "/static/")
+DEFAULT_EXEMPT = ("/auth/", "/api/", "/webhooks/", "/static/")
 
 
 def make_token(secret: str, cookie_value: str) -> str:

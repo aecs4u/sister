@@ -12204,9 +12204,13 @@ async def web_api_batch(request: Request, user=Depends(_require_auth)):
             for i, row in enumerate(rows):
                 try:
                     if form_command in generic_commands or command in generic_commands:
-                        resp = await client.post(f"{base}{api_path}", params=row, headers=_internal_api_headers())
+                        resp = await client.post(
+                            f"{base}/api/v1{api_path}", params=row, headers=_internal_api_headers()
+                        )
                     else:
-                        resp = await client.post(f"{base}{api_path}", json=row, headers=_internal_api_headers())
+                        resp = await client.post(
+                            f"{base}/api/v1{api_path}", json=row, headers=_internal_api_headers()
+                        )
                     data = resp.json()
                     if resp.is_success and user_key:
                         data = _query_poll_tokens(data, user_key)
@@ -12654,7 +12658,7 @@ async def web_api_proxy(endpoint: str, request: Request, user=Depends(_require_a
 
     async with httpx.AsyncClient(timeout=300, follow_redirects=True) as client:
         resp = await client.post(
-            f"{base}/visura/{endpoint}",
+            f"{base}/api/v1/visura/{endpoint}",
             json=body,
             headers=_internal_api_headers() or None,
         )
@@ -12684,7 +12688,7 @@ async def web_api_poll(request_id: str, request: Request, user=Depends(_require_
     base = f"http://localhost:{request.url.port or 8025}"
 
     async with httpx.AsyncClient(timeout=120, follow_redirects=True) as client:
-        resp = await client.get(f"{base}/visura/{upstream_request_id}", headers=_internal_api_headers() or None)
+        resp = await client.get(f"{base}/api/v1/visura/{upstream_request_id}", headers=_internal_api_headers() or None)
     try:
         content = resp.json()
     except Exception:

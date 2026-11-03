@@ -346,7 +346,7 @@ async def test_extract_route_returns_202_with_job_links():
 
     assert response.status_code == 202
     assert body["status"] == "queued"
-    assert body["status_url"] == f"/sezioni/extract/{body['job_id']}"
+    assert body["status_url"] == f"/api/v1/sezioni/extract/{body['job_id']}"
     await _run_to_end(service, body["job_id"])
 
 

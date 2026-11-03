@@ -31,6 +31,24 @@ DEFAULT_BASE_URL = "http://localhost:8025"
 DEFAULT_TIMEOUT = 120.0
 DEFAULT_POLL_INTERVAL = 5.0
 DEFAULT_POLL_TIMEOUT = 300.0
+API_V1_PREFIX = "/api/v1"
+_VERSIONED_API_ROOTS = (
+    "/visura",
+    "/catasto/workflow",
+    "/territorio",
+    "/courts",
+    "/sezioni/extract",
+    "/shutdown",
+)
+
+
+def _versioned_api_path(path: str) -> str:
+    """Map legacy internal command paths onto the public versioned API namespace."""
+    if path == API_V1_PREFIX or path.startswith(f"{API_V1_PREFIX}/"):
+        return path
+    if any(path == root or path.startswith(f"{root}/") for root in _VERSIONED_API_ROOTS):
+        return f"{API_V1_PREFIX}{path}"
+    return path
 
 
 # ---------------------------------------------------------------------------
@@ -137,7 +155,7 @@ class VisuraClient:
             if _REUSE_PREVIOUS.get():
                 params["reuse_previous"] = "true"
         async with self._get_client() as client:
-            resp = await client.request(method, path, json=json, params=params)
+            resp = await client.request(method, _versioned_api_path(path), json=json, params=params)
         if resp.status_code >= 400:
             detail = resp.text
             try:
@@ -162,7 +180,7 @@ class VisuraClient:
         form_fields: dict[str, Any] | None = None,
         force: bool = False,
     ) -> dict:
-        """Submit an immobili search (POST /visura)."""
+        """Submit an immobili search (POST /api/v1/visura)."""
         payload: dict[str, Any] = {
             "provincia": provincia,
             "comune": comune,
@@ -193,7 +211,7 @@ class VisuraClient:
         request_documents: bool = False,
         force: bool = False,
     ) -> dict:
-        """Submit an owners (intestati) lookup (POST /visura/intestati)."""
+        """Submit an owners (intestati) lookup (POST /api/v1/visura/intestati)."""
         payload: dict[str, Any] = {
             "provincia": provincia,
             "comune": comune,
@@ -220,7 +238,7 @@ class VisuraClient:
         form_fields: dict[str, Any] | None = None,
         force: bool = False,
     ) -> dict:
-        """Submit a national subject search by codice fiscale (POST /visura/soggetto)."""
+        """Submit a national subject search by codice fiscale (POST /api/v1/visura/soggetto)."""
         payload: dict[str, Any] = {}
         if codice_fiscale:
             payload["codice_fiscale"] = codice_fiscale.upper()
@@ -241,7 +259,7 @@ class VisuraClient:
         form_fields: dict[str, Any] | None = None,
         force: bool = False,
     ) -> dict:
-        """Submit a legal entity search by P.IVA or name (POST /visura/persona-giuridica)."""
+        """Submit a legal entity search by P.IVA or name (POST /api/v1/visura/persona-giuridica)."""
         payload: dict[str, Any] = {"identificativo": identificativo}
         if tipo_catasto:
             payload["tipo_catasto"] = tipo_catasto.upper()
@@ -262,7 +280,7 @@ class VisuraClient:
         form_fields: dict[str, Any] | None = None,
         force: bool = False,
     ) -> dict:
-        """Submit a property listing request (POST /visura/elenco-immobili)."""
+        """Submit a property listing request (POST /api/v1/visura/elenco-immobili)."""
         payload: dict[str, Any] = {"provincia": provincia, "comune": comune}
         if tipo_catasto:
             payload["tipo_catasto"] = tipo_catasto.upper()
@@ -361,7 +379,7 @@ class VisuraClient:
         force: bool = False,
         reuse_cached: bool = False,
     ) -> dict:
-        """Submit an Ispezione Ipotecaria (POST /visura/ispezione-ipotecaria)."""
+        """Submit an Ispezione Ipotecaria (POST /api/v1/visura/ispezione-ipotecaria)."""
         payload: dict[str, Any] = {
             "tipo_ricerca": tipo_ricerca,
             "provincia": provincia,
@@ -416,7 +434,7 @@ class VisuraClient:
         force: bool = False,
         **params,
     ) -> dict:
-        """Submit a generic SISTER search (POST /visura/{search_type})."""
+        """Submit a generic SISTER search (POST /api/v1/visura/{search_type})."""
         query: dict[str, Any] = {"provincia": provincia}
         if comune:
             query["comune"] = comune
@@ -428,7 +446,7 @@ class VisuraClient:
         return await self._request("POST", f"/visura/{search_type}", params=query, force=force)
 
     async def get_result(self, request_id: str) -> dict:
-        """Poll a single request result (GET /visura/{request_id})."""
+        """Poll a single request result (GET /api/v1/visura/{request_id})."""
         return await self._request("GET", f"/visura/{request_id}")
 
     async def submit(
@@ -516,7 +534,7 @@ class VisuraClient:
         limit: int = 50,
         offset: int = 0,
     ) -> dict:
-        """Query response history (GET /visura/history)."""
+        """Query response history (GET /api/v1/visura/history)."""
         params: dict[str, Any] = {"limit": limit, "offset": offset}
         if provincia:
             params["provincia"] = provincia

@@ -8,7 +8,7 @@ Starting from codici fiscali / partite IVA it repeats, until no new node is foun
   * property → owners    every intestato of each of those immobili (identity, share), which become new
                           owners to expand in turn.
 
-Everything goes through the running SISTER service (``POST /visura/soggetto-immobili`` with
+Everything goes through the running SISTER service (``POST /api/v1/visura/soggetto-immobili`` with
 ``con_intestati=1``): no document is requested and no CAPTCHA is involved, but the AdE session must be
 logged in (``sister app login``). The graph is saved after every expansion, so an interrupted run
 (session expired, Ctrl-C, ``--max-requests`` reached) continues with ``--resume <graph.json>``.
@@ -214,7 +214,7 @@ def fetch_properties(client: httpx.Client, ident: str) -> tuple[list[dict] | Non
     params = {"provincia": "NAZIONALE", "codice_fiscale": ident, "tipo_catasto": "E", "con_intestati": "1"}
     if is_company(ident):
         params["azienda"] = "1"
-    response = client.post(f"{BASE_URL}/visura/soggetto-immobili", params=params)
+    response = client.post(f"{BASE_URL}/api/v1/visura/soggetto-immobili", params=params)
     response.raise_for_status()
     payload = response.json()
     request_id = payload.get("request_id")
@@ -225,7 +225,7 @@ def fetch_properties(client: httpx.Client, ident: str) -> tuple[list[dict] | Non
         if time.time() > deadline:
             return None, "timeout"
         time.sleep(POLL_SECONDS)
-        poll = client.get(f"{BASE_URL}/visura/{request_id}")
+        poll = client.get(f"{BASE_URL}/api/v1/visura/{request_id}")
         if poll.status_code == 404:
             return None, "request_id non trovato"
         poll.raise_for_status()

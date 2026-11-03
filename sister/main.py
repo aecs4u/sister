@@ -17,7 +17,7 @@ from dotenv import load_dotenv
 load_dotenv()
 load_dotenv(Path(__file__).resolve().parents[2] / ".env", override=False)  # shared workspace-root defaults (project .env above wins)
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.exception_handlers import http_exception_handler as fastapi_http_exception_handler
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
@@ -124,7 +124,7 @@ api_key = os.getenv("API_KEY")
 shutdown_api_key = os.getenv("SHUTDOWN_API_KEY")
 
 if not shutdown_api_key:
-    logger.warning("SHUTDOWN_API_KEY non configurata: endpoint /shutdown disabilitato")
+    logger.warning("SHUTDOWN_API_KEY non configurata: endpoint /api/v1/shutdown disabilitato")
 if not api_key:
     logger.warning("API_KEY non configurata: endpoint operativi accessibili senza autenticazione")
 
@@ -293,6 +293,10 @@ app = FastAPI(
     dependencies=[Depends(_reuse_previous)],
 )
 
+# Machine-facing Catasto operations have a stable versioned namespace. HTML pages and their
+# browser-only endpoints remain on the web router (including /api/ui/*).
+api_v1_router = APIRouter(prefix="/api/v1")
+
 
 @app.get("/robots.txt", include_in_schema=False)
 async def robots_txt():
@@ -430,7 +434,7 @@ async def redoc_ui(_user=Depends(_docs_auth)):
 async def _http_exception_handler(request: Request, exc: StarletteHTTPException):
     """Browsers get a themed HTML error page; API clients keep the JSON body."""
     wants_html = "text/html" in request.headers.get("accept", "") and not request.url.path.startswith(
-        ("/visura", "/auth", "/api", "/sezioni", "/health")
+        ("/auth", "/api", "/health")
     )
     theme = getattr(request.app.state, "theme_setup", None)
     if exc.status_code == 500:
@@ -479,7 +483,7 @@ async def _unhandled_exception_handler(request: Request, exc: Exception):
     request_id = _error_request_id(request)
     logger.exception("Unhandled request error id=%s path=%s", request_id, request.url.path)
     wants_html = "text/html" in request.headers.get("accept", "") and not request.url.path.startswith(
-        ("/visura", "/auth", "/api", "/sezioni", "/health")
+        ("/auth", "/api", "/health")
     )
     theme = getattr(request.app.state, "theme_setup", None)
     if wants_html and theme is not None:
@@ -942,7 +946,7 @@ def _court_payload(court):
     }
 
 
-@app.get("/territorio", tags=["Territory"])
+@api_v1_router.get("/territorio", tags=["Territory"])
 async def _territory_provinces(
     tipo_catasto: str = "F",
     _: None = Depends(require_api_key_dependency),
@@ -954,7 +958,7 @@ async def _territory_provinces(
     )
 
 
-@app.get("/territorio/conservatorie", tags=["Territory"])
+@api_v1_router.get("/territorio/conservatorie", tags=["Territory"])
 async def _list_conservatorie(_: None = Depends(require_api_key_dependency)):
     offices = await list_conservatorie()
     return _reference_response(
@@ -962,7 +966,7 @@ async def _list_conservatorie(_: None = Depends(require_api_key_dependency)):
     )
 
 
-@app.get("/territorio/conservatorie/{conservatoria_or_id}", tags=["Territory"])
+@api_v1_router.get("/territorio/conservatorie/{conservatoria_or_id}", tags=["Territory"])
 async def _conservatoria_detail(
     conservatoria_or_id: str,
     comune: str | None = None,
@@ -1003,7 +1007,7 @@ async def _conservatoria_detail(
     return _reference_response(data)
 
 
-@app.get("/territorio/{provincia_or_nome_provincia_or_id}", tags=["Territory"])
+@api_v1_router.get("/territorio/{provincia_or_nome_provincia_or_id}", tags=["Territory"])
 async def _territory_province_detail(
     provincia_or_nome_provincia_or_id: str,
     tipo_catasto: str = "F",
@@ -1014,7 +1018,7 @@ async def _territory_province_detail(
     return _reference_response(_province_payload(province, municipalities))
 
 
-@app.get("/territorio/{provincia_or_nome_provincia_or_id}/{comune}", tags=["Territory"])
+@api_v1_router.get("/territorio/{provincia_or_nome_provincia_or_id}/{comune}", tags=["Territory"])
 async def _territory_municipality_detail(
     provincia_or_nome_provincia_or_id: str,
     comune: str,
@@ -1032,12 +1036,12 @@ async def _territory_municipality_detail(
     return _reference_response(_province_payload(province, municipalities))
 
 
-@app.get("/courts", tags=["Territory"])
+@api_v1_router.get("/courts", tags=["Territory"])
 async def _list_courts(_: None = Depends(require_api_key_dependency)):
     return _reference_response([_court_payload(court) for court in await list_courts()])
 
 
-@app.get("/courts/{court_id}", tags=["Territory"])
+@api_v1_router.get("/courts/{court_id}", tags=["Territory"])
 async def _court_detail(court_id: str, _: None = Depends(require_api_key_dependency)):
     court = await get_court(court_id)
     if court is None:
@@ -1047,7 +1051,7 @@ async def _court_detail(court_id: str, _: None = Depends(require_api_key_depende
     return _reference_response(data)
 
 
-@app.post("/visura")
+@api_v1_router.post("/visura")
 async def _richiedi_visura(
     request: VisuraInput,
     force: bool = False,
@@ -1057,7 +1061,7 @@ async def _richiedi_visura(
     return await richiedi_visura(request, service, force=force)
 
 
-@app.post("/visura/intestati")
+@api_v1_router.post("/visura/intestati")
 async def _richiedi_intestati_immobile(
     request: VisuraIntestatiInput,
     force: bool = False,
@@ -1067,7 +1071,7 @@ async def _richiedi_intestati_immobile(
     return await richiedi_intestati_immobile(request, service, force=force)
 
 
-@app.post("/visura/soggetto")
+@api_v1_router.post("/visura/soggetto")
 async def _richiedi_visura_soggetto(
     request: VisuraSoggettoInput,
     force: bool = False,
@@ -1077,7 +1081,7 @@ async def _richiedi_visura_soggetto(
     return await richiedi_visura_soggetto(request, service, force=force)
 
 
-@app.post("/visura/persona-giuridica")
+@api_v1_router.post("/visura/persona-giuridica")
 async def _richiedi_visura_persona_giuridica(
     request: VisuraPersonaGiuridicaInput,
     force: bool = False,
@@ -1087,7 +1091,7 @@ async def _richiedi_visura_persona_giuridica(
     return await richiedi_visura_persona_giuridica(request, service, force=force)
 
 
-@app.post("/visura/elenco-immobili")
+@api_v1_router.post("/visura/elenco-immobili")
 async def _richiedi_elenco_immobili(
     request: ElencoImmobiliInput,
     force: bool = False,
@@ -1097,7 +1101,7 @@ async def _richiedi_elenco_immobili(
     return await richiedi_elenco_immobili(request, service, force=force)
 
 
-@app.post("/visura/download-documents")
+@api_v1_router.post("/visura/download-documents")
 async def _download_documents(
     since: str = "",
     skip_known: bool = False,
@@ -1107,7 +1111,7 @@ async def _download_documents(
     return await download_documents(service, since=since, skip_known=skip_known)
 
 
-@app.post("/visura/ispezione-ipotecaria")
+@api_v1_router.post("/visura/ispezione-ipotecaria")
 async def _richiedi_ispezione_ipotecaria(
     request: IspezioneIpotecariaInput,
     force: bool = False,
@@ -1148,7 +1152,7 @@ async def _run_workflow_backend(payload: dict):
     return await _workflow_backend_request("POST", "/catasto/workflow/run", json=payload)
 
 
-@app.post("/catasto/workflow/run")
+@api_v1_router.post("/catasto/workflow/run")
 async def _workflow_run(
     body: dict,
     resume: bool = False,
@@ -1167,23 +1171,23 @@ async def _workflow_run(
     return await _run_workflow_backend(body)
 
 
-@app.get("/catasto/workflow/runs/{workflow_id}")
+@api_v1_router.get("/catasto/workflow/runs/{workflow_id}")
 async def _workflow_status(workflow_id: str, _: None = Depends(require_api_key_dependency)):
     return await _workflow_backend_request("GET", f"/catasto/workflow/runs/{workflow_id}")
 
 
-@app.post("/catasto/workflow/runs/{workflow_id}/cancel")
+@api_v1_router.post("/catasto/workflow/runs/{workflow_id}/cancel")
 async def _workflow_cancel(workflow_id: str, _: None = Depends(require_api_key_dependency)):
     return await _workflow_backend_request("POST", f"/catasto/workflow/runs/{workflow_id}/cancel")
 
 
-@app.post("/visura/workflow")
+@api_v1_router.post("/visura/workflow")
 async def _execute_workflow(body: dict, _: None = Depends(require_api_key_dependency)):
     """Compatibility route for existing SISTER workflow clients."""
     return await _run_workflow_backend(body)
 
 
-@app.post("/visura/{search_type}")
+@api_v1_router.post("/visura/{search_type}")
 async def _richiedi_generic(
     request: Request,
     search_type: str,
@@ -1269,7 +1273,7 @@ async def _health_check(request: Request, x_api_key: Optional[str] = Header(defa
     )
 
 
-@app.get("/visura/history")
+@api_v1_router.get("/visura/history")
 async def _visura_history(
     provincia: Optional[str] = None,
     comune: Optional[str] = None,
@@ -1283,7 +1287,7 @@ async def _visura_history(
     return await visura_history(provincia, comune, foglio, particella, tipo_catasto, limit, offset)
 
 
-@app.get("/visura/{request_id}")
+@api_v1_router.get("/visura/{request_id}")
 async def _ottieni_visura(
     request_id: str,
     service: VisuraService = Depends(get_visura_service),
@@ -1292,7 +1296,7 @@ async def _ottieni_visura(
     return await ottieni_visura(request_id, service)
 
 
-@app.post("/visura/queue/clear")
+@api_v1_router.post("/visura/queue/clear")
 async def _clear_queue(
     service: VisuraService = Depends(get_visura_service),
     _: None = Depends(require_api_key_dependency),
@@ -1311,7 +1315,7 @@ async def _clear_queue(
     return {"drained": drained, "queue_size": service.request_queue.qsize()}
 
 
-@app.post("/shutdown")
+@api_v1_router.post("/shutdown")
 async def _graceful_shutdown_endpoint(
     service: VisuraService = Depends(get_visura_service),
     _: None = Depends(require_shutdown_api_key),
@@ -1319,7 +1323,7 @@ async def _graceful_shutdown_endpoint(
     return await graceful_shutdown_endpoint(service)
 
 
-@app.post("/sezioni/extract")
+@api_v1_router.post("/sezioni/extract")
 async def _extract_sezioni(
     request: SezioniExtractionRequest,
     service: VisuraService = Depends(get_visura_service),
@@ -1328,7 +1332,7 @@ async def _extract_sezioni(
     return await extract_sezioni(request, service)
 
 
-@app.get("/sezioni/extract")
+@api_v1_router.get("/sezioni/extract")
 async def _list_section_extractions(
     limit: int = 50,
     _: None = Depends(require_api_key_dependency),
@@ -1336,7 +1340,7 @@ async def _list_section_extractions(
     return await list_section_extractions(limit)
 
 
-@app.get("/sezioni/extract/{job_id}")
+@api_v1_router.get("/sezioni/extract/{job_id}")
 async def _get_section_extraction(
     job_id: str,
     _: None = Depends(require_api_key_dependency),
@@ -1344,7 +1348,7 @@ async def _get_section_extraction(
     return await get_section_extraction(job_id)
 
 
-@app.post("/sezioni/extract/{job_id}/cancel")
+@api_v1_router.post("/sezioni/extract/{job_id}/cancel")
 async def _cancel_section_extraction(
     job_id: str,
     service: VisuraService = Depends(get_visura_service),
@@ -1353,10 +1357,13 @@ async def _cancel_section_extraction(
     return await cancel_section_extraction(job_id, service)
 
 
-@app.post("/sezioni/extract/{job_id}/resume")
+@api_v1_router.post("/sezioni/extract/{job_id}/resume")
 async def _resume_section_extraction(
     job_id: str,
     service: VisuraService = Depends(get_visura_service),
     _: None = Depends(require_api_key_dependency),
 ):
     return await resume_section_extraction(job_id, service)
+
+
+app.include_router(api_v1_router)

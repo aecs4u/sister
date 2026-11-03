@@ -3,8 +3,8 @@
 
 For each PDF in the documents directory without a paired .p7m, extracts the
 query parameters from the PDF text and re-runs the corresponding SISTER query:
-  - visura per soggetto  → POST /visura/soggetto
-  - visura per immobile  → POST /visura
+  - visura per soggetto  → POST /api/v1/visura/soggetto
+  - visura per immobile  → POST /api/v1/visura
 
 Progress is saved after each query so the script can be re-run safely.
 """
@@ -156,7 +156,7 @@ def collect_queries(docs_dir: Path) -> list[dict]:
 
 
 def submit(client: httpx.Client, endpoint: str, payload: dict) -> str | None:
-    resp = client.post(f"{SISTER_URL}{endpoint}", json=payload, timeout=30)
+    resp = client.post(f"{SISTER_URL}/api/v1{endpoint}", json=payload, timeout=30)
     resp.raise_for_status()
     return resp.json().get("request_id")
 
@@ -164,7 +164,7 @@ def submit(client: httpx.Client, endpoint: str, payload: dict) -> str | None:
 def poll(client: httpx.Client, request_id: str) -> dict:
     deadline = time.time() + TIMEOUT
     while time.time() < deadline:
-        resp = client.get(f"{SISTER_URL}/visura/{request_id}", timeout=30)
+        resp = client.get(f"{SISTER_URL}/api/v1/visura/{request_id}", timeout=30)
         resp.raise_for_status()
         data = resp.json()
         if data.get("status") in ("completed", "error", "failed"):
@@ -190,7 +190,7 @@ def main():
 
     print(f"\nFound {len(queries)} unique queries to run:")
     for q in queries:
-        print(f"  {q['endpoint']}  {q['label']}")
+        print(f"  /api/v1{q['endpoint']}  {q['label']}")
 
     OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
     results = []

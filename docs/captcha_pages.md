@@ -47,7 +47,7 @@ not proof that the code was accepted. `_wait_for_captcha` therefore loops until 
 - `run_visura` catches `CaptchaRequired` inside the per-immobile loop, keeps the immobili/intestati already
   extracted and adds `"needs_human"` to the result.
 - Any other caller lets it propagate; the response error then starts with `CaptchaRequired: CAPTCHA_REQUIRED`.
-- Polling (`GET /visura/{id}`, the web form, `VisuraClient.wait_for_result`, the CLI) reports status `needs_human`
+- Polling (`GET /api/v1/visura/{id}`, the web form, `VisuraClient.wait_for_result`, the CLI) reports status `needs_human`
   and stops polling.
 - Policy: the CAPTCHA is **not** automated. It protects official document requests under the SISTER agreement
   (see [improvement_proposals.md](improvement_proposals.md) §3.2).

@@ -57,7 +57,7 @@ of "catasto terreni" (a Fabbricati visura also contains "Particelle corrisponden
 * 62 queries; JSON results in `outputs/pdf_parseable_batch/` (`batch_NNNN_<command>.json`, failed originals kept in
   `_failed_before_rerun/`). Rows that need a CAPTCHA (property searches) wait for you to type it in the SISTER tab.
 * Signed documents are **not** produced by the JSON queries. They come from the visura *requests* the property
-  searches submit; download them with `POST /visura/download-documents` into `SISTER_FILES_BASE` using the naming
+  searches submit; download them with `POST /api/v1/visura/download-documents` into `SISTER_FILES_BASE` using the naming
   convention of `docs/document_file_naming.md`.
 * Still missing after that (compared by file name with the 80 PDFs): the historical property visure
   (`vi_sto_*`, request them with `sister query visura-storica`), the persona fisica subject visure (`vs_att_*`,

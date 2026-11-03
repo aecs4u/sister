@@ -318,9 +318,9 @@ async def extract_sezioni(request: SezioniExtractionRequest, service: VisuraServ
     return JSONResponse(
         jsonable_encoder({
             **job,
-            "status_url": f"/sezioni/extract/{job_id}",
-            "cancel_url": f"/sezioni/extract/{job_id}/cancel",
-            "resume_url": f"/sezioni/extract/{job_id}/resume",
+            "status_url": f"/api/v1/sezioni/extract/{job_id}",
+            "cancel_url": f"/api/v1/sezioni/extract/{job_id}/cancel",
+            "resume_url": f"/api/v1/sezioni/extract/{job_id}/resume",
         }),
         status_code=202,
     )

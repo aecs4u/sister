@@ -33,7 +33,7 @@ from rich.markup import escape
 from rich.table import Table
 
 from . import batch as batch_engine
-from .client import VisuraAPIError, VisuraClient
+from .client import API_V1_PREFIX, VisuraAPIError, VisuraClient
 from .query_forms import QUERY_FORMS, option_flags, validate_params
 
 app = typer.Typer(
@@ -463,7 +463,7 @@ def _run_query_command(
     client = VisuraClient()
     if dry_run:
         console.print("[bold yellow]DRY RUN[/bold yellow] — request will not be sent")
-        console.print(f"  POST {client.base_url}{spec.path}")
+        console.print(f"  POST {client.base_url}{API_V1_PREFIX}{spec.path}")
         console.print(f"  Body: {json.dumps(params, ensure_ascii=False)}")
         return
     try:
@@ -628,7 +628,7 @@ def ipotecaria_immobile(
     """Ispezione ipotecaria per immobile. SERVIZIO A PAGAMENTO."""
     client = VisuraClient()
     if dry_run:
-        console.print("[bold yellow]DRY RUN[/bold yellow] POST /visura/ispezione-ipotecaria (immobile)")
+        console.print("[bold yellow]DRY RUN[/bold yellow] POST /api/v1/visura/ispezione-ipotecaria (immobile)")
         return
     _ipotecaria_command(
         "immobile",
@@ -657,7 +657,7 @@ def ipotecaria_persona(
     """Ispezione ipotecaria per persona (codice fiscale). SERVIZIO A PAGAMENTO."""
     client = VisuraClient()
     if dry_run:
-        console.print("[bold yellow]DRY RUN[/bold yellow] POST /visura/ispezione-ipotecaria (persona_fisica)")
+        console.print("[bold yellow]DRY RUN[/bold yellow] POST /api/v1/visura/ispezione-ipotecaria (persona_fisica)")
         return
     _ipotecaria_command(
         "persona_fisica",
@@ -683,7 +683,7 @@ def ipotecaria_azienda(
     """Ispezione ipotecaria per società (P.IVA o denominazione). SERVIZIO A PAGAMENTO."""
     client = VisuraClient()
     if dry_run:
-        console.print("[bold yellow]DRY RUN[/bold yellow] POST /visura/ispezione-ipotecaria (persona_giuridica)")
+        console.print("[bold yellow]DRY RUN[/bold yellow] POST /api/v1/visura/ispezione-ipotecaria (persona_giuridica)")
         return
     _ipotecaria_command(
         "persona_giuridica",
@@ -710,7 +710,7 @@ def ipotecaria_nota(
     """Ispezione ipotecaria per riferimento nota. SERVIZIO A PAGAMENTO."""
     client = VisuraClient()
     if dry_run:
-        console.print("[bold yellow]DRY RUN[/bold yellow] POST /visura/ispezione-ipotecaria (nota)")
+        console.print("[bold yellow]DRY RUN[/bold yellow] POST /api/v1/visura/ispezione-ipotecaria (nota)")
         return
     _ipotecaria_command(
         "nota",
@@ -891,7 +891,7 @@ def workflow(
 
         if dry_run:
             console.print(
-                f"[bold yellow]DRY RUN[/bold yellow] — POST /visura/workflow (preset={preset}, depth={depth})"
+                f"[bold yellow]DRY RUN[/bold yellow] — POST /api/v1/visura/workflow (preset={preset}, depth={depth})"
             )
             console.print(f"  {plan.description}")
             console.print(f"  Steps: {' → '.join(plan.steps)}")
@@ -1510,14 +1510,14 @@ def queries():
     table.add_column("Description")
 
     # one row per single-step query, straight from the spec that also generates the commands
-    rows = [(f"query {form.command}", "POST", form.path, form.summary) for form in QUERY_FORMS.values()]
+    rows = [(f"query {form.command}", "POST", f"/api/v1{form.path}", form.summary) for form in QUERY_FORMS.values()]
     rows += [
         ("query workflow", "—", "search → intestati", "Full two-phase: immobili + intestati"),
-        ("query batch", "POST", "/visura (×N)", "Batch of queries from a JSON/CSV file (resumable)"),
-        ("get", "GET", "/visura/{request_id}", "Poll for a single result"),
-        ("wait", "GET", "/visura/{request_id}", "Poll until complete or timeout"),
-        ("requests", "GET", "/visura/history", "List all requests with status"),
-        ("history", "GET", "/visura/history", "Query response history"),
+        ("query batch", "POST", "/api/v1/visura (×N)", "Batch of queries from a JSON/CSV file (resumable)"),
+        ("get", "GET", "/api/v1/visura/{request_id}", "Poll for a single result"),
+        ("wait", "GET", "/api/v1/visura/{request_id}", "Poll until complete or timeout"),
+        ("requests", "GET", "/api/v1/visura/history", "List all requests with status"),
+        ("history", "GET", "/api/v1/visura/history", "Query response history"),
         ("health", "GET", "/health", "Service health check"),
     ]
     for cmd, method, ep, desc in rows:
@@ -1534,7 +1534,7 @@ def get_result(
     request_id: str = typer.Argument(help="ID della richiesta da recuperare"),
     output: Optional[str] = typer.Option(None, "--output", "-o", help="Percorso del file di output (.json)"),
 ):
-    """Recupera il risultato di una richiesta di visura tramite ID (GET /visura/{request_id}).
+    """Recupera il risultato di una richiesta di visura tramite ID (GET /api/v1/visura/{request_id}).
 
     Returns the current status: processing, completed, error, or expired.
     """
@@ -1570,7 +1570,7 @@ def wait_cmd(
 ):
     """Controlla una richiesta finché non termina o scade il tempo.
 
-    Continuously polls GET /visura/{request_id} until status is
+    Continuously polls GET /api/v1/visura/{request_id} until status is
     'completed' or 'error', then prints the result.
     """
     client = VisuraClient()

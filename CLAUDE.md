@@ -43,7 +43,7 @@ SISTER is a FastAPI service + Typer CLI for automated cadastral data extraction 
 - **`data/`** — documenti, dossier e output generati
 - **`docs/*.dot` / `*.svg`** — flowcharts of the query flows (`property_visura_workflow`, `person_search_workflow`); `docs/data_extraction.md` lists what each form returns and where it is stored
 - **`scripts/`** — Start script + bulk query scripts
-  - `query_recrowd_proponents.py` — bulk `/visura/persona-giuridica` for all Recrowd proponents
+  - `query_recrowd_proponents.py` — bulk `/api/v1/visura/persona-giuridica` for all Recrowd proponents
   - `ade_login.py` — SISTER login in the shared Chrome (`--close` frees a stale session)
   - `build_dossier_graph.py` — owner ↔ property graph crawler (`docs/dossier_graph.md`)
   - `build_pdf_parseable_batch.py` / `run_pdf_parseable_batch.sh` — batch for PDFs without a parseable companion (`docs/pdf_parseable_batch.md`)
@@ -117,7 +117,7 @@ uv run sister build dossier-graph --seed <CF|PIVA>
 - `query batch --resume` does not resend a row whose answer was SISTER's own "NESSUNA CORRISPONDENZA" (`batch.FINAL_ERRORS`);
   a codice fiscale with a wrong check character (`sister/fiscal_code.py`) is answered by SISTER with a confirmation page and
   is reported the same way, never confirmed. A failed search keeps its page in `logs/errors/<request id>.html`.
-- **A subject search must cover Fabbricati and Terreni (`tipo_catasto=E`).** The generic route `/visura/{search_type}` used to default to `T`,
+- **A subject search must cover Fabbricati and Terreni (`tipo_catasto=E`).** The generic route `/api/v1/visura/{search_type}` used to default to `T`,
   so every `soggetto-immobili` of 2026-10-26/27 (335 subjects) listed only Terreni and a "nessuna corrispondenza" was not final (a subject with
   fabbricati only got it). Now `E` is the default for `soggetto-immobili`/`soggetto-documento`; `run_in_session.answered_codes` ignores answers
   with another `cadastre_type`, and `prune_plan` writes `tipo_catasto: E` into the plan rows. `run_in_session.py` shows a live bar
@@ -278,7 +278,7 @@ See `docs/document_due_diligence_batch.md` for document-derived property jobs an
 
 ## Persona giuridica queries
 
-Companies must use `POST /visura/persona-giuridica` with `{"identificativo": "<vat_number>", "tipo_catasto": "E"}` — **not** `/visura/soggetto` (persona fisica). The SISTER portal has separate forms for natural persons vs legal entities.
+Companies must use `POST /api/v1/visura/persona-giuridica` with `{"identificativo": "<vat_number>", "tipo_catasto": "E"}` — **not** `/api/v1/visura/soggetto` (persona fisica). The SISTER portal has separate forms for natural persons vs legal entities.
 
 ## Recrowd integration
 

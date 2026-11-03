@@ -1059,7 +1059,7 @@ class VisuraService:
     # ------------------------------------------------------------------
 
     async def download_richieste_documents(self, *, since: str = "", skip_known: bool = False) -> list[dict]:
-        """Download the completed documents listed on the SISTER Richieste page (see /visura/download-documents).
+        """Download the completed documents listed on the SISTER Richieste page (see /api/v1/visura/download-documents).
 
         ``since`` (ISO date) and ``skip_known`` limit it to recent requests whose document is not stored yet.
         """

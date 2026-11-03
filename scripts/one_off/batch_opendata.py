@@ -171,7 +171,7 @@ def load_requests(opendata_dir: str) -> list[dict]:
 def _poll(client: httpx.Client, request_id: str) -> dict:
     deadline = time.time() + TIMEOUT
     while time.time() < deadline:
-        resp = client.get(f"{SISTER_URL}/visura/{request_id}", timeout=30)
+        resp = client.get(f"{SISTER_URL}/api/v1/visura/{request_id}", timeout=30)
         resp.raise_for_status()
         data = resp.json()
         if data.get("status") in ("completed", "error", "failed"):
@@ -190,12 +190,12 @@ def run(opendata_dir: str) -> None:
 
     with httpx.Client() as client:
         for i, req in enumerate(requests, 1):
-            label = f"[{i:3}/{total}] {req['endpoint']:35s} {json.dumps(req['payload'])[:80]}"
+            label = f"[{i:3}/{total}] /api/v1{req['api_path']:35s} {json.dumps(req['payload'])[:80]}"
             print(label, end=" ... ", flush=True)
 
             try:
                 resp = client.post(
-                    f"{SISTER_URL}{req['api_path']}",
+                    f"{SISTER_URL}/api/v1{req['api_path']}",
                     json=req["payload"],
                     timeout=30,
                 )
