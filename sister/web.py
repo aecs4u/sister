@@ -19,7 +19,7 @@ from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from threading import Lock
 from typing import Any, AsyncIterable, Optional
-from urllib.parse import urlencode, urlsplit
+from urllib.parse import quote, urlencode, urlsplit
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, Query, Request
@@ -4096,6 +4096,248 @@ async def web_admin_documents(
     )
 
 
+@router.get("/admin/document-reconciliation", response_class=HTMLResponse)
+async def web_admin_document_reconciliation(
+    request: Request,
+    q: str = "",
+    status: str = "",
+    page: int = 1,
+    user=Depends(_require_admin),
+):
+    """Compare indexed /documents rows with files currently stored under the documents root."""
+    supported_extensions = {".pdf", ".xml", ".p7m", ".zip", ".png", ".dat"}
+    base = _files_base()
+    files_by_path: dict[str, dict[str, Any]] = {}
+    files_by_name: dict[str, list[dict[str, Any]]] = {}
+    supported_file_count = 0
+    unsupported_file_count = 0
+    scan_errors = 0
+    directory_available = base.is_dir()
+
+    if directory_available:
+        def on_walk_error(_error: OSError) -> None:
+            nonlocal scan_errors
+            scan_errors += 1
+
+        for current, directories, filenames in os.walk(base, onerror=on_walk_error):
+            current_path = Path(current)
+            directories[:] = [
+                directory
+                for directory in directories
+                if not (current_path == base and directory == "named")
+                and not (current_path / directory).is_symlink()
+            ]
+            for filename in filenames:
+                # Parser sidecars are cached output, not independent documents.
+                if filename.casefold().endswith(".plan.json"):
+                    continue
+                path = current_path / filename
+                try:
+                    if path.is_symlink() or not path.is_file():
+                        continue
+                    resolved_path = str(path.resolve())
+                    relative_path = path.relative_to(base).as_posix()
+                    suffix = path.suffix.casefold()
+                    size_bytes = path.stat().st_size
+                except OSError:
+                    scan_errors += 1
+                    continue
+                file_entry = {
+                    "filename": filename,
+                    "relative_path": relative_path,
+                    "resolved_path": resolved_path,
+                    "size_bytes": size_bytes,
+                }
+                files_by_path[resolved_path] = file_entry
+                files_by_name.setdefault(filename, []).append(file_entry)
+                if suffix in supported_extensions:
+                    supported_file_count += 1
+                else:
+                    unsupported_file_count += 1
+
+    indexed_count = 0
+    indexed_by_name: dict[str, list[dict[str, Any]]] = {}
+    exact_disk_paths: set[str] = set()
+    path_mismatch_disk_paths: set[str] = set()
+    issues: list[dict[str, Any]] = []
+
+    async for document in iter_all_documents():
+        indexed_count += 1
+        filename = str(document.get("filename") or "")
+        document_id = document.get("id")
+        if filename:
+            indexed_by_name.setdefault(Path(filename).name, []).append(document)
+        if not directory_available:
+            continue
+        expected_path_value = document.get("file_path") or (base / filename)
+        try:
+            expected_path = str(Path(expected_path_value).resolve()) if expected_path_value else ""
+        except (OSError, RuntimeError):
+            expected_path = ""
+        if expected_path and expected_path in files_by_path:
+            exact_disk_paths.add(expected_path)
+            continue
+
+        basename_matches = files_by_name.get(Path(filename).name, []) if filename else []
+        if basename_matches:
+            for file_entry in basename_matches:
+                path_mismatch_disk_paths.add(file_entry["resolved_path"])
+                relative_path = file_entry["relative_path"]
+                issues.append(
+                    {
+                        "status": "path_mismatch",
+                        "filename": filename,
+                        "document_id": document_id,
+                        "response_id": document.get("response_id"),
+                        "document_type": document.get("document_type"),
+                        "relative_path": relative_path,
+                        "file_url": f"/documents/{quote(relative_path, safe='/')}",
+                        "size_bytes": file_entry["size_bytes"],
+                        "detail": "Il nome esiste nella cartella, ma il percorso registrato è diverso.",
+                    }
+                )
+        else:
+            issues.append(
+                {
+                    "status": "db_missing",
+                    "filename": filename or "(nome file non disponibile)",
+                    "document_id": document_id,
+                    "response_id": document.get("response_id"),
+                    "document_type": document.get("document_type"),
+                    "relative_path": "",
+                    "file_url": "",
+                    "size_bytes": None,
+                    "detail": "Il record è nell’endpoint /documents, ma il file non è presente al percorso registrato.",
+                }
+            )
+
+    for resolved_path, file_entry in files_by_path.items():
+        if resolved_path in exact_disk_paths:
+            continue
+        filename = file_entry["filename"]
+        relative_path = file_entry["relative_path"]
+        if Path(filename).suffix.casefold() not in supported_extensions:
+            continue
+        if resolved_path in path_mismatch_disk_paths:
+            continue
+
+        same_name_documents = indexed_by_name.get(filename, [])
+        if same_name_documents:
+            document = same_name_documents[0]
+            issues.append(
+                {
+                    "status": "duplicate_name",
+                    "filename": filename,
+                    "document_id": document.get("id"),
+                    "response_id": document.get("response_id"),
+                    "document_type": document.get("document_type"),
+                    "relative_path": relative_path,
+                    "file_url": f"/documents/{quote(relative_path, safe='/')}",
+                    "size_bytes": file_entry["size_bytes"],
+                    "detail": "Un altro percorso usa lo stesso nome già indicizzato; la scansione per nome può saltarlo.",
+                }
+            )
+        else:
+            issues.append(
+                {
+                    "status": "file_only",
+                    "filename": filename,
+                    "document_id": None,
+                    "response_id": None,
+                    "document_type": None,
+                    "relative_path": relative_path,
+                    "file_url": f"/documents/{quote(relative_path, safe='/')}",
+                    "size_bytes": file_entry["size_bytes"],
+                    "detail": "File supportato presente nella cartella, ma senza un record indicizzato.",
+                }
+            )
+
+    allowed_statuses = {"file_only", "db_missing", "path_mismatch", "duplicate_name"}
+    if status not in allowed_statuses:
+        status = ""
+    query = str(q or "").strip()[:200]
+    filtered_issues = [
+        issue
+        for issue in issues
+        if (not status or issue["status"] == status)
+        and (
+            not query
+            or query.casefold()
+            in " ".join(
+                str(issue.get(key) or "")
+                for key in ("filename", "relative_path", "document_id", "response_id", "document_type")
+            ).casefold()
+        )
+    ]
+    status_order = {"file_only": 0, "db_missing": 1, "path_mismatch": 2, "duplicate_name": 3}
+    filtered_issues.sort(
+        key=lambda issue: (
+            status_order[issue["status"]],
+            str(issue.get("filename") or "").casefold(),
+            int(issue.get("document_id") or 0),
+            str(issue.get("relative_path") or "").casefold(),
+        )
+    )
+    page_size = 100
+    total_issues = len(filtered_issues)
+    total_pages = max(1, (total_issues + page_size - 1) // page_size)
+    page = min(max(1, page), total_pages)
+    start = (page - 1) * page_size
+    page_issues = filtered_issues[start : start + page_size]
+    issue_counts = {
+        issue_status: sum(issue["status"] == issue_status for issue in issues)
+        for issue_status in allowed_statuses
+    }
+    return _get_theme(request).render(
+        "admin/document_reconciliation.html",
+        request,
+        user=user,
+        documents_dir=str(base),
+        directory_available=directory_available,
+        scan_errors=scan_errors,
+        indexed_count=indexed_count,
+        supported_file_count=supported_file_count,
+        unsupported_file_count=unsupported_file_count,
+        issue_counts=issue_counts,
+        issues=page_issues,
+        total_issues=total_issues,
+        query=query,
+        status=status,
+        page=page,
+        total_pages=total_pages,
+        rescan_indexed=request.query_params.get("indexed", ""),
+    )
+
+
+@router.post("/admin/document-reconciliation/rescan", response_class=HTMLResponse)
+async def web_admin_document_reconciliation_rescan(request: Request, user=Depends(_require_admin)):
+    """Index files missing from the catalog and return to the reconciliation report."""
+    started = datetime.now(timezone.utc)
+    try:
+        indexed = await _rescan_documents_dir()
+    except Exception as exc:  # noqa: BLE001
+        await record_activity(
+            "documents.rescan",
+            actor=_actor(user),
+            status="error",
+            error=str(exc) or exc.__class__.__name__,
+            started_at=started,
+            client_ip=_client_ip(request),
+        )
+        raise
+    await record_activity(
+        "documents.rescan",
+        actor=_actor(user),
+        result={"indexed": indexed},
+        started_at=started,
+        client_ip=_client_ip(request),
+    )
+    return RedirectResponse(
+        f"/admin/document-reconciliation?indexed={indexed if indexed is not None else 'unavailable'}",
+        status_code=303,
+    )
+
+
 @router.get("/admin/activity", response_class=HTMLResponse)
 async def web_admin_activity(request: Request, user=Depends(_require_admin)):
     """Show the latest audited changes to document ownership grants."""
@@ -6733,7 +6975,7 @@ async def web_documents_export_named(request: Request, user=Depends(_require_aut
 
 @router.get("/documents/{doc_id}/view")
 async def web_document_view_by_id(request: Request, doc_id: int, user=Depends(_require_auth)):
-    """Serve the document file inline (for in-browser PDF viewing)."""
+    """Serve a document inline using its browser-readable media type."""
     from pathlib import Path
 
     from fastapi import HTTPException
@@ -6746,7 +6988,12 @@ async def web_document_view_by_id(request: Request, doc_id: int, user=Depends(_r
     p = Path(doc["file_path"])
     if not p.exists() or not p.is_file():
         raise HTTPException(status_code=404, detail="Document file not found")
-    _MEDIA = {".pdf": "application/pdf", ".p7m": "application/pkcs7-mime", ".xml": "application/xml"}
+    _MEDIA = {
+        ".pdf": "application/pdf",
+        ".p7m": "application/pkcs7-mime",
+        ".xml": "application/xml",
+        ".png": "image/png",
+    }
     media_type = _MEDIA.get(p.suffix.lower(), "application/octet-stream")
     filename = doc.get("filename") or p.name
     headers = {"Content-Disposition": f'inline; filename="{filename}"'}
@@ -6804,25 +7051,32 @@ async def web_document_download(request: Request, doc_id: int, user=Depends(_req
 
 
 def _extract_planimetria_zip(file_path: str) -> bytes | None:
-    """Extract the inner ZIP payload from a CAdES-signed P7M file (aecs4u-crypto).
+    """Read a raw ZIP or extract the inner ZIP payload from a signed P7M.
 
-    Strips the CMS signature layer via the shared pure-Python extractor (no
-    openssl). Returns raw ZIP bytes, or None if extraction fails or the payload
-    is not a ZIP.
+    For P7M, strips the CMS signature layer via the shared pure-Python extractor
+    (no openssl). Returns raw ZIP bytes, or None if the payload is not a ZIP.
     """
+    try:
+        with open(file_path, "rb") as source:
+            data = source.read()
+    except OSError:
+        return None
+    if data.startswith(b"PK"):
+        return data
+
     from aecs4u_crypto import P7MError, extract_p7m_payload
 
     try:
-        data = extract_p7m_payload(open(file_path, "rb").read())
-    except (P7MError, OSError):
+        data = extract_p7m_payload(data)
+    except P7MError:
         return None
     return data if data.startswith(b"PK\x03\x04") else None
 
 
 def _read_planimetria_geojson(file_path: str) -> dict | None:
-    """Extract metadata from a planimetria P7M ZIP.
+    """Extract metadata from a raw or P7M-wrapped planimetria ZIP.
 
-    Returns a dict for ALL extractable planimetria P7M files, regardless of
+    Returns a dict for supported planimetria archives, regardless of
     the inner format.  ``geojson`` is populated only when the ZIP contains a
     .geojson file; otherwise it is None and ``fmt`` describes the actual format.
 
@@ -6833,9 +7087,9 @@ def _read_planimetria_geojson(file_path: str) -> dict | None:
         epsg         – parsed EPSG code (int) or None
         proj4        – proj4 string for the CRS
         files        – list of filenames inside the ZIP
-        fmt          – 'geojson' | 'dxf' | 'cxf' | 'cmf' | 'unknown'
+        fmt          – 'geojson' | 'dxf' | 'cxf' | 'cmf'
 
-    Returns None only if the P7M cannot be extracted (not a ZIP at all).
+    Returns None if the file is not a supported planimetria ZIP.
     """
     import io
     import json
@@ -6869,6 +7123,9 @@ def _read_planimetria_geojson(file_path: str) -> dict | None:
         fmt = "cmf"
     else:
         fmt = "unknown"
+
+    if fmt == "unknown":
+        return None
 
     # Parse EPSG from the CRS description file
     epsg: int | None = None
@@ -7078,7 +7335,7 @@ def _parse_dxf_entities(dxf_bytes: bytes) -> list[dict]:
 
 
 def _build_plan_data(file_path: str) -> dict | None:
-    """Parse a planimetria P7M to a JSON-serialisable entity list, with disk cache.
+    """Parse a raw ZIP or P7M planimetria to JSON entities, with disk cache.
 
     Cache is stored at ``{file_path}.plan.json`` and is only written once.
     Returns None if the file cannot be extracted or is in an unsupported format.
@@ -7106,7 +7363,7 @@ def _build_plan_data(file_path: str) -> dict | None:
 
             geojson_name = next((n for n in names if n.lower().endswith(".geojson")), None)
             cxf_name = next((n for n in names if n.lower().endswith(".cxf")), None)
-            cmf_name = next((n for n in names if n.lower().endswith(".cmf")), None)
+            cmf_name = next((n for n in names if n.lower().endswith((".cmf", ".cmb"))), None)
             dxf_name = next((n for n in names if n.lower().endswith(".dxf")), None)
 
             if geojson_name:
@@ -7976,6 +8233,7 @@ async def _backfill_document_metadata(base: Path, parsed_by_stem: dict) -> None:
     import asyncio
 
     from sqlalchemy import text
+    from sqlalchemy.dialects.postgresql import insert as pg_insert
 
     from .database import DATABASE_ARCHIVE_SCHEMA, _get_session_factory, is_db_writable
     from .db_models import Document, DocumentContent
@@ -7994,6 +8252,7 @@ async def _backfill_document_metadata(base: Path, parsed_by_stem: dict) -> None:
         await ensure_lookup(session, "document_type", "ispezione_ipotecaria")
         await ensure_lookup(session, "document_type", "elenco_immobili")
         await ensure_lookup(session, "document_type", "elenco_subalterni")
+        await ensure_lookup(session, "document_type", "planimetria")
         await session.execute(
             text(
                 "UPDATE document SET document_type = 'ispezione_ipotecaria' "
@@ -8013,6 +8272,14 @@ async def _backfill_document_metadata(base: Path, parsed_by_stem: dict) -> None:
                 "UPDATE document SET document_type = 'elenco_immobili' "
                 "WHERE lower(file_name) LIKE '%.dat' "
                 "AND document_type IS DISTINCT FROM 'elenco_immobili'"
+            )
+        )
+        await session.execute(
+            text(
+                "UPDATE document SET document_type = 'planimetria' "
+                "WHERE substr(lower(file_name), 1, 6) = 'mappa_' "
+                "AND upper(coalesce(file_format, '')) IN ('ZIP', 'P7M', 'PNG') "
+                "AND document_type IS DISTINCT FROM 'planimetria'"
             )
         )
         await session.commit()
@@ -8086,7 +8353,14 @@ async def _backfill_document_metadata(base: Path, parsed_by_stem: dict) -> None:
             document.reference_date = parse_it_date(parsed.get("situazione_al"))
             session.add(document)
             if xml_content:
-                session.add(DocumentContent(document_id=doc_id, content=xml_content.replace("\x00", "")))
+                # Another rescan/import can archive this document after the
+                # initial missing-content query. Keep the first archived XML
+                # and let this metadata backfill continue without a PK error.
+                await session.execute(
+                    pg_insert(DocumentContent)
+                    .values(document_id=doc_id, content=xml_content.replace("\x00", ""))
+                    .on_conflict_do_nothing(index_elements=[DocumentContent.document_id])
+                )
             await session.flush()
             await _persist_flattened_xml(session, doc_id, xml_content)
             await session.commit()
@@ -8145,7 +8419,14 @@ async def _rescan_documents_dir() -> int | None:
     indexed_paths = set((await get_indexed_file_paths()).keys())
     indexed_names = await get_indexed_filenames()
 
-    _EXT_FORMAT = {".pdf": "PDF", ".xml": "XML", ".p7m": "P7M", ".dat": "DAT"}
+    _EXT_FORMAT = {
+        ".pdf": "PDF",
+        ".xml": "XML",
+        ".p7m": "P7M",
+        ".zip": "ZIP",
+        ".png": "PNG",
+        ".dat": "DAT",
+    }
     _NAME_TYPE = [
         ("isp_", "ispezione_ipotecaria"),
         ("el_sub_", "elenco_subalterni"),
@@ -8162,6 +8443,8 @@ async def _rescan_documents_dir() -> int | None:
 
     def _guess_type_from_name(name: str) -> str:
         n = name.lower()
+        if n.startswith(("mappa_", "elaborato_planimetrico")):
+            return "planimetria"
         for prefix, dtype in _NAME_TYPE:
             if prefix in n:
                 return dtype
@@ -8216,8 +8499,10 @@ async def _rescan_documents_dir() -> int | None:
             elif parsed is None:
                 # No paired structured file — parse PDF content directly
                 parsed = await asyncio.to_thread(_parse_visura_pdf, str(fpath))
+        elif ext == ".zip":
+            parsed = {"tipo": _guess_type_from_name(fpath.name)}
         else:
-            parsed = {}
+            parsed = {"tipo": _guess_type_from_name(fpath.name)}
 
         if ext == ".dat":
             parsed = dict(parsed or {})
@@ -8452,11 +8737,35 @@ async def web_documents(
             if fiscal_code:
                 route = "/companies" if len(fiscal_code) == 11 and fiscal_code.isdigit() else "/persons"
                 return RedirectResponse(url=f"{route}/{fiscal_code}", status_code=307)
-        # Planimetria P7M: render interactive GeoJSON map viewer when possible.
+        image_path = Path(doc.get("file_path") or "")
         if (
             not template
-            and (doc.get("document_type") or "") in ("planimetria", "elaborato_planimetrico")
-            and (doc.get("file_format") or "").upper() == "P7M"
+            and (
+                (doc.get("file_format") or "").upper() == "PNG"
+                or Path(doc.get("filename") or "").suffix.casefold() == ".png"
+            )
+            and image_path.is_file()
+        ):
+            await _load_document_favorite_state(doc, user)
+            return theme.render(
+                "document_image.html",
+                request,
+                user=user,
+                doc=doc,
+                doc_id=int(path),
+            )
+
+        # Cadastral map archives (raw ZIP or signed P7M) share the same viewer.
+        if (
+            not template
+            and (
+                (doc.get("document_type") or "") in ("planimetria", "elaborato_planimetrico")
+                or Path(doc.get("filename") or "").name.casefold().startswith(("mappa_", "elaborato_planimetrico"))
+            )
+            and (
+                (doc.get("file_format") or "").upper() in ("P7M", "ZIP")
+                or Path(doc.get("filename") or "").suffix.casefold() in (".p7m", ".zip")
+            )
             and doc.get("file_path")
         ):
             fp = Path(doc["file_path"])
@@ -8480,8 +8789,12 @@ async def web_documents(
                         zip_files=gj_result.get("files", []),
                         land_registry_map=await _land_registry_map_context(map_lookup),
                     )
-                # P7M not extractable — fall through to direct download
-                return FileResponse(str(fp), filename=fp.name, media_type="application/octet-stream")
+                # Unsupported map archive — keep its original available for download.
+                return FileResponse(
+                    str(fp),
+                    filename=fp.name,
+                    media_type="application/pkcs7-mime" if fp.suffix.casefold() == ".p7m" else "application/zip",
+                )
         if not template and (doc.get("document_type") or "") == "ispezione_ipotecaria" and doc.get("file_path"):
             from .utils import _parse_ispezione_ipotecaria_pdf
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Index the files in the SISTER documents directory in PostgreSQL.
 
-The source files remain in place. PDF, P7M, XML, ZIP and fiducial DAT files are
+The source files remain in place. PDF, P7M, XML, ZIP, PNG and fiducial DAT files are
 indexed; generated ``*.plan.json`` sidecars are deliberately excluded. A document
 is stored by file name (the documents directory is configuration); XML content
 is kept in the archive (``document_content``) and decomposed into the archived
@@ -58,11 +58,14 @@ def is_extensionless_copy(path: Path) -> bool:
 
 
 def file_kind(path: Path) -> str:
-    header = path.read_bytes()[:8]
+    with path.open("rb") as source:
+        header = source.read(8)
     if header.startswith(b"%PDF"):
         return "PDF"
     if header.startswith(b"PK"):
         return "ZIP"
+    if header.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "PNG"
     if header.lstrip().startswith(b"<"):
         return "XML"
     if path.suffix.lower() == ".p7m":
@@ -74,6 +77,8 @@ def file_kind(path: Path) -> str:
 
 def guess_type(filename: str) -> str:
     name = filename.lower()
+    if name.startswith(("mappa_", "elaborato_planimetrico")):
+        return "planimetria"
     if name.endswith(".dat"):
         return "elenco_immobili"
     if name.startswith("el_sub_"):
@@ -208,7 +213,7 @@ async def import_documents(files: list[Path], paired_xml: dict[str, Path]) -> di
             xml_content = read_xml_content(parse_path if parse_path != path else path, parsed)
             filename_type = guess_type(path.name)
             document_type = parsed.get("tipo") or filename_type
-            if filename_type in {"elenco_subalterni", "elenco_immobili"}:
+            if filename_type in {"elenco_subalterni", "elenco_immobili", "planimetria"}:
                 document_type = filename_type
             row = by_filename.get(path.name)
 
@@ -227,7 +232,7 @@ async def import_documents(files: list[Path], paired_xml: dict[str, Path]) -> di
                 row.file_size = path.stat().st_size
                 if not row.file_format:
                     row.file_format = kind
-                if not row.document_type or filename_type in {"elenco_subalterni", "elenco_immobili"}:
+                if not row.document_type or filename_type in {"elenco_subalterni", "elenco_immobili", "planimetria"}:
                     row.document_type = await ensure_lookup(session, "document_type", document_type)
 
             if document_type == "visura_soggetto":
@@ -266,7 +271,7 @@ async def async_main() -> None:
         if path.is_file()
         and not path.name.endswith(".plan.json")
         and not is_extensionless_copy(path)
-        and file_kind(path) in {"PDF", "P7M", "XML", "ZIP", "DAT"}
+        and file_kind(path) in {"PDF", "P7M", "XML", "ZIP", "PNG", "DAT"}
     )
     # PDFs inherit their metadata from the signed document with the same stem (read in memory for a .p7m);
     # the key without the request date also pairs a PDF and a P7M that were requested on different days

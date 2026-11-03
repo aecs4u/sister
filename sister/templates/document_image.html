@@ -1,0 +1,77 @@
+{% extends "_base.html" %}
+{% from "_doc_macros.html" import document_favorite_action, documents_favorites_js %}
+{% block page_title %}Immagine {{ doc.filename or doc_id }}{% endblock %}
+
+{% block extra_css %}
+{{ super() }}
+<style>
+  #document-image-stage { display: flex; align-items: center; justify-content: center; height: calc(100vh - 230px); min-height: 340px; overflow: auto; background: #e9ecef; }
+  #document-image-stage img { display: block; max-width: 100%; max-height: 100%; width: auto; height: auto; margin: auto; }
+  #document-image-stage.is-original-size { display: block; }
+  #document-image-stage.is-original-size img { max-width: none; max-height: none; margin: 0; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="container-fluid py-3">
+  <nav class="mb-3" aria-label="breadcrumb">
+    <ol class="breadcrumb">
+      <li class="breadcrumb-item"><a href="/documents">Documenti</a></li>
+      <li class="breadcrumb-item active" aria-current="page">{{ doc.filename or ('Doc ' ~ doc_id) }}</li>
+    </ol>
+  </nav>
+
+  <section class="card border-0 shadow-sm">
+    <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
+      <h1 class="h5 mb-0"><i class="fas fa-image text-secondary me-2" aria-hidden="true"></i>{{ doc.filename or ('Doc ' ~ doc_id) }}</h1>
+      <div class="d-flex align-items-center flex-wrap gap-2">
+        {{ document_favorite_action(doc_id, doc.is_favorite|default(false), doc.favorites_enabled|default(false)) }}
+        <button class="btn btn-sm btn-outline-primary" id="image-fit" type="button" aria-pressed="true">Adatta allo schermo</button>
+        <button class="btn btn-sm btn-outline-secondary" id="image-original" type="button" aria-pressed="false">Dimensioni originali</button>
+        <a class="btn btn-sm btn-outline-secondary" href="/documents/{{ doc_id }}/download">Scarica PNG</a>
+      </div>
+    </div>
+    <div class="card-body p-2">
+      <div id="document-image-stage" class="rounded" role="region" aria-label="Visualizzatore immagine">
+        <img id="document-image" src="/documents/{{ doc_id }}/view" alt="{{ doc.filename or 'Immagine del documento' }}">
+      </div>
+      <p id="image-dimensions" class="small text-muted mb-0 mt-2" aria-live="polite">Caricamento immagine…</p>
+    </div>
+  </section>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+{{ super() }}
+{{ documents_favorites_js(csp_nonce) }}
+<script nonce="{{ csp_nonce }}">
+  (function () {
+    const stage = document.getElementById('document-image-stage');
+    const image = document.getElementById('document-image');
+    const dimensions = document.getElementById('image-dimensions');
+    const fitButton = document.getElementById('image-fit');
+    const originalButton = document.getElementById('image-original');
+
+    image.addEventListener('load', function () {
+      dimensions.textContent = image.naturalWidth + ' × ' + image.naturalHeight + ' px';
+    });
+    image.addEventListener('error', function () {
+      dimensions.textContent = 'Impossibile caricare l’immagine.';
+      dimensions.classList.add('text-danger');
+    });
+    if (image.complete && image.naturalWidth) {
+      dimensions.textContent = image.naturalWidth + ' × ' + image.naturalHeight + ' px';
+    }
+    fitButton.addEventListener('click', function () {
+      stage.classList.remove('is-original-size');
+      fitButton.setAttribute('aria-pressed', 'true');
+      originalButton.setAttribute('aria-pressed', 'false');
+    });
+    originalButton.addEventListener('click', function () {
+      stage.classList.add('is-original-size');
+      fitButton.setAttribute('aria-pressed', 'false');
+      originalButton.setAttribute('aria-pressed', 'true');
+    });
+  }());
+</script>
+{% endblock %}
