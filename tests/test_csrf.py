@@ -23,7 +23,7 @@ def client():
     async def form(name: str = Form(...)):
         return {"name": name}
 
-    @app.post("/visura/x")
+    @app.post("/api/v1/visura/x")
     async def api():
         return {"api": True}
 
@@ -78,7 +78,7 @@ def test_api_key_clients_are_not_checked(client):
 
 def test_exempt_paths(client):
     client.cookies.set(COOKIE, "jwt")
-    assert client.post("/visura/x").status_code == 200
+    assert client.post("/api/v1/visura/x").status_code == 200
 
 
 def test_html_clients_get_a_plain_403(client):
