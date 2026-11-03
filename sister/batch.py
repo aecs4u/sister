@@ -216,9 +216,15 @@ def load_csv_batch(path: Path, command: str | None = None) -> BatchFile:
 
 
 def load_batch(path: Path, command: str | None = None) -> BatchFile:
-    """Read a submission file: ``.json`` = the JSON format, anything else = CSV."""
-    if path.suffix.lower() == ".json":
-        batch = load_json_batch(path)
+    """Read a submission file: ``.json`` = the JSON format, ``.md`` = the Markdown format, anything else = CSV."""
+    suffix = path.suffix.lower()
+    if suffix in {".json", ".md"}:
+        if suffix == ".json":
+            batch = load_json_batch(path)
+        else:
+            from .batch_markdown import load_markdown  # imports this module
+
+            batch = load_markdown(path.read_text(encoding="utf-8")).batch
         if command:
             batch.defaults.command = command
         return batch

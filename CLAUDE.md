@@ -29,7 +29,8 @@ SISTER is a FastAPI service + Typer CLI for automated cadastral data extraction 
     `data.json`, so no visura text is ever Typst source. Browser print uses `static/css/pages/document_visura.css` (A4 landscape); the theme's blocked
     `onclick="window.print()"` is now `data-aecs4u-print` (theme.js) with a fallback in `sister_actions.js`. Page-level polish (labels, headings, dates, aria) is `static/js/document_visura.js`.
   - `client.py` — VisuraClient async HTTP client
-  - `batch.py` — `query batch` engine: JSON/CSV submission file → validated plan → runner with retries, journal and `--resume` (format: `docs/batch_format.md`, schema `docs/batch_submission.schema.json`)
+  - `batch.py` — `query batch` engine: JSON/CSV/Markdown submission file → validated plan → runner with retries, journal and `--resume` (format: `docs/batch_format.md`, schema `docs/batch_submission.schema.json`)
+  - `batch_markdown.py` — the Markdown form of the same file (`inputs/*.md`, `<!-- sister-batch-table -->` tables, legacy codici lists); read by `batch build-list|run-list|prune-list|convert-list` and `query batch` (`docs/batch_markdown_format.md`)
   - `mcp_server.py` — optional local MCP server over stdio; wraps `VisuraClient` and `query_forms.py`
   - `cli.py` — Typer CLI with query, db, and top-level commands
   - `building_kmz.py` + `building_overrides.json` — OSM footprints → 3D KMZ (extruded volumes, roads, optional gabled roofs);

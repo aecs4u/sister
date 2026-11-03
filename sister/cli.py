@@ -125,7 +125,11 @@ _tool_commands = {
         "run-pvp-is": ("scripts/run_pvp_sales_is.sh", "Prompt for and run a PVP IS list.", True),
         "run-pdf-parseable": ("scripts/run_pdf_parseable_batch.sh", "Build and run the PDF-parseable batch.", True),
         "progress": ("sister.command_tools.batch_progress", "Display saved batch progress."),
-        "prune-list": ("sister.command_tools.prune_code_list", "Remove completed identifiers from a list."),
+        "prune-list": ("sister.command_tools.prune_code_list", "Remove rows already answered from a Markdown batch list."),
+        "convert-list": (
+            "sister.command_tools.convert_code_list",
+            "Rewrite a legacy codici list as a Markdown batch file.",
+        ),
         "recrowd": (
             "sister.command_tools.recrowd_storica_analitica",
             "Check or request Recrowd subject or property history (choose --items).",
@@ -1310,7 +1314,12 @@ def _batch_printer(total: int):
 
 @query_app.command()
 def batch(
-    input_file: str = typer.Option(..., "--input", "-I", help="File JSON (vedi `sister query batch-schema`) o CSV"),
+    input_file: str = typer.Option(
+        ...,
+        "--input",
+        "-I",
+        help="File JSON (vedi `sister query batch-schema`), Markdown (docs/batch_markdown_format.md) o CSV",
+    ),
     command: Optional[str] = typer.Option(
         None,
         "--command",
@@ -1350,7 +1359,7 @@ def batch(
     on_error: Optional[str] = typer.Option(None, "--on-error", help="'continue' (default) o 'stop' al primo errore"),
     skip_invalid: bool = typer.Option(False, "--skip-invalid", help="Esegue le righe valide anche se altre non lo sono"),
 ):
-    """Invia piu' query da un file JSON o CSV, con validazione preventiva, retry e ripresa.
+    """Invia piu' query da un file JSON, Markdown o CSV, con validazione preventiva, retry e ripresa.
 
     Il file JSON (formato: docs/batch_format.md, schema: `sister query batch-schema`) contiene `defaults`, `options`
     e la lista `queries`. Il CSV resta supportato: le colonne sono i parametri del comando (stessi input del form

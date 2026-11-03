@@ -2,7 +2,8 @@
 
 `sister query batch` runs many single-step queries (the commands of `sister/query_forms.py`) from one file.
 The preferred format is **JSON**, described here; the older **CSV** is still read and converted to the same
-structure (see the end).
+structure (see the end), and so are **Markdown** lists ([`batch_markdown_format.md`](batch_markdown_format.md): the
+`inputs/*.md` files, one or more tables, one row per query).
 
 * Schema (editors, validators): [`batch_submission.schema.json`](batch_submission.schema.json), regenerated with
   `sister query batch-schema -o docs/batch_submission.schema.json` (a test fails when it drifts from the code). It lists

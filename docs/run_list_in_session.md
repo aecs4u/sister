@@ -15,9 +15,9 @@ do not need to start `scripts/start.sh` separately.
 
    Complete the SPID/CIE step, including any phone approval. Run the list command soon after login because the portal
    session lasts about 30 minutes.
-3. Use a list file in one of the formats supported by `sister batch build-list`:
-   - tax-code lists such as `inputs/codici_fiscali.all.md`;
-   - parcel query tables marked `<!-- sister-batch-table:v1 -->`, such as the Markdown generated from PVP CSVs.
+3. Use a Markdown batch file ([format](batch_markdown_format.md)): tables marked `<!-- sister-batch-table -->` with one
+   query per row, in any mix of commands (subjects, parcels, PVP lists such as `inputs/pvp_sales/IS.md`, or the legacy
+   `inputs/codici_fiscali.all.md`). Remove what SISTER already has first with `sister batch prune-list FILE.md`.
 
 See [batch format](batch_format.md) for the underlying batch behavior and [portal session](portal_session.md) for
 login and session details.
