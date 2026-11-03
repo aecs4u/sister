@@ -60,6 +60,19 @@ def place_name(value: Any) -> Optional[str]:
     return name.upper() or None
 
 
+_ACCENTED = {"A": ("À",), "E": ("È", "É"), "I": ("Ì",), "O": ("Ò",), "U": ("Ù",)}
+
+
+def place_name_variants(place: str) -> list[str]:
+    """The name as SISTER writes it plus its accented spellings: SISTER shows ``CANICATTI'`` where ISTAT has ``CANICATTÌ``."""
+    variants = [place]
+    for match in re.finditer(r"([AEIOU])'(?=\s|$)", place):
+        variants = variants + [
+            v[: match.start()] + accent + v[match.end() :] for v in variants for accent in _ACCENTED[match.group(1)]
+        ]
+    return list(dict.fromkeys(variants))
+
+
 def belfiore_code(value: Any) -> Optional[str]:
     """The four-character cadastral municipality code (``H199``), or None when the value is not one."""
     code = squeeze(value).upper()
@@ -156,10 +169,11 @@ async def get_or_create_comune(
     if not place:
         return None
 
+    spellings = place_name_variants(place)
     names = or_(
-        func.upper(func.trim(IstatMunicipality.name)) == place,
-        func.upper(func.trim(IstatMunicipality.italian_name)) == place,
-        func.upper(func.trim(IstatMunicipality.other_language_name)) == place,
+        func.upper(func.trim(IstatMunicipality.name)).in_(spellings),
+        func.upper(func.trim(IstatMunicipality.italian_name)).in_(spellings),
+        func.upper(func.trim(IstatMunicipality.other_language_name)).in_(spellings),
     )
     statement = select(IstatMunicipality.numeric_code).where(names)
     if prov:

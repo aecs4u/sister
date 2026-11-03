@@ -185,6 +185,15 @@
 {{ doc_macros_js(csp_nonce) }}
 {{ documents_favorites_js(csp_nonce) }}
 <script nonce="{{ csp_nonce }}">
+(function () {
+    if (window.location.hash !== '#q-elenco_immobili') return;
+    var url = new URL(window.location.href);
+    if (url.searchParams.get('type') === 'elenco_immobili') return;
+    url.searchParams.set('type', 'elenco_immobili');
+    url.searchParams.delete('page');
+    window.location.replace(url.pathname + url.search + url.hash);
+})();
+
 function toggleActiveDocuments(expand) {
     var pane = document.querySelector('#documents-tab-panes > section');
     if (!pane) return;

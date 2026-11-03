@@ -1,5 +1,3 @@
-{% from "_doc_macros.html" import jump_chips %}
-
 {% macro document_category_navigation(tree) %}
 <section class="card border-0 shadow-sm mb-3 documents-type-index no-print">
     <div class="card-header d-flex flex-wrap justify-content-between align-items-center gap-2">
@@ -50,7 +48,18 @@
     </details>
     {% if tree %}
     <div class="card-footer bg-body-tertiary">
-        {{ jump_chips(tree, 'mb-0') }}
+        <div class="d-flex flex-wrap gap-2 mb-0 no-print dossier-jump-chips">
+            {% for g in tree %}
+            {% set jump_href = '#q-' ~ g.key %}
+            {% if g.key == 'elenco_immobili' %}
+                {% set jump_href = '/documents?type=elenco_immobili#q-elenco_immobili' %}
+            {% endif %}
+            <a href="{{ jump_href }}" class="btn btn-sm btn-outline-{{ g.color }}">
+                <i class="fas {{ g.icon }} me-1" aria-hidden="true"></i>{{ g.label }}
+                <span class="badge bg-{{ g.color }} ms-1">{{ g.count }}</span>
+            </a>
+            {% endfor %}
+        </div>
     </div>
     {% endif %}
 </section>

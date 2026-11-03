@@ -150,6 +150,28 @@ class ConservatoriaSection(SQLModel, table=True):
     section_code: str = Field(primary_key=True)
 
 
+class CadastralOfficeListing(SQLModel, table=True):
+    """Row of the portal's "Elenco uffici" page: a provincial office and the date its cadastral data was updated."""
+
+    __tablename__ = "cadastral_office_listing"
+    __table_args__ = (
+        sa.ForeignKeyConstraint(["province_code"], ["territory_province.code"], ondelete="SET NULL"),
+        sa.Index("ix_cadastral_office_listing_province_code", "province_code"),
+    )
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    name: str = Field(unique=True)
+    province_code: Optional[str] = Field(default=None)
+    data_updated_on: Optional[date] = Field(default=None)
+    source_url: Optional[str] = Field(default=None)
+    created_at: datetime = Field(
+        sa_column=Column(sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now())
+    )
+    updated_at: datetime = Field(
+        sa_column=Column(sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now())
+    )
+
+
 class CadastralUnit(SQLModel, table=True):
     __tablename__ = "cadastral_unit"
 

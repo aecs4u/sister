@@ -79,7 +79,7 @@ def guess_type(filename: str) -> str:
     name = filename.lower()
     if name.startswith(("mappa_", "elaborato_planimetrico")):
         return "planimetria"
-    if name.endswith(".dat"):
+    if name.startswith("el_imm_"):
         return "elenco_immobili"
     if name.startswith("el_sub_"):
         return "elenco_subalterni"

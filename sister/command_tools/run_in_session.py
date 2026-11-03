@@ -99,8 +99,11 @@ def session_is_alive(cdp: str) -> bool:
 
 
 def health(port: int) -> dict:
+    # /health shows the auth state only to the API key; an anonymous probe gets {"status": ...} and never "ready".
+    headers = {"X-API-Key": os.environ["API_KEY"]} if os.getenv("API_KEY") else {}
     try:
-        with urllib.request.urlopen(f"http://127.0.0.1:{port}/health", timeout=3) as response:
+        request = urllib.request.Request(f"http://127.0.0.1:{port}/health", headers=headers)
+        with urllib.request.urlopen(request, timeout=3) as response:
             return json.load(response)
     except Exception:  # noqa: BLE001 (not up yet)
         return {}

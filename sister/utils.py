@@ -5,6 +5,7 @@ import logging
 import os
 import re
 import time
+import unicodedata
 import weakref
 from datetime import datetime
 
@@ -430,11 +431,17 @@ def _record_ambiguous_option(selector, requested, candidates, selected, resoluti
     decisions.append(decision)
 
 
+def _fold_accents(text: str) -> str:
+    """Upper case without accents: the portal writes CHATILLON where a source says Châtillon."""
+    decomposed = unicodedata.normalize("NFKD", str(text))
+    return "".join(ch for ch in decomposed if not unicodedata.combining(ch)).upper()
+
+
 async def _rank_option_matches(page, selector, search_text):
     """Return a single best option or the equally ranked top candidates."""
     options = await page.locator(f"{selector} option").all()
     requested = str(search_text or "").strip()
-    requested_upper = requested.upper()
+    requested_upper = _fold_accents(requested)
     if not requested_upper:
         return None, []
 
@@ -452,7 +459,7 @@ async def _rank_option_matches(page, selector, search_text):
         if "soppress" in f"{value} {text}".lower():
             continue
 
-        text_upper, value_upper = text.upper(), value.strip().upper()
+        text_upper, value_upper = _fold_accents(text), _fold_accents(value.strip())
         if requested_upper == value_upper or requested_upper == text_upper:
             log.debug("Exact option match: '%s' -> '%s'", text, value)
             return value, []
@@ -2809,6 +2816,8 @@ async def _save_documents_to_db(documents: list[dict]) -> None:
             doc_type = parsed.get("tipo", "")
             # the database keeps the file name only; the documents directory is configuration
             file_name = Path(doc.get("path") or doc.get("filename") or "").name or doc.get("filename", "")
+            if file_name.casefold().startswith("el_imm_"):
+                doc_type = "elenco_immobili"
             reference_date = parse_it_date(parsed.get("situazione_al"))
 
             # Ispezione PDFs are separate records and notes for the same parcel must
@@ -2822,6 +2831,10 @@ async def _save_documents_to_db(documents: list[dict]) -> None:
                     if doc_type == "elenco_immobili":
                         existing_document = await session.get(Document, int(existing_row.id))
                         if existing_document is not None:
+                            if existing_document.document_type != doc_type:
+                                existing_document.document_type = await ensure_lookup(
+                                    session, "document_type", doc_type
+                                )
                             if not existing_document.cadastral_unit_id and (foglio or particella):
                                 existing_document.cadastral_unit_id = await get_or_create_cadastral_unit(
                                     session,

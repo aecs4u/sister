@@ -133,7 +133,7 @@ DATABASE_SCHEMA = os.getenv("DATABASE_SCHEMA", "sister")
 DATABASE_ISTAT_SCHEMA = os.getenv("DATABASE_ISTAT_SCHEMA", DATABASE_SCHEMA)
 # raw payloads (response JSON, XML tree, extraction JSON) live in their own schema; tests point it at a throwaway one
 DATABASE_ARCHIVE_SCHEMA = os.getenv("DATABASE_ARCHIVE_SCHEMA", "sister_archive")
-DATABASE_REVISION = "20261121_territory_courts"
+DATABASE_REVISION = "20261122_office_listing"
 
 # ---------------------------------------------------------------------------
 # Engine and session
@@ -1578,7 +1578,7 @@ def _document_record(doc: Document, unit: Optional[CadastralUnit], comune: Optio
     """One document + its cadastral unit as the dict the document pages and the browse list use."""
     filename = doc.file_name or ""
     document_type = doc.document_type
-    if filename.casefold().startswith("el_imm_") and filename.casefold().endswith(".dat"):
+    if filename.casefold().startswith("el_imm_"):
         document_type = "elenco_immobili"
     elif filename.casefold().startswith("isp_"):
         document_type = "ispezione_ipotecaria"

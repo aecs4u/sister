@@ -111,6 +111,7 @@ python_functions = ["test_*"]
 asyncio_mode = "auto"
 markers = [
     "integration: tests that use developer-local or external service data",
+    "live: tests that require live service access",
 ]
 
 [tool.deptry]

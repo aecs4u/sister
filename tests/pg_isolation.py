@@ -79,6 +79,7 @@ def _apply_table_migrations(engine, schema: str, istat_schema: str) -> None:
         "20261119_billing_wallet_tables.py",
         "20261120_wallet_environment_endpoint.py",
         "20261121_territory_courts_and_conservatorie.py",
+        "20261122_cadastral_office_listing.py",
     ):
         path = migration_dir / name
         spec = importlib.util.spec_from_file_location(f"_{path.stem}_migration", path)

@@ -8800,19 +8800,18 @@ async def _backfill_document_metadata(
         raise ValueError(f"Unsupported document metadata filter: {only_document_type}")
 
     # Older scans guessed these filenames as generic visure. Correct their type
-    # even when their metadata already exists.
+    # even when their metadata already exists. The `el_imm_` prefix identifies
+    # Elenco Immobili for both DAT and PDF files.
     async with session_factory() as session:
         await ensure_lookup(session, "document_type", "elenco_immobili")
-        if only_document_type == "elenco_immobili":
-            await session.execute(
-                text(
-                    "UPDATE document SET document_type = 'elenco_immobili' "
-                    "WHERE substr(lower(file_name), 1, 7) = 'el_imm_' "
-                    "AND lower(file_name) LIKE '%.dat' "
-                    "AND document_type IS DISTINCT FROM 'elenco_immobili'"
-                )
+        await session.execute(
+            text(
+                "UPDATE document SET document_type = 'elenco_immobili' "
+                "WHERE substr(lower(file_name), 1, 7) = 'el_imm_' "
+                "AND document_type IS DISTINCT FROM 'elenco_immobili'"
             )
-        else:
+        )
+        if only_document_type != "elenco_immobili":
             await ensure_lookup(session, "document_type", "ispezione_ipotecaria")
             await ensure_lookup(session, "document_type", "elenco_subalterni")
             await ensure_lookup(session, "document_type", "fiduciali")
@@ -9201,7 +9200,7 @@ async def _rescan_documents_dir(progress_callback=None) -> int | None:
             else:
                 parsed = {"tipo": _guess_type_from_name(fpath.name)}
 
-            if ext == ".dat" and fpath.name.casefold().startswith("el_imm_"):
+            if fpath.name.casefold().startswith("el_imm_"):
                 parsed = dict(parsed or {})
                 parsed["tipo"] = "elenco_immobili"
             elif fpath.name.casefold().startswith("el_sub_"):
