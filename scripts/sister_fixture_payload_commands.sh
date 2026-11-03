@@ -65,7 +65,7 @@ fi
 # Generic SISTER payloads
 "$SISTER_CLI" query indirizzo --provincia Terni --comune TERNI --tipo-catasto F --indirizzo "VIA DEL RIVO" "${common_flags[@]}"
 "$SISTER_CLI" query partita --provincia Roma --comune ROMA --tipo-catasto T --partita 123456 "${common_flags[@]}"
-"$SISTER_CLI" query nota --provincia Roma --tipo-catasto T --numero 12345 --anno 2020 "${common_flags[@]}"
+"$SISTER_CLI" query nota --provincia Roma --tipo-catasto T --numero 12345 --anno-nota 2020 "${common_flags[@]}"
 "$SISTER_CLI" query mappa --provincia Trieste --comune TRIESTE --tipo-catasto T --foglio 9 "${common_flags[@]}"
 "$SISTER_CLI" query export-mappa --provincia Trieste --comune TRIESTE --tipo-catasto T --foglio 9 "${common_flags[@]}"
 "$SISTER_CLI" query originali --provincia Trieste --comune TRIESTE --tipo-catasto T "${common_flags[@]}"

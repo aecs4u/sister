@@ -41,6 +41,115 @@ class IstatMunicipality(SQLModel, table=True):
     cadastral_code: Optional[str] = Field(default=None)
 
 
+class TerritoryProvince(SQLModel, table=True):
+    """Province names used by the local territory lookup API."""
+
+    __tablename__ = "territory_province"
+
+    code: str = Field(primary_key=True, max_length=2)
+    name: str
+
+
+class Court(SQLModel, table=True):
+    """Court catalog entry; municipality competence is stored separately."""
+
+    __tablename__ = "court"
+    __table_args__ = (
+        sa.ForeignKeyConstraint(["province_code"], ["territory_province.code"], ondelete="SET NULL"),
+        sa.Index("ix_court_municipality_code", "municipality_code"),
+        sa.Index("ix_court_province_code", "province_code"),
+    )
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    source_id: Optional[str] = Field(default=None, unique=True)
+    code: Optional[str] = Field(default=None, unique=True)
+    name: str
+    court_type: Optional[str] = Field(default=None)
+    province_code: Optional[str] = Field(default=None)
+    municipality_code: Optional[int] = Field(default=None)
+    address: Optional[str] = Field(default=None)
+    source_url: Optional[str] = Field(default=None)
+    source_updated_at: Optional[datetime] = Field(default=None)
+    created_at: datetime = Field(
+        sa_column=Column(sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now())
+    )
+    updated_at: datetime = Field(
+        sa_column=Column(sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now())
+    )
+
+
+class CourtMunicipality(SQLModel, table=True):
+    """Municipalities in a court's territorial jurisdiction."""
+
+    __tablename__ = "court_municipality"
+    __table_args__ = (
+        sa.ForeignKeyConstraint(["court_id"], ["court.id"], ondelete="CASCADE"),
+        sa.Index("ix_court_municipality_municipality_code", "municipality_code"),
+    )
+
+    court_id: int = Field(primary_key=True)
+    municipality_code: int = Field(primary_key=True)
+
+
+class ConservatoriaOffice(SQLModel, table=True):
+    """Conservatoria / land-registry public office catalog entry."""
+
+    __tablename__ = "conservatoria_office"
+    __table_args__ = (
+        sa.ForeignKeyConstraint(["province_code"], ["territory_province.code"], ondelete="SET NULL"),
+        sa.Index("ix_conservatoria_office_municipality_code", "municipality_code"),
+        sa.Index("ix_conservatoria_office_province_code", "province_code"),
+    )
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    source_id: Optional[str] = Field(default=None, unique=True)
+    code: Optional[str] = Field(default=None, unique=True)
+    name: str
+    province_code: Optional[str] = Field(default=None)
+    municipality_code: Optional[int] = Field(default=None)
+    address: Optional[str] = Field(default=None)
+    source_url: Optional[str] = Field(default=None)
+    source_updated_at: Optional[datetime] = Field(default=None)
+    created_at: datetime = Field(
+        sa_column=Column(sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now())
+    )
+    updated_at: datetime = Field(
+        sa_column=Column(sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now())
+    )
+
+
+class ConservatoriaMunicipality(SQLModel, table=True):
+    """Municipalities served by a Conservatoria office."""
+
+    __tablename__ = "conservatoria_municipality"
+    __table_args__ = (
+        sa.ForeignKeyConstraint(["office_id"], ["conservatoria_office.id"], ondelete="CASCADE"),
+        sa.Index("ix_conservatoria_municipality_municipality_code", "municipality_code"),
+    )
+
+    office_id: int = Field(primary_key=True)
+    municipality_code: int = Field(primary_key=True)
+
+
+class ConservatoriaSection(SQLModel, table=True):
+    """Cadastral sections advertised by a Conservatoria for one municipality."""
+
+    __tablename__ = "conservatoria_section"
+    __table_args__ = (
+        sa.CheckConstraint("cadastre_type IN ('F', 'T')", name="ck_conservatoria_section_cadastre_type"),
+        sa.ForeignKeyConstraint(
+            ["office_id", "municipality_code"],
+            ["conservatoria_municipality.office_id", "conservatoria_municipality.municipality_code"],
+            ondelete="CASCADE",
+        ),
+    )
+
+    office_id: int = Field(primary_key=True)
+    municipality_code: int = Field(primary_key=True)
+    cadastre_type: str = Field(primary_key=True, max_length=1)
+    section_code: str = Field(primary_key=True)
+
+
 class CadastralUnit(SQLModel, table=True):
     __tablename__ = "cadastral_unit"
 

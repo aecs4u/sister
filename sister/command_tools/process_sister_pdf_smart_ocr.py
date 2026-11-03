@@ -30,7 +30,7 @@ load_dotenv(OCULAR_ROOT / ".env", override=False)
 from sister.database import _get_session_factory  # noqa: E402
 from sister.database import document_file_path  # noqa: E402
 from sister.db_models import Document, DocumentExtraction  # noqa: E402
-from import_ocular_extraction import import_extraction  # noqa: E402
+from sister.command_tools.import_ocular_extraction import import_extraction  # noqa: E402
 
 
 def sha256_file(path: Path) -> str:

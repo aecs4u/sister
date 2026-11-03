@@ -17,7 +17,7 @@ from dotenv import load_dotenv
 load_dotenv()
 load_dotenv(Path(__file__).resolve().parents[2] / ".env", override=False)  # shared workspace-root defaults (project .env above wins)
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Request
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.exception_handlers import http_exception_handler as fastapi_http_exception_handler
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
@@ -67,6 +67,19 @@ from .routes import (
 )
 from .passwords import plaintext_users_allowed, require_hashed_passwords, verify_local_password
 from .services import PageLogger, VisuraService
+from .territory import (
+    get_conservatoria,
+    get_conservatoria_sections,
+    get_court,
+    get_province,
+    list_conservatoria_municipalities,
+    list_conservatorie,
+    list_court_municipalities,
+    list_courts,
+    list_municipalities,
+    list_provinces,
+)
+from .provinces import province_code
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -875,6 +888,163 @@ except ImportError as exc:
     logger.error("Web UI non disponibile: %s", exc)
     if os.getenv("SISTER_ALLOW_NO_WEB_UI", "").strip().lower() not in {"1", "true", "yes"}:
         raise
+
+
+def _reference_response(data):
+    """Use the familiar OpenAPI Catasto response envelope for reference lookups."""
+    return {"data": data, "success": True, "message": "", "error": None}
+
+
+def _validate_cadastre_type(tipo_catasto: str) -> str:
+    value = tipo_catasto.upper()
+    if value not in {"F", "T"}:
+        raise HTTPException(status_code=422, detail="tipo_catasto deve essere 'F' (fabbricati) o 'T' (terreni)")
+    return value
+
+
+async def _resolve_territory_province(provincia_or_name: str):
+    code = province_code(provincia_or_name)
+    if not code:
+        raise HTTPException(status_code=404, detail="Provincia non trovata")
+    province = await get_province(code)
+    if province is None:
+        raise HTTPException(status_code=404, detail="Provincia non trovata")
+    return province
+
+
+def _province_payload(province, municipalities):
+    return {
+        "provincia": province.code,
+        "nome_provincia": province.name.upper(),
+        "comuni": municipalities,
+        # SISTER uses the province code as a stable local ID. It is not Openapi's opaque resource ID.
+        "id": province.code,
+    }
+
+
+def _office_id(office) -> str:
+    return office.source_id or office.code or str(office.id)
+
+
+def _court_payload(court):
+    return {
+        "id": _office_id(court),
+        "local_id": court.id,
+        "codice": court.code,
+        "ufficio": court.name.upper(),
+        "tipo": court.court_type,
+        "provincia": court.province_code,
+        "comune_istat": court.municipality_code,
+        "indirizzo": court.address,
+        "source_id": court.source_id,
+        "source_url": court.source_url,
+        "source_updated_at": court.source_updated_at,
+    }
+
+
+@app.get("/territorio", tags=["Territory"])
+async def _territory_provinces(
+    tipo_catasto: str = "F",
+    _: None = Depends(require_api_key_dependency),
+):
+    _validate_cadastre_type(tipo_catasto)
+    provinces = await list_provinces()
+    return _reference_response(
+        [{"provincia": row.code, "nome_provincia": row.name.upper(), "id": row.code} for row in provinces]
+    )
+
+
+@app.get("/territorio/conservatorie", tags=["Territory"])
+async def _list_conservatorie(_: None = Depends(require_api_key_dependency)):
+    offices = await list_conservatorie()
+    return _reference_response(
+        [{"conservatoria": office.name.upper(), "id": _office_id(office)} for office in offices]
+    )
+
+
+@app.get("/territorio/conservatorie/{conservatoria_or_id}", tags=["Territory"])
+async def _conservatoria_detail(
+    conservatoria_or_id: str,
+    comune: str | None = None,
+    _: None = Depends(require_api_key_dependency),
+):
+    office = await get_conservatoria(conservatoria_or_id)
+    if office is None:
+        raise HTTPException(status_code=404, detail="Conservatoria non trovata")
+
+    municipalities = await list_conservatoria_municipalities(office.id, municipality=comune)
+    if comune and not municipalities:
+        raise HTTPException(status_code=404, detail="Comune non associato alla Conservatoria")
+
+    if comune:
+        municipality = municipalities[0]
+        terreni = await get_conservatoria_sections(office.id, municipality["municipality_code"], "T")
+        fabbricati = await get_conservatoria_sections(office.id, municipality["municipality_code"], "F")
+        data = {
+            "conservatoria": office.name.upper(),
+            "comune": municipality["comune"],
+            "codice_catastale": municipality["codice_catastale"],
+            "catasto": {
+                "terreni": {"sezioni": terreni or None},
+                "fabbricati": {"sezioni": fabbricati or None},
+            },
+        }
+        return _reference_response(data)
+
+    data = [
+        {
+            "conservatoria": office.name.upper(),
+            "comuni": [
+                {"comune": row["comune"], "codice_catastale": row["codice_catastale"]}
+                for row in municipalities
+            ],
+        }
+    ]
+    return _reference_response(data)
+
+
+@app.get("/territorio/{provincia_or_nome_provincia_or_id}", tags=["Territory"])
+async def _territory_province_detail(
+    provincia_or_nome_provincia_or_id: str,
+    tipo_catasto: str = "F",
+    _: None = Depends(require_api_key_dependency),
+):
+    province = await _resolve_territory_province(provincia_or_nome_provincia_or_id)
+    municipalities = await list_municipalities(province.code, cadastre_type=_validate_cadastre_type(tipo_catasto))
+    return _reference_response(_province_payload(province, municipalities))
+
+
+@app.get("/territorio/{provincia_or_nome_provincia_or_id}/{comune}", tags=["Territory"])
+async def _territory_municipality_detail(
+    provincia_or_nome_provincia_or_id: str,
+    comune: str,
+    tipo_catasto: str = "F",
+    _: None = Depends(require_api_key_dependency),
+):
+    province = await _resolve_territory_province(provincia_or_nome_provincia_or_id)
+    municipalities = await list_municipalities(
+        province.code,
+        cadastre_type=_validate_cadastre_type(tipo_catasto),
+        municipality=comune,
+    )
+    if not municipalities:
+        raise HTTPException(status_code=404, detail="Comune non trovato nella provincia indicata")
+    return _reference_response(_province_payload(province, municipalities))
+
+
+@app.get("/courts", tags=["Territory"])
+async def _list_courts(_: None = Depends(require_api_key_dependency)):
+    return _reference_response([_court_payload(court) for court in await list_courts()])
+
+
+@app.get("/courts/{court_id}", tags=["Territory"])
+async def _court_detail(court_id: str, _: None = Depends(require_api_key_dependency)):
+    court = await get_court(court_id)
+    if court is None:
+        raise HTTPException(status_code=404, detail="Ufficio giudiziario non trovato")
+    data = _court_payload(court)
+    data["comuni"] = await list_court_municipalities(court.id)
+    return _reference_response(data)
 
 
 @app.post("/visura")

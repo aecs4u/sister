@@ -133,7 +133,7 @@ DATABASE_SCHEMA = os.getenv("DATABASE_SCHEMA", "sister")
 DATABASE_ISTAT_SCHEMA = os.getenv("DATABASE_ISTAT_SCHEMA", DATABASE_SCHEMA)
 # raw payloads (response JSON, XML tree, extraction JSON) live in their own schema; tests point it at a throwaway one
 DATABASE_ARCHIVE_SCHEMA = os.getenv("DATABASE_ARCHIVE_SCHEMA", "sister_archive")
-DATABASE_REVISION = "20261120_wallet_env_endpoint"
+DATABASE_REVISION = "20261121_territory_courts"
 
 # ---------------------------------------------------------------------------
 # Engine and session
@@ -205,6 +205,12 @@ async def init_db() -> None:
         )
         required_tables = {
             "cadastral_unit",
+            "territory_province",
+            "court",
+            "court_municipality",
+            "conservatoria_office",
+            "conservatoria_municipality",
+            "conservatoria_section",
             "subject",
             "right_kind",
             "ownership_right",

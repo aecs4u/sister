@@ -39,6 +39,11 @@ from sister.db_models import (  # noqa: F401, E402
     CalculationSnapshot,
     CadastralCategory,
     CadastralUnit,
+    ConservatoriaMunicipality,
+    ConservatoriaOffice,
+    ConservatoriaSection,
+    Court,
+    CourtMunicipality,
     Document,
     DocumentContent,
     DocumentExtraction,
@@ -74,6 +79,7 @@ from sister.db_models import (  # noqa: F401, E402
     SubjectFavorite,
     RightKind,
     Subject,
+    TerritoryProvince,
 )
 from sister.visura_xml_models import (  # noqa: F401, E402
     BuildingUnit,

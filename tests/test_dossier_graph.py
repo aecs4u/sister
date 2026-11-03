@@ -4,7 +4,7 @@ import importlib.util
 from pathlib import Path
 
 _SPEC = importlib.util.spec_from_file_location(
-    "build_dossier_graph", Path(__file__).resolve().parents[1] / "scripts" / "build_dossier_graph.py"
+    "build_dossier_graph", Path(__file__).resolve().parents[1] / "sister" / "command_tools" / "build_dossier_graph.py"
 )
 graph_mod = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(graph_mod)

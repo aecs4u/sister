@@ -12,7 +12,7 @@ from sqlalchemy import text
 from sister import database
 from sister.db_models import Document
 
-SCRIPT = Path(__file__).resolve().parent.parent / "scripts" / "import_ocular_extraction.py"
+SCRIPT = Path(__file__).resolve().parent.parent / "sister" / "command_tools" / "import_ocular_extraction.py"
 
 pytestmark = pytest.mark.usefixtures("fresh_db")
 

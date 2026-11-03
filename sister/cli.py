@@ -78,11 +78,24 @@ app.add_typer(audit_tool, name="audit")
 app.add_typer(dev_tool, name="dev")
 
 
+def _project_root() -> Path:
+    """The checkout that holds ``scripts/``, ``.env`` and ``outputs/``.
+
+    An editable install is the checkout itself; a regular install (``site-packages``) has none of them, so the tools
+    run from ``$SISTER_HOME`` or from the current directory when that is a checkout.
+    """
+    candidates = [os.environ.get("SISTER_HOME"), Path(__file__).resolve().parents[1], Path.cwd()]
+    for candidate in candidates:
+        if candidate and (Path(candidate) / "scripts").is_dir() and (Path(candidate) / "pyproject.toml").is_file():
+            return Path(candidate).resolve()
+    raise typer.BadParameter("checkout di SISTER non trovato: lancia il comando dalla sua cartella o imposta SISTER_HOME")
+
+
 def _forward_command(group: typer.Typer, name: str, target: str, description: str, *, shell: bool = False) -> None:
     """Register a command that forwards its arguments to a packaged tool or shell helper."""
 
     def forward(ctx: typer.Context) -> None:
-        project_root = Path(__file__).resolve().parents[1]
+        project_root = _project_root()
         if shell:
             command = ["bash", str(project_root / target)]
         else:
@@ -106,7 +119,7 @@ def _forward_command(group: typer.Typer, name: str, target: str, description: st
 _tool_commands = {
     app_tool: {
         "login": ("sister.command_tools.ade_login", "Log in to SISTER or close a stale session."),
-        "start": ("scripts/start.sh", "Start the SISTER app."),
+        "start": ("scripts/start.sh", "Start the SISTER app.", True),
         "stop": ("scripts/kill_app.sh", "Stop the local app on a port (default 8025).", True),
         "hash-password": ("sister.command_tools.hash_local_password", "Generate a local user password hash."),
     },
