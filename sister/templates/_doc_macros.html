@@ -139,11 +139,11 @@
                     <i class="fas fa-copy" aria-hidden="true"></i> ID
                 </button>
                 {% endif %}
-                <a href="/dossiers/view/{{ peer.name }}" class="btn btn-compact btn-outline-{{ color }}">
-                    <i class="fas fa-eye"></i> Apri
+                <a href="/dossiers/view/{{ peer.name }}" class="btn btn-compact btn-outline-{{ color }}" aria-label="Apri {{ peer.title }} ({{ peer.name }})">
+                    <i class="fas fa-eye" aria-hidden="true"></i> Apri
                 </a>
-                <a href="/dossiers/{{ peer.name }}?download=1" class="btn btn-compact btn-outline-secondary">
-                    <i class="fas fa-download"></i>
+                <a href="/dossiers/{{ peer.name }}?download=1" class="btn btn-compact btn-outline-secondary" title="Scarica JSON" aria-label="Scarica in JSON {{ peer.title }} ({{ peer.name }})">
+                    <i class="fas fa-download" aria-hidden="true"></i>
                 </a>
             </div>
         </li>
@@ -198,15 +198,15 @@
     {% endif %}
     <div class="small text-muted px-3 pb-2"><i class="fas fa-clock me-1"></i>{{ d.mtime }} · {{ d.size_human }}</div>
     <div class="card-footer bg-transparent border-top-0 pt-0 pb-2 px-3 d-flex gap-2 no-print">
-        <a href="/dossiers/view/{{ d.name }}" class="btn btn-sm btn-outline-{{ color }} flex-fill">
-            <i class="fas fa-eye me-1"></i>Apri
+        <a href="/dossiers/view/{{ d.name }}" class="btn btn-sm btn-outline-{{ color }} flex-fill" aria-label="Apri il dossier {{ d.title }}">
+            <i class="fas fa-eye me-1" aria-hidden="true"></i>Apri
         </a>
         {% if d.ident %}
-        <button type="button" class="btn btn-sm btn-compact btn-outline-secondary" data-copy-request-id="{{ d.ident }}" title="Copia request_id" aria-label="Copia request_id">
+        <button type="button" class="btn btn-sm btn-compact btn-outline-secondary" data-copy-request-id="{{ d.ident }}" title="Copia request_id" aria-label="Copia l'ID di {{ d.title }}">
             <i class="fas fa-copy" aria-hidden="true"></i>
         </button>
         {% endif %}
-        <a href="/dossiers/{{ d.name }}?download=1" class="btn btn-sm btn-outline-secondary" title="Scarica JSON" aria-label="Scarica il dossier in formato JSON">
+        <a href="/dossiers/{{ d.name }}?download=1" class="btn btn-sm btn-outline-secondary" title="Scarica JSON" aria-label="Scarica in JSON il dossier {{ d.title }}">
             <i class="fas fa-download" aria-hidden="true"></i>
         </a>
     </div>

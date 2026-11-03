@@ -1768,7 +1768,15 @@ async def _download_richieste_documents(
                 parsed = _parse_visura_pdf(temp_path)
 
             if file_ext == ".dat":
-                parsed = {"tipo": "elenco_immobili"}
+                parsed = await asyncio.to_thread(_parse_elenco_immobili_dat, temp_path)
+                parsed = dict(parsed or {})
+                parsed["tipo"] = "elenco_immobili"
+                parsed["request_ref"] = parsed.get("request_ref") or id_richiesta or None
+                requested_date = _iso_request_date(richiesta_del)
+                parsed["requested_at"] = parsed.get("requested_at") or requested_date or None
+                parsed["request_year"] = parsed.get("request_year") or (
+                    int(requested_date[:4]) if requested_date else None
+                )
 
             canonical_stem = _descriptive_filename(
                 parsed or {}, oggetto=oggetto, request_id=id_richiesta, requested_at=richiesta_del
@@ -1962,6 +1970,25 @@ def _descriptive_filename(parsed: dict, *, oggetto: str = "", request_id: str = 
             if situation and requested and situation != requested and view in {"sto", "sin"}:
                 parts.append(f"al{situation}")
             return "_".join(parts)
+
+    if tipo == "elenco_immobili" and (foglio or particella):
+        parts = ["el_imm"]
+        if province:
+            parts.append(province)
+        if foglio:
+            parts.append(f"FG{foglio}")
+        if particella:
+            parts.append(f"PT{particella}")
+        request_ref = _filename_token(parsed.get("request_ref") or request_id)
+        if request_ref:
+            parts.append(request_ref)
+        request_year = parsed.get("request_year")
+        if not request_year:
+            request_date = _iso_request_date(parsed.get("requested_at") or requested_at)
+            request_year = request_date[:4] if request_date else ""
+        if request_year:
+            parts.append(str(request_year))
+        return "_".join(parts)
 
     if tipo in {"visura_fabbricati", "visura_terreni"} or (foglio and particella):
         if "storic" in subtype:
@@ -2410,6 +2437,91 @@ def _parse_visura_pdf(file_path: str) -> dict | None:
     return result
 
 
+def _parse_elenco_immobili_dat(file_path: str) -> dict:
+    """Parse the fixed-width SISTER ``el_imm_*.dat`` property-list export.
+
+    Each detail row is a 500-character record followed by its line ending. The
+    positions below follow the legacy SISTER layout; text fields are kept as
+    printed and numeric identifiers have only their padding zeroes removed.
+    """
+    import re as _re
+    from pathlib import Path
+
+    path = Path(file_path)
+    text = path.read_bytes().decode("latin-1", errors="replace")
+
+    def _field(value: str, *, zero_is_empty: bool = False) -> str:
+        value = value.strip()
+        if not value:
+            return ""
+        if value.isdigit():
+            number = value.lstrip("0")
+            if zero_is_empty and not number:
+                return ""
+            return number or "0"
+        return value
+
+    records: list[dict[str, Any]] = []
+    rejected_records = 0
+    for line_number, line in enumerate(text.splitlines(), start=1):
+        if not line.strip():
+            continue
+        row = line[:500]
+        if len(row) < 419 or row[498:500].upper() != "D3":
+            rejected_records += 1
+            continue
+
+        floors = [value for value in (row[84:88].strip(), row[88:92].strip(), row[92:96].strip()) if value]
+        records.append(
+            {
+                "row_number": line_number,
+                "comune_code": row[3:7].strip(),
+                "section": row[7:11].strip(),
+                "sheet": _field(row[11:15]),
+                "parcel": _field(row[15:20]),
+                "denominator": _field(row[20:24], zero_is_empty=True),
+                "subunit": _field(row[24:28], zero_is_empty=True),
+                "address": row[28:78].strip(),
+                "civic_number": _field(row[78:84], zero_is_empty=True),
+                "floors": floors,
+                "staircase": row[96:97].strip(),
+                "interior": row[97:101].strip(),
+                "description": row[101:401].strip(),
+                "map_sheet_number": _field(row[401:409], zero_is_empty=True),
+                "map_sheet_date": row[409:417].strip(),
+                "unit_kind": row[418:419].strip(),
+            }
+        )
+
+    filename_meta = _re.match(
+        r"el_imm_(?P<province>[A-Z]{2})_FG(?P<sheet>[^_]+)_PT(?P<parcel>[^_]+)",
+        path.name,
+        _re.IGNORECASE,
+    )
+    request_meta = _re.match(
+        r"el_imm_(?P<province>[A-Z]{2})_FG(?P<sheet>[^_]+)_PT(?P<parcel>[^_]+)_"
+        r"(?P<request_ref>[^_]+)_(?P<request_year>\d{4})_"
+        r"(?P<requested_at>\d{4}-\d{2}-\d{2})(?:_\d+)?$",
+        path.stem,
+        _re.IGNORECASE,
+    )
+    first = records[0] if records else {}
+    province = filename_meta.group("province").upper() if filename_meta else ""
+    return {
+        "tipo": "elenco_immobili",
+        "provincia": province or None,
+        "foglio": (first.get("sheet") or (filename_meta.group("sheet") if filename_meta else "")) or None,
+        "particella": (first.get("parcel") or (filename_meta.group("parcel") if filename_meta else "")) or None,
+        "request_ref": request_meta.group("request_ref") if request_meta else None,
+        "request_year": int(request_meta.group("request_year")) if request_meta else None,
+        "requested_at": request_meta.group("requested_at") if request_meta else None,
+        "comune_code": first.get("comune_code") or None,
+        "record_count": len(records),
+        "rejected_record_count": rejected_records,
+        "records": records,
+    }
+
+
 def _parse_ispezione_ipotecaria_pdf(file_path: str) -> dict | None:
     """Extract searchable data and complete sections from a SISTER inspection PDF."""
     import re as _re
@@ -2615,6 +2727,61 @@ async def _persist_flattened_xml(session, document_id: int, content: str | None)
         log.warning("Tabelle tipizzate non popolate per il documento %s: %s", document_id, exc)
 
 
+async def _persist_elenco_immobili_extraction(
+    session, document_id: int, parsed: dict, source_path: str
+) -> int | None:
+    """Upsert the fixed-width property-list parse into the document extraction archive."""
+    from datetime import datetime, timezone
+    from pathlib import Path
+
+    from sqlalchemy.dialects.postgresql import insert as pg_insert
+
+    from .db_models import DocumentExtraction, DocumentExtractionPayload
+
+    if not parsed or not parsed.get("records"):
+        return None
+
+    extracted_at = datetime.now(timezone.utc)
+    extraction_id = (
+        await session.execute(
+            pg_insert(DocumentExtraction)
+            .values(
+                document_id=document_id,
+                provider="sister",
+                model="elenco_immobili_fixed_width",
+                schema_name="sister.elenco_immobili",
+                schema_version="1",
+                run_id="native-parser-v1",
+                workflow_id="documents_import",
+                output_path=Path(source_path).name,
+                extracted_at=extracted_at,
+                created_at=extracted_at,
+            )
+            .on_conflict_do_update(
+                constraint="uq_document_extraction_run",
+                set_={
+                    "provider": "sister",
+                    "model": "elenco_immobili_fixed_width",
+                    "schema_version": "1",
+                    "workflow_id": "documents_import",
+                    "output_path": Path(source_path).name,
+                    "extracted_at": extracted_at,
+                },
+            )
+            .returning(DocumentExtraction.id)
+        )
+    ).scalar_one()
+    await session.execute(
+        pg_insert(DocumentExtractionPayload)
+        .values(extraction_id=extraction_id, structured_data=parsed)
+        .on_conflict_do_update(
+            index_elements=[DocumentExtractionPayload.extraction_id],
+            set_={"structured_data": parsed},
+        )
+    )
+    return int(extraction_id)
+
+
 async def _save_documents_to_db(documents: list[dict]) -> None:
     """Persist downloaded documents to the ``document`` table (+ archived XML text), skipping duplicates."""
 
@@ -2646,11 +2813,36 @@ async def _save_documents_to_db(documents: list[dict]) -> None:
 
             # Ispezione PDFs are separate records and notes for the same parcel must
             # not be deduplicated by cadastral coordinates.
-            if doc_type == "ispezione_ipotecaria":
+            if doc_type in {"ispezione_ipotecaria", "elenco_immobili"}:
                 existing = await session.execute(
                     text("SELECT id FROM document WHERE file_name = :name LIMIT 1"), {"name": file_name}
                 )
-                if existing.fetchone():
+                existing_row = existing.first()
+                if existing_row:
+                    if doc_type == "elenco_immobili":
+                        existing_document = await session.get(Document, int(existing_row.id))
+                        if existing_document is not None:
+                            if not existing_document.cadastral_unit_id and (foglio or particella):
+                                existing_document.cadastral_unit_id = await get_or_create_cadastral_unit(
+                                    session,
+                                    cadastre_type=parsed.get("tipo_catasto"),
+                                    province=parsed.get("provincia"),
+                                    municipality=parsed.get("comune"),
+                                    section=parsed.get("sezione_urbana"),
+                                    sheet=foglio,
+                                    parcel=particella,
+                                )
+                            existing_document.requested_at = (
+                                parse_it_datetime(parsed.get("requested_at"))
+                                or existing_document.requested_at
+                            )
+                            session.add(existing_document)
+                            await _persist_elenco_immobili_extraction(
+                                session,
+                                int(existing_row.id),
+                                parsed,
+                                doc.get("path") or file_name,
+                            )
                     skipped += 1
                     continue
             # Other document types retain the property-level duplicate check: the same file, or the same kind of
@@ -2708,7 +2900,7 @@ async def _save_documents_to_db(documents: list[dict]) -> None:
                 file_name=file_name,
                 file_size=doc.get("file_size"),
                 subject_text=clean(doc.get("oggetto")),
-                requested_at=parse_it_datetime(doc.get("richiesta_del")),
+                requested_at=parse_it_datetime(doc.get("richiesta_del") or parsed.get("requested_at")),
                 cadastral_unit_id=unit_id,
                 view_subtype=clean(parsed.get("visura_subtype")),
                 reference_date=reference_date,
@@ -2725,6 +2917,10 @@ async def _save_documents_to_db(documents: list[dict]) -> None:
                 session.add(DocumentContent(document_id=row.id, content=xml_content.replace("\x00", "")))
                 await session.flush()
             await _persist_flattened_xml(session, row.id, xml_content)
+            if doc_type == "elenco_immobili":
+                await _persist_elenco_immobili_extraction(
+                    session, row.id, parsed, doc.get("path") or file_name
+                )
 
             saved += 1
         await session.commit()

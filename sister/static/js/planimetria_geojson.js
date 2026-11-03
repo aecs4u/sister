@@ -94,6 +94,7 @@
 
     // ── Load GeoJSON ─────────────────────────────────────────────────────────
     var statusDiv = document.getElementById('plan-status');
+    var loadProgress = document.getElementById('plan-loading-progress');
     var allLayers = [];
     var geojsonGroup = L.featureGroup().addTo(map);
     var selectedLayer = null;
@@ -168,10 +169,12 @@
                     map.fitBounds(geojsonGroup.getBounds(), { padding: [20, 20] });
                 }
             });
+            if (loadProgress) loadProgress.classList.add('d-none');
         })
         .catch(function (err) {
             statusDiv.textContent = 'Errore caricamento: ' + err.message;
             statusDiv.classList.add('text-danger');
+            if (loadProgress) loadProgress.classList.add('d-none');
         });
 
     map.on('click', function () {

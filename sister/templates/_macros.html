@@ -59,12 +59,12 @@
 {% macro metric_card(label, value, icon, color, url) %}
 {% set formatted_value = "{:,}".format(value|int).replace(",", ".") %}
 <div class="card h-100">
-  <div class="card-body d-flex align-items-center justify-content-between">
-    <div>
+  <div class="card-body d-flex align-items-center justify-content-between gap-2">
+    <div class="min-w-0">
       <div class="text-muted small mb-1">{{ label }}</div>
       <div class="h3 mb-0">{{ formatted_value }}</div>
     </div>
-    <div class="text-{{ color }} opacity-75" aria-hidden="true"><i class="fas {{ icon }} icon-size-2xl"></i></div>
+    <div class="text-{{ color }} opacity-75 flex-shrink-0" aria-hidden="true"><i class="fas {{ icon }} icon-size-2xl"></i></div>
     <a href="{{ url }}" class="stretched-link" aria-label="{{ label }}: {{ formatted_value }}"></a>
   </div>
 </div>

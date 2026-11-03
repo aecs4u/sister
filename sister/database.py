@@ -1398,9 +1398,8 @@ async def get_result_record(request_id: str) -> Optional[dict]:
 
     req, raw_data, unit, comune = row
     responded = req.responded_at is not None
-    status = "pending"
-    if responded:
-        status = "completed" if req.success else "failed"
+    # Same vocabulary as the list (a SISTER "nessuna corrispondenza" answer is ``no_match``, not a failure).
+    status = _single_result_status(req.success, req.error) if responded else "pending"
     data = _decode_payload(raw_data)
     return {
         "request_id": req.request_ref,
@@ -1573,12 +1572,14 @@ def _document_record(doc: Document, unit: Optional[CadastralUnit], comune: Optio
     """One document + its cadastral unit as the dict the document pages and the browse list use."""
     filename = doc.file_name or ""
     document_type = doc.document_type
-    if filename.casefold().endswith(".dat"):
+    if filename.casefold().startswith("el_imm_") and filename.casefold().endswith(".dat"):
         document_type = "elenco_immobili"
     elif filename.casefold().startswith("isp_"):
         document_type = "ispezione_ipotecaria"
     elif filename.casefold().startswith("el_sub_"):
         document_type = "elenco_subalterni"
+    elif filename.casefold().startswith("punti_fiduciali_"):
+        document_type = "fiduciali"
     return {
         "id": doc.id,
         "response_id": request_ref,
@@ -2466,19 +2467,22 @@ def _iso(value: Any) -> Optional[str]:
     return value.isoformat() if value is not None else None
 
 
-async def get_document_structured_extraction(doc_id: int) -> dict | None:
-    """Fetch the latest structured extraction of a document with its inspection, title, lien, units and parties.
+async def get_document_structured_extraction(
+    doc_id: int, *, schema_name: str | None = None
+) -> dict | None:
+    """Fetch a document's latest structured payload and any normalized inspection rows.
 
-    The shape is the one the inspection page was written for; fields the normalised layout derives (the original
-    texts of shares, rights and qualities, the unit count, the interest rate text) are rebuilt from the typed columns.
+    Pass ``schema_name`` to select a particular parser's extraction. For mortgage inspections, fields the normalized
+    layout derives (the original texts of shares, rights and qualities, unit count, interest rate text) are rebuilt
+    from the typed columns.
     """
     async with _get_session_factory()() as session:
+        statement = select(DocumentExtraction).where(DocumentExtraction.document_id == doc_id)
+        if schema_name:
+            statement = statement.where(DocumentExtraction.schema_name == schema_name)
         extraction = (
             await session.execute(
-                select(DocumentExtraction)
-                .where(DocumentExtraction.document_id == doc_id)
-                .order_by(DocumentExtraction.created_at.desc(), DocumentExtraction.id.desc())
-                .limit(1)
+                statement.order_by(DocumentExtraction.created_at.desc(), DocumentExtraction.id.desc()).limit(1)
             )
         ).scalar_one_or_none()
         if extraction is None:
@@ -3789,6 +3793,32 @@ async def find_result_rows(
             func.concat_ws(" · ", Subject.name, Subject.fiscal_code),
             Subject.subject_type == "legal_entity",
         )
+        # Page on the request ids alone, then compute the per-row aggregates (counts, subjects, tags) for those rows:
+        # evaluated in one statement they also ran for every row skipped by OFFSET (9-40 s at the end of the list).
+        page_ids = (
+            select(Request.id.label("id"))
+            .select_from(Request)
+            .outerjoin(CadastralUnit, Request.cadastral_unit_id == CadastralUnit.id)
+            .where(
+                *_build_single_where(
+                    provincia,
+                    comune,
+                    foglio,
+                    particella,
+                    tipo_catasto,
+                    status,
+                    request_type,
+                    tag,
+                    fiscal_code,
+                    person,
+                    company,
+                )
+            )
+            .order_by(Request.created_at.desc(), Request.id.desc())
+            .limit(limit)
+            .offset(offset)
+            .subquery("page_ids")
+        )
         stmt = (
             select(
                 Request.id.label("request_pk"),
@@ -3822,26 +3852,10 @@ async def find_result_rows(
                 company_details.label("company_details"),
             )
             .select_from(Request)
+            .join(page_ids, page_ids.c.id == Request.id)
             .outerjoin(RequestType, Request.request_type == RequestType.code)
             .outerjoin(CadastralUnit, Request.cadastral_unit_id == CadastralUnit.id)
-            .where(
-                *_build_single_where(
-                    provincia,
-                    comune,
-                    foglio,
-                    particella,
-                    tipo_catasto,
-                    status,
-                    request_type,
-                    tag,
-                    fiscal_code,
-                    person,
-                    company,
-                )
-            )
-            .order_by(Request.created_at.desc())
-            .limit(limit)
-            .offset(offset)
+            .order_by(Request.created_at.desc(), Request.id.desc())
         )
         async with _get_session_factory()() as session:
             rows = (await session.execute(stmt)).mappings().all()

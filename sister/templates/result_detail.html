@@ -8,7 +8,7 @@
                                 doc_accordion, render_workflow_steps %}
 {% from "components/related_links.html" import related_pages %}
 {% from "land_registry/components/document_parcel_map.html" import document_parcel_map_assets, document_parcel_map_scripts, document_parcel_map %}
-{% block page_title %}Risultato {{ request_id[:20] }}{% endblock %}
+{% block page_title %}{% if result and result.kind == 'dossier' %}Dossier {{ result.file_name or request_id[:20] }}{% else %}Risultato {{ request_id[:20] }}{% endif %}{% endblock %}
 
 {% block extra_css %}
 {{ super() }}
@@ -16,12 +16,49 @@
 <link rel="stylesheet" href="/static/vendor/tabulator-6.3.1/css/tabulator_bootstrap5.min.css">
 <link rel="stylesheet" href="/static/aecs4u-theme/css/data-table.css{{ theme_asset_v|default('') }}">
 <script src="/static/vendor/tabulator-6.3.1/js/tabulator.min.js"></script>
-<link rel="stylesheet" href="/static/css/pages/result_detail.css?v=20261009a">
+<link rel="stylesheet" href="/static/css/pages/result_detail.css?v=20261103a">
 {{ document_parcel_map_assets(result.land_registry_map if result else none) }}
 {% endblock %}
 
 {# ── Local macro: request parameters card body ─────────────────────────────── #}
 {% macro request_params_card(result) %}
+{% if result.kind == 'dossier' %}
+<div class="row g-4">
+  <div class="col-lg-6">
+    <div class="mb-3">
+      <div class="detail-label">File</div>
+      <div class="detail-value"><code class="user-select-all">{{ result.file_name or result.request_id }}</code></div>
+    </div>
+    <div class="mb-3">
+      <div class="detail-label">ID {{ 'workflow' if result.step_count is defined else 'richiesta' }}</div>
+      <div class="detail-value d-flex align-items-center gap-2">
+        <code class="user-select-all" id="req-id-text">{{ result.request_id }}</code>
+        <button class="btn btn-sm btn-outline-secondary copy-btn" type="button"
+                id="btn-copy-request-id" title="Copia negli appunti" aria-label="Copia l'ID">
+          <i class="fas fa-copy" aria-hidden="true"></i>
+        </button>
+      </div>
+    </div>
+  </div>
+  <div class="col-lg-6">
+    <div class="row g-3">
+      <div class="col-6">{{ param_label('Tipo', result.dossier_kind or 'Dossier') }}</div>
+      {% if result.step_count is defined %}<div class="col-6">{{ param_label('Preset', result.request_type or '-') }}</div>{% endif %}
+      {% if result.step_count is defined %}<div class="col-6">{{ param_label('Passi', result.step_count) }}</div>{% endif %}
+      {% if result.tipo_catasto %}
+      <div class="col-6">
+        <div class="detail-label">Catasto</div>
+        <div class="detail-value">{{ catasto_badge(result.tipo_catasto) }}</div>
+      </div>
+      {% endif %}
+      {% if result.responded_at_display and result.responded_at_display != '-' %}
+      <div class="col-6">{{ param_label('Esportato il', result.responded_at_display) }}</div>
+      {% endif %}
+    </div>
+    {{ error_alert(result) }}
+  </div>
+</div>
+{% else %}
 <div class="row g-4">
   <div class="col-lg-6">
     <div class="mb-3">
@@ -62,13 +99,29 @@
       <div class="col-6">{{ param_label('Sezione / Subalterno', (result.sezione or '-') ~ ' / ' ~ (result.subalterno or '-')) }}</div>
       {% endif %}
     </div>
-    {% if result.error %}
-    <div class="alert alert-danger mt-3 mb-0">
-      <i class="fas fa-exclamation-triangle me-2"></i>{{ result.error }}
-    </div>
-    {% endif %}
+    {{ error_alert(result) }}
   </div>
 </div>
+{% endif %}
+{% endmacro %}
+
+{# The error as people should read it; the raw text (exception, portal page) stays one click away. #}
+{% macro error_alert(result) %}
+{% if result.status == 'no_match' %}
+<div class="alert alert-secondary mt-3 mb-0" role="status">
+  <i class="fas fa-circle-question me-2" aria-hidden="true"></i>{{ result.error_message or 'SISTER non ha trovato corrispondenze per questi criteri.' }}
+</div>
+{% elif result.error %}
+<div class="alert alert-danger mt-3 mb-0" role="alert">
+  <i class="fas fa-exclamation-triangle me-2" aria-hidden="true"></i>{{ result.error_message or result.error }}
+  {% if result.error_detail %}
+  <details class="mt-2 small">
+    <summary>Dettaglio tecnico</summary>
+    <code class="d-block text-break mt-1">{{ result.error_detail }}</code>
+  </details>
+  {% endif %}
+</div>
+{% endif %}
 {% endmacro %}
 
 {% block content %}
@@ -77,14 +130,25 @@
   {# Breadcrumb #}
   <nav class="mb-3" aria-label="breadcrumb">
     <ol class="breadcrumb">
+      {% if result and result.kind == 'dossier' %}
+      <li class="breadcrumb-item"><a href="/dossiers">Dossier</a></li>
+      {% else %}
       <li class="breadcrumb-item"><a href="/results">Risultati</a></li>
+      {% endif %}
       <li class="breadcrumb-item active" title="{{ request_id }}">
         {{ request_id[:30] }}{% if request_id|length > 30 %}&hellip;{% endif %}
       </li>
     </ol>
   </nav>
 
-  {% if result.document_id %}
+  <h1 class="h3 mb-3 text-break">
+    {%- if result and result.kind == 'dossier' %}{{ result.title or 'Dossier' }} <small class="text-muted fw-normal fs-6 font-monospace">{{ result.file_name or request_id }}</small>
+    {%- elif result %}{{ result.request_type_label or (result.request_type or 'Richiesta')|replace('_', ' ')|capitalize }}
+    <small class="text-muted fw-normal font-monospace fs-6">{{ request_id[:20] }}{% if request_id|length > 20 %}&hellip;{% endif %}</small>
+    {%- else %}Richiesta non trovata{% endif -%}
+  </h1>
+
+  {% if result and result.document_id %}
   <div class="d-flex justify-content-end mb-3 no-print">
     {{ document_favorite_action(result.document_id, result.document_is_favorite, result.document_favorites_enabled|default(false)) }}
   </div>
@@ -99,18 +163,31 @@
                              else result.db_properties|default([], true)|length %}
   {% set extracted_owners = payload.total_intestati if payload.total_intestati is defined and payload.total_intestati is not none
                             else result.db_owners|default([], true)|length %}
-  {% call card("Risposta estratta", subtitle="Dati normalizzati restituiti dalla richiesta eseguita", class="border-0 shadow-sm mb-4") %}
-    <div class="d-flex flex-wrap align-items-center gap-3">
-      {{ badge(extracted_results ~ (' risultato' if extracted_results == 1 else ' risultati'), variant='success', icon='fas fa-table-list') }}
-      {{ badge(extracted_owners ~ (' intestatario' if extracted_owners == 1 else ' intestatari'), variant='info', dark=true, icon='fas fa-users') }}
-      {% if result.sections %}<span class="text-muted small">{{ result.sections|length }} sezioni della risposta</span>{% endif %}
+  {% if result.kind == 'dossier' %}
+  <div class="d-flex flex-wrap align-items-center gap-3 mb-4">
+    {% if result.step_count is defined %}{{ badge(result.step_count ~ (' passo' if result.step_count == 1 else ' passi'), variant='primary', icon='fas fa-diagram-project') }}{% endif %}
+    {% if result.sections %}<span class="text-muted small">{{ result.sections|length }} sezioni nel file</span>{% endif %}
+  </div>
+  {% elif result.status in ('completed', 'partial') %}
+  <section class="card border-0 shadow-sm mb-4" aria-labelledby="extracted-heading">
+    <div class="card-header bg-transparent">
+      <h2 class="h5 mb-0" id="extracted-heading">Risposta estratta</h2>
+      <div class="text-muted small">Dati normalizzati restituiti dalla richiesta eseguita</div>
     </div>
-  {% endcall %}
+    <div class="card-body">
+      <div class="d-flex flex-wrap align-items-center gap-3">
+        {{ badge(extracted_results ~ (' risultato' if extracted_results == 1 else ' risultati'), variant='success', icon='fas fa-table-list') }}
+        {{ badge(extracted_owners ~ (' intestatario' if extracted_owners == 1 else ' intestatari'), variant='info', dark=true, icon='fas fa-users') }}
+        {% if result.sections %}<span class="text-muted small">{{ result.sections|length }} sezioni della risposta</span>{% endif %}
+      </div>
+    </div>
+  </section>
+  {% endif %}
 
   {# ── Request Details card ──────────────────────────────────────────────── #}
   <div class="card border-0 shadow-sm mb-4">
     <div class="card-header d-flex justify-content-between align-items-center">
-      <h4 class="mb-0"><i class="fas fa-info-circle text-primary me-2"></i>Dettagli della richiesta</h4>
+      <h2 class="h4 mb-0"><i class="fas fa-info-circle text-primary me-2" aria-hidden="true"></i>{{ 'Dettagli del dossier' if result.kind == 'dossier' else 'Dettagli della richiesta' }}</h2>
       {{ status_badge(result.status, large=True) }}
     </div>
     <div class="card-body">
@@ -137,10 +214,10 @@
   <div id="section-{{ section.dom_id }}"
        class="card border-0 shadow-sm mb-4 result-section {{ section_border(section.name, section.kind) }}">
     <div class="card-header">
-      <h5 class="mb-0">
+      <h2 class="h5 mb-0">
         <i class="fas {{ section_icon(section.name, section.kind) }} me-2"></i>{{ section.title }}
         {% if section.count is defined %}<span class="text-muted">({{ section.count }})</span>{% endif %}
-      </h5>
+      </h2>
     </div>
 
     {% if section.kind == 'flat_table' %}
@@ -209,10 +286,10 @@
   {% if result.documents %}
   <div class="card border-0 shadow-sm mb-4 result-section section-docs">
     <div class="card-header">
-      <h5 class="mb-0">
+      <h2 class="h5 mb-0">
         <i class="fas fa-file-alt text-danger me-2"></i>
         Documenti scaricati ({{ result.documents|length }})
-      </h5>
+      </h2>
     </div>
     <div class="card-body p-0">
       {{ doc_accordion(result.documents,
@@ -227,10 +304,10 @@
   {% if result.page_visit_rows %}
   <div class="card border-0 shadow-sm mb-4">
     <div class="card-header">
-      <h5 class="mb-0">
+      <h2 class="h5 mb-0">
         <i class="fas fa-route text-warning me-2"></i>
         Accessi alle pagine ({{ result.page_visit_rows|length }})
-      </h5>
+      </h2>
     </div>
     <div class="card-body p-0">
       <div id="tabulator-page-visits"></div>
@@ -243,11 +320,11 @@
   {%- set props_with_sub = result.db_properties | selectattr('subunit') | list %}
   <div class="card border-0 shadow-sm mb-4 result-section section-immobili">
     <div class="card-header d-flex justify-content-between align-items-center">
-      <h5 class="mb-0">
+      <h2 class="h5 mb-0">
         <i class="fas fa-home text-success me-2"></i>Immobili
         <span class="text-muted">({{ result.db_properties|length }})</span>
         <span class="badge bg-light text-secondary border ms-2 small fw-normal">DB</span>
-      </h5>
+      </h2>
       <div class="d-flex align-items-center gap-3">
         <span id="prop-filter-chip" class="badge bg-info text-dark d-none" style="font-size:.75rem">
           <i class="fas fa-filter me-1"></i><span id="prop-filter-label"></span>
@@ -318,11 +395,11 @@
   {% if result.db_owners %}
   <div class="card border-0 shadow-sm mb-4 result-section section-intestati">
     <div class="card-header d-flex justify-content-between align-items-center">
-      <h5 class="mb-0">
+      <h2 class="h5 mb-0">
         <i class="fas fa-users text-info me-2"></i>Intestati
         <span class="text-muted">({{ result.db_owners|length }})</span>
         <span class="badge bg-light text-secondary border ms-2 small fw-normal">DB</span>
-      </h5>
+      </h2>
       <div class="d-flex align-items-center gap-3">
         <span id="owners-filter-chip" class="badge bg-info text-dark d-none" style="font-size:.75rem">
           <i class="fas fa-filter me-1"></i><span id="owners-filter-label"></span>
@@ -350,9 +427,9 @@
 
   {# ── Raw JSON ──────────────────────────────────────────────────────────── #}
   <div class="card border-0 shadow-sm">
-    <div class="card-header d-flex justify-content-between align-items-center">
-      <h5 class="mb-0"><i class="fas fa-code text-muted me-2"></i>JSON originale</h5>
-      <div class="d-flex gap-2">
+    <div class="card-header d-flex flex-wrap justify-content-between align-items-center gap-2">
+      <h2 class="h5 mb-0"><i class="fas fa-code text-muted me-2"></i>JSON originale</h2>
+      <div class="d-flex flex-wrap gap-2">
         <button class="btn btn-sm btn-outline-secondary" type="button"
                 id="btn-copy-json" title="Copia JSON" aria-label="Copia JSON negli appunti">
           <i class="fas fa-copy me-1"></i>Copia
@@ -423,12 +500,47 @@
         });
     }
 
+    // Tabulator renders its header filters unlabelled: give each one an accessible name from its column title.
+    (function labelHeaderFilters() {
+        var pending = null;
+        function label() {
+            pending = null;
+            document.querySelectorAll(".tabulator .tabulator-col").forEach(function(col) {
+                var title = col.querySelector(".tabulator-col-title");
+                var name = "Filtra per " + (title && title.textContent.trim() ? title.textContent.trim() : "colonna");
+                col.querySelectorAll(".tabulator-header-filter input, .tabulator-header-filter select").forEach(function(control) {
+                    if (!control.getAttribute("aria-label")) control.setAttribute("aria-label", name);
+                });
+            });
+        }
+        new MutationObserver(function() {
+            if (!pending) pending = window.setTimeout(label, 50);
+        }).observe(document.body, {childList: true, subtree: true});
+        label();
+    })();
+
     // Common Tabulator config
     var commonOpts = {
         layout: "fitDataFill",
         pagination: true,
         paginationSize: 25,
         paginationSizeSelector: [10, 25, 50, 100],
+        locale: "it",
+        langs: {
+            it: {
+                pagination: {
+                    page_size: "Righe",
+                    page_title: "Mostra la pagina",
+                    first: "Prima", first_title: "Prima pagina",
+                    last: "Ultima", last_title: "Ultima pagina",
+                    prev: "Precedente", prev_title: "Pagina precedente",
+                    next: "Successiva", next_title: "Pagina successiva",
+                    all: "Tutte",
+                    counter: {showing: "Righe", of: "di", rows: "", pages: "pagine"}
+                },
+                headerFilters: {default: "Filtra…"}
+            }
+        },
         movableColumns: true,
         placeholder: "Nessun dato",
         // no maxHeight: pagination already bounds the rows, and an inner scrollbar hides most of a 25-row page

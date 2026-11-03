@@ -16,3 +16,19 @@
 /* Income box — page-specific sizing overrides sister.css defaults */
 .income-box { padding: .75rem 1rem; border-radius: .375rem; display: inline-block; }
 .income-box .income-value { font-size: 1.25rem; font-weight: 700; }
+
+/* Links inside Tabulator rows sat at 4.36:1 on the striped rows. */
+.tabulator-row a:not(.badge):not(.btn) {
+  color: var(--bs-link-color-emphasis, #0a58ca);
+}
+
+/* The switches were 32x18 px. */
+.form-switch .form-check-input {
+  width: 2.75rem;
+  height: 1.5rem;
+}
+
+/* A wide nested table scrolls inside its card instead of widening the page. */
+.result-section .card-body {
+  overflow-x: auto;
+}

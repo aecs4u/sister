@@ -5,7 +5,7 @@
 {% block extra_css %}
 {{ super() }}
 {% if has_geojson %}<link rel="stylesheet" href="/static/vendor/leaflet/leaflet.css">{% endif %}
-<link rel="stylesheet" href="/static/css/pages/planimetria.css?v=20261009a">
+<link rel="stylesheet" href="/static/css/pages/planimetria.css?v=20261103a">
 {% endblock %}
 
 {% block content %}
@@ -51,6 +51,10 @@
       <div class="row g-0">
         <div class="col">
           <div id="plan-map"></div>
+          <div class="progress plan-loading-progress" id="plan-loading-progress" role="progressbar"
+               aria-label="Caricamento e parsing della planimetria in corso" aria-valuemin="0" aria-valuemax="100">
+            <div class="progress-bar progress-bar-striped progress-bar-animated" style="width: 100%"></div>
+          </div>
           <div id="plan-status" class="text-muted small px-3 py-1 border-top">Caricamento…</div>
         </div>
         <div class="col-auto plan-sidebar" style="width: 260px" id="plan-sidebar">
@@ -74,6 +78,10 @@
             <div id="plan-cad-inner" style="position:absolute;top:0;left:0;width:100%;height:100%;">
               <svg id="plan-svg" width="100%" height="100%" style="display:block"></svg>
             </div>
+          </div>
+          <div class="progress plan-loading-progress" id="plan-loading-progress" role="progressbar"
+               aria-label="Caricamento e parsing della planimetria in corso" aria-valuemin="0" aria-valuemax="100">
+            <div class="progress-bar progress-bar-striped progress-bar-animated" style="width: 100%"></div>
           </div>
           <div id="plan-status" class="text-muted small px-3 py-1 border-top">Caricamento…</div>
         </div>
@@ -106,8 +114,8 @@
 {% if has_geojson %}
 <script src="/static/vendor/leaflet/leaflet.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/proj4js/2.11.0/proj4.js"></script>
-<script src="/static/js/planimetria_geojson.js?v=20261009a"></script>
+<script src="/static/js/planimetria_geojson.js?v=20261103a"></script>
 {% else %}
-<script src="/static/js/planimetria_cad.js?v=20261009a"></script>
+<script src="/static/js/planimetria_cad.js?v=20261103a"></script>
 {% endif %}
 {% endblock %}

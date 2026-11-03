@@ -1,6 +1,6 @@
 # Run a Markdown list in the current SISTER session
 
-`scripts/run_list_in_session.sh` converts a supported Markdown list into a batch plan, then runs that plan through the
+`sister batch run-list` converts a supported Markdown list into a batch plan, then runs that plan through the
 SISTER browser session already open in shared Chrome. The runner starts and stops its own SISTER service process; you
 do not need to start `scripts/start.sh` separately.
 
@@ -10,12 +10,12 @@ do not need to start `scripts/start.sh` separately.
 2. Log in to SISTER and leave the authenticated session open. For example:
 
    ```bash
-   ../.venv/bin/python scripts/ade_login.py
+   uv run sister app login
    ```
 
    Complete the SPID/CIE step, including any phone approval. Run the list command soon after login because the portal
    session lasts about 30 minutes.
-3. Use a list file in one of the formats supported by `scripts/build_batch_from_list.py`:
+3. Use a list file in one of the formats supported by `sister batch build-list`:
    - tax-code lists such as `inputs/codici_fiscali.all.md`;
    - parcel query tables marked `<!-- sister-batch-table:v1 -->`, such as the Markdown generated from PVP CSVs.
 
@@ -27,13 +27,13 @@ login and session details.
 From the repository root, pass the Markdown file path as the first argument:
 
 ```bash
-./scripts/run_list_in_session.sh inputs/codici_fiscali.all.md
+uv run sister batch run-list inputs/codici_fiscali.all.md
 ```
 
 For a PVP parcel list, for example:
 
 ```bash
-./scripts/run_list_in_session.sh inputs/pvp_sales/IS.md
+uv run sister batch run-list inputs/pvp_sales/IS.md
 ```
 
 The path can be absolute. A relative path is resolved from the directory where you run the command. The script records
@@ -44,7 +44,7 @@ the current system time as the login time, so start it just after logging in.
 You can provide a second argument to choose the output directory:
 
 ```bash
-./scripts/run_list_in_session.sh inputs/codici_fiscali.all.md outputs/batches/codici_fiscali_run_01
+uv run sister batch run-list inputs/codici_fiscali.all.md outputs/batches/codici_fiscali_run_01
 ```
 
 The batch directory contains `batch.json`, the progress journal `batch_journal.jsonl`, and run logs. Use the same
@@ -66,12 +66,12 @@ The script chooses a Python command in this order:
 
 1. `PYTHON_RUNNER`, if set;
 2. the repository's `.venv/bin/python`, if present;
-3. `uv run --no-project`, if `uv` is installed.
+3. `uv run --no-project python`, if `uv` is installed.
 
 To select a runner explicitly, set `PYTHON_RUNNER` for the command:
 
 ```bash
-PYTHON_RUNNER="uv run --no-project" ./scripts/run_list_in_session.sh inputs/codici_fiscali.all.md
+PYTHON_RUNNER="uv run --no-project python" uv run sister batch run-list inputs/codici_fiscali.all.md
 ```
 
 ## What to expect
@@ -83,17 +83,17 @@ PYTHON_RUNNER="uv run --no-project" ./scripts/run_list_in_session.sh inputs/codi
 - To continue after a stop or interrupted run, log in again and rerun the same command (or pass the same batch
   directory explicitly).
 
-For the PVP `IS.md` list, `scripts/run_pvp_sales_is.sh` is an optional wrapper that prompts for the Markdown path and
-then calls `scripts/run_list_in_session.sh`.
+For the PVP `IS.md` list, `sister batch run-pvp-is` is an optional wrapper that prompts for the Markdown path and
+then calls `sister batch run-list`.
 
 ## Help
 
 The shell runners accept `-h` or `--help`. The Python scripts use `argparse`, which provides the same options:
 
 ```bash
-./scripts/run_list_in_session.sh --help
-./scripts/run_pvp_sales_is.sh -h
-./.venv/bin/python scripts/convert_pvp_sales_csvs_to_markdown.py --help
-./.venv/bin/python scripts/build_batch_from_list.py --help
-./.venv/bin/python scripts/run_in_session.py --help
+uv run sister batch run-list --help
+uv run sister batch run-pvp-is -h
+uv run sister batch convert-pvp-csv --help
+uv run sister batch build-list --help
+uv run sister batch run-session --help
 ```

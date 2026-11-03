@@ -1,6 +1,6 @@
 # Recrowd historical property visure
 
-`scripts/batch_recrowd_immobile_storica_analitica.py` finds properties owned by Recrowd proponents, checks the local Sister PostgreSQL document index, and can submit a **Visura Catastale Storica Analitica per Immobile** for each property without a matching document.
+`sister batch recrowd --items properties` finds properties owned by Recrowd proponents, checks the local Sister PostgreSQL document index, and can submit a **Visura Catastale Storica Analitica per Immobile** for each property without a matching document.
 
 The script groups proponents by tax code and uses `soggetto-immobili` to list their national holdings. Sister's property normalizer supplies the province, municipality, cadastre type, sheet, parcel, section, and subunit used to match the local document metadata. Duplicate property rows are submitted once, with all matching proponents retained in the report.
 
@@ -9,13 +9,13 @@ The script groups proponents by tax code and uses `soggetto-immobili` to list th
 Run from the repository root. This queries property holdings through Sister and checks the local database, but does not request historical visure:
 
 ```bash
-uv run python scripts/batch_recrowd_immobile_storica_analitica.py
+uv run sister batch recrowd --items properties
 ```
 
 Use small limits to inspect a subset:
 
 ```bash
-uv run python scripts/batch_recrowd_immobile_storica_analitica.py --limit-proponents 2 --limit-properties 5
+uv run sister batch recrowd --items properties --limit-proponents 2 --limit-properties 5
 ```
 
 The timestamped JSON report is saved under `outputs/`. It includes proponents, unique property keys and locations, current status, API request IDs, and any rows that could not be parsed. Statuses include `already_present`, `missing_dry_run`, `awaiting_document`, and `request_in_progress`.
@@ -25,13 +25,13 @@ The timestamped JSON report is saved under `outputs/`. It includes proponents, u
 Ensure Sister is running with an authenticated SISTER browser session, then submit a small batch first:
 
 ```bash
-uv run python scripts/batch_recrowd_immobile_storica_analitica.py --execute --limit-proponents 2 --limit-properties 5
+uv run sister batch recrowd --items properties --execute --limit-proponents 2 --limit-properties 5
 ```
 
 Run the full batch with:
 
 ```bash
-uv run python scripts/batch_recrowd_immobile_storica_analitica.py --execute
+uv run sister batch recrowd --items properties --execute
 ```
 
 The job submits requests sequentially and saves its JSON report as it proceeds. SISTER may require a human to solve a CAPTCHA; the job stops at that property. Solve it in Sister's authenticated browser, then rerun the job. Stored documents and recent/in-progress matching requests are detected to avoid repeat submissions.

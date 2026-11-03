@@ -369,3 +369,54 @@ code#req-id-text, .request-id { overflow-wrap: anywhere; word-break: break-all; 
 [data-bs-theme="dark"] .cat-compact-table th { color: #aeb8c5 !important; }
 /* visually-hidden labels are position:absolute: without a positioned scroller they escape its overflow and widen the page */
 .table-responsive, .tabulator { position: relative; }
+
+/* Collapsed sidebar: the theme only slides it off-canvas, so its links stayed in the tab order (16 invisible stops before
+   the page content). visibility removes it from focus and from the accessibility tree once the slide-out has finished. */
+body.sidebar-hidden .sidebar {
+  visibility: hidden;
+  transition: transform 0.3s ease, visibility 0s linear 0.3s;
+}
+
+body.sidebar-visible .sidebar {
+  visibility: visible;
+  transition: transform 0.3s ease, visibility 0s;
+}
+
+/* Saved "hidden" preference: start collapsed on desktop (see _base.html) instead of flashing open. */
+@media (min-width: 992px) {
+  html.sidebar-pref-hidden body.sidebar-visible .sidebar {
+    transform: translateX(-100%);
+    visibility: hidden;
+    transition: none;
+  }
+
+  html.sidebar-pref-hidden body.sidebar-visible .main-content,
+  html.sidebar-pref-hidden body.sidebar-visible .site-footer {
+    margin-left: 0;
+    transition: none;
+  }
+}
+
+/* Visura page chips (aecs4u-theme catasto.css): muted grey on the pastel chip backgrounds, faded further by opacity on
+   suppressed units, measured 1.96:1 (labels) and 2.31:1 (owner codice fiscale). Dark text on the chips, desaturate
+   instead of fading. */
+.cat-kpi-chip .cat-kpi-chip-label,
+.cat-kpi-chip.cat-kpi-f .cat-kpi-chip-label,
+.cat-kpi-chip.cat-kpi-t .cat-kpi-chip-label {
+  color: #3b4248;
+}
+
+.cat-kpi-chip.cat-kpi-soppressa {
+  opacity: 1;
+  filter: saturate(0.45);
+}
+
+.cat-owner-chip .cat-owner-chip-cf,
+.cat-owner-chip .cat-owner-chip-proprieta {
+  color: #495057;
+}
+
+[data-bs-theme="dark"] .cat-owner-chip .cat-owner-chip-cf,
+[data-bs-theme="dark"] .cat-owner-chip .cat-owner-chip-proprieta {
+  color: #ced4da;
+}

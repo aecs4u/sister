@@ -1,6 +1,6 @@
 # Document-derived due-diligence batch
 
-`scripts/define_document_workflow_batch.py` scans local SISTER documents and writes one JSONL row per deduplicated job to a private output file. It does not contact SISTER or submit portal requests. The manifest contains fiscal codes and cadastral coordinates, so keep it under the gitignored `outputs/` directory.
+`sister documents define-workflow` scans local SISTER documents and writes one JSONL row per deduplicated job to a private output file. It does not contact SISTER or submit portal requests. The manifest contains fiscal codes and cadastral coordinates, so keep it under the gitignored `outputs/` directory.
 
 ## Jobs in the manifest
 
@@ -14,7 +14,7 @@ Property jobs deduplicate by all cadastral fields, including subunit and section
 ## Build the manifest
 
 ```bash
-uv run python scripts/define_document_workflow_batch.py \
+uv run sister documents define-workflow \
   --documents /path/to/sister/documents \
   --output outputs/document_workflow_batch.jsonl
 ```

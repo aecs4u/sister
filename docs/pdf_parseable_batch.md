@@ -9,7 +9,7 @@ deduplicated SISTER queries.
 Regenerate both CSV files after the documents folder changes:
 
 ```bash
-python3 scripts/build_pdf_parseable_batch.py
+uv run sister batch build-pdf-parseable
 ```
 
 Run the batch from the normal SISTER environment when the SISTER API is

@@ -6,9 +6,9 @@ The service does **not** log in to AdE/SISTER on its own. The login lives in a s
 `--remote-debugging-port`, address in `BROWSER_CDP_ENDPOINT`, e.g. `http://localhost:9222`) and the service
 **attaches** to it:
 
-1. **Log in** (CIE approval on your phone): `../.venv/bin/python scripts/ade_login.py` — leaves the SISTER tab
+1. **Log in** (CIE approval on your phone): `uv run sister app login` — leaves the SISTER tab
    open on the Visure page and disconnects. If SISTER answers *"Utente gia' in sessione"* the script closes the
-   stale session (`CloseSessionsSis` / `CloseSessions`) and retries once. `scripts/ade_login.py --close` only
+   stale session (`CloseSessionsSis` / `CloseSessions`) and retries once. `sister app login --close` only
    closes the session held on the server.
 2. **Start the service** (`./scripts/start.sh`). At startup it attaches to a valid SISTER tab
    (`BrowserManager.attach_existing_session`); a tab left on a result page is sent back to Visure without a
@@ -26,7 +26,7 @@ The service does **not** log in to AdE/SISTER on its own. The login lives in a s
 |---|---|---|
 | SISTER session timeout (observed ≈30 min) | pages redirect to `sessione_scaduta.jsp` / `lock.html`; requests fail with *Sessione scaduta* | log in again |
 | Chrome restarted | AdE login is a session cookie: it is gone | log in again |
-| A second login while one is open | AdE error *"Si prega effettuare la logout…"* / *Utente gia' in sessione* | `scripts/ade_login.py --close` (or "Chiudi" on the portal page), then log in |
+| A second login while one is open | AdE error *"Si prega effettuare la logout…"* / *Utente gia' in sessione* | `sister app login --close` (or "Chiudi" on the portal page), then log in |
 | Service **shutdown/reload** | **does not** log out: in CDP mode `graceful_shutdown` only disconnects, so the session survives | none |
 | Panel *Stop* | closes the server-side session on purpose | log in again |
 
@@ -69,7 +69,7 @@ When `API_KEY` is set the operational endpoints require `X-API-Key`. The CLI/`Vi
 ## Lessons from the bulk runs of 2026-10-26 (about 1,300 searches)
 
 - **A session lasts about 30 minutes from the login, whatever the activity** (29.6, 29.8 and 30.4 min measured). The keep-alive does
-  not extend it. Run bulk work with `scripts/run_in_session.py` (see the file's docstring): it stops cleanly at `--minutes` after the
+  not extend it. Run bulk work with `sister batch run-session` (see the file's docstring): it stops cleanly at `--minutes` after the
   login, so the service never reaches the expiry. After the expiry the portal answers with `Servizi/sessione_scaduta.jsp` or `lock.html`.
 - **The service must not log in by itself.** aecs4u-auth's keep-alive tests the province menu on the *current* page, which result pages
   do not have, and marks a healthy session invalid; the package then tried a "recovery" and a full CIE login in the user's tab, which
@@ -113,5 +113,5 @@ When `API_KEY` is set the operational endpoints require `X-API-Key`. The CLI/`Vi
   fisica form on 2026-10-27, the older saved forms in `logs/pages` did not have it). `tipo_richiesta=storica` (CLI `--tipo-richiesta`, batch param) is set by
   `utils._select_tipo_richiesta` for `soggetto`, `soggetto-immobili` and `soggetto-documento` (persona fisica and giuridica); it raises when the form has no
   such control instead of answering with Attualità. It is part of the cache key. The database does not record it yet, so an Attualità answer and a Storica
-  one of the same code look alike to `run_in_session.answered_codes`. Plan with it: `scripts/build_batch_from_list.py <list.md> --output-dir <dir> --tipo-richiesta storica`.
+  one of the same code look alike to `run_in_session.answered_codes`. Plan with it: `sister batch build-list <list.md> --output-dir <dir> --tipo-richiesta storica`.
   The layout of a Storica result page is unverified: test one row for real before a full run.

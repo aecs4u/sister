@@ -8,7 +8,7 @@ if [[ -n "${PYTHON_RUNNER:-}" ]]; then
 elif [[ -x "$ROOT/.venv/bin/python" ]]; then
   PYTHON_CMD=("$ROOT/.venv/bin/python")
 elif command -v uv >/dev/null 2>&1; then
-  PYTHON_CMD=(uv run --no-project)
+  PYTHON_CMD=(uv run --no-project python)
 else
   PYTHON_CMD=()
 fi
@@ -39,7 +39,7 @@ if [[ ! -f "$SOURCE_LIST" ]]; then
   exit 2
 fi
 if [[ ${#PYTHON_CMD[@]} -eq 0 ]] || { ! command -v "${PYTHON_CMD[0]}" >/dev/null 2>&1 && [[ ! -x "${PYTHON_CMD[0]}" ]]; }; then
-  printf 'Python runner unavailable. Install the project venv or set PYTHON_RUNNER (for example: "uv run --no-project").\n' >&2
+  printf 'Python runner unavailable. Install the project venv or set PYTHON_RUNNER (for example: "uv run --no-project python").\n' >&2
   exit 2
 fi
 
@@ -66,5 +66,5 @@ else
 fi
 
 mkdir -p -- "$BATCH_DIR"
-"${PYTHON_CMD[@]}" "$ROOT/scripts/build_batch_from_list.py" "$SOURCE_LIST" --output-dir "$BATCH_DIR"
-exec "${PYTHON_CMD[@]}" "$ROOT/scripts/run_in_session.py" --batch "$BATCH_DIR" --logged-in-at "$LOGIN_TIME"
+"${PYTHON_CMD[@]}" -m sister.cli batch build-list "$SOURCE_LIST" --output-dir "$BATCH_DIR"
+exec "${PYTHON_CMD[@]}" -m sister.cli batch run-session --batch "$BATCH_DIR" --logged-in-at "$LOGIN_TIME"

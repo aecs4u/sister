@@ -170,7 +170,7 @@ Gotchas learned on the real data:
 - `idx_omi_ref_zone_comune_period_zone`, `idx_omi_ref_zone_comune_catastale`, and `idx_omi_ref_zone_comune_istat`
   support lookup by each accepted comune key. Without the alternate-key indexes, PostgreSQL can choose a full scan for
   the overview's `OR` filter. The quote SQL selects the newest semester before joining the fact table, avoiding the full
-  historical join. Keep these indexes on the `omi` database; `scripts/omi_quote_index.sql` installs them concurrently.
+  historical join. Keep these indexes on the `omi` database; `scripts/one_off/omi_quote_index.sql` installs them concurrently.
   Results are cached for `OMI_CACHE_DAYS` (30 days, 512 entries, memory only) and lookups run concurrently, bounded.
 - **OMI has no land typologies**: the latest semester contains only building types (codes 1, 5-10 and 13-22).
   `zornade.zornade_zone_omi` in `aecs4u-stats` has "Seminativo/Uliveto/Vigneto" rows, but they are not land prices (Barolo's

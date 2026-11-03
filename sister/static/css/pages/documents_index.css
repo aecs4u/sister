@@ -4,3 +4,27 @@
 .tree-doc-entry { min-width: 0; }
 .tree-doc-entry .tree-doc-chip { min-width: 0; }
 @media print { .collapse { display: block !important; height: auto !important; } }
+
+/* Touch/pointer target of the favourite heart (was 24x30 px, 100 of them per page). */
+.documents-hub .document-favorite-toggle {
+  min-width: 32px;
+  min-height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Count badge: 4.47:1 with Bootstrap's secondary; this is 7:1 in both themes. */
+.documents-count-badge {
+  background-color: #495057;
+  color: #fff;
+}
+
+[data-bs-theme="dark"] .documents-count-badge {
+  background-color: #adb5bd;
+  color: #11151a;
+}
+
+.documents-type-reference > summary {
+  cursor: pointer;
+}

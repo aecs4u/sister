@@ -1,0 +1,143 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 760" role="img" aria-labelledby="title desc">
+  <title id="title">Schema della cronologia della titolarità</title>
+  <desc id="desc">Esempio illustrativo: tre stati dei titolari collegati da atti documentati. Le formalità ipotecarie sono mostrate in una corsia separata.</desc>
+  <defs>
+    <linearGradient id="page" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#f7f9fc"/>
+      <stop offset="1" stop-color="#eef3f8"/>
+    </linearGradient>
+    <linearGradient id="current" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#e9f7f2"/>
+      <stop offset="1" stop-color="#d8f0e7"/>
+    </linearGradient>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="130%">
+      <feDropShadow dx="0" dy="5" stdDeviation="8" flood-color="#12233a" flood-opacity=".08"/>
+    </filter>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L10,5 L0,10 z" fill="#52708d"/>
+    </marker>
+    <style>
+      text { font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; fill: #182b43; }
+      .eyebrow { font-size: 12px; font-weight: 750; letter-spacing: 1.5px; fill: #60758d; }
+      .headline { font-size: 29px; font-weight: 760; letter-spacing: -.5px; }
+      .subhead { font-size: 14px; fill: #60758d; }
+      .card-title { font-size: 13px; font-weight: 750; letter-spacing: .55px; }
+      .small { font-size: 12px; fill: #65788d; }
+      .person { font-size: 15px; font-weight: 700; }
+      .share { font-size: 13px; font-weight: 650; fill: #415c77; }
+      .event-title { font-size: 14px; font-weight: 750; }
+      .event-meta { font-size: 11.5px; fill: #60758d; }
+      .pill { font-size: 10px; font-weight: 750; letter-spacing: .8px; }
+    </style>
+  </defs>
+
+  <rect width="1280" height="760" rx="24" fill="url(#page)"/>
+  <circle cx="1190" cy="40" r="100" fill="#dce8f2" opacity=".28"/>
+  <circle cx="1160" cy="8" r="48" fill="#c9deed" opacity=".25"/>
+
+  <g transform="translate(48 40)">
+    <rect width="46" height="46" rx="14" fill="#173b63"/>
+    <path d="M13 24h20M23 14v20M16 17l14 14M30 17 16 31" stroke="#fff" stroke-width="2" stroke-linecap="round" opacity=".9"/>
+    <circle cx="23" cy="24" r="4" fill="#8bd2b6"/>
+  </g>
+  <text x="110" y="54" class="eyebrow">DOCUMENTO #388 · ESEMPIO DI LAYOUT</text>
+  <text x="48" y="126" class="headline">Cronologia della titolarità</text>
+  <text x="48" y="154" class="subhead">Segui i passaggi tra uno stato documentato e il successivo, con atto e fonte sempre visibili.</text>
+
+  <g transform="translate(48 180)">
+    <rect width="1184" height="56" rx="14" fill="#fff" stroke="#dce5ee"/>
+    <circle cx="27" cy="28" r="13" fill="#e9f0f7"/>
+    <path d="M27 20v8l6 4" fill="none" stroke="#44627f" stroke-width="1.8" stroke-linecap="round"/>
+    <text x="52" y="25" class="card-title">UNITÀ CATASTALE</text>
+    <text x="52" y="43" class="small">Mostrare qui Comune · Foglio · Particella · Subalterno associati alla formalità</text>
+    <rect x="935" y="13" width="232" height="30" rx="15" fill="#f0f5f9"/>
+    <text x="1051" y="32" text-anchor="middle" class="pill" fill="#42617e">ORDINE CRONOLOGICO →</text>
+  </g>
+
+  <text x="48" y="278" class="eyebrow">TITOLARITÀ · DA VISURE COLLEGATE</text>
+  <text x="1232" y="278" text-anchor="end" class="small">Ogni passaggio apre la fonte</text>
+
+  <!-- Main ownership states -->
+  <g filter="url(#shadow)">
+    <rect x="48" y="306" width="226" height="190" rx="18" fill="#fff" stroke="#d7e1eb"/>
+    <rect x="48" y="306" width="226" height="8" rx="4" fill="#8399ae"/>
+    <rect x="68" y="331" width="88" height="24" rx="12" fill="#edf2f6"/>
+    <text x="112" y="347" text-anchor="middle" class="pill" fill="#536a80">STATO 01</text>
+    <text x="68" y="382" class="card-title">TITOLARI</text>
+    <text x="68" y="415" class="person">Titolare A</text>
+    <text x="68" y="438" class="share">Quota 1/1</text>
+    <line x1="68" y1="458" x2="254" y2="458" stroke="#e6ecf1"/>
+    <text x="68" y="480" class="small">Situazione al · data fonte</text>
+  </g>
+
+  <g filter="url(#shadow)">
+    <rect x="526" y="306" width="226" height="190" rx="18" fill="#fff" stroke="#d7e1eb"/>
+    <rect x="526" y="306" width="226" height="8" rx="4" fill="#6b91ad"/>
+    <rect x="546" y="331" width="88" height="24" rx="12" fill="#edf4f8"/>
+    <text x="590" y="347" text-anchor="middle" class="pill" fill="#466781">STATO 02</text>
+    <text x="546" y="382" class="card-title">TITOLARI</text>
+    <text x="546" y="413" class="person">Titolare A</text>
+    <text x="716" y="413" text-anchor="end" class="share">Quota 1/2</text>
+    <text x="546" y="439" class="person">Titolare B</text>
+    <text x="716" y="439" text-anchor="end" class="share">Quota 1/2</text>
+    <line x1="546" y1="458" x2="732" y2="458" stroke="#e6ecf1"/>
+    <text x="546" y="480" class="small">Situazione al · data fonte</text>
+  </g>
+
+  <g filter="url(#shadow)">
+    <rect x="1004" y="306" width="228" height="190" rx="18" fill="url(#current)" stroke="#b9dfd0"/>
+    <rect x="1004" y="306" width="228" height="8" rx="4" fill="#38a27b"/>
+    <rect x="1024" y="331" width="174" height="24" rx="12" fill="#ccebdd"/>
+    <circle cx="1040" cy="343" r="4" fill="#2e916b"/>
+    <text x="1115" y="347" text-anchor="middle" class="pill" fill="#287957">ULTIMO DOCUMENTATO</text>
+    <text x="1024" y="382" class="card-title">TITOLARI</text>
+    <text x="1024" y="413" class="person">Titolare B</text>
+    <text x="1196" y="413" text-anchor="end" class="share">Quota 1/2</text>
+    <text x="1024" y="439" class="person">Titolare C</text>
+    <text x="1196" y="439" text-anchor="end" class="share">Quota 1/2</text>
+    <line x1="1024" y1="458" x2="1212" y2="458" stroke="#d3e8de"/>
+    <text x="1024" y="480" class="small">Situazione al · data fonte</text>
+  </g>
+
+  <!-- Connecting acts -->
+  <line x1="282" y1="400" x2="326" y2="400" stroke="#52708d" stroke-width="2" marker-end="url(#arrow)"/>
+  <g filter="url(#shadow)">
+    <rect x="338" y="354" width="170" height="100" rx="16" fill="#f5f8fb" stroke="#cbd8e4"/>
+    <circle cx="362" cy="378" r="12" fill="#dce9f2"/>
+    <path d="M357 378h10M362 373v10" stroke="#426582" stroke-width="1.7" stroke-linecap="round"/>
+    <text x="382" y="382" class="event-title">Atto · tipo</text>
+    <text x="354" y="410" class="event-meta">Data · RG/RP</text>
+    <text x="354" y="431" class="event-meta">Fonte: Visura #… ↗</text>
+  </g>
+
+  <line x1="760" y1="400" x2="804" y2="400" stroke="#52708d" stroke-width="2" marker-end="url(#arrow)"/>
+  <g filter="url(#shadow)">
+    <rect x="816" y="354" width="170" height="100" rx="16" fill="#f5f8fb" stroke="#cbd8e4"/>
+    <circle cx="840" cy="378" r="12" fill="#dce9f2"/>
+    <path d="M835 378h10M840 373v10" stroke="#426582" stroke-width="1.7" stroke-linecap="round"/>
+    <text x="860" y="382" class="event-title">Atto · tipo</text>
+    <text x="832" y="410" class="event-meta">Data · RG/RP</text>
+    <text x="832" y="431" class="event-meta">Fonte: Visura #… ↗</text>
+  </g>
+
+  <text x="48" y="535" class="eyebrow">FORMALITÀ IPOTECARIE · DA ISPEZIONE #388</text>
+  <g>
+    <rect x="48" y="553" width="1184" height="112" rx="18" fill="#fffaf2" stroke="#f0d7a9"/>
+    <rect x="48" y="553" width="7" height="112" rx="3.5" fill="#d69832"/>
+    <circle cx="86" cy="594" r="19" fill="#f9e8c7"/>
+    <path d="M78 594h16M86 586v16" stroke="#9b6a1b" stroke-width="2" stroke-linecap="round"/>
+    <text x="120" y="584" class="card-title" fill="#805716">ISCRIZIONE IPOTECARIA</text>
+    <text x="120" y="607" class="small">Data · registro · importo · parti indicate nella nota</text>
+    <text x="120" y="636" class="small">Apri formalità e documento sorgente ↗</text>
+    <line x1="650" y1="573" x2="650" y2="645" stroke="#ead9bb"/>
+    <text x="682" y="588" class="card-title">CORSIA SEPARATA</text>
+    <text x="682" y="611" class="small">La formalità ipotecaria descrive un gravame; non aggiunge da sola</text>
+    <text x="682" y="632" class="small">un passaggio tra titolari. Collegare un atto solo con fonte verificata.</text>
+  </g>
+
+  <g transform="translate(48 691)">
+    <circle cx="7" cy="7" r="7" fill="#e6edf3"/>
+    <path d="M7 3.5v4l2.8 1.8" fill="none" stroke="#526a80" stroke-width="1.4" stroke-linecap="round"/>
+    <text x="22" y="11" class="small">Schema illustrativo: nomi, quote, date e riferimenti sono segnaposto. Mostrare solo dati presenti nelle fonti collegate.</text>
+  </g>
+</svg>

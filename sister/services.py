@@ -139,7 +139,7 @@ class VisuraService:
         background_auth=False → auth blocks startup (used in tests / sync init)
         defer_auth=True       → worker starts but no auth is attempted; call start_browser() later
         attach_only=True      → never log in: only adopt an existing SISTER session in the shared CDP
-                                Chrome (created by scripts/ade_login.py); otherwise stay idle
+                                Chrome (created by sister app login); otherwise stay idle
         """
         self.processing = True
         self._worker_task = asyncio.create_task(self._process_requests(), name="visura-request-worker")
@@ -170,7 +170,7 @@ class VisuraService:
                 self._auth_ready = True
                 logger.info("Browser agganciato a sessione SISTER esistente")
             else:
-                logger.info("Nessuna sessione SISTER attiva — esegui scripts/ade_login.py o usa /browser")
+                logger.info("Nessuna sessione SISTER attiva — esegui sister app login o usa /browser")
         except Exception as e:
             self._auth_failed_message = f"Aggancio sessione browser fallito: {type(e).__name__}: {e}"
             logger.error("Browser attach error: %s", e)

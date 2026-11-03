@@ -37,8 +37,22 @@
 }
 
 .results-column-options input {
-  width: 1rem;
-  height: 1rem;
+  width: 1.5rem;
+  height: 1.5rem;
+}
+
+/* The identity column wraps instead of stretching the table to the longest owner list. */
+.results-desktop-table .results-wrap-cell {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.results-desktop-table .tabulator-cell a:not(.badge) {
+  color: var(--bs-link-color-emphasis, #0a58ca);
+}
+
+.min-w-0 {
+  min-width: 0;
 }
 
 .results-mobile-card {

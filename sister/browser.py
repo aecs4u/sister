@@ -279,7 +279,7 @@ class BrowserManager:
         """Adopt an already-authenticated SISTER tab in the shared CDP Chrome, without logging in.
 
         Returns True when a tab with a valid SISTER session was found and adopted
-        (see ``scripts/ade_login.py`` for how such a tab is created).
+        (see ``sister app login`` for how such a tab is created).
         """
         from aecs4u_auth.browser.services import get_service
         from aecs4u_auth.browser.session import AuthenticatedSession
@@ -364,7 +364,7 @@ class BrowserManager:
                     valid = await self._auth._try_recovery()
             if not valid:
                 self._session_checked_at = None
-                raise AuthenticationError("Sessione SISTER scaduta o non valida: serve un nuovo accesso (scripts/ade_login.py)")
+                raise AuthenticationError("Sessione SISTER scaduta o non valida: serve un nuovo accesso (sister app login)")
             self.last_login_time = datetime.now()
             self._session_checked_at = time.monotonic()
             return
@@ -686,7 +686,7 @@ class BrowserManager:
     async def graceful_shutdown(self):
         logger.info("Iniziando shutdown graceful...")
         if self.is_cdp:
-            # The session lives in the shared Chrome and is owned by scripts/ade_login.py: a restart or
+            # The session lives in the shared Chrome and is owned by sister app login: a restart or
             # --reload of this service must only disconnect, never log the user out of SISTER.
             # close() would click "Torna al portale" and move the tab off the Visure page, so disconnect directly.
             await self._auth.stop_keepalive()

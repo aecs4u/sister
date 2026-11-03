@@ -35,7 +35,7 @@
 {% block extra_css %}
 {{ super() }}
 <link rel="stylesheet" href="/static/css/doc_sections.css?v=20261009a">
-<link rel="stylesheet" href="/static/css/pages/documents_index.css?v=20261025a">
+<link rel="stylesheet" href="/static/css/pages/documents_index.css?v=20261103a">
 <link rel="stylesheet" href="/static/css/pages/documents_map.css?v=20261009a">
 {% endblock %}
 
@@ -58,23 +58,40 @@
             </div>
             <div class="d-flex flex-wrap gap-2 align-items-center">
                 <a href="/dossiers" class="btn btn-outline-light"><i class="fas fa-folder-open me-2"></i>Dossier</a>
+                <a href="/documents?type=ispezione_ipotecaria" class="btn btn-outline-light"><i class="fas fa-landmark me-2" aria-hidden="true"></i>Ispezioni ipotecarie</a>
                 {% if favorites_enabled %}<a href="/favorites" class="btn btn-outline-light"><i class="fas fa-heart me-2"></i>I miei preferiti</a>{% endif %}
                 <a href="/documents?view=cadastral-map" class="btn btn-outline-light"><i class="fas fa-map-location-dot me-2"></i>Mappa catastale</a>
                 {% if can_admin(user) %}
-                <form method="post" action="/documents/rescan" class="d-inline">
-                    {{ csrf_input() }}
-                    <button type="submit" class="btn btn-outline-warning"><i class="fas fa-rotate me-2"></i>Aggiorna</button>
-                </form>
-                <button type="button" data-click="importDocuments" data-args='["@this", false]' class="btn btn-outline-info"
-                        title="Indicizza i file nuovi e riempie le tabelle strutturate dai documenti XML non ancora importati">
-                    <i class="fas fa-file-import me-2"></i>Importa nuovi
-                </button>
-                <button type="button" data-click="importDocuments" data-args='["@this", true]' class="btn btn-outline-secondary"
-                        title="Rielabora tutti i documenti XML già importati">
-                    <i class="fas fa-arrows-rotate me-2"></i>Reimporta tutti
-                </button>
+                <div class="dropdown">
+                    <button type="button" class="btn btn-outline-warning dropdown-toggle" data-bs-toggle="dropdown" aria-expanded="false">
+                        <i class="fas fa-rotate me-2" aria-hidden="true"></i>Aggiorna archivio
+                    </button>
+                    <ul class="dropdown-menu dropdown-menu-end">
+                        <li>
+                            <form method="post" action="/documents/rescan">
+                                {{ csrf_input() }}
+                                <button type="submit" class="dropdown-item" title="Cerca nella cartella i file aggiunti o rimossi">
+                                    <i class="fas fa-magnifying-glass me-2" aria-hidden="true"></i>Cerca file nuovi o rimossi
+                                </button>
+                            </form>
+                        </li>
+                        <li>
+                            <button type="button" data-click="importDocuments" data-args='["@this", false]' class="dropdown-item"
+                                    title="Indicizza i file nuovi e riempie le tabelle strutturate dai documenti XML non ancora importati">
+                                <i class="fas fa-file-import me-2" aria-hidden="true"></i>Importa i documenti nuovi
+                            </button>
+                        </li>
+                        <li><hr class="dropdown-divider"></li>
+                        <li>
+                            <button type="button" data-click="importDocuments" data-args='["@this", true]' class="dropdown-item text-danger"
+                                    title="Rielabora tutti i documenti XML già importati (chiede conferma)">
+                                <i class="fas fa-arrows-rotate me-2" aria-hidden="true"></i>Reimporta tutti i documenti&hellip;
+                            </button>
+                        </li>
+                    </ul>
+                </div>
                 {% endif %}
-                <button type="button" data-click="exportNamed" data-args='["@this"]' class="btn btn-outline-success"><i class="fas fa-file-export me-2"></i>Esporta con nomi</button>
+                <button type="button" data-click="exportNamed" data-args='["@this"]' class="btn btn-outline-light"><i class="fas fa-file-export me-2"></i>Esporta con nomi</button>
                 <button type="button" data-click="sisterActions.print" class="btn btn-outline-light"><i class="fas fa-print me-2"></i>Stampa</button>
             </div>
         </div>
@@ -94,48 +111,43 @@
     <div class="alert alert-info" role="status"><i class="fas fa-circle-info me-2" aria-hidden="true"></i>Non hai ancora documenti disponibili. Per ottenere l’accesso a un documento <a class="alert-link" href="/contact">contatta l’amministratore</a> indicando le chiavi account del tuo <a class="alert-link" href="/profile">profilo</a> e l’ID o il nome del documento.</div>
     {% endif %}
     {{ documents_pager() }}
-    <ul class="nav nav-tabs documents-view-tabs mb-3" id="documents-view-tabs" role="tablist" aria-label="Viste documenti">
-        <li class="nav-item" role="presentation">
-            <button class="nav-link {{ 'active' if active_view == 'categories' else '' }}" id="documents-tab-categories"
-                    type="button" role="tab" data-bs-toggle="tab" data-bs-target="#documents-pane-categories"
-                    aria-controls="documents-pane-categories" aria-selected="{{ 'true' if active_view == 'categories' else 'false' }}"
-                    data-documents-view="categories">
-                <i class="fas fa-layer-group me-1"></i>Per categoria
-                <span class="badge text-bg-secondary ms-1">{{ total }}</span>
-            </button>
-        </li>
-        <li class="nav-item" role="presentation">
-            <button class="nav-link {{ 'active' if active_view == 'location' else '' }}" id="documents-tab-location"
-                    type="button" role="tab" data-bs-toggle="tab" data-bs-target="#documents-pane-location"
-                    aria-controls="documents-pane-location" aria-selected="{{ 'true' if active_view == 'location' else 'false' }}"
-                    data-documents-view="location">
-                <i class="fas fa-diagram-project me-1"></i>Per ubicazione
-                <span class="badge text-bg-secondary ms-1">{{ total }}</span>
-            </button>
-        </li>
-        <li class="nav-item" role="presentation">
-            <button class="nav-link {{ 'active' if active_view == 'files' else '' }}" id="documents-tab-files"
-                    type="button" role="tab" data-bs-toggle="tab" data-bs-target="#documents-pane-files"
-                    aria-controls="documents-pane-files" aria-selected="{{ 'true' if active_view == 'files' else 'false' }}"
-                    data-documents-view="files">
-                <i class="fas fa-file-lines me-1"></i>Per file
-                <span class="badge text-bg-secondary ms-1">{{ total }}</span>
-            </button>
-        </li>
-    </ul>
+    {% if document_type_filter %}
+    <div class="alert alert-info d-flex flex-wrap justify-content-between align-items-center gap-2" role="status">
+        <span>Filtro attivo: <strong>{{ document_type_label }}</strong> · {{ total }} risultati.</span>
+        <a class="alert-link" href="/documents">Mostra tutti i documenti</a>
+    </div>
+    {% endif %}
+    {# Only the active view is rendered (the full page was 5 MB / 58,000 nodes), so switching view is a page load:
+       plain links, not an ARIA tablist. #}
+    <nav aria-label="Viste documenti">
+        <ul class="nav nav-tabs documents-view-tabs mb-3" id="documents-view-tabs">
+            {% for view_key, view_label, view_icon, view_href in [
+                ('categories', 'Per categoria', 'fa-layer-group', '/documents'),
+                ('location', 'Per ubicazione', 'fa-diagram-project', '/documents?view=map'),
+                ('files', 'Per file', 'fa-file-lines', '/documents?view=files')] %}
+            <li class="nav-item">
+                <a class="nav-link {{ 'active' if active_view == view_key else '' }}" id="documents-tab-{{ view_key }}"
+                   href="{{ view_href }}{% if favorites_only %}{{ '&' if '?' in view_href else '?' }}favorites=true{% endif %}"
+                   {% if active_view == view_key %}aria-current="page"{% endif %}>
+                    <i class="fas {{ view_icon }} me-1" aria-hidden="true"></i>{{ view_label }}
+                </a>
+            </li>
+            {% endfor %}
+        </ul>
+    </nav>
 
-    <div class="tab-content" id="documents-tab-panes">
-        <section class="tab-pane fade {{ 'show active' if active_view == 'categories' else '' }}" id="documents-pane-categories"
-                 role="tabpanel" aria-labelledby="documents-tab-categories" tabindex="0">
-            {% if active_view != 'categories' %}
-            <p class="text-muted py-4" data-lazy-view="categories"><a href="/documents">Apri la vista per categoria</a></p>
-            {% else %}
+    <div id="documents-tab-panes">
+        <section id="documents-pane-{{ active_view }}" aria-labelledby="documents-tab-{{ active_view }}">
+            {% if active_view == 'categories' %}
             {{ document_category_navigation(tree) }}
             {% if not tree %}
             <div class="alert alert-info"><i class="fas fa-circle-info me-2"></i>{% if can_admin(user) %}Nessun documento indicizzato.{% else %}Non hai ancora documenti disponibili. Per ottenere l’accesso a un documento <a class="alert-link" href="/contact">contatta l’amministratore</a> indicando le chiavi account del tuo <a class="alert-link" href="/profile">profilo</a> e l’ID o il nome del documento.{% endif %}</div>
             {% else %}
             {% for g in tree %}
             {% call query_section(g) %}
+                {% if g.full_catalog %}
+                <p class="small text-muted mb-2">Elenco completo delle ispezioni ipotecarie nel catalogo, incluse quelle presenti nelle altre pagine.</p>
+                {% endif %}
                 {% if g.docs %}{{ doc_table(g.key, g.docs, g.color, '/documents', is_soggetto=g.is_soggetto, favorites_enabled=favorites_enabled) }}{% endif %}
                 {% if not g.docs and not g.children and g.empty_message %}
                 <div class="alert alert-light border mb-0" role="status">
@@ -150,19 +162,11 @@
             {% endcall %}
             {% endfor %}
             {% endif %}
+            {% elif active_view == 'location' %}
+            {{ location_view(prop_map, favorites_enabled) }}
+            {% else %}
+            {{ files_view(files, favorites_enabled) }}
             {% endif %}
-        </section>
-
-        <section class="tab-pane fade {{ 'show active' if active_view == 'location' else '' }}" id="documents-pane-location"
-                 role="tabpanel" aria-labelledby="documents-tab-location" tabindex="0">
-            {% if active_view == 'location' %}{{ location_view(prop_map, favorites_enabled) }}
-            {% else %}<p class="text-muted py-4" data-lazy-view="location"><a href="/documents?view=map">Apri la vista per ubicazione</a></p>{% endif %}
-        </section>
-
-        <section class="tab-pane fade {{ 'show active' if active_view == 'files' else '' }}" id="documents-pane-files"
-                 role="tabpanel" aria-labelledby="documents-tab-files" tabindex="0">
-            {% if active_view == 'files' %}{{ files_view(files, favorites_enabled) }}
-            {% else %}<p class="text-muted py-4" data-lazy-view="files"><a href="/documents?view=files">Apri la vista per file</a></p>{% endif %}
         </section>
     </div>
     {{ documents_pager() }}
@@ -182,7 +186,7 @@
 {{ documents_favorites_js(csp_nonce) }}
 <script nonce="{{ csp_nonce }}">
 function toggleActiveDocuments(expand) {
-    var pane = document.querySelector('#documents-tab-panes .tab-pane.active');
+    var pane = document.querySelector('#documents-tab-panes > section');
     if (!pane) return;
     pane.querySelectorAll('.collapse').forEach(function (element) {
         var collapse = bootstrap.Collapse.getOrCreateInstance(element, {toggle: false});
@@ -253,59 +257,6 @@ function showExportToast(type, html) {
 }
 
 (function () {
-    var restoringHistory = false;
-
-    function selectedView() {
-        var view = new URL(window.location.href).searchParams.get('view');
-        if (view === 'files') return 'files';
-        if (view === 'map' || view === 'tree') return 'location';
-        return 'categories';
-    }
-
-    function activateView(view) {
-        var trigger = document.querySelector('[data-documents-view="' + view + '"]');
-        if (!trigger || trigger.classList.contains('active')) return;
-        restoringHistory = true;
-        bootstrap.Tab.getOrCreateInstance(trigger).show();
-    }
-
-    function lazyViewUrl(view) {
-        var url = new URL(window.location.href);
-        url.pathname = '/documents';
-        url.searchParams.delete('view');
-        if (view === 'location') url.searchParams.set('view', 'map');
-        if (view === 'files') url.searchParams.set('view', 'files');
-        return url;
-    }
-
-    document.querySelectorAll('[data-documents-view]').forEach(function (trigger) {
-        // Only the active view is rendered (the full page was 5 MB / 58,000 nodes); the others load on demand.
-        trigger.addEventListener('show.bs.tab', function (event) {
-            var view = trigger.dataset.documentsView;
-            if (document.querySelector('#documents-tab-panes [data-lazy-view="' + view + '"]')) {
-                event.preventDefault();
-                window.location.href = lazyViewUrl(view).toString();
-            }
-        });
-        trigger.addEventListener('shown.bs.tab', function () {
-            if (restoringHistory) {
-                restoringHistory = false;
-                return;
-            }
-            var view = trigger.dataset.documentsView;
-            var url = new URL(window.location.href);
-            url.pathname = '/documents';
-            url.searchParams.delete('view');
-            if (view === 'location') url.searchParams.set('view', 'map');
-            if (view === 'files') url.searchParams.set('view', 'files');
-            window.history.pushState({documentsView: view}, '', url);
-        });
-    });
-    window.addEventListener('popstate', function () {
-        if (document.querySelector('#documents-tab-panes [data-lazy-view="' + selectedView() + '"]')) { window.location.reload(); return; }
-        activateView(selectedView());
-    });
-
     var filter = document.getElementById('files-filter');
     var table = document.getElementById('files-table');
     if (filter && table) {

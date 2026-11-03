@@ -49,7 +49,7 @@ Foreign keys are repointed to the surviving row before anything is deleted.
 | `visura_documents` | 3 (+ their row trees) | same file under `/data/…` and `/mnt/mobile/data/…` (symlink) |
 
 Left alone on purpose: repeated requests (history), the same owner in different responses, 79 groups of documents
-with identical content (that is `scripts/normalize_documents.py`, it deletes files), 4 mutation pairs that differ in
+with identical content (that is `sister documents normalize`, it deletes files), 4 mutation pairs that differ in
 `reference_location_id`.
 
 The load then merges more, by normalised key: 420 more units (province spelling), 9 rights, 2 owner rows, 13 geometry

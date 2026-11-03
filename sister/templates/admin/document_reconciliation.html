@@ -9,6 +9,8 @@
     {%- else %}<span class="badge text-bg-secondary">Nome duplicato</span>{% endif -%}
 {%- endmacro %}
 
+{% macro count_it(value) -%}{{ "{:,}".format(value|int).replace(",", ".") }}{%- endmacro %}
+
 {% block content %}
 <div class="container-fluid py-4">
     <nav aria-label="breadcrumb" class="mb-3">
@@ -26,9 +28,9 @@
         <div class="d-flex flex-wrap gap-2">
             <a class="btn btn-outline-primary" href="/documents">Apri /documents</a>
             <a class="btn btn-outline-secondary" href="/admin/documents">Catalogo documenti</a>
-            <form method="post" action="/admin/document-reconciliation/rescan">
+            <form method="post" action="/admin/document-reconciliation/rescan" id="document-rescan-form">
                 {{ csrf_input() }}
-                <button class="btn btn-warning" type="submit">
+                <button class="btn btn-warning" type="submit" id="document-rescan-submit">
                     <i class="fas fa-rotate me-2" aria-hidden="true"></i>Indicizza i file nuovi
                 </button>
             </form>
@@ -50,49 +52,56 @@
         <div class="col-6 col-xl-3">
             <div class="card h-100"><div class="card-body">
                 <div class="small text-muted">Record in /documents</div>
-                <div class="fs-3 fw-semibold">{{ indexed_count }}</div>
+                <div class="fs-3 fw-semibold text-nowrap">{{ count_it(indexed_count) }}</div>
                 <a class="small" href="/documents">Apri il catalogo visibile</a>
             </div></div>
         </div>
         <div class="col-6 col-xl-3">
             <div class="card h-100"><div class="card-body">
-                <div class="small text-muted">File supportati nella cartella</div>
-                <div class="fs-3 fw-semibold">{{ supported_file_count }}</div>
-                <span class="small text-muted">PDF, XML, P7M, ZIP, PNG e DAT; le cache del parser sono escluse</span>
+                <div class="small text-muted">File totali nella cartella</div>
+                <div class="fs-3 fw-semibold text-nowrap">{{ count_it(total_file_count) }}</div>
+                <span class="small text-muted">{{ count_it(supported_file_count) }} file indicizzabili</span>
+            </div></div>
+        </div>
+        <div class="col-6 col-xl-3">
+            <div class="card h-100"><div class="card-body">
+                <div class="small text-muted">Cache parser</div>
+                <div class="fs-3 fw-semibold text-nowrap">{{ count_it(parser_cache_count) }}</div>
+                <span class="small text-muted">Sidecar <code>.plan.json</code> delle planimetrie, escluse dal confronto</span>
             </div></div>
         </div>
         <div class="col-6 col-xl-3">
             <div class="card h-100"><div class="card-body">
                 <div class="small text-muted">Solo nella cartella</div>
-                <div class="fs-3 fw-semibold">{{ issue_counts.file_only }}</div>
+                <div class="fs-3 fw-semibold text-nowrap">{{ count_it(issue_counts.file_only) }}</div>
                 <span class="small text-muted">File non ancora indicizzati</span>
             </div></div>
         </div>
         <div class="col-6 col-xl-3">
             <div class="card h-100"><div class="card-body">
                 <div class="small text-muted">File mancanti</div>
-                <div class="fs-3 fw-semibold">{{ issue_counts.db_missing }}</div>
+                <div class="fs-3 fw-semibold text-nowrap">{{ count_it(issue_counts.db_missing) }}</div>
                 <span class="small text-muted">Record presenti, file assente</span>
             </div></div>
         </div>
         <div class="col-6 col-xl-3">
             <div class="card h-100"><div class="card-body">
                 <div class="small text-muted">Percorsi diversi</div>
-                <div class="fs-3 fw-semibold">{{ issue_counts.path_mismatch }}</div>
+                <div class="fs-3 fw-semibold text-nowrap">{{ count_it(issue_counts.path_mismatch) }}</div>
                 <span class="small text-muted">Stesso nome in un altro percorso</span>
             </div></div>
         </div>
         <div class="col-6 col-xl-3">
             <div class="card h-100"><div class="card-body">
                 <div class="small text-muted">Nomi duplicati</div>
-                <div class="fs-3 fw-semibold">{{ issue_counts.duplicate_name }}</div>
+                <div class="fs-3 fw-semibold text-nowrap">{{ count_it(issue_counts.duplicate_name) }}</div>
                 <span class="small text-muted">File aggiuntivi con nome già indicizzato</span>
             </div></div>
         </div>
         <div class="col-6 col-xl-3">
             <div class="card h-100"><div class="card-body">
                 <div class="small text-muted">Altri file</div>
-                <div class="fs-3 fw-semibold">{{ unsupported_file_count }}</div>
+                <div class="fs-3 fw-semibold text-nowrap">{{ count_it(unsupported_file_count) }}</div>
                 <span class="small text-muted">Formati non acquisiti da questa scansione</span>
             </div></div>
         </div>
@@ -190,4 +199,207 @@
         {% endif %}
     </section>
 </div>
+
+<div class="modal fade" id="document-rescan-modal" tabindex="-1" aria-labelledby="document-rescan-modal-title"
+     aria-describedby="document-rescan-modal-description" aria-hidden="true" data-bs-backdrop="static" data-bs-keyboard="false">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2 class="modal-title fs-5" id="document-rescan-modal-title">Indicizzazione in corso</h2>
+            </div>
+            <div class="modal-body">
+                <p id="document-rescan-modal-description" class="mb-3">
+                    Sto controllando la cartella e indicizzando i file nuovi. L’operazione può richiedere qualche minuto;
+                    lascia aperta questa pagina.
+                </p>
+                <div class="progress" style="height: .75rem" aria-label="Indicizzazione documenti in corso">
+                    <div id="document-rescan-progress" class="progress-bar bg-primary document-rescan-progress is-indeterminate" role="progressbar"
+                         aria-valuemin="0" aria-valuemax="100" aria-valuetext="Scansione e indicizzazione in corso"></div>
+                </div>
+                <div id="document-rescan-progress-description" class="small text-muted mt-2" aria-live="polite">
+                    La pagina si aggiornerà al termine della scansione.
+                </div>
+                <div id="document-rescan-current-file" class="small text-muted text-break mt-1 d-none" aria-live="polite"></div>
+                <div id="document-rescan-error" class="alert alert-danger d-none mt-3 mb-0" role="alert"></div>
+            </div>
+            <div id="document-rescan-modal-footer" class="modal-footer d-none">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Chiudi</button>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_css %}
+{{ super() }}
+<style>
+    .document-rescan-progress { transition: width .25s ease; }
+    .document-rescan-progress.is-indeterminate { width: 35%; animation: document-rescan-progress 1.4s ease-in-out infinite alternate; }
+    @keyframes document-rescan-progress {
+        from { transform: translateX(-100%); }
+        to { transform: translateX(285%); }
+    }
+    @media (prefers-reduced-motion: reduce) {
+        .document-rescan-progress.is-indeterminate { animation: none; transform: none; }
+    }
+</style>
+{% endblock %}
+
+{% block extra_js %}
+{{ super() }}
+<script nonce="{{ csp_nonce }}">
+    (function () {
+        function setupRescanModal() {
+            const form = document.getElementById('document-rescan-form');
+            const submitButton = document.getElementById('document-rescan-submit');
+            const modalElement = document.getElementById('document-rescan-modal');
+            const progressBar = document.getElementById('document-rescan-progress');
+            const progressDescription = document.getElementById('document-rescan-progress-description');
+            const currentFile = document.getElementById('document-rescan-current-file');
+            const errorMessage = document.getElementById('document-rescan-error');
+            const modalFooter = document.getElementById('document-rescan-modal-footer');
+            const modalTitle = document.getElementById('document-rescan-modal-title');
+            if (!form || !submitButton || !modalElement || !window.bootstrap) return;
+
+            let submitting = false;
+
+            function showProgress(progress) {
+                progressDescription.textContent = progress.description || 'Scansione e indicizzazione in corso…';
+                if (progress.current_file) {
+                    currentFile.textContent = 'File in elaborazione: ' + progress.current_file;
+                    currentFile.classList.remove('d-none');
+                } else {
+                    currentFile.textContent = '';
+                    currentFile.classList.add('d-none');
+                }
+                if (typeof progress.percent === 'number') {
+                    const percent = Math.max(0, Math.min(100, Math.round(progress.percent)));
+                    progressBar.classList.remove('is-indeterminate');
+                    progressBar.style.width = percent + '%';
+                    progressBar.setAttribute('aria-valuenow', String(percent));
+                    progressBar.setAttribute('aria-valuetext', percent + '% completato in questa fase');
+                } else {
+                    progressBar.classList.add('is-indeterminate');
+                    progressBar.style.width = '';
+                    progressBar.removeAttribute('aria-valuenow');
+                    progressBar.setAttribute('aria-valuetext', 'In corso');
+                }
+            }
+
+            function showError(message) {
+                modalTitle.textContent = 'Indicizzazione non riuscita';
+                progressDescription.textContent = 'La scansione si è interrotta prima del completamento.';
+                progressBar.classList.remove('is-indeterminate');
+                progressBar.classList.remove('bg-primary');
+                progressBar.classList.add('bg-danger');
+                progressBar.style.width = '100%';
+                progressBar.removeAttribute('aria-valuenow');
+                errorMessage.textContent = message || 'Controlla i log del server e riprova.';
+                errorMessage.classList.remove('d-none');
+                modalFooter.classList.remove('d-none');
+                submitButton.disabled = false;
+                submitButton.innerHTML = '<i class="fas fa-rotate me-2" aria-hidden="true"></i>Indicizza i file nuovi';
+                submitting = false;
+            }
+
+            async function readJsonResponse(response, fallbackMessage) {
+                const body = await response.text();
+                let payload;
+                try {
+                    payload = JSON.parse(body);
+                } catch (parseError) {
+                    let detail = '';
+                    if (body) {
+                        try {
+                            const parsedHtml = new DOMParser().parseFromString(body, 'text/html');
+                            detail = [parsedHtml.title, parsedHtml.body ? parsedHtml.body.textContent : '']
+                                .filter(Boolean)
+                                .join(' ');
+                        } catch (htmlError) {
+                            detail = body.replace(/<[^>]*>/g, ' ');
+                        }
+                    }
+                    detail = detail.replace(/\s+/g, ' ').trim().slice(0, 280);
+                    throw new Error(
+                        fallbackMessage + ' (HTTP ' + response.status + ').' +
+                        (detail ? ' Risposta del server: ' + detail : ' Il server non ha restituito dettagli.')
+                    );
+                }
+
+                if (!response.ok) {
+                    const detail = payload.error || payload.detail || fallbackMessage;
+                    throw new Error(String(detail) + ' (HTTP ' + response.status + ').');
+                }
+                return payload;
+            }
+
+            async function pollProgress(jobId) {
+                while (true) {
+                    await new Promise(function (resolve) { window.setTimeout(resolve, 600); });
+                    const response = await fetch('/admin/document-reconciliation/rescan/' + encodeURIComponent(jobId), {
+                        credentials: 'same-origin',
+                        headers: { 'Accept': 'application/json' }
+                    });
+                    const progress = await readJsonResponse(response, 'Stato della scansione non disponibile');
+                    showProgress(progress);
+
+                    if (progress.status === 'failed') {
+                        showError(progress.error);
+                        return;
+                    }
+                    if (progress.status === 'completed') {
+                        const indexed = progress.indexed === null ? 'unavailable' : String(progress.indexed);
+                        window.setTimeout(function () {
+                            window.location.assign('/admin/document-reconciliation?indexed=' + encodeURIComponent(indexed));
+                        }, 500);
+                        return;
+                    }
+                }
+            }
+
+            async function startRescan() {
+                try {
+                    const response = await fetch(form.action, {
+                        method: 'POST',
+                        body: new FormData(form),
+                        credentials: 'same-origin',
+                        headers: {
+                            'Accept': 'application/json',
+                            'X-Requested-With': 'XMLHttpRequest'
+                        }
+                    });
+                    const result = await readJsonResponse(response, 'Impossibile avviare la scansione');
+                    await pollProgress(result.job_id);
+                } catch (error) {
+                    showError(error.message);
+                }
+            }
+
+            form.addEventListener('submit', function (event) {
+                if (submitting) return;
+                event.preventDefault();
+                submitting = true;
+                submitButton.disabled = true;
+                submitButton.innerHTML = '<span class="spinner-border spinner-border-sm me-2" aria-hidden="true"></span>Indicizzazione…';
+                errorMessage.classList.add('d-none');
+                modalFooter.classList.add('d-none');
+                modalTitle.textContent = 'Indicizzazione in corso';
+                progressBar.classList.remove('bg-danger');
+                progressBar.classList.add('bg-primary');
+                showProgress({ description: 'Avvio della scansione della cartella documenti…' });
+
+                modalElement.addEventListener('shown.bs.modal', function () {
+                    startRescan();
+                }, { once: true });
+                bootstrap.Modal.getOrCreateInstance(modalElement, { backdrop: 'static', keyboard: false }).show();
+            });
+        }
+
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', setupRescanModal, { once: true });
+        } else {
+            setupRescanModal();
+        }
+    }());
+</script>
 {% endblock %}

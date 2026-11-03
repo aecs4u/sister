@@ -13,6 +13,8 @@ import json
 import logging
 import os
 import re
+import shlex
+import sys
 import time
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
@@ -103,6 +105,22 @@ logger = logging.getLogger("sister")
 _OPTIONAL_DATA_DEGRADATIONS_LOCK = Lock()
 _OPTIONAL_DATA_DEGRADATIONS: dict[str, int] = {}
 _OPTIONAL_DATA_ACTIVE_FAILURES: set[str] = set()
+_DOCUMENT_RESCAN_JOBS: dict[str, dict[str, Any]] = {}
+_DOCUMENT_RESCAN_LOCK = asyncio.Lock()
+_CLI_COMMAND_JOBS: dict[str, dict[str, Any]] = {}
+_CLI_COMMAND_JOBS_LOCK = asyncio.Lock()
+_CLI_COMMAND_MAX_OUTPUT_CHARS = 40_000
+_CLI_COMMAND_MAX_ACTIVE_JOBS = 3
+_CLI_COMMAND_MAX_RETAINED_JOBS = 20
+
+# These tools need a terminal, prompt for secrets, or can stop the web process that launched them.
+_CLI_COMMAND_TERMINAL_ONLY = {
+    "app:login",
+    "app:start",
+    "app:stop",
+    "app:hash-password",
+    "batch:run-pvp-is",
+}
 
 
 def _record_optional_data_degradation(component: str) -> None:
@@ -711,9 +729,20 @@ async def _collapse_streamed_documents(documents: AsyncIterable[dict]) -> tuple[
     return accumulator.finish(), raw_count
 
 
+async def _iter_documents_of_type(documents: AsyncIterable[dict], document_type: str) -> AsyncIterator[dict]:
+    """Stream all documents or only rows matching the catalog's type filter."""
+    async for document in documents:
+        if not document_type or str(document.get("document_type") or "").casefold() == document_type:
+            yield document
+
+
 async def _page_streamed_documents(
-    documents: AsyncIterable[dict], page: int, page_size: int = _DOCUMENTS_PAGE_SIZE
-) -> tuple[list[dict], int, int, int, int, int]:
+    documents: AsyncIterable[dict],
+    page: int,
+    page_size: int = _DOCUMENTS_PAGE_SIZE,
+    *,
+    include_all_ipotecari: bool = False,
+) -> tuple[list[dict], int, int, int, int, int, list[dict]]:
     """Group a streamed catalogue on disk and materialize only one logical page."""
     import sqlite3
     import tempfile
@@ -961,6 +990,17 @@ async def _page_streamed_documents(
             )
 
             total = int(connection.execute("SELECT COUNT(*) FROM logical_documents").fetchone()[0])
+            inspection_rows = []
+            if include_all_ipotecari:
+                for root_id, primary_json in connection.execute(
+                    "SELECT root_id, primary_json FROM logical_documents"
+                ):
+                    primary = json.loads(primary_json)
+                    if (primary.get("document_type") or "").casefold() in {
+                        "ispezione_ipotecaria",
+                        "visura_ipotecaria",
+                    }:
+                        inspection_rows.append((int(root_id), primary))
             page_count = max(1, (total + page_size - 1) // page_size)
             page = min(max(1, int(page or 1)), page_count)
             page_offset = (page - 1) * page_size
@@ -974,9 +1014,11 @@ async def _page_streamed_documents(
                 (page_size, page_offset),
             ).fetchall()
             roots = [int(row[0]) for row in selected]
-            files_by_root: dict[int, list[tuple[int, dict]]] = {root: [] for root in roots}
-            if roots:
-                placeholders = ", ".join("?" for _ in roots)
+            inspection_roots = [root_id for root_id, _ in inspection_rows]
+            all_roots = list(dict.fromkeys([*roots, *inspection_roots]))
+            files_by_root: dict[int, list[tuple[int, dict]]] = {root: [] for root in all_roots}
+            if all_roots:
+                placeholders = ", ".join("?" for _ in all_roots)
                 file_rows = connection.execute(
                     f"""
                     SELECT roots.root_id, files.file_rank, files.file_document_id, files.sequence, files.file_json
@@ -985,20 +1027,36 @@ async def _page_streamed_documents(
                     WHERE roots.root_id IN ({placeholders})
                     ORDER BY roots.root_id, files.file_rank, files.file_document_id, files.sequence
                     """,
-                    roots,
+                    all_roots,
                 )
                 for root_id, file_rank, file_id, sequence, file_json in file_rows:
                     files_by_root[int(root_id)].append(
                         ((int(file_rank), int(file_id), int(sequence)), json.loads(file_json))
                     )
 
-            page_documents = []
-            for root_id, primary_json in selected:
-                ordered_files = [item for _, item in sorted(files_by_root[int(root_id)], key=lambda row: row[0])]
-                page_documents.append(
-                    _finalize_logical_document(json.loads(primary_json), ordered_files)
-                )
-            return page_documents, page, page_count, page_offset, total, raw_count
+            def materialize(rows):
+                result = []
+                for root_id, primary in rows:
+                    ordered_files = [
+                        item
+                        for _, item in sorted(files_by_root[int(root_id)], key=lambda row: row[0])
+                    ]
+                    result.append(_finalize_logical_document(dict(primary), ordered_files))
+                return result
+
+            page_documents = materialize(
+                [(int(root_id), json.loads(primary_json)) for root_id, primary_json in selected]
+            )
+            inspection_documents = materialize(inspection_rows)
+            return (
+                page_documents,
+                page,
+                page_count,
+                page_offset,
+                total,
+                raw_count,
+                inspection_documents,
+            )
         finally:
             connection.close()
 
@@ -1367,7 +1425,9 @@ def _build_property_map(
     return {"immobili": immobili_tree, "soggetti": soggetti_tree, "altri": other_docs}
 
 
-def _build_document_tree(docs: list[dict]) -> list[dict]:
+def _build_document_tree(
+    docs: list[dict], *, all_ispezioni: list[dict] | None = None
+) -> list[dict]:
     """Build the hierarchical document index using the unified query-type taxonomy.
 
     Single-step query groups (top-level):
@@ -1421,12 +1481,19 @@ def _build_document_tree(docs: list[dict]) -> list[dict]:
     tree: list[dict] = []
     classified_types = set(_VISURA_TYPES) | {"visura_soggetto"}
 
-    def add_document_category(key, label, icon, color, *type_codes, always=False):
-        items = [d for d in docs if (d.get("document_type") or "") in type_codes]
+    def add_document_category(
+        key, label, icon, color, *type_codes, always=False, items_override=None
+    ):
+        items = (
+            items_override
+            if items_override is not None
+            else [d for d in docs if (d.get("document_type") or "") in type_codes]
+        )
         classified_types.update(type_codes)
         if items or always:
             category = leaf(key, label, icon, color, items)
             category["empty_message"] = "Nessun documento in questa categoria."
+            category["full_catalog"] = items_override is not None
             tree.append(category)
 
     # ── Visura per Immobile ────────────────────────────────────────────────
@@ -1526,6 +1593,16 @@ def _build_document_tree(docs: list[dict]) -> list[dict]:
         "primary",
         "ispezione_ipotecaria",
         "visura_ipotecaria",
+        always=bool(all_ispezioni),
+        items_override=all_ispezioni,
+    )
+    add_document_category(
+        "fiduciali",
+        "Punti Fiduciali",
+        "fa-crosshairs",
+        "secondary",
+        "fiduciali",
+        always=True,
     )
     add_document_category(
         "nota_trascrizione_iscrizione",
@@ -1731,6 +1808,43 @@ def _dossier_subtype(name: str, kind: str, data: Any) -> str:
 _TC_LABEL = {"F": "Fabbricati", "T": "Terreni", "E": "Entrambi"}
 
 
+_DOSSIER_SUBTYPE_LABELS = {
+    "soggetto_pf": "Visura per soggetto",
+    "persona_giuridica": "Persona giuridica",
+    "elenco_immobili": "Elenco immobili",
+    "intestati": "Intestati",
+    "richieste": "Richieste",
+}
+
+
+def _dossier_readable_title(name: str, kind: str, subtype: str, request_params: list[dict]) -> Optional[str]:
+    """A card title people can scan ("Visura per soggetto · RSSMRA…", "Agrigento · Fg. 32 · P.lla 12").
+
+    The file name and request id stay on the card (and in the search text); they are poor titles.
+    """
+    values = {param["k"]: str(param["v"]) for param in request_params if param.get("v")}
+    subject = values.get("CF / P.IVA")
+    place = " · ".join(
+        part
+        for part in (
+            values.get("Comune"),
+            f"Fg. {values['Foglio']}" if values.get("Foglio") else "",
+            f"P.lla {values['Particella']}" if values.get("Particella") else "",
+        )
+        if part
+    )
+    label = _DOSSIER_SUBTYPE_LABELS.get(subtype) or (
+        "Visura per immobile" if subtype.startswith(("visura", "immobile")) else ""
+    )
+    if kind == "multi_response":
+        stem = name.rsplit(".", 1)[0].replace("_", " ").replace("-", " ").strip()
+        return stem.capitalize() if stem else None
+    detail = subject or place
+    if label and detail:
+        return f"{label} · {detail}"
+    return label or detail or None
+
+
 def _dossier_meta(name: str, data: Any, size_bytes: int, mtime: float) -> dict:
     """Summarize one dossier JSON for the index listing.
 
@@ -1826,6 +1940,8 @@ def _dossier_meta(name: str, data: Any, size_bytes: int, mtime: float) -> dict:
 
     subtype = _dossier_subtype(name, kind, data)
     group_key = _dossier_group_key(name, kind, data)
+    if kind in ("response", "multi_response") and (not title or title == name):
+        title = _dossier_readable_title(name, kind, subtype, request_params) or title
 
     return {
         "name": name,
@@ -2136,11 +2252,16 @@ def _dossier_to_result(name: str, data: Any) -> dict:
     Workflow dossiers expose steps/aggregate/summary as sections; single-step
     responses expose their ``data`` payload; anything else is shown via the
     exhaustive nested dump. The raw JSON panel always reflects the full file.
+
+    ``kind == "dossier"`` tells the template not to show the request-only fields (provincia, foglio, ...) or the
+    "extracted results" counters, which do not exist for a stored file.
     """
     base = {
+        "kind": "dossier",
         "status": "completed",
         "request_type": "dossier",
-        "tipo_catasto": "-",
+        "file_name": name,
+        "tipo_catasto": "",
         "requested_at_display": "-",
         "responded_at_display": "-",
         "provincia": "-",
@@ -2155,10 +2276,18 @@ def _dossier_to_result(name: str, data: Any) -> dict:
     }
 
     if isinstance(data, dict) and "steps" in data:
+        steps = data.get("steps") if isinstance(data.get("steps"), list) else []
+        failed_steps = [
+            step for step in steps if isinstance(step, dict) and step.get("success") is False
+        ]
         base.update(
             {
                 "request_id": data.get("workflow_id") or name,
                 "request_type": data.get("preset") or "workflow",
+                "dossier_kind": "Workflow multi-step",
+                "step_count": len(steps),
+                "status": "failed" if failed_steps and len(failed_steps) == len(steps) else "completed",
+                "responded_at_display": _display_timestamp(data.get("exported_at") or data.get("finished_at")),
                 "data": data,
                 "sections": _build_result_sections(data),
             }
@@ -2168,8 +2297,9 @@ def _dossier_to_result(name: str, data: Any) -> dict:
         base.update(
             {
                 "request_id": data.get("request_id") or name,
-                "tipo_catasto": data.get("tipo_catasto") or "-",
-                "responded_at_display": data.get("exported_at") or "-",
+                "dossier_kind": "Risposta singola",
+                "tipo_catasto": data.get("tipo_catasto") or "",
+                "responded_at_display": _display_timestamp(data.get("exported_at")),
                 "error": data.get("error"),
                 "status": "completed" if data.get("success", True) else "failed",
                 "data": payload or {"_": True},
@@ -2181,10 +2311,12 @@ def _dossier_to_result(name: str, data: Any) -> dict:
         base.update(
             {
                 "request_id": name,
+                "dossier_kind": "Documento",
                 "data": wrapped,
                 "sections": _build_result_sections(wrapped),
             }
         )
+    base["error_message"], base["error_detail"] = _friendly_error(base.get("error"))
     return base
 
 
@@ -2196,6 +2328,63 @@ def _dossier_to_result(name: str, data: Any) -> dict:
 def _get_theme(request: Request):
     """Get the ThemeSetup from app state."""
     return request.app.state.theme_setup
+
+
+def _cli_command_catalog() -> list[dict[str, Any]]:
+    """Return the registered operational CLI commands for the admin launcher."""
+    from .cli import _tool_commands
+
+    commands = []
+    for group_app, group_commands in _tool_commands.items():
+        group = group_app.info.name
+        if not group:
+            continue
+        for name, (_target, description, *_shell) in group_commands.items():
+            command_id = f"{group}:{name}"
+            commands.append(
+                {
+                    "id": command_id,
+                    "group": group,
+                    "name": name,
+                    "description": description,
+                    "terminal_only": command_id in _CLI_COMMAND_TERMINAL_ONLY,
+                }
+            )
+    return commands
+
+
+def _cli_job_payload(job: dict[str, Any]) -> dict[str, Any]:
+    """Expose only browser-safe command-job fields; omit process and task objects."""
+    public_fields = (
+        "id",
+        "command",
+        "display_command",
+        "status",
+        "exit_code",
+        "output",
+        "started_at",
+        "finished_at",
+    )
+    return {key: job[key] for key in public_fields}
+
+
+async def _capture_cli_command_output(job_id: str, process: asyncio.subprocess.Process) -> None:
+    """Drain a CLI process and retain a bounded tail of its output for the admin page."""
+    job = _CLI_COMMAND_JOBS.get(job_id)
+    if job is None or process.stdout is None:
+        return
+    while chunk := await process.stdout.read(4096):
+        current = _CLI_COMMAND_JOBS.get(job_id)
+        if current is None:
+            continue
+        output = current["output"] + chunk.decode("utf-8", errors="replace")
+        current["output"] = output[-_CLI_COMMAND_MAX_OUTPUT_CHARS:]
+    return_code = await process.wait()
+    current = _CLI_COMMAND_JOBS.get(job_id)
+    if current is not None:
+        current["exit_code"] = return_code
+        current["status"] = "succeeded" if return_code == 0 else "failed"
+        current["finished_at"] = datetime.now(timezone.utc).isoformat()
 
 
 def _get_user(request: Request):
@@ -2784,8 +2973,76 @@ def _merge_subject_visura_asset_groups(parsed_documents: list[dict]) -> dict:
     return primary
 
 
+# Section titles for the keys the stored responses use; any other key falls back to its title-cased name.
+_SECTION_TITLES_IT = {
+    "request_id": "ID richiesta",
+    "success": "Esito",
+    "tipo_catasto": "Tipo di catasto",
+    "data": "Dati",
+    "error": "Errore",
+    "exported_at": "Esportato il",
+    "workflow_id": "ID workflow",
+    "preset": "Preset",
+    "description": "Descrizione",
+    "steps": "Passi",
+    "persisted_steps": "Passi salvati",
+    "aggregate": "Riepilogo aggregato",
+    "summary": "Sintesi",
+    "results": "Risultati",
+    "intestati": "Intestati",
+    "total_results": "Totale risultati",
+    "total_intestati": "Totale intestati",
+    "skipped_soppresso": "Immobili soppressi saltati",
+    "immobili": "Immobili",
+    "province": "Province",
+    "soggetto": "Soggetto",
+    "downloaded_pdfs": "PDF scaricati",
+    "documents": "Documenti",
+    "contenuto": "Contenuto",
+}
+
+
 def _titleize_key(value: str) -> str:
-    return value.replace("_", " ").strip().title()
+    return _SECTION_TITLES_IT.get(value) or value.replace("_", " ").strip().capitalize()
+
+
+def _friendly_error(error: Optional[str]) -> tuple[Optional[str], Optional[str]]:
+    """Split a stored error into (message for people, technical detail).
+
+    Stored errors are raw exception texts (``Re-authentication failed: Page.content: Target page, ...``) or the
+    portal's own capitals ("NESSUNA CORRISPONDENZA TROVATA"). The page shows the first; the second goes in a
+    collapsible block so nothing is lost.
+    """
+    text = (error or "").strip()
+    if not text:
+        return None, None
+    lowered = text.lower()
+    if "nessuna corrispondenza" in lowered:
+        return "SISTER non ha trovato corrispondenze per questi criteri.", None
+    if any(
+        marker in lowered
+        for marker in ("re-authentication failed", "sessione sister scaduta", "sessione_scaduta", "login.jsp")
+    ):
+        return "La sessione SISTER è scaduta o non è valida. Esegui di nuovo l'accesso e ripeti la richiesta.", text
+    if "target page, context or browser has been closed" in lowered or "browser has been closed" in lowered:
+        return "Il browser della sessione SISTER si è chiuso durante la richiesta. Ripeti la richiesta.", text
+    if "timeout" in lowered or "timed out" in lowered:
+        return "Il portale SISTER non ha risposto in tempo. Ripeti la richiesta.", text
+    if len(text) > 160 or "\n" in text:
+        return "La richiesta non è andata a buon fine.", text
+    return text, None
+
+
+def _display_timestamp(value: Any) -> str:
+    """ISO timestamps (with microseconds) as ``2026-10-29 20:54:31``; anything unparseable is returned unchanged."""
+    if value in (None, "", "-"):
+        return "-"
+    text = str(value).strip()
+    match = re.match(r"^(\d{4}-\d{2}-\d{2})[T ](\d{2}:\d{2}:\d{2})", text)
+    if match:
+        return f"{match.group(1)} {match.group(2)}"
+    match = re.match(r"^(\d{4}-\d{2}-\d{2})[T ](\d{2}:\d{2})", text)
+    return f"{match.group(1)} {match.group(2)}" if match else text
 
 
 def _dom_id(value: str) -> str:
@@ -3519,6 +3776,17 @@ async def web_results_refresh(request: Request, user=Depends(_require_admin)):
     return RedirectResponse("/results", status_code=303)
 
 
+_RESULT_STATUSES = frozenset({"completed", "partial", "failed", "error", "pending", "running", "no_match", "cancelled"})
+
+
+def _lenient_int(value: Any, default: int) -> int:
+    """``int(value)`` for query-string input; *default* for anything that is not a plain integer."""
+    try:
+        return int(str(value).strip())
+    except (TypeError, ValueError):
+        return default
+
+
 @router.get("/results", response_class=HTMLResponse)
 async def web_results(
     request: Request,
@@ -3535,13 +3803,40 @@ async def web_results(
     fiscal_code: Optional[str] = None,
     person: Optional[str] = None,
     company: Optional[str] = None,
-    limit: int = 50,
-    offset: int = 0,
+    limit: str = "50",
+    offset: str = "0",
 ):
-    """Results browser — paginated list from database."""
+    """Results browser — paginated list from database.
+
+    ``limit``/``offset`` are read leniently (a malformed value falls back to the default instead of a JSON 422 on an
+    HTML page); an ``offset`` past the end redirects to the last page; an unknown ``status`` is ignored and reported.
+    """
     theme = _get_theme(request)
-    limit = max(1, min(limit, 200))
-    offset = max(0, offset)
+    limit = max(1, min(_lenient_int(limit, 50), 200))
+    offset = max(0, _lenient_int(offset, 0))
+    ignored_filters: list[str] = []
+    if status and status not in _RESULT_STATUSES:
+        ignored_filters.append(f"Stato «{status}» non riconosciuto: filtro ignorato.")
+        status = None
+    total_count = await count_total_result_rows(
+        provincia=provincia,
+        comune=comune,
+        foglio=foglio,
+        particella=particella,
+        tipo_catasto=tipo_catasto,
+        request_type=request_type,
+        tag=tag,
+        source=source,
+        status=status,
+        fiscal_code=fiscal_code,
+        person=person,
+        company=company,
+    )
+    if total_count and offset >= total_count:
+        last_offset = ((total_count - 1) // limit) * limit
+        params = {k: v for k, v in request.query_params.items() if k != "offset"}
+        params["offset"] = last_offset
+        return RedirectResponse(url=f"/results?{urlencode(params)}", status_code=303)
     results = await find_result_rows(
         provincia=provincia,
         comune=comune,
@@ -3554,20 +3849,6 @@ async def web_results(
         status=status,
         limit=limit,
         offset=offset,
-        fiscal_code=fiscal_code,
-        person=person,
-        company=company,
-    )
-    total_count = await count_total_result_rows(
-        provincia=provincia,
-        comune=comune,
-        foglio=foglio,
-        particella=particella,
-        tipo_catasto=tipo_catasto,
-        request_type=request_type,
-        tag=tag,
-        source=source,
-        status=status,
         fiscal_code=fiscal_code,
         person=person,
         company=company,
@@ -3712,6 +3993,7 @@ async def web_results(
         next_url=next_url,
         stats_urls=stats_urls,
         active_filters=active_filters,
+        ignored_filters=ignored_filters,
         request_type_options=request_type_options,
         tag_options=tag_options,
         current_count=len(results),
@@ -3907,11 +4189,14 @@ async def web_result_detail(request: Request, request_id: str, user=Depends(_req
         {
             "Step": v.get("step") or "-",
             "URL": v.get("url") or "-",
-            "Timestamp": v.get("timestamp") or "-",
+            "Timestamp": _display_timestamp(v.get("timestamp")),
             "Errors": ", ".join(v.get("errors", [])) if v.get("errors") else "-",
         }
         for v in (result.get("page_visits") or [])
     ]
+    result["error_message"], result["error_detail"] = _friendly_error(result.get("error"))
+    if result.get("request_type"):
+        result.setdefault("request_type_label", request_type_info(result["request_type"]).label)
     result["db_properties"] = await get_db_properties_for_response(request_id)
     result["db_owners"] = await get_db_owners_for_response(request_id)
     return theme.render(
@@ -4054,6 +4339,7 @@ async def web_settings(request: Request, user=Depends(_require_auth)):
                             "url": "/admin/document-purchases",
                             "icon": "fa-file-invoice",
                         },
+                        {"label": "Comandi CLI", "url": "/admin/commands", "icon": "fa-terminal"},
                         {"label": "Browser", "url": "/browser", "icon": "fa-window-maximize"},
                     ],
                 }
@@ -4068,6 +4354,111 @@ async def web_settings(request: Request, user=Depends(_require_auth)):
 async def web_admin(request: Request, user=Depends(_require_admin)):
     """Admin landing page for managing document ownership."""
     return _get_theme(request).render("admin/index.html", request, user=user)
+
+
+@router.get("/admin/commands", response_class=HTMLResponse)
+async def web_admin_commands(
+    request: Request,
+    job: str = "",
+    error: str = "",
+    user=Depends(_require_admin),
+):
+    """Show the allowlisted CLI command launcher and the selected job output."""
+    current_job = _CLI_COMMAND_JOBS.get(job) if job else None
+    errors = {
+        "invalid_command": "Scegli un comando disponibile.",
+        "terminal_only": "Questo comando richiede un terminale interattivo e non può essere avviato dalla pagina.",
+        "invalid_args": "Gli argomenti non sono validi. Controlla virgolette e lunghezza del testo.",
+        "busy": "Ci sono già tre comandi in esecuzione. Attendi che uno termini.",
+        "start_failed": "Non è stato possibile avviare il comando.",
+    }
+    return _get_theme(request).render(
+        "admin/commands.html",
+        request,
+        user=user,
+        commands=_cli_command_catalog(),
+        job=_cli_job_payload(current_job) if current_job else None,
+        error_message=errors.get(error),
+    )
+
+
+@router.post("/admin/commands/run", response_class=HTMLResponse)
+@_audited("admin.cli_command.start")
+async def web_admin_commands_run(request: Request, user=Depends(_require_admin)):
+    """Start one registered CLI tool with separately parsed arguments, never through a shell."""
+    form = await request.form()
+    command_id = str(form.get("command_id") or "").strip()
+    argument_text = str(form.get("arguments") or "")
+    request.state.audit_params = {"command": command_id[:100]}
+
+    command_map = {entry["id"]: entry for entry in _cli_command_catalog()}
+    selected = command_map.get(command_id)
+    if selected is None:
+        return RedirectResponse(url="/admin/commands?error=invalid_command", status_code=303)
+    if selected["terminal_only"]:
+        return RedirectResponse(url="/admin/commands?error=terminal_only", status_code=303)
+    if len(argument_text) > 4000:
+        return RedirectResponse(url="/admin/commands?error=invalid_args", status_code=303)
+    try:
+        arguments = shlex.split(argument_text, posix=True)
+    except ValueError:
+        return RedirectResponse(url="/admin/commands?error=invalid_args", status_code=303)
+    if len(arguments) > 128 or any("\x00" in argument for argument in arguments):
+        return RedirectResponse(url="/admin/commands?error=invalid_args", status_code=303)
+
+    request.state.audit_params = {"command": command_id, "argument_count": len(arguments)}
+    command = [sys.executable, "-m", "sister.cli", selected["group"], selected["name"], *arguments]
+    async with _CLI_COMMAND_JOBS_LOCK:
+        active_count = sum(job["status"] == "running" for job in _CLI_COMMAND_JOBS.values())
+        if active_count >= _CLI_COMMAND_MAX_ACTIVE_JOBS:
+            return RedirectResponse(url="/admin/commands?error=busy", status_code=303)
+
+        try:
+            process = await asyncio.create_subprocess_exec(
+                *command,
+                cwd=Path(__file__).resolve().parents[1],
+                stdin=asyncio.subprocess.DEVNULL,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+                start_new_session=True,
+            )
+        except OSError as exc:
+            logger.warning("Could not start admin CLI command %s: %s", command_id, type(exc).__name__)
+            return RedirectResponse(url="/admin/commands?error=start_failed", status_code=303)
+
+        # Keep a bounded in-memory history; running processes are always retained.
+        while len(_CLI_COMMAND_JOBS) >= _CLI_COMMAND_MAX_RETAINED_JOBS:
+            finished_id = next(
+                (key for key, value in _CLI_COMMAND_JOBS.items() if value["status"] != "running"),
+                None,
+            )
+            if finished_id is None:
+                break
+            _CLI_COMMAND_JOBS.pop(finished_id, None)
+
+        job_id = uuid4().hex
+        _CLI_COMMAND_JOBS[job_id] = {
+            "id": job_id,
+            "command": command_id,
+            "display_command": shlex.join(["sister", selected["group"], selected["name"], *arguments]),
+            "status": "running",
+            "exit_code": None,
+            "output": "",
+            "started_at": datetime.now(timezone.utc).isoformat(),
+            "finished_at": None,
+        }
+        _CLI_COMMAND_JOBS[job_id]["task"] = asyncio.create_task(_capture_cli_command_output(job_id, process))
+
+    return RedirectResponse(url=f"/admin/commands?job={job_id}", status_code=303)
+
+
+@router.get("/admin/commands/jobs/{job_id}", response_class=JSONResponse)
+async def web_admin_command_job(job_id: str, user=Depends(_require_admin)):
+    """Return live output and state for a command launched by this app process."""
+    job = _CLI_COMMAND_JOBS.get(job_id)
+    if job is None:
+        return JSONResponse({"error": "Command job not found"}, status_code=404)
+    return JSONResponse(_cli_job_payload(job))
 
 
 @router.get("/admin/documents", response_class=HTMLResponse)
@@ -4109,6 +4500,8 @@ async def web_admin_document_reconciliation(
     base = _files_base()
     files_by_path: dict[str, dict[str, Any]] = {}
     files_by_name: dict[str, list[dict[str, Any]]] = {}
+    total_file_count = 0
+    parser_cache_count = 0
     supported_file_count = 0
     unsupported_file_count = 0
     scan_errors = 0
@@ -4128,9 +4521,6 @@ async def web_admin_document_reconciliation(
                 and not (current_path / directory).is_symlink()
             ]
             for filename in filenames:
-                # Parser sidecars are cached output, not independent documents.
-                if filename.casefold().endswith(".plan.json"):
-                    continue
                 path = current_path / filename
                 try:
                     if path.is_symlink() or not path.is_file():
@@ -4141,6 +4531,11 @@ async def web_admin_document_reconciliation(
                     size_bytes = path.stat().st_size
                 except OSError:
                     scan_errors += 1
+                    continue
+                total_file_count += 1
+                # Parser sidecars count as physical files, but are not independent documents.
+                if filename.casefold().endswith(".plan.json"):
+                    parser_cache_count += 1
                     continue
                 file_entry = {
                     "filename": filename,
@@ -4296,6 +4691,8 @@ async def web_admin_document_reconciliation(
         directory_available=directory_available,
         scan_errors=scan_errors,
         indexed_count=indexed_count,
+        total_file_count=total_file_count,
+        parser_cache_count=parser_cache_count,
         supported_file_count=supported_file_count,
         unsupported_file_count=unsupported_file_count,
         issue_counts=issue_counts,
@@ -4313,6 +4710,43 @@ async def web_admin_document_reconciliation(
 async def web_admin_document_reconciliation_rescan(request: Request, user=Depends(_require_admin)):
     """Index files missing from the catalog and return to the reconciliation report."""
     started = datetime.now(timezone.utc)
+    if request.headers.get("x-requested-with") == "XMLHttpRequest":
+        if _DOCUMENT_RESCAN_LOCK.locked():
+            return JSONResponse(
+                {"error": "È già in corso un’indicizzazione dei documenti."},
+                status_code=409,
+            )
+        await _DOCUMENT_RESCAN_LOCK.acquire()
+
+        for old_job_id, old_job in list(_DOCUMENT_RESCAN_JOBS.items()):
+            if (
+                old_job.get("status") != "running"
+                and time.monotonic() - old_job.get("updated_monotonic", 0) > 3600
+            ):
+                _DOCUMENT_RESCAN_JOBS.pop(old_job_id, None)
+
+        job_id = uuid4().hex
+        _DOCUMENT_RESCAN_JOBS[job_id] = {
+            "status": "running",
+            "phase": "scan",
+            "current": None,
+            "total": None,
+            "percent": None,
+            "description": "Avvio della scansione della cartella documenti…",
+            "current_file": None,
+            "updated_monotonic": time.monotonic(),
+        }
+        task = asyncio.create_task(
+            _run_document_reconciliation_rescan(
+                job_id,
+                actor=_actor(user),
+                client_ip=_client_ip(request),
+                started=started,
+            )
+        )
+        _DOCUMENT_RESCAN_JOBS[job_id]["task"] = task
+        return JSONResponse({"job_id": job_id}, status_code=202, headers={"Cache-Control": "no-store"})
+
     try:
         indexed = await _rescan_documents_dir()
     except Exception as exc:  # noqa: BLE001
@@ -4335,6 +4769,109 @@ async def web_admin_document_reconciliation_rescan(request: Request, user=Depend
     return RedirectResponse(
         f"/admin/document-reconciliation?indexed={indexed if indexed is not None else 'unavailable'}",
         status_code=303,
+    )
+
+
+async def _run_document_reconciliation_rescan(
+    job_id: str,
+    *,
+    actor: str,
+    client_ip: str | None,
+    started: datetime,
+) -> None:
+    job = _DOCUMENT_RESCAN_JOBS[job_id]
+
+    def update_progress(progress: dict[str, Any]) -> None:
+        job.update(progress)
+        job["updated_monotonic"] = time.monotonic()
+
+    try:
+        try:
+            indexed = await _rescan_documents_dir(progress_callback=update_progress)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("Indicizzazione documenti non riuscita")
+            current_file = job.get("current_file")
+            error_detail = str(exc) or exc.__class__.__name__
+            error_message = (
+                f"Errore durante l’elaborazione di {current_file}: {error_detail}"
+                if current_file
+                else f"Impossibile completare la scansione: {error_detail}"
+            )
+            job.update(
+                status="failed",
+                phase="failed",
+                percent=None,
+                description="Indicizzazione non riuscita.",
+                error=error_message[:700],
+                updated_monotonic=time.monotonic(),
+            )
+            try:
+                await record_activity(
+                    "documents.rescan",
+                    actor=actor,
+                    status="error",
+                    error=str(exc) or exc.__class__.__name__,
+                    started_at=started,
+                    client_ip=client_ip,
+                )
+            except Exception:  # noqa: BLE001
+                logger.exception("Audit della scansione documenti non riuscito")
+            return
+
+        job.update(
+            status="completed",
+            phase="complete",
+            current=1,
+            total=1,
+            percent=100,
+            indexed=indexed,
+            description=(
+                f"Scansione completata: {indexed} nuovi file indicizzati."
+                if indexed is not None
+                else "Scansione completata; cartella documenti non disponibile."
+            ),
+            updated_monotonic=time.monotonic(),
+        )
+        try:
+            await record_activity(
+                "documents.rescan",
+                actor=actor,
+                result={"indexed": indexed},
+                started_at=started,
+                client_ip=client_ip,
+            )
+        except Exception:  # noqa: BLE001
+            logger.exception("Audit della scansione documenti non riuscito")
+    finally:
+        job.pop("task", None)
+        if _DOCUMENT_RESCAN_LOCK.locked():
+            _DOCUMENT_RESCAN_LOCK.release()
+
+
+@router.get("/admin/document-reconciliation/rescan/{job_id}", response_class=JSONResponse)
+async def web_admin_document_reconciliation_rescan_status(job_id: str, user=Depends(_require_admin)):
+    """Return progress, including the active basename, for an admin rescan job."""
+    from fastapi import HTTPException
+
+    job = _DOCUMENT_RESCAN_JOBS.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Scansione non trovata")
+    return JSONResponse(
+        {
+            key: job.get(key)
+            for key in (
+                "status",
+                "phase",
+                "current",
+                "total",
+                "percent",
+                "description",
+                "current_file",
+                "error",
+                "indexed",
+            )
+        },
+        headers={"Cache-Control": "no-store"},
     )
 
 
@@ -8224,7 +8761,13 @@ async def web_company_parcel_map_data(fiscal_code: str, k: str | None = None, af
     return await _subject_parcel_map_data(fiscal_code, r"\d{11}", k, after)
 
 
-async def _backfill_document_metadata(base: Path, parsed_by_stem: dict) -> None:
+async def _backfill_document_metadata(
+    base: Path,
+    parsed_by_stem: dict,
+    progress_callback=None,
+    *,
+    only_document_type: str | None = None,
+) -> None:
     """Fill the unit, view subtype, reference date and archived XML text of documents that have none yet.
 
     A document counts as lacking metadata when it has neither a cadastral unit nor archived content; its file is found
@@ -8235,67 +8778,103 @@ async def _backfill_document_metadata(base: Path, parsed_by_stem: dict) -> None:
     from sqlalchemy import text
     from sqlalchemy.dialects.postgresql import insert as pg_insert
 
-    from .database import DATABASE_ARCHIVE_SCHEMA, _get_session_factory, is_db_writable
+    from .database import DATABASE_ARCHIVE_SCHEMA, DATABASE_SCHEMA, _get_session_factory, is_db_writable
     from .db_models import Document, DocumentContent
     from .reference import clean, ensure_lookup, get_or_create_cadastral_unit
-    from .result_parsers import parse_it_date
-    from .utils import _document_key, _parse_ispezione_ipotecaria_pdf, _parse_visura_xml, _persist_flattened_xml
+    from .result_parsers import parse_it_date, parse_it_datetime
+    from .utils import (
+        _document_key,
+        _parse_elenco_immobili_dat,
+        _parse_ispezione_ipotecaria_pdf,
+        _parse_visura_xml,
+        _persist_elenco_immobili_extraction,
+        _persist_flattened_xml,
+    )
 
     if not is_db_writable():
         return
 
     session_factory = _get_session_factory()
 
+    if only_document_type not in (None, "elenco_immobili"):
+        raise ValueError(f"Unsupported document metadata filter: {only_document_type}")
+
     # Older scans guessed these filenames as generic visure. Correct their type
     # even when their metadata already exists.
     async with session_factory() as session:
-        await ensure_lookup(session, "document_type", "ispezione_ipotecaria")
         await ensure_lookup(session, "document_type", "elenco_immobili")
-        await ensure_lookup(session, "document_type", "elenco_subalterni")
-        await ensure_lookup(session, "document_type", "planimetria")
-        await session.execute(
-            text(
-                "UPDATE document SET document_type = 'ispezione_ipotecaria' "
-                "WHERE substr(lower(file_name), 1, 4) = 'isp_' "
-                "AND document_type IS DISTINCT FROM 'ispezione_ipotecaria'"
+        if only_document_type == "elenco_immobili":
+            await session.execute(
+                text(
+                    "UPDATE document SET document_type = 'elenco_immobili' "
+                    "WHERE substr(lower(file_name), 1, 7) = 'el_imm_' "
+                    "AND lower(file_name) LIKE '%.dat' "
+                    "AND document_type IS DISTINCT FROM 'elenco_immobili'"
+                )
             )
-        )
-        await session.execute(
-            text(
-                "UPDATE document SET document_type = 'elenco_subalterni' "
-                "WHERE substr(lower(file_name), 1, 7) = 'el_sub_' "
-                "AND document_type IS DISTINCT FROM 'elenco_subalterni'"
+        else:
+            await ensure_lookup(session, "document_type", "ispezione_ipotecaria")
+            await ensure_lookup(session, "document_type", "elenco_subalterni")
+            await ensure_lookup(session, "document_type", "fiduciali")
+            await ensure_lookup(session, "document_type", "planimetria")
+            await session.execute(
+                text(
+                    "UPDATE document SET document_type = 'ispezione_ipotecaria' "
+                    "WHERE substr(lower(file_name), 1, 4) = 'isp_' "
+                    "AND document_type IS DISTINCT FROM 'ispezione_ipotecaria'"
+                )
             )
-        )
-        await session.execute(
-            text(
-                "UPDATE document SET document_type = 'elenco_immobili' "
-                "WHERE lower(file_name) LIKE '%.dat' "
-                "AND document_type IS DISTINCT FROM 'elenco_immobili'"
+            await session.execute(
+                text(
+                    "UPDATE document SET document_type = 'elenco_subalterni' "
+                    "WHERE substr(lower(file_name), 1, 7) = 'el_sub_' "
+                    "AND document_type IS DISTINCT FROM 'elenco_subalterni'"
+                )
             )
-        )
-        await session.execute(
-            text(
-                "UPDATE document SET document_type = 'planimetria' "
-                "WHERE substr(lower(file_name), 1, 6) = 'mappa_' "
-                "AND upper(coalesce(file_format, '')) IN ('ZIP', 'P7M', 'PNG') "
-                "AND document_type IS DISTINCT FROM 'planimetria'"
+            await session.execute(
+                text(
+                    "UPDATE document SET document_type = 'fiduciali' "
+                    "WHERE substr(lower(file_name), 1, 16) = 'punti_fiduciali_' "
+                    "AND document_type IS DISTINCT FROM 'fiduciali'"
+                )
             )
-        )
+            await session.execute(
+                text(
+                    "UPDATE document SET document_type = 'planimetria' "
+                    "WHERE substr(lower(file_name), 1, 6) = 'mappa_' "
+                    "AND upper(coalesce(file_format, '')) IN ('ZIP', 'P7M', 'PNG') "
+                    "AND document_type IS DISTINCT FROM 'planimetria'"
+                )
+            )
         await session.commit()
 
     # Step 1: collect the documents that have no metadata yet.
     archive = f'"{DATABASE_ARCHIVE_SCHEMA}"'
+    app_schema = f'"{DATABASE_SCHEMA}"'
     async with session_factory() as session:
-        rows = (
-            await session.execute(
-                text(
-                    "SELECT d.id, d.file_name FROM document d"  # noqa: S608 (quoted schema name)
-                    f" LEFT JOIN {archive}.document_content c ON c.document_id = d.id"
-                    " WHERE d.cadastral_unit_id IS NULL AND c.document_id IS NULL"
-                )
+        if only_document_type == "elenco_immobili":
+            statement = text(
+                "SELECT d.id, d.file_name FROM document d"
+                " WHERE substr(lower(d.file_name), 1, 7) = 'el_imm_'"
+                " AND lower(d.file_name) LIKE '%.dat'"
+                " AND (d.cadastral_unit_id IS NULL OR NOT EXISTS ("
+                f"SELECT 1 FROM {app_schema}.document_extraction e "
+                "WHERE e.document_id = d.id AND e.schema_name = 'sister.elenco_immobili'"
+                "))"
             )
-        ).fetchall()
+        else:
+            statement = text(
+                "SELECT d.id, d.file_name FROM document d"  # noqa: S608 (quoted schema name)
+                f" LEFT JOIN {archive}.document_content c ON c.document_id = d.id"
+                " WHERE (d.cadastral_unit_id IS NULL AND c.document_id IS NULL)"
+                " OR (substr(lower(d.file_name), 1, 7) = 'el_imm_'"
+                " AND lower(d.file_name) LIKE '%.dat'"
+                " AND NOT EXISTS ("
+                f"SELECT 1 FROM {app_schema}.document_extraction e "
+                "WHERE e.document_id = d.id AND e.schema_name = 'sister.elenco_immobili'"
+                "))"
+            )
+        rows = (await session.execute(statement)).fetchall()
 
     if not rows:
         return
@@ -8308,7 +8887,19 @@ async def _backfill_document_metadata(base: Path, parsed_by_stem: dict) -> None:
 
     backfilled = 0
 
-    for doc_id, filename in rows:
+    total_rows = len(rows)
+    for index, (doc_id, filename) in enumerate(rows, start=1):
+        if progress_callback:
+            progress_callback(
+                {
+                    "phase": "metadata",
+                    "current": index - 1,
+                    "total": total_rows,
+                    "percent": round((index - 1) * 100 / total_rows) if total_rows else 100,
+                    "description": f"Aggiornamento dei metadati: {index} di {total_rows} documenti…",
+                    "current_file": Path(filename or "").name or None,
+                }
+            )
         actual = name_to_path.get(filename)
         if actual is None:
             logger.debug("Backfill: file not found for doc %d (%s)", doc_id, filename)
@@ -8319,12 +8910,17 @@ async def _backfill_document_metadata(base: Path, parsed_by_stem: dict) -> None:
         parsed = parsed_by_stem.get(stem)
         if parsed is None and actual.suffix.lower() == ".pdf":
             parsed = parsed_by_stem.get(_document_key(stem))
-        if actual.suffix.lower() == ".pdf" and actual.name.casefold().startswith("isp_"):
-            parsed = await asyncio.to_thread(_parse_ispezione_ipotecaria_pdf, str(actual))
-        elif parsed is None and actual.suffix.lower() in (".p7m", ".xml"):
-            parsed = await asyncio.to_thread(_parse_visura_xml, str(actual))
-            if parsed:
-                parsed_by_stem[stem] = parsed
+        try:
+            if actual.suffix.lower() == ".pdf" and actual.name.casefold().startswith("isp_"):
+                parsed = await asyncio.to_thread(_parse_ispezione_ipotecaria_pdf, str(actual))
+            elif actual.suffix.lower() == ".dat" and actual.name.casefold().startswith("el_imm_"):
+                parsed = await asyncio.to_thread(_parse_elenco_immobili_dat, str(actual))
+            elif parsed is None and actual.suffix.lower() in (".p7m", ".xml"):
+                parsed = await asyncio.to_thread(_parse_visura_xml, str(actual))
+                if parsed:
+                    parsed_by_stem[stem] = parsed
+        except Exception as exc:  # noqa: BLE001 - add the basename to the job's visible error.
+            raise RuntimeError(f"Errore nel file {actual.name}: {exc}") from exc
 
         if not parsed:
             parsed = {}
@@ -8333,24 +8929,33 @@ async def _backfill_document_metadata(base: Path, parsed_by_stem: dict) -> None:
         particella = parsed.get("particella", "")
         xml_content = parsed.get("xml_content")
 
-        if not (xml_content or foglio or particella):
+        is_elenco_immobili = parsed.get("tipo") == "elenco_immobili" and parsed.get("records")
+        if not (xml_content or foglio or particella or is_elenco_immobili):
             continue
 
         async with session_factory() as session:
-            unit_id = await get_or_create_cadastral_unit(
-                session,
-                cadastre_type=parsed.get("tipo_catasto"),
-                province=parsed.get("provincia"),
-                municipality=parsed.get("comune"),
-                sheet=foglio,
-                parcel=particella,
-                subunit=parsed.get("subalterno"),
-                section=parsed.get("sezione_urbana"),
-            )
+            unit_id = None
+            if xml_content or foglio or particella:
+                unit_id = await get_or_create_cadastral_unit(
+                    session,
+                    cadastre_type=parsed.get("tipo_catasto"),
+                    province=parsed.get("provincia"),
+                    municipality=parsed.get("comune"),
+                    sheet=foglio,
+                    parcel=particella,
+                    subunit=parsed.get("subalterno"),
+                    section=parsed.get("sezione_urbana"),
+                )
             document = await session.get(Document, doc_id)
-            document.cadastral_unit_id = unit_id
-            document.view_subtype = clean(parsed.get("visura_subtype"))
-            document.reference_date = parse_it_date(parsed.get("situazione_al"))
+            if unit_id is not None:
+                document.cadastral_unit_id = unit_id
+            if parsed.get("visura_subtype"):
+                document.view_subtype = clean(parsed.get("visura_subtype"))
+            if parsed.get("situazione_al"):
+                document.reference_date = parse_it_date(parsed.get("situazione_al"))
+            document.requested_at = (
+                parse_it_datetime(parsed.get("requested_at")) or document.requested_at
+            )
             session.add(document)
             if xml_content:
                 # Another rescan/import can archive this document after the
@@ -8362,6 +8967,10 @@ async def _backfill_document_metadata(base: Path, parsed_by_stem: dict) -> None:
                     .on_conflict_do_nothing(index_elements=[DocumentContent.document_id])
                 )
             await session.flush()
+            if is_elenco_immobili:
+                await _persist_elenco_immobili_extraction(
+                    session, doc_id, parsed, str(actual)
+                )
             await _persist_flattened_xml(session, doc_id, xml_content)
             await session.commit()
         backfilled += 1
@@ -8396,7 +9005,7 @@ async def web_documents_rescan(request: Request, user=Depends(_require_admin)):
     return RedirectResponse("/documents", status_code=303)
 
 
-async def _rescan_documents_dir() -> int | None:
+async def _rescan_documents_dir(progress_callback=None) -> int | None:
     """Index the files of the documents directory that are not in the DB yet.
 
     Returns how many new files were indexed (``None`` when the directory does not exist).
@@ -8406,6 +9015,7 @@ async def _rescan_documents_dir() -> int | None:
     from .database import get_indexed_file_paths, get_indexed_filenames
     from .utils import (
         _document_key,
+        _parse_elenco_immobili_dat,
         _parse_ispezione_ipotecaria_pdf,
         _parse_visura_pdf,
         _parse_visura_xml,
@@ -8414,6 +9024,14 @@ async def _rescan_documents_dir() -> int | None:
 
     base = _files_base()
     if not base.exists():
+        if progress_callback:
+            progress_callback({
+                "phase": "unavailable",
+                "current": None,
+                "total": None,
+                "percent": None,
+                "description": "La cartella documenti non è disponibile.",
+            })
         return None
 
     indexed_paths = set((await get_indexed_file_paths()).keys())
@@ -8429,6 +9047,7 @@ async def _rescan_documents_dir() -> int | None:
     }
     _NAME_TYPE = [
         ("isp_", "ispezione_ipotecaria"),
+        ("punti_fiduciali_", "fiduciali"),
         ("el_sub_", "elenco_subalterni"),
         ("vi_att_fab", "visura_fabbricati"),
         ("vi_sto_fab", "visura_fabbricati"),
@@ -8445,6 +9064,8 @@ async def _rescan_documents_dir() -> int | None:
         n = name.lower()
         if n.startswith(("mappa_", "elaborato_planimetrico")):
             return "planimetria"
+        if n.startswith("el_imm_"):
+            return "elenco_immobili"
         for prefix, dtype in _NAME_TYPE:
             if prefix in n:
                 return dtype
@@ -8457,82 +9078,170 @@ async def _rescan_documents_dir() -> int | None:
         s = str(p)
         return any(s.startswith(pfx) for pfx in _excluded_prefixes)
 
-    # First pass: parse all P7M/XML files to build a stem → parsed_data map
-    # so PDFs can inherit coordinates from their paired signed counterpart.
-    parsed_by_stem: dict[str, dict] = {}
-    for fpath in sorted(base.rglob("*")):
-        if _excluded(fpath) or not fpath.is_file() or fpath.suffix.lower() not in (".p7m", ".xml"):
-            continue
-        stem = fpath.stem  # e.g. "DOC_123" from "DOC_123.p7m"
-        if stem in parsed_by_stem:
-            continue
-        result = await asyncio.to_thread(_parse_visura_xml, str(fpath))
-        if result:
-            parsed_by_stem[stem] = result
-            # PDFs pair without the request date (another request, possibly another day)
-            parsed_by_stem.setdefault(_document_key(stem), result)
-
-    new_docs = []
-    for fpath in sorted(base.rglob("*")):
-        if _excluded(fpath) or not fpath.is_file():
-            continue
-        ext = fpath.suffix.lower()
-        if ext not in _EXT_FORMAT:
-            continue
-        if str(fpath) in indexed_paths or fpath.name in indexed_names:
-            continue
-
-        fmt = _EXT_FORMAT[ext]
-        parsed = None
-        if ext in (".p7m", ".xml"):
-            parsed = parsed_by_stem.get(fpath.stem)
-            if parsed is None:
-                parsed = await asyncio.to_thread(_parse_visura_xml, str(fpath))
-            if fpath.name.casefold().startswith("isp_"):
-                parsed = dict(parsed or {})
-                parsed["tipo"] = "ispezione_ipotecaria"
-        elif ext == ".pdf":
-            # PDF: try to inherit metadata from a paired P7M/XML with the same stem (or the same without the date)
-            parsed = parsed_by_stem.get(fpath.stem) or parsed_by_stem.get(_document_key(fpath.stem))
-            if fpath.name.casefold().startswith("isp_"):
-                parsed = await asyncio.to_thread(_parse_ispezione_ipotecaria_pdf, str(fpath))
-            elif parsed is None:
-                # No paired structured file — parse PDF content directly
-                parsed = await asyncio.to_thread(_parse_visura_pdf, str(fpath))
-        elif ext == ".zip":
-            parsed = {"tipo": _guess_type_from_name(fpath.name)}
-        else:
-            parsed = {"tipo": _guess_type_from_name(fpath.name)}
-
-        if ext == ".dat":
-            parsed = dict(parsed or {})
-            parsed["tipo"] = "elenco_immobili"
-        elif fpath.name.casefold().startswith("el_sub_"):
-            parsed = dict(parsed or {})
-            parsed["tipo"] = "elenco_subalterni"
-
-        if parsed is None:
-            parsed = {"tipo": _guess_type_from_name(fpath.name)}
-
-        new_docs.append(
+    def _report_progress(
+        phase: str,
+        description: str,
+        current: int | None = None,
+        total: int | None = None,
+        current_file: str | None = None,
+    ):
+        if not progress_callback:
+            return
+        percent = None
+        if current is not None and total is not None:
+            percent = 100 if total == 0 else round(current * 100 / total)
+        progress_callback(
             {
-                "filename": fpath.name,
-                "path": str(fpath),
-                "file_format": fmt,
-                "file_size": fpath.stat().st_size,
-                "oggetto": None,
-                "richiesta_del": None,
-                "parsed_data": parsed,
+                "phase": phase,
+                "current": current,
+                "total": total,
+                "percent": percent,
+                "description": description,
+                "current_file": Path(current_file).name if current_file else None,
             }
         )
 
+    _report_progress("scan", "Scansione della cartella documenti…")
+    candidate_files: list[Path] = []
+    walked = 0
+    for fpath in base.rglob("*"):
+        walked += 1
+        if not _excluded(fpath) and fpath.is_file() and fpath.suffix.lower() in _EXT_FORMAT:
+            candidate_files.append(fpath)
+        if walked % 250 == 0:
+            _report_progress(
+                "scan",
+                f"Scansione cartella: {len(candidate_files)} file supportati individuati…",
+                len(candidate_files),
+                None,
+                fpath.name,
+            )
+            await asyncio.sleep(0)
+    candidate_files.sort()
+
+    # First pass: parse all P7M/XML files to build a stem → parsed_data map
+    # so PDFs can inherit coordinates from their paired signed counterpart.
+    parsed_by_stem: dict[str, dict] = {}
+    structured_files = [fpath for fpath in candidate_files if fpath.suffix.lower() in (".p7m", ".xml")]
+    _report_progress("parse", "Parsing dei documenti XML e P7M…", 0, len(structured_files))
+    for index, fpath in enumerate(structured_files, start=1):
+        stem = fpath.stem  # e.g. "DOC_123" from "DOC_123.p7m"
+        _report_progress(
+            "parse",
+            f"Parsing XML/P7M: {index} di {len(structured_files)} file…",
+            index - 1,
+            len(structured_files),
+            fpath.name,
+        )
+        if stem not in parsed_by_stem:
+            result = await asyncio.to_thread(_parse_visura_xml, str(fpath))
+            if result:
+                parsed_by_stem[stem] = result
+                # PDFs pair without the request date (another request, possibly another day)
+                parsed_by_stem.setdefault(_document_key(stem), result)
+        _report_progress(
+            "parse",
+            f"Parsing XML/P7M: {index} di {len(structured_files)} file…",
+            index,
+            len(structured_files),
+            fpath.name,
+        )
+        if index % 25 == 0:
+            await asyncio.sleep(0)
+
+    new_docs = []
+    _report_progress("prepare", "Preparazione dei file da indicizzare…", 0, len(candidate_files))
+    for index, fpath in enumerate(candidate_files, start=1):
+        ext = fpath.suffix.lower()
+        if str(fpath) in indexed_paths or fpath.name in indexed_names:
+            _report_progress(
+                "prepare",
+                f"Controllo file: {index} di {len(candidate_files)}…",
+                index - 1,
+                len(candidate_files),
+                fpath.name,
+            )
+            _report_progress(
+                "prepare",
+                f"Controllo completato: {index} di {len(candidate_files)} file…",
+                index,
+                len(candidate_files),
+                fpath.name,
+            )
+            if index % 25 == 0:
+                await asyncio.sleep(0)
+            continue
+        else:
+            fmt = _EXT_FORMAT[ext]
+            parsed = None
+            _report_progress(
+                "prepare",
+                f"Preparazione file: {index} di {len(candidate_files)}…",
+                index - 1,
+                len(candidate_files),
+                fpath.name,
+            )
+            if ext in (".p7m", ".xml"):
+                parsed = parsed_by_stem.get(fpath.stem)
+                if parsed is None:
+                    parsed = await asyncio.to_thread(_parse_visura_xml, str(fpath))
+                if fpath.name.casefold().startswith("isp_"):
+                    parsed = dict(parsed or {})
+                    parsed["tipo"] = "ispezione_ipotecaria"
+            elif ext == ".pdf":
+                # PDF: try to inherit metadata from a paired P7M/XML with the same stem (or the same without the date)
+                parsed = parsed_by_stem.get(fpath.stem) or parsed_by_stem.get(_document_key(fpath.stem))
+                if fpath.name.casefold().startswith("isp_"):
+                    parsed = await asyncio.to_thread(_parse_ispezione_ipotecaria_pdf, str(fpath))
+                elif parsed is None:
+                    # No paired structured file — parse PDF content directly
+                    parsed = await asyncio.to_thread(_parse_visura_pdf, str(fpath))
+            elif ext == ".dat" and fpath.name.casefold().startswith("el_imm_"):
+                parsed = await asyncio.to_thread(_parse_elenco_immobili_dat, str(fpath))
+            else:
+                parsed = {"tipo": _guess_type_from_name(fpath.name)}
+
+            if ext == ".dat" and fpath.name.casefold().startswith("el_imm_"):
+                parsed = dict(parsed or {})
+                parsed["tipo"] = "elenco_immobili"
+            elif fpath.name.casefold().startswith("el_sub_"):
+                parsed = dict(parsed or {})
+                parsed["tipo"] = "elenco_subalterni"
+
+            if parsed is None:
+                parsed = {"tipo": _guess_type_from_name(fpath.name)}
+
+            new_docs.append(
+                {
+                    "filename": fpath.name,
+                    "path": str(fpath),
+                    "file_format": fmt,
+                    "file_size": fpath.stat().st_size,
+                    "oggetto": None,
+                    "richiesta_del": None,
+                    "parsed_data": parsed,
+                }
+            )
+        _report_progress(
+            "prepare",
+            f"Preparazione file: {index} di {len(candidate_files)} file…",
+            index,
+            len(candidate_files),
+            fpath.name,
+        )
+        if index % 25 == 0:
+            await asyncio.sleep(0)
+
     if new_docs:
+        _report_progress("save", f"Salvataggio di {len(new_docs)} nuovi record nell’indice…")
         await _save_documents_to_db(new_docs)
         logger.info("Rescan: %d nuovi documenti indicizzati", len(new_docs))
 
     # Fill the metadata of existing docs that are missing it.
-    await _backfill_document_metadata(base, parsed_by_stem)
+    _report_progress("metadata", "Aggiornamento dei metadati dei documenti…")
+    await _backfill_document_metadata(base, parsed_by_stem, progress_callback=progress_callback)
 
+    _report_progress("complete", f"Scansione completata: {len(new_docs)} nuovi file indicizzati.", 1, 1)
     return len(new_docs)
 
 
@@ -8714,6 +9423,7 @@ async def web_documents(
     """
 
     theme = _get_theme(request)
+    document_type_filter = str(request.query_params.get("type") or "").strip().casefold()[:64]
 
     # Normalize trailing slash (e.g. /documents/21/ → "21")
     path = path.strip("/")
@@ -8754,6 +9464,36 @@ async def web_documents(
                 doc=doc,
                 doc_id=int(path),
             )
+
+        if not template and (
+            (doc.get("document_type") or "") == "elenco_immobili"
+            or Path(doc.get("filename") or "").name.casefold().startswith("el_imm_")
+        ):
+            elenco_path = Path(doc.get("file_path") or "")
+            if not elenco_path.is_file() and doc.get("filename"):
+                candidate = _files_base() / doc["filename"]
+                if candidate.is_file():
+                    elenco_path = candidate
+            extraction = await get_document_structured_extraction(
+                int(doc["id"]), schema_name="sister.elenco_immobili"
+            )
+            parsed = (extraction or {}).get("extraction", {}).get("structured_data")
+            if not isinstance(parsed, dict) or not parsed.get("records"):
+                parsed = None
+            if parsed is None and elenco_path.is_file():
+                from .utils import _parse_elenco_immobili_dat
+
+                parsed = await asyncio.to_thread(_parse_elenco_immobili_dat, str(elenco_path))
+            if parsed:
+                await _load_document_favorite_state(doc, user)
+                return theme.render(
+                    "catasto/elenco_immobili.html",
+                    request,
+                    user=user,
+                    doc=doc,
+                    doc_id=int(path),
+                    parsed=parsed,
+                )
 
         # Cadastral map archives (raw ZIP or signed P7M) share the same viewer.
         if (
@@ -8916,7 +9656,11 @@ async def web_documents(
     )
     favorite_user = _favorite_user_key(user)
     favorites_only = bool(favorites and favorite_user)
+    include_full_inspections = (
+        active_view == "categories" and not document_type_filter and not favorites_only
+    )
     favorite_document_ids: set[int] = set()
+    inspection_documents: list[dict] = []
     # Favorite views need only favorite rows and their alternate-format
     # siblings; cross-page links are loaded from normalized relations below.
     if favorites_only:
@@ -8940,19 +9684,43 @@ async def web_documents(
                 page_offset,
                 total,
                 raw_document_file_count,
-            ) = await _page_streamed_documents(iter_all_documents(), page)
+                inspection_documents,
+            ) = await _page_streamed_documents(
+                _iter_documents_of_type(iter_all_documents(), document_type_filter),
+                page,
+                include_all_ipotecari=include_full_inspections,
+            )
             logical = None
         else:
             document_files = await get_documents_by_ids(visible_document_ids)
             raw_document_file_count = len(document_files)
             logical = _collapse_to_logical_docs(document_files)
             del document_files
+    if logical is not None and include_full_inspections:
+        inspection_documents = [
+            document
+            for document in logical
+            if (document.get("document_type") or "").casefold()
+            in {"ispezione_ipotecaria", "visura_ipotecaria"}
+        ]
+    if logical is not None and document_type_filter:
+        logical = [
+            document
+            for document in logical
+            if str(document.get("document_type") or "").casefold() == document_type_filter
+        ]
+        raw_document_file_count = sum(document.get("n_files") or 1 for document in logical)
     if favorite_user and not favorites_only:
         from .database import get_document_favorite_ids
 
         favorite_document_ids = await get_document_favorite_ids(favorite_user)
     if logical is None:
         for document in page_documents:
+            logical_file_ids = {file.get("id") for file in document.get("files") or []}
+            if document.get("id") is not None:
+                logical_file_ids.add(document["id"])
+            document["is_favorite"] = bool(logical_file_ids & favorite_document_ids)
+        for document in inspection_documents:
             logical_file_ids = {file.get("id") for file in document.get("files") or []}
             if document.get("id") is not None:
                 logical_file_ids.add(document["id"])
@@ -8968,11 +9736,18 @@ async def web_documents(
             logical = [document for document in logical if document.get("is_favorite")]
         document_file_count = (
             sum(document.get("n_files") or 1 for document in logical)
-            if favorites_only
+            if favorites_only or document_type_filter
             else raw_document_file_count
         )
         page_documents, page, page_count, page_offset = _paginate_documents(logical, page)
-    tree = _build_document_tree(page_documents) if active_view == "categories" else []
+    tree = (
+        _build_document_tree(
+            page_documents,
+            all_ispezioni=inspection_documents if include_full_inspections else None,
+        )
+        if active_view == "categories"
+        else []
+    )
     page_file_id_to_logical_id: dict[int, int] = {}
     for document in page_documents:
         logical_id = document.get("id")
@@ -9114,6 +9889,17 @@ async def web_documents(
         page_size=_DOCUMENTS_PAGE_SIZE,
         page_start=document_page_start,
         page_end=document_page_end,
+        document_type_filter=document_type_filter,
+        document_type_label={
+            "ispezione_ipotecaria": "Ispezioni ipotecarie",
+            "nota_trascrizione_iscrizione": "Note di trascrizione e iscrizione",
+            "nota_iscrizione": "Note di iscrizione",
+            "nota_trascrizione": "Note di trascrizione",
+            "nota_annotazione": "Note di annotazione",
+            "elenco_immobili": "Elenco degli Immobili",
+            "elenco_subalterni": "Elenco Subalterni",
+            "fiduciali": "Punti Fiduciali",
+        }.get(document_type_filter, document_type_filter.replace("_", " ").capitalize()),
     )
 
 
@@ -9122,7 +9908,12 @@ _PARCEL_DOCUMENT_KINDS = (
     ("visure", "Visure", "fa-file-lines", {"visura_fabbricati", "visura_terreni", "visura", "elenco_subalterni"}),
     ("planimetrie", "Planimetrie", "fa-ruler-combined", {"planimetria", "elaborato_planimetrico", "epa"}),
     ("mappe", "Mappe", "fa-map", {"estratto_mappa", "mappa", "fiduciali", "export_mappa", "originali"}),
-    ("ispezioni", "Ispezioni ipotecarie", "fa-landmark", {"ispezione_ipotecaria"}),
+    (
+        "ispezioni",
+        "Ispezioni ipotecarie",
+        "fa-landmark",
+        {"ispezione_ipotecaria"},
+    ),
 )
 _PARCEL_REQUEST_KINDS = (
     ("ispezioni_catastali", "Ispezioni catastali", "fa-magnifying-glass", {"ispezioni", "ispezioni_cart", "ispezioni_cartacee"}),
@@ -11092,7 +11883,7 @@ def _safe_dossier_path(path: str) -> "Path":
 
     base = _dossiers_base()
     target = (base / path).resolve()
-    if not str(target).startswith(str(base)):
+    if not target.is_relative_to(base):
         raise HTTPException(status_code=403, detail="Access denied")
     if not target.exists() or not target.is_file():
         raise HTTPException(status_code=404, detail="Dossier not found")
@@ -11124,6 +11915,11 @@ async def web_dossier_view(request: Request, path: str, user=Depends(_require_ad
         return theme.render("dossier_batch_viewer.html", request, user=user, name=target.name, **parsed)
 
     result = _dossier_to_result(target.name, data)
+    try:
+        stat = target.stat()
+        result["title"] = _dossier_meta(target.name, data, stat.st_size, stat.st_mtime)["title"]
+    except Exception:  # noqa: BLE001 - the title is cosmetic; the file name is always shown
+        result["title"] = target.name
     return theme.render("result_detail.html", request, user=user, result=result, request_id=target.name)
 
 

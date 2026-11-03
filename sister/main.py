@@ -235,7 +235,7 @@ async def lifespan(app: FastAPI):
         await _ensure_chrome_cdp()
         try:
             visura_service = VisuraService()
-            # No login at startup: only attach to a session created by scripts/ade_login.py
+            # No login at startup: only attach to a session created by sister app login
             await visura_service.initialize(attach_only=True)
             logger.info("Servizio visure avviato (aggancio sessione SISTER esistente in background)")
         except Exception as e:
@@ -662,7 +662,7 @@ try:
             raise RuntimeError(str(exc)) from exc
         if plaintext_count:
             logger.warning(
-                "%d local user(s) have a plain-text password in %s (use scripts/hash_local_password.py)",
+                "%d local user(s) have a plain-text password in %s (use sister app hash-password)",
                 plaintext_count,
                 _local_users_path.name,
             )

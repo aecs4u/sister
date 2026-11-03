@@ -1,0 +1,102 @@
+{% extends "_base.html" %}
+{% from "_doc_macros.html" import document_favorite_action, documents_favorites_js %}
+
+{% block page_title %}Elenco degli Immobili · {{ doc.filename or ('Doc ' ~ doc_id) }}{% endblock %}
+
+{% block content %}
+<div class="container-fluid py-3">
+    <nav class="mb-3" aria-label="breadcrumb">
+        <ol class="breadcrumb">
+            <li class="breadcrumb-item"><a href="/documents">Documenti</a></li>
+            <li class="breadcrumb-item active" aria-current="page">Elenco degli Immobili</li>
+        </ol>
+    </nav>
+
+    <section class="card border-0 shadow-sm" aria-labelledby="elenco-immobili-heading">
+        <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
+            <div>
+                <h1 class="h5 mb-1" id="elenco-immobili-heading">
+                    <i class="fas fa-list text-primary me-2" aria-hidden="true"></i>Elenco degli Immobili
+                </h1>
+                <div class="small text-muted text-break">{{ doc.filename or ('Documento ' ~ doc_id) }}</div>
+            </div>
+            <div class="d-flex flex-wrap align-items-center gap-2">
+                {{ document_favorite_action(doc_id, doc.is_favorite|default(false), doc.favorites_enabled|default(false)) }}
+                <a class="btn btn-sm btn-outline-secondary" href="/documents/{{ doc_id }}/download">
+                    <i class="fas fa-download me-1" aria-hidden="true"></i>Scarica DAT originale
+                </a>
+            </div>
+        </div>
+
+        <div class="card-body">
+            <div class="row g-3 mb-4" aria-label="Riepilogo del documento">
+                <div class="col-6 col-lg-3"><div class="border rounded p-3 h-100">
+                    <div class="small text-muted">Immobili nell’elenco</div>
+                    <div class="fs-4 fw-semibold">{{ parsed.record_count }}</div>
+                </div></div>
+                {% if parsed.provincia %}<div class="col-6 col-lg-3"><div class="border rounded p-3 h-100">
+                    <div class="small text-muted">Provincia</div><div class="fs-5 fw-semibold">{{ parsed.provincia }}</div>
+                </div></div>{% endif %}
+                {% if parsed.foglio %}<div class="col-6 col-lg-3"><div class="border rounded p-3 h-100">
+                    <div class="small text-muted">Foglio</div><div class="fs-5 fw-semibold">{{ parsed.foglio }}</div>
+                </div></div>{% endif %}
+                {% if parsed.particella %}<div class="col-6 col-lg-3"><div class="border rounded p-3 h-100">
+                    <div class="small text-muted">Particella</div><div class="fs-5 fw-semibold">{{ parsed.particella }}</div>
+                </div></div>{% endif %}
+            </div>
+
+            {% if parsed.rejected_record_count %}
+            <div class="alert alert-warning" role="status">
+                {{ parsed.rejected_record_count }} righe non riconosciute sono state escluse dalla tabella.
+                Puoi comunque scaricare il file originale.
+            </div>
+            {% endif %}
+
+            {% if parsed.records %}
+            <div class="table-responsive">
+                <table class="table table-sm table-striped table-hover align-middle">
+                    <caption class="visually-hidden">Immobili estratti dal file DAT</caption>
+                    <thead><tr>
+                        <th scope="col">Subalterno</th>
+                        <th scope="col">Ubicazione</th>
+                        <th scope="col">Piano</th>
+                        <th scope="col">Descrizione</th>
+                        <th scope="col">Tipo unità</th>
+                    </tr></thead>
+                    <tbody>
+                        {% for row in parsed.records %}
+                        <tr>
+                            <td>
+                                {% if row.subunit %}<strong>{{ row.subunit }}</strong>{% else %}<span class="text-muted">—</span>{% endif %}
+                                {% if row.denominator %}<div class="small text-muted">Denominatore {{ row.denominator }}</div>{% endif %}
+                            </td>
+                            <td>
+                                {{ row.address or '—' }}{% if row.civic_number %}, {{ row.civic_number }}{% endif %}
+                                {% if row.staircase or row.interior %}<div class="small text-muted">{% if row.staircase %}Scala {{ row.staircase }}{% endif %}{% if row.interior %}{% if row.staircase %} · {% endif %}Interno {{ row.interior }}{% endif %}</div>{% endif %}
+                            </td>
+                            <td>{{ row.floors|join(', ') if row.floors else '—' }}</td>
+                            <td>{{ row.description or '—' }}</td>
+                            <td>
+                                {% if row.unit_kind == 'U' %}Unità immobiliare
+                                {% elif row.unit_kind == 'B' %}Bene comune
+                                {% else %}{{ row.unit_kind or '—' }}{% endif %}
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% else %}
+            <div class="alert alert-info mb-0" role="status">
+                Non sono state trovate righe DAT leggibili. Il file originale è disponibile per il download.
+            </div>
+            {% endif %}
+        </div>
+    </section>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+{{ super() }}
+{{ documents_favorites_js(csp_nonce) }}
+{% endblock %}

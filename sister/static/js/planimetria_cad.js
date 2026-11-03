@@ -19,6 +19,7 @@
     };
 
     var statusDiv = document.getElementById('plan-status');
+    var loadProgress = document.getElementById('plan-loading-progress');
     var infoDiv   = document.getElementById('cad-feature-info');
     var svg       = document.getElementById('plan-svg');
     var container = document.getElementById('plan-cad');
@@ -168,10 +169,12 @@
             statusDiv.textContent = data.entities.length + ' entità · ' + data.format.toUpperCase();
             document.getElementById('badge-count').textContent = data.entities.length + ' entità';
             fitToView();
+            if (loadProgress) loadProgress.classList.add('d-none');
         })
         .catch(function (err) {
             statusDiv.textContent = 'Errore caricamento: ' + err.message;
             statusDiv.classList.add('text-danger');
+            if (loadProgress) loadProgress.classList.add('d-none');
         });
 
     document.getElementById('btn-fit').addEventListener('click', fitToView);

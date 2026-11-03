@@ -133,5 +133,5 @@ exit code is 1 when a row failed.
 ## Fabbricati e Terreni
 
 `soggetto`, `soggetto-immobili` and `soggetto-documento` search both (`tipo_catasto` `E`) when the row gives none; the other generic queries
-default to `T`. A row that must cover both should still say `"tipo_catasto": "E"`: `scripts/run_in_session.py` writes it into
+default to `T`. A row that must cover both should still say `"tipo_catasto": "E"`: `sister batch run-session` writes it into
 `soggetto-immobili` rows when it prunes a plan. A "nessuna corrispondenza" answers only for the type that was searched.

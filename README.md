@@ -133,7 +133,8 @@ sister/
 │   ├── utils.py            # Automazione SISTER: run_visura(), parse_table()
 │   ├── client.py           # VisuraClient — async HTTP client con polling
 │   ├── mcp_server.py       # Server MCP locale su stdio (extra opzionale)
-│   ├── cli.py              # CLI Typer: query commands, workflow, batch, db
+│   ├── cli.py              # CLI Typer: query, app, batch, documents, build, audit, db
+│   ├── command_tools/      # Operational commands exposed through the sister CLI
 │   ├── templates/sister/   # Jinja2 templates (extends aecs4u-theme)
 │   │   ├── landing.html    # Landing page (pubblica)
 │   │   ├── index.html      # Dashboard
@@ -144,7 +145,9 @@ sister/
 ├── alembic/                # Database migrations
 ├── data/                   # Documenti, dossier e output generati
 ├── examples/               # CLI + Python client examples
-├── scripts/                # Avvio, import e job batch/manutenzione
+├── scripts/                # Stable launcher and one-off scripts (see scripts/README.md)
+│   ├── start.sh            # Stable app entry point
+│   └── one_off/            # Fixed-data backfills and targeted repairs
 ├── docs/                   # Guide operative, diagrammi, audit e documentazione di progetto
 ├── Dockerfile
 ├── docker-compose.yaml
@@ -254,8 +257,8 @@ Il servizio **non esegue il login da solo**: si aggancia alla sessione SISTER gi
 (`BROWSER_CDP_ENDPOINT`). Prima di avviare le query:
 
 ```bash
-../.venv/bin/python scripts/ade_login.py          # login (approvazione CIE) — lascia aperta la scheda SISTER
-../.venv/bin/python scripts/ade_login.py --close  # chiude una sessione rimasta aperta ("Utente già in sessione")
+uv run sister app login          # login (approvazione CIE) — lascia aperta la scheda SISTER
+uv run sister app login --close  # chiude una sessione rimasta aperta ("Utente già in sessione")
 ```
 
 SISTER consente **una sola sessione per utente** e la chiude dopo circa 30 minuti; il riavvio/reload del servizio
@@ -995,6 +998,7 @@ uv run sister history --provincia Roma --limit 10
 
 ### Guide operative
 
+- [CLI unificata e catalogo degli script](scripts/README.md#scripts-and-operational-commands)
 - [Form delle query e parametri CLI/API](docs/query_forms.md)
 - [Estrazione HTML, documenti e dati tipizzati](docs/data_extraction.md)
 - [Sessione SISTER nel browser](docs/portal_session.md) e [gestione CAPTCHA](docs/captcha_pages.md)
@@ -1010,8 +1014,8 @@ uv run sister history --provincia Roma --limit 10
 Anteprima (sola lettura) e invio delle richieste mancanti:
 
 ```bash
-uv run python scripts/batch_recrowd_storica_analitica.py
-uv run python scripts/batch_recrowd_storica_analitica.py --execute --limit 2
+uv run sister batch recrowd --items proponents
+uv run sister batch recrowd --items proponents --execute --limit 2
 ```
 
 Il job verifica prima il database Sister; CAPTCHA e download dei documenti pronti sono descritti in [questa guida](docs/recrowd_storica_analitica_batch.md).
@@ -1021,9 +1025,9 @@ Il job verifica prima il database Sister; CAPTCHA e download dei documenti pront
 Il job elenca gli immobili intestati ai proponenti Recrowd, controlla se la visura storica analitica è già nel database Sister e, con `--execute`, invia solo le richieste mancanti:
 
 ```bash
-uv run python scripts/batch_recrowd_immobile_storica_analitica.py
-uv run python scripts/batch_recrowd_immobile_storica_analitica.py --execute --limit-proponents 2 --limit-properties 5
-uv run python scripts/batch_recrowd_immobile_storica_analitica.py --execute
+uv run sister batch recrowd --items properties
+uv run sister batch recrowd --items properties --execute --limit-proponents 2 --limit-properties 5
+uv run sister batch recrowd --items properties --execute
 ```
 
 Uso e stati del report sono descritti in [questa guida](docs/recrowd_immobile_storica_analitica_batch.md).

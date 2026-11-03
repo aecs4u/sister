@@ -6,9 +6,12 @@ set -euo pipefail
 #
 # The default DRY_RUN=1 makes these commands validate the CLI payload mapping
 # without submitting requests to SISTER. To execute live queries:
-#   DRY_RUN=0 WAIT=1 bash scripts/sister_fixture_payload_commands.sh
+#   DRY_RUN=0 WAIT=1 sister dev fixture-payloads
 #
 # Paid ipotecaria commands are kept in dry-run mode unless PAID=1 is set.
+
+ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$ROOT"
 
 DRY_RUN="${DRY_RUN:-1}"
 WAIT="${WAIT:-0}"

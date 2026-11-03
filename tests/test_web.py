@@ -41,6 +41,7 @@ def _fake_request():
         app=SimpleNamespace(state=SimpleNamespace(theme_setup=_FakeTheme())),
         state=SimpleNamespace(user=None),
         url=SimpleNamespace(path="/results"),
+        query_params={},
     )
 
 
@@ -283,6 +284,7 @@ async def test_streamed_document_collapse_matches_full_list_grouping():
             disk_offset,
             disk_total,
             disk_raw_count,
+            _disk_inspections,
         ) = await web._page_streamed_documents(_rows(), requested_page, page_size=2)
         assert disk_page == expected
         assert (disk_page_number, disk_page_count, disk_offset) == (
@@ -428,7 +430,7 @@ async def test_web_results_passes_extended_filters_and_urls(monkeypatch):
         return {"total_requests": 1, "total_responses": 0, "successful": 0, "failed": 0, "pending": 1}
 
     async def _count_total(**kwargs):
-        return 1
+        return 2
 
     monkeypatch.setattr(web, "find_result_rows", _find_responses)
     monkeypatch.setattr(web, "count_result_rows", _count_responses)
@@ -1152,8 +1154,8 @@ def test_results_page_renders_mobile_cards_and_optional_columns(main_module, mon
     assert 'data-result-column="request_type_tags"' in html
     assert 'data-result-column="extracted_results"' in html
     assert "Nessuna corrispondenza" in html
-    assert "/static/css/pages/results.css?v=20261030a" in html
-    assert html.count("visible: false") == 10
+    assert "/static/css/pages/results.css?v=20261103a" in html
+    assert html.count("visible: false") == 11
     columns = html.split("columns: [", 1)[1].split("\n        ],", 1)[0]
     assert re.findall(r'\{title: "([^"]+)"', columns)[:7] == [
         "Data",
@@ -1551,3 +1553,122 @@ def test_direct_theme_sister_pages_hide_unsupported_language_controls(main_modul
     assert 'for="language"' in settings.text and 'id="language"' in settings.text
     assert 'href="/static/css/sister.css?v=20261030e"' in settings.text
     assert '#general .mb-3:has(> label[for="language"]) { display: none !important; }' in settings_css.text
+
+
+def test_friendly_error_hides_exception_text_but_keeps_it_as_detail():
+    message, detail = web._friendly_error(
+        "Re-authentication failed: Page.content: Target page, context or browser has been closed"
+    )
+    assert "sessione SISTER" in message
+    assert "Page.content" not in message
+    assert detail.startswith("Re-authentication failed")
+
+    message, detail = web._friendly_error("NESSUNA CORRISPONDENZA TROVATA")
+    assert message == "SISTER non ha trovato corrispondenze per questi criteri."
+    assert detail is None
+    assert web._friendly_error("") == (None, None)
+    assert web._friendly_error("Codice fiscale non valido") == ("Codice fiscale non valido", None)
+
+
+def test_section_titles_are_italian_and_unknown_keys_fall_back_to_the_key():
+    assert web._titleize_key("total_results") == "Totale risultati"
+    assert web._titleize_key("skipped_soppresso") == "Immobili soppressi saltati"
+    assert web._titleize_key("some_new_key") == "Some new key"
+
+
+def test_display_timestamp_drops_microseconds():
+    assert web._display_timestamp("2026-06-06T18:30:40.703637") == "2026-06-06 18:30:40"
+    assert web._display_timestamp("2026-06-06 18:30") == "2026-06-06 18:30"
+    assert web._display_timestamp(None) == "-"
+    assert web._display_timestamp("ieri") == "ieri"
+
+
+def test_dossier_result_is_marked_as_dossier_without_request_only_counters():
+    workflow = web._dossier_to_result(
+        "full-due-diligence_20260412_074447.json",
+        {
+            "workflow_id": "wf_x",
+            "preset": "full-due-diligence",
+            "exported_at": "2026-04-12T07:44:47.123456",
+            "steps": [{"success": True}, {"success": True}],
+            "summary": {},
+        },
+    )
+    assert workflow["kind"] == "dossier"
+    assert workflow["step_count"] == 2
+    assert workflow["status"] == "completed"
+    assert workflow["responded_at_display"] == "2026-04-12 07:44:47"
+    assert workflow["tipo_catasto"] == ""
+
+    failed = web._dossier_to_result(
+        "soggetto_T_x.json",
+        {
+            "request_id": "soggetto_T_x",
+            "success": False,
+            "error": "Re-authentication failed: Page.content: Target page, context or browser has been closed",
+            "data": {"soggetto": "ABC"},
+        },
+    )
+    assert failed["status"] == "failed"
+    assert "Page.content" not in failed["error_message"]
+    assert failed["error_detail"].startswith("Re-authentication failed")
+
+
+def test_dossier_cards_get_a_readable_title_but_keep_the_file_name_searchable():
+    meta = web._dossier_meta(
+        "soggetto_T_f6201f83672e41069532dd3eadbd374f_20260606_183040.json",
+        {"request_id": "soggetto_T_f6201", "success": True, "tipo_catasto": "T", "data": {"soggetto": "RSSMRA80A01H501U"}},
+        100,
+        0,
+    )
+    assert meta["title"] == "Visura per soggetto · RSSMRA80A01H501U"
+    assert meta["name"].startswith("soggetto_T_")
+
+    multi = web._dossier_meta(
+        "immobili.json",
+        {"a": {"request_id": "a", "tipo_catasto": "T", "data": {"total_results": 4}}},
+        100,
+        0,
+    )
+    assert multi["title"] == "Immobili"
+
+
+@pytest.mark.asyncio
+async def test_results_page_tolerates_bad_limit_and_unknown_status(monkeypatch):
+    request = _fake_request()
+    seen = {}
+
+    async def _find(**kwargs):
+        seen.update(kwargs)
+        return []
+
+    async def _count_total(**_kwargs):
+        return 0
+
+    async def _count(**_kwargs):
+        return {"total_requests": 0, "total_responses": 0, "successful": 0, "failed": 0, "no_match": 0, "pending": 0}
+
+    monkeypatch.setattr(web, "find_result_rows", _find)
+    monkeypatch.setattr(web, "count_result_rows", _count)
+    monkeypatch.setattr(web, "count_total_result_rows", _count_total)
+
+    response = await web.web_results(request, user=None, status="bogus", limit="abc", offset="-3")
+
+    assert seen["limit"] == 50 and seen["offset"] == 0 and seen["status"] is None
+    assert any("bogus" in notice for notice in response["context"]["ignored_filters"])
+
+
+@pytest.mark.asyncio
+async def test_results_offset_past_the_end_redirects_to_the_last_page(monkeypatch):
+    request = _fake_request()
+    request.query_params = {"status": "failed", "offset": "999999"}
+
+    async def _count_total(**_kwargs):
+        return 120
+
+    monkeypatch.setattr(web, "count_total_result_rows", _count_total)
+
+    response = await web.web_results(request, user=None, status="failed", limit="50", offset="999999")
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/results?status=failed&offset=100"

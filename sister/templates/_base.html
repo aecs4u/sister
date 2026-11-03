@@ -7,7 +7,13 @@
 {% block extra_css %}
 <meta name="csrf-token" content="{{ csrf_token(request) }}">
     {% include "components/sister_meta_links.html" %}
-    <link rel="stylesheet" href="/static/css/sister.css?v=20261030d">
+    <link rel="stylesheet" href="/static/css/sister.css?v=20261103b">
+{% endblock %}
+
+{# The theme renders the sidebar open and hides it from JS after load; with a saved "hidden" preference that was a visible
+   jump (sidebar flashing in, content shifting 280 px). Mark <html> before first paint so the CSS starts in the right state. #}
+{% block extra_head %}
+<script nonce="{{ csp_nonce }}">try{if(window.innerWidth>=992&&JSON.parse(localStorage.getItem('sidebarHidden'))===true){document.documentElement.classList.add('sidebar-pref-hidden');}}catch(e){}</script>
 {% endblock %}
 
 {# SISTER is Italian-only (docs/ui_audit_2026-10-09.md G7): no language switcher that changes only the menu. #}
@@ -83,9 +89,15 @@
         </div>
         {% if can_admin(user) %}
         <div class="nav-item">
-            <a class="nav-link{% if request.url.path.startswith('/admin') %} active{% endif %}" href="/admin">
+            <a class="nav-link{% if request.url.path.startswith('/admin') and not request.url.path.startswith('/admin/commands') %} active{% endif %}" href="/admin">
                 <i class="fas fa-shield-halved"></i>
                 <span>Amministrazione</span>
+            </a>
+        </div>
+        <div class="nav-item">
+            <a class="nav-link{% if request.url.path.startswith('/admin/commands') %} active{% endif %}" href="/admin/commands">
+                <i class="fas fa-terminal"></i>
+                <span>Comandi CLI</span>
             </a>
         </div>
         <div class="nav-item">

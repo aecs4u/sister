@@ -51,7 +51,7 @@ SISTER is a FastAPI service + Typer CLI for automated cadastral data extraction 
 
 ```bash
 # Log in to SISTER first (CIE approval); the service only attaches to that session
-../.venv/bin/python scripts/ade_login.py            # --close frees a stale session
+uv run sister app login            # --close frees a stale session
 # Start service
 ./scripts/start.sh
 
@@ -70,7 +70,7 @@ uv run sister db backfill            # projections + xml; `xml --force --limit N
 uv sync --extra mcp
 uv run sister-mcp
 # Owner <-> property graph (resumable; see docs/dossier_graph.md)
-../.venv/bin/python scripts/build_dossier_graph.py --seed <CF|PIVA>
+uv run sister build dossier-graph --seed <CF|PIVA>
 ```
 
 ## MCP server
@@ -98,17 +98,17 @@ uv run sister-mcp
 ## Portal session and running jobs
 
 - The service **never logs in by itself**: it attaches to the SISTER session left open in the shared Chrome
-  (`BROWSER_CDP_ENDPOINT`) by `scripts/ade_login.py`. One session per user ("Utente gia' in sessione" → `ade_login.py --close`);
+  (`BROWSER_CDP_ENDPOINT`) by `sister app login`. One session per user ("Utente gia' in sessione" → `ade_login.py --close`);
   it expires after about 30 minutes and is lost when Chrome restarts. Details: `docs/portal_session.md`.
 - `scripts/start.sh` runs without `--reload` by default so edits cannot restart a live demo or batch process. Opt in to
   hot reload for local UI work with `scripts/start.sh --reload`. Reload watches every `*.py` (including
   `scripts/` and `tests/`) and can drop an in-flight request; do not use it for batches or crawlers. A restart does
   **not** log out (CDP mode).
 - **A SISTER session lasts ~30 minutes from the login, whatever the activity** (measured 2026-10-26: 29.6, 29.8 and 30.4 min;
-  the keep-alive does not extend it). Run bulk work with `scripts/run_in_session.py --batch <dir> ...` right after the login:
+  the keep-alive does not extend it). Run bulk work with `sister batch run-session --batch <dir> ...` right after the login:
   it checks the browser, starts the service, drops answered rows and wrong codici fiscali from the plans, proves the session with
   one real search, runs `query batch --resume` until `--minutes` (26) after the login or the first expired-session answer,
-  interrupts cleanly and stops the service. `scripts/batch_progress.py <dir>...` shows the progress bar.
+  interrupts cleanly and stops the service. `sister batch progress <dir>...` shows the progress bar.
 - **The service never logs in by itself** (`SISTER_AUTO_RELOGIN=false`, `browser._ensure_authenticated`). aecs4u-auth's keep-alive
   marks a healthy session invalid whenever its province-menu test runs on a result page, and its answer to that was a recovery and then
   a CIE login in the user's tab, waiting for a phone approval nobody expected and blocking the worker. The check now tries the
@@ -122,7 +122,7 @@ uv run sister-mcp
   with another `cadastre_type`, and `prune_plan` writes `tipo_catasto: E` into the plan rows. `run_in_session.py` shows a live bar
   (all plans, SISTER session time left, rows still possible; `batch_progress.Dashboard`).
 - **"Tipo richiesta" (Attualità / Storica)** of the subject forms is `tipo_richiesta` (`attualita`|`storica`, default the portal's Attualità), set by
-  `utils._select_tipo_richiesta`, which raises if the form lacks the control; `scripts/build_batch_from_list.py --tipo-richiesta storica` puts it in a plan.
+  `utils._select_tipo_richiesta`, which raises if the form lacks the control; `sister batch build-list --tipo-richiesta storica` puts it in a plan.
 - Speed: the time of a search is SISTER's own answer (~1.2 s per page, 4-6 pages). Measured 2026-10-26: no gain from blocking/caching
   static files (`SISTER_CACHE_STATIC`, off) nor from waiting for `load` instead of `networkidle` (`SISTER_FAST_NAV`, off: more errors);
   `SISTER_PAGE_LOG_FAST` (on) skips the HTML/screenshot of every step, `SISTER_ACTION_TIMEOUT_SECONDS` (15) shortens a failing row.
@@ -137,7 +137,7 @@ uv run sister-mcp
 - Hardening: CSRF for cookie-authenticated browser requests (`sister/csrf.py`, token derived from the auth cookie; the
   `csrf_token`/`csrf_input()` template helpers and `static/js/sister_csrf.js` add it), per-path rate limits (`/auth/*` 20/min,
   rest 600/min, per socket peer), nonce-based CSP outside `/docs` (`sister/security.py`), opt-in admin gating via
-  `SISTER_ADMIN_USERS` (Browser Control, imports, rescans), hashed passwords in `local_users.txt` (`scripts/hash_local_password.py`).
+  `SISTER_ADMIN_USERS` (Browser Control, imports, rescans), hashed passwords in `local_users.txt` (`sister app hash-password`).
   Sign-in/out/password-help pages are SISTER's own (`sister/auth_pages.py`), mounted before the package's.
 - Core front-end assets are self-hosted in `sister/static/vendor/` (official Bootstrap 5.3.2, Font Awesome 6.5.0,
   Tabulator 6.3.1, Chart.js 4.4.4 — do not use crowdaction's trimmed CSS copies; fonts are local too). Map views request
@@ -158,7 +158,7 @@ uv run sister-mcp
   database rows is opt-in via `DB_RETENTION_SECONDS` (default 0 = never). (It used to reuse the cache TTL, which silently purged
   jobs/responses older than 6 h every minute.) After switching `DATABASE_DSN` to an empty database, rebuild jobs/responses from
   `outputs/` with the admin "Importa output" button on `/results`; it is idempotent.
-- Logins: `LOCAL_USERS_FILE` (in `.env`) points at `local_users.sister.txt` — hashed, mode 600, git-ignored (`local_users*.txt`). Regenerate or add users with `scripts/hash_local_password.py <user>`; plain entries still work but log a warning.
+- Logins: `LOCAL_USERS_FILE` (in `.env`) points at `local_users.sister.txt` — hashed, mode 600, git-ignored (`local_users*.txt`). Regenerate or add users with `sister app hash-password <user>`; plain entries still work but log a warning.
 - Static files: SISTER's own `/static` assets revalidate via ETag (no long cache); only versioned `aecs4u-theme` assets are immutable.
   Presentation formatting (dates, money, enum labels) lives in `sister/display.py` as Jinja filters.
 - **`/persons/<cf>` and `/companies/<piva>` are one "Visura Soggetto" page** (`catasto/entity.html` → local `catasto/visura_soggetto_archive.html`,
@@ -239,16 +239,16 @@ saved portal forms in `tests/fixtures/portal_forms/`.
 - **Only the `.p7m` is stored; its XML is never extracted next to it.** The signed content is read in memory
   (`utils._p7m_payload`, used by `_parse_visura_xml`, the document page, `missing_pairs`, `xml_ingest._complete_content`).
   Older runs left `<stem>.xml` and a bare `<stem>` per `.p7m`, and the folder imports indexed them as extra documents;
-  `scripts/cleanup_extracted_xml.py` removes them (dry run by default, verifies each file against the payload, backs up first).
+  `sister documents cleanup-xml` removes them (dry run by default, verifies each file against the payload, backs up first).
 - **Every stored document includes its ISO request date** (`vs_att_<CF>_CE_2026-10-06.p7m`: the date, never the time;
   `utils._unique_document_stem`). A same-day repeat adds the practice id after it (`_2026-10-06_T265733_2026`). A PDF and a
   P7M are separate requests and can carry different dates, so pair them with `utils._document_key(stem)` (the stem without
-  the date), never the exact stem. Existing files were renamed with `scripts/rename_documents_with_date.py` (plan + DB
+  the date), never the exact stem. Existing files were renamed with `sister documents rename-date` (plan + DB
   backup in `<data>/backups/`, `--revert <plan.json>` undoes it). `.meta` files are never renamed.
-  `scripts/normalize_documents.py` re-derives names from content (office/comune/`al` date of a subject visura, `sto`/`ter` of
+  `sister documents normalize` re-derives names from content (office/comune/`al` date of a subject visura, `sto`/`ter` of
   a property visura), then collapses same-day repeats with the same content (quarantine folder + DB rows, dry run by default)
   and lists the names that still cover different contents. After removing files by hand run
-  `scripts/reconcile_missing_documents.py` (dry run by default): it drops the rows/aliases of a deleted `.p7m` only when a
+  `sister documents reconcile` (dry run by default): it drops the rows/aliases of a deleted `.p7m` only when a
   surviving file has the same XML as the row, never a row that has extraction results its equivalent lacks.
 - **`query batch` never re-sends a submitted row on `--resume`** (it re-polls the journaled request ids; a repeat can be paid twice) and
   validates the whole file before sending. After changing `query_forms.py` or `batch.py` models regenerate the schema:
@@ -283,7 +283,7 @@ Companies must use `POST /visura/persona-giuridica` with `{"identificativo": "<v
 
 - DB: configure `RECROWD_DATABASE_DSN` with the Recrowd PostgreSQL connection for this script.
 - 97 proponents with VAT numbers; VAT comes from `COALESCE(recrowd_proponent_company_details.vat_code, recrowd_proponents.vat_number)`
-- Bulk query: `uv run python scripts/query_recrowd_proponents.py` — queries all 97 sequentially, saves progress to `outputs/recrowd_soggetto_<timestamp>.json`
+- Bulk query: `uv run python scripts/one_off/query_recrowd_proponents.py` — queries all 97 sequentially, saves progress to `outputs/recrowd_soggetto_<timestamp>.json`
 
 ## Code style
 

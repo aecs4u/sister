@@ -1,6 +1,6 @@
 # Dossier graph: owners ↔ properties
 
-`scripts/build_dossier_graph.py` builds the ownership graph around a set of seed persons/companies and keeps
+`sister build dossier-graph` builds the ownership graph around a set of seed persons/companies and keeps
 following it until no new node appears:
 
 * **owner → properties**: every immobile of the owner with its details (ubicazione, classamento, consistenza,
@@ -13,9 +13,9 @@ It runs entirely through `POST /visura/soggetto-immobili?con_intestati=1` (`sist
 in (see `docs/portal_session.md`). Companies use the persona giuridica flow (`--azienda`).
 
 ```bash
-../.venv/bin/python scripts/build_dossier_graph.py --seed PGGPLA52C15H199K
-../.venv/bin/python scripts/build_dossier_graph.py --from-batch outputs/pdf_parseable_batch   # every id found
-../.venv/bin/python scripts/build_dossier_graph.py --resume <graph.json> [--retry-errors]
+uv run sister build dossier-graph --seed PGGPLA52C15H199K
+uv run sister build dossier-graph --from-batch outputs/pdf_parseable_batch   # every id found
+uv run sister build dossier-graph --resume <graph.json> [--retry-errors]
 ```
 
 | Option | Meaning |

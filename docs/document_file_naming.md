@@ -78,9 +78,9 @@ modification time. The script updates database paths, `.plan.json` sidecars, and
 backup and a reversible plan when applying changes. Files ending in `.meta` are left alone:
 
 ```bash
-uv run python scripts/rename_documents_with_date.py --documents "$DOCS" --links "$LINKS"
-uv run python scripts/rename_documents_with_date.py --documents "$DOCS" --links "$LINKS" --apply
-uv run python scripts/rename_documents_with_date.py --documents "$DOCS" --links "$LINKS" --revert /path/to/rename_plan.json
+uv run sister documents rename-date --documents "$DOCS" --links "$LINKS"
+uv run sister documents rename-date --documents "$DOCS" --links "$LINKS" --apply
+uv run sister documents rename-date --documents "$DOCS" --links "$LINKS" --revert /path/to/rename_plan.json
 ```
 
 Re-derive `vi_*` and `vs_*` names from document content and identify same-day duplicates. Identical repeats are moved to
@@ -88,8 +88,8 @@ a quarantine directory, with their database rows and aliases removed or redirect
 the same name are kept and reported with the content fields that distinguish them:
 
 ```bash
-uv run python scripts/normalize_documents.py --documents "$DOCS" --links "$LINKS"
-uv run python scripts/normalize_documents.py --documents "$DOCS" --links "$LINKS" --apply
+uv run sister documents normalize --documents "$DOCS" --links "$LINKS"
+uv run sister documents normalize --documents "$DOCS" --links "$LINKS" --apply
 ```
 
 Remove legacy `.xml` and extensionless files only when their bytes match the payload of a neighboring `.p7m`. The
@@ -97,8 +97,8 @@ script also removes matching aliases and duplicate database rows, and backs up t
 Use `--skip-db` for a files-only cleanup:
 
 ```bash
-uv run python scripts/cleanup_extracted_xml.py --documents "$DOCS" --links "$LINKS"
-uv run python scripts/cleanup_extracted_xml.py --documents "$DOCS" --links "$LINKS" --apply
+uv run sister documents cleanup-xml --documents "$DOCS" --links "$LINKS"
+uv run sister documents cleanup-xml --documents "$DOCS" --links "$LINKS" --apply
 ```
 
 After files have been deleted manually, reconcile database rows and source aliases whose paths no longer exist. A
@@ -107,8 +107,8 @@ results that the missing row has. A dangling alias is re-pointed only when an eq
 verified; unmatched rows and aliases are reported and kept:
 
 ```bash
-uv run python scripts/reconcile_missing_documents.py --documents "$DOCS" --links "$LINKS"
-uv run python scripts/reconcile_missing_documents.py --documents "$DOCS" --links "$LINKS" --apply
+uv run sister documents reconcile --documents "$DOCS" --links "$LINKS"
+uv run sister documents reconcile --documents "$DOCS" --links "$LINKS" --apply
 ```
 
 The scripts use the configured Sister database for record updates. Backups are written beside the documents under

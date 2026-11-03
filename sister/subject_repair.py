@@ -1,6 +1,6 @@
 """Repair of ``cadastral_subjects`` rows imported with incomplete or wrong birth data.
 
-What the audit of 2026-10-23 found (see ``scripts/repair_subject_data.py``): owners whose date the portal degraded
+What the audit of 2026-10-23 found (see ``scripts/one_off/repair_subject_data.py``): owners whose date the portal degraded
 (``/0/08/ il``) were stored without birth date and without first/last name, some display names still carried the
 Intestati-page text (``ROSSI MARIO nato a ROMA (RM) il 01/01/1970``), a few men were stored as "F", and one date used
 the ISO format. A personal codice fiscale states sex, birth date (day, month, two-digit year) and birth place, so it is

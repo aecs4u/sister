@@ -1,6 +1,6 @@
 """Password helpers for file-backed local users.
 
-Passwords are stored as PBKDF2 hashes produced by ``scripts/hash_local_password.py`` in the form
+Passwords are stored as PBKDF2 hashes produced by ``sister app hash-password`` in the form
 ``pbkdf2_sha256$<iterations>$<salt hex>$<hash hex>``. Plaintext passwords are accepted only with an explicit
 development opt-in.
 """
@@ -41,7 +41,7 @@ def require_hashed_passwords(stored_passwords: Iterable[str], *, allow_plaintext
     if plaintext_count and not allow_plaintext:
         raise ValueError(
             f"{plaintext_count} local user password(s) are not hashed; hash them with "
-            "scripts/hash_local_password.py or explicitly set ALLOW_PLAINTEXT_USERS=true for development only"
+            "sister app hash-password or explicitly set ALLOW_PLAINTEXT_USERS=true for development only"
         )
     return plaintext_count
 

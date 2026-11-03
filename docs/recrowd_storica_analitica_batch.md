@@ -1,6 +1,6 @@
 # Recrowd analytical historical subject visure
 
-`scripts/batch_recrowd_storica_analitica.py` checks Recrowd proponents against the local Sister PostgreSQL database and submits a national **Storica Analitica per Soggetto** request only when a matching document is not already stored.
+`sister batch recrowd --items proponents` checks Recrowd proponents against the local Sister PostgreSQL database and submits a national **Storica Analitica per Soggetto** request only when a matching document is not already stored.
 
 The lookup uses each proponent's `tax_code`, then `vat_code`, then Recrowd's `vat_number`. Duplicate proponents with the same identifier are grouped into one request. Proponents without a usable identifier are reported and skipped. In execute mode, a successful recent analytical request that has not yet been downloaded is marked `awaiting_download` to avoid submitting a duplicate.
 
@@ -9,7 +9,7 @@ The lookup uses each proponent's `tax_code`, then `vat_code`, then Recrowd's `va
 Run from the repository root. The default mode is read-only:
 
 ```bash
-uv run python scripts/batch_recrowd_storica_analitica.py
+uv run sister batch recrowd --items proponents
 ```
 
 The job saves a timestamped JSON report under `outputs/`. It identifies an existing document by the queried fiscal code and the analytical historical subtype, using the typed subject, document XML, metadata, and filename where available. A successful recent request that has not yet been downloaded is marked `awaiting_download` to avoid submitting a duplicate.
@@ -19,13 +19,13 @@ The job saves a timestamped JSON report under `outputs/`. It identifies an exist
 First ensure Sister is running with an authenticated SISTER browser session. Then submit a small batch:
 
 ```bash
-uv run python scripts/batch_recrowd_storica_analitica.py --execute --limit 2
+uv run sister batch recrowd --items proponents --execute --limit 2
 ```
 
 Run the full batch with:
 
 ```bash
-uv run python scripts/batch_recrowd_storica_analitica.py --execute
+uv run sister batch recrowd --items proponents --execute
 ```
 
 The request uses `tipo_catasto=E`, `vista=analitica`, and searches the identifier as a legal entity. SISTER may ask a human to solve a CAPTCHA. The script stops on `needs_human` and saves its progress report; it does not solve CAPTCHAs.
@@ -33,7 +33,7 @@ The request uses `tipo_catasto=E`, `vista=analitica`, and searches the identifie
 Documents requested as differita appear under SISTER **Richieste**. To download ready documents into the Sister database, run:
 
 ```bash
-uv run python scripts/batch_recrowd_storica_analitica.py --execute --download-ready
+uv run sister batch recrowd --items proponents --execute --download-ready
 ```
 
 Sister's download endpoint downloads **all** ready items in the account's Richieste page, not just Recrowd requests. The job then rechecks the database and marks matching documents as downloaded.

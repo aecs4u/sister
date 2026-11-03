@@ -4,7 +4,7 @@ OSM footprints in Emilia-Romagna come from the Regione's topographic database (`
 usually carry ``height`` or ``building:levels``. Heights missing from OSM are estimated (3 m per level, 9 m default) and
 coloured differently. Google Earth imagery/3D data is deliberately not used: its terms forbid extracting geometry.
 
-Used by ``/3d/kmz`` (web.py) and ``scripts/build_building_kmz.py``. Output © OpenStreetMap contributors (ODbL);
+Used by ``/3d/kmz`` (web.py) and ``sister build building-kmz``. Output © OpenStreetMap contributors (ODbL);
 footprints/heights originally © Regione Emilia-Romagna.
 """
 

@@ -1,0 +1,140 @@
+{% extends "_base.html" %}
+
+{% block page_title %}Comandi CLI · Amministrazione{% endblock %}
+
+{% block content %}
+<div class="container-fluid py-4" id="admin-cli-page" data-job-id="{{ job.id if job else '' }}">
+    <nav aria-label="breadcrumb" class="mb-3">
+        <ol class="breadcrumb">
+            <li class="breadcrumb-item"><a href="/admin">Amministrazione</a></li>
+            <li class="breadcrumb-item active" aria-current="page">Comandi CLI</li>
+        </ol>
+    </nav>
+
+    <div class="d-flex flex-wrap justify-content-between align-items-center gap-3 mb-4">
+        <div>
+            <h1 class="h2 mb-1"><i class="fas fa-terminal me-2" aria-hidden="true"></i>Comandi CLI</h1>
+            <p class="text-muted mb-0">Avvia gli strumenti operativi registrati e consulta qui l’output. Alcuni possono inviare richieste o modificare dati.</p>
+        </div>
+        <a class="btn btn-outline-secondary" href="/admin">Torna all’amministrazione</a>
+    </div>
+
+    {% if error_message %}<div class="alert alert-warning" role="alert">{{ error_message }}</div>{% endif %}
+
+    <section class="card mb-4" aria-labelledby="launch-command-heading">
+        <div class="card-body">
+            <h2 class="h5" id="launch-command-heading">Avvia un comando</h2>
+            <p class="small text-muted">Gli argomenti seguono le regole di quoting della shell, ma vengono passati al programma senza eseguire una shell. Massimo tre comandi contemporanei.</p>
+            <form method="post" action="/admin/commands/run" class="row g-3 align-items-end">
+                {{ csrf_input() }}
+                <div class="col-12 col-xl-4">
+                    <label class="form-label" for="cli-command">Comando</label>
+                    <select class="form-select" id="cli-command" name="command_id" required>
+                        <option value="" selected disabled>Seleziona uno strumento</option>
+                        {% set command_groups = commands|map(attribute='group')|unique|list %}
+                        {% for group in command_groups %}
+                        <optgroup label="{{ group }}">
+                            {% for command in commands if command.group == group %}
+                            <option value="{{ command.id }}"{% if command.terminal_only %} disabled{% endif %}>
+                                {{ command.name }}{% if command.terminal_only %} · solo terminale{% endif %}
+                            </option>
+                            {% endfor %}
+                        </optgroup>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="col-12 col-xl-6">
+                    <label class="form-label" for="cli-arguments">Argomenti</label>
+                    <input class="form-control font-monospace" id="cli-arguments" name="arguments" maxlength="4000"
+                           placeholder="--help oppure --input 'percorso file.csv'" autocomplete="off">
+                </div>
+                <div class="col-12 col-xl-2">
+                    <button class="btn btn-primary w-100" type="submit">
+                        <i class="fas fa-play me-2" aria-hidden="true"></i>Avvia
+                    </button>
+                </div>
+            </form>
+            <p class="form-text mb-0 mt-3">I comandi che richiedono input interattivo sono disponibili solo da terminale. I processi avviati dalla pagina non ricevono input da tastiera.</p>
+        </div>
+    </section>
+
+    {% if job %}
+    <section class="card mb-4" id="cli-job" aria-labelledby="cli-job-heading" data-status-url="/admin/commands/jobs/{{ job.id }}">
+        <div class="card-header d-flex flex-wrap align-items-center gap-2">
+            <h2 class="h5 mb-0" id="cli-job-heading">Esecuzione</h2>
+            <span class="badge text-bg-secondary" id="cli-job-status">{{ job.status }}</span>
+            <span class="small text-muted ms-auto" id="cli-job-exit">{% if job.exit_code is not none %}Exit code: {{ job.exit_code }}{% endif %}</span>
+        </div>
+        <div class="card-body">
+            <div class="small text-muted mb-2">Comando</div>
+            <code class="d-block text-break mb-3">{{ job.display_command }}</code>
+            <div class="d-flex justify-content-between align-items-center mb-2">
+                <h3 class="h6 mb-0">Output</h3>
+                <span class="small text-muted" id="cli-output-note">{% if job.status == 'running' %}Aggiornamento automatico{% else %}Output recente{% endif %}</span>
+            </div>
+            <pre class="bg-dark text-light rounded p-3 mb-0" id="cli-job-output" style="max-height: 36rem; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere;">{{ job.output or 'In attesa dell’output…' }}</pre>
+        </div>
+    </section>
+    {% endif %}
+
+    <details class="card">
+        <summary class="card-header h5 mb-0">Catalogo comandi</summary>
+        <div class="table-responsive">
+            <table class="table table-striped align-middle mb-0">
+                <thead><tr><th scope="col">Comando</th><th scope="col">Descrizione</th><th scope="col">Disponibilità</th></tr></thead>
+                <tbody>
+                {% for command in commands %}
+                    <tr>
+                        <td class="text-nowrap"><code>sister {{ command.group }} {{ command.name }}</code></td>
+                        <td>{{ command.description }}</td>
+                        <td>{% if command.terminal_only %}<span class="badge text-bg-secondary">Solo terminale</span>{% else %}<span class="badge text-bg-success">Avviabile</span>{% endif %}</td>
+                    </tr>
+                {% else %}
+                    <tr><td colspan="3" class="text-center text-muted py-4">Nessun comando registrato.</td></tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </details>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+{{ super() }}
+{% if job %}
+<script nonce="{{ csp_nonce }}">
+(function () {
+    const card = document.getElementById('cli-job');
+    const jobId = document.getElementById('admin-cli-page').dataset.jobId;
+    const statusBadge = document.getElementById('cli-job-status');
+    const exitLabel = document.getElementById('cli-job-exit');
+    const output = document.getElementById('cli-job-output');
+    const outputNote = document.getElementById('cli-output-note');
+    let timer;
+
+    async function refreshJob() {
+        try {
+            const response = await fetch(card.dataset.statusUrl, { headers: { 'Accept': 'application/json' } });
+            if (!response.ok) return;
+            const job = await response.json();
+            statusBadge.textContent = job.status;
+            statusBadge.className = 'badge ' + (job.status === 'running' ? 'text-bg-primary' : job.status === 'succeeded' ? 'text-bg-success' : 'text-bg-danger');
+            exitLabel.textContent = job.exit_code === null ? '' : `Exit code: ${job.exit_code}`;
+            output.textContent = job.output || 'In attesa dell’output…';
+            output.scrollTop = output.scrollHeight;
+            if (job.status !== 'running') {
+                outputNote.textContent = 'Output recente';
+                clearInterval(timer);
+            }
+        } catch (_) {}
+    }
+
+    if (jobId && statusBadge.textContent.trim() === 'running') {
+        statusBadge.className = 'badge text-bg-primary';
+        timer = setInterval(refreshJob, 1500);
+        refreshJob();
+    }
+})();
+</script>
+{% endif %}
+{% endblock %}
