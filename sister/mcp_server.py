@@ -84,6 +84,7 @@ def _query_description(spec) -> dict[str, Any]:
         "command": spec.command,
         "description": spec.summary,
         "api_path": f"/api/v1{spec.path}",
+        "requests_documents": spec.documents or None,
         "parameters": fields,
         "required_any": [list(group) for group in spec.required_any],
     }

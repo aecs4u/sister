@@ -239,7 +239,10 @@ Defined once in `sister/query_forms.py` (portal input → parameter, submit meta
 CLI batch, `/forms` and the generic API route are generated from it and submit through
 `VisuraClient.submit`. To add a query or an input, edit that table (see `docs/query_forms.md`); do not hand-write
 CLI options or web params. `uv run python -m pytest tests/test_query_forms.py` checks the spec against the
-saved portal forms in `tests/fixtures/portal_forms/`.
+saved portal forms in `tests/fixtures/portal_forms/`. `QueryForm.documents` (`optional` = `search`/`intestati` unless `richiedi_documenti=false`, `always` =
+`visura-storica`, `soggetto-documento`) marks the queries that request documents (CAPTCHA by hand, repeats may be charged): the CLI help and
+`--dry-run`, and the MCP `list_queries` (`requests_documents`) show it. `validate_params` also rejects values the portal does not know
+(`tipo_catasto`, `tipo_richiesta`, `vista`) and an input whose mode (`requires`) is explicitly set to another value.
 
 ## Data extraction (two phases)
 

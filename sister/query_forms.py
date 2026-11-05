@@ -52,6 +52,10 @@ class QueryForm:
     dedicated: tuple[str, ...] = ()  # parameters that are explicit arguments of the client method
     required: tuple[str, ...] = ()
     required_any: tuple[tuple[str, ...], ...] = ()  # at least one of each group (e.g. codice_fiscale | cognome)
+    # "" = the query only reads pages; "optional" = it requests documents unless ``richiedi_documenti=false``; "always" =
+    # it requests documents. A document request goes through the one SISTER form with a CAPTCHA (a human types it:
+    # the request ends as ``needs_human`` otherwise) and a repeated request can be charged again
+    documents: str = ""
 
 
 def _f(portal, param, kind="text", help="", choices=None, handled=False, page=1) -> FormField:
@@ -767,6 +771,26 @@ _NO_FORM = (
 )
 QUERY_FORMS.update({q.command: q for q in _NO_FORM})
 
+_DOCUMENT_REQUESTS = {
+    "search": "optional",
+    "intestati": "optional",
+    "visura-storica": "always",
+    "soggetto-documento": "always",
+}
+for _command, _mode in _DOCUMENT_REQUESTS.items():
+    QUERY_FORMS[_command] = replace(QUERY_FORMS[_command], documents=_mode)
+
+
+def documents_note(spec: QueryForm) -> str:
+    """One line for help texts and previews, or "" when the query requests no documents."""
+    if spec.documents == "always":
+        return "Richiede documenti a SISTER: serve il CAPTCHA (a mano) e una richiesta ripetuta puo' essere addebitata di nuovo."
+    if spec.documents == "optional":
+        return (
+            "Richiede anche i documenti (CAPTCHA a mano, possibile addebito) salvo --richiedi-documenti false."
+        )
+    return ""
+
 
 # --- helpers --------------------------------------------------------------------------------------------
 
@@ -818,6 +842,14 @@ def option_flags(param: str) -> tuple[str, ...]:
     return FLAGS.get(param, ("--" + param.replace("_", "-"),))
 
 
+# values the portal knows for these inputs, whichever query they belong to (the forms without a portal form have no choices)
+_ALLOWED_VALUES = {
+    "tipo_catasto": {"t", "f", "e"},
+    "tipo_richiesta": {"attualita", "storica", "a", "s"},
+    "vista": {"analitica", "sintetica"},
+}
+
+
 def validate_params(command: str, params: dict) -> None:
     """Raise ``ValueError`` when required parameters are missing or a choice is not one of the allowed values."""
     form = QUERY_FORMS[command]
@@ -828,6 +860,24 @@ def validate_params(command: str, params: dict) -> None:
             missing.append(" | ".join(group))
     if missing:
         raise ValueError(f"parametri obbligatori mancanti per '{command}': {', '.join(missing)}")
+    for param, allowed in _ALLOWED_VALUES.items():
+        value = params.get(param)
+        if value not in (None, "") and str(value).strip().lower() not in allowed:
+            raise ValueError(f"valore non valido per '{param}': {value!r} (valori: {', '.join(sorted(allowed))})")
+    by_param = {fld.param: fld for fld in form.fields}
+    for fld in form.fields:
+        if fld.requires and params.get(fld.param) not in (None, ""):
+            mode_param, mode_value = fld.requires
+            chosen = params.get(mode_param)
+            if chosen not in (None, ""):  # a mode left out has its default; only an explicit other mode is a contradiction
+                mode_field = by_param.get(mode_param)
+                chosen = str(chosen).strip().lower()
+                if mode_field is not None:  # the portal value ("1") stands for its name ("storica")
+                    chosen = next((k for k, v in mode_field.choices.items() if str(v).lower() == chosen), chosen)
+                if chosen != mode_value:
+                    raise ValueError(
+                        f"'{fld.param}' si usa solo con {mode_param}={mode_value} (indicato: {mode_param}={params[mode_param]})"
+                    )
     for fld in form.fields:
         value = params.get(fld.param)
         if fld.choices and fld.kind in ("radio", "select") and value not in (None, ""):

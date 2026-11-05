@@ -34,7 +34,8 @@ from rich.table import Table
 
 from . import batch as batch_engine
 from .client import API_V1_PREFIX, VisuraAPIError, VisuraClient
-from .query_forms import QUERY_FORMS, option_flags, validate_params
+from .fiscal_code import valid_codice_fiscale
+from .query_forms import QUERY_FORMS, documents_note, option_flags, validate_params
 
 app = typer.Typer(
     name="sister",
@@ -54,6 +55,13 @@ db_app = typer.Typer(
     no_args_is_help=True,
 )
 app.add_typer(db_app, name="db")
+
+workflow_app = typer.Typer(
+    name="workflow",
+    help="Stato e annullamento dei workflow avviati con `query workflow --preset`",
+    no_args_is_help=True,
+)
+app.add_typer(workflow_app, name="workflow")
 
 _forward_context = {
     "allow_extra_args": True,
@@ -459,12 +467,19 @@ def _run_query_command(
     except ValueError as e:
         console.print(f"[bold red]Error:[/bold red] {e}")
         raise typer.Exit(2)
+    code = params.get("codice_fiscale", "").strip().upper()
+    if len(code) == 16 and code.isalnum() and not valid_codice_fiscale(code):
+        # SISTER answers a wrong check character with a confirmation page and then "nessuna corrispondenza": the answer is
+        # cheap and final, so the query is still sent, but a typo is better noticed now than after the wait
+        console.print(f"[yellow]Attenzione:[/yellow] il codice fiscale {code} ha un carattere di controllo errato")
 
     client = VisuraClient()
     if dry_run:
         console.print("[bold yellow]DRY RUN[/bold yellow] — request will not be sent")
         console.print(f"  POST {client.base_url}{API_V1_PREFIX}{spec.path}")
         console.print(f"  Body: {json.dumps(params, ensure_ascii=False)}")
+        if (note := documents_note(spec)) and not _documents_skipped(spec, params):
+            console.print(f"  [yellow]{note}[/yellow]")
         return
     try:
         if force or redownload is True:
@@ -477,6 +492,10 @@ def _run_query_command(
         _handle_api_error(e)
         return
     _report_submission(client, params, result, wait, output)
+
+
+def _documents_skipped(spec, params: dict) -> bool:
+    return spec.documents == "optional" and str(params.get("richiedi_documenti", "")).lower() == "false"
 
 
 def _make_query_command(form):
@@ -525,7 +544,7 @@ def _make_query_command(form):
     command.__signature__ = inspect.Signature(parameters)
     command.__annotations__ = {p.name: p.annotation for p in parameters}
     command.__name__ = form.command.replace("-", "_")
-    command.__doc__ = form.summary
+    command.__doc__ = f"{form.summary}\n\n{note}" if (note := documents_note(form)) else form.summary
     return command
 
 
@@ -551,6 +570,7 @@ def _ipotecaria_command(
     particella: Optional[str] = None,
     numero_nota: Optional[str] = None,
     anno_nota: Optional[str] = None,
+    force: bool = False,
 ):
     """Shared logic for ispezione ipotecaria CLI commands."""
     if not yes:
@@ -574,6 +594,7 @@ def _ipotecaria_command(
                 numero_nota=numero_nota,
                 anno_nota=anno_nota,
                 auto_confirm=yes,
+                force=force,
             )
         )
     except VisuraAPIError as e:
@@ -612,6 +633,18 @@ def _ipotecaria_command(
         raise typer.Exit(1)
 
 
+def _ipotecaria_dry_run(tipo_ricerca: str, provincia: str, **fields: Optional[str]) -> None:
+    """What an ispezione ipotecaria would send (paid service: nothing is sent)."""
+    body = {"tipo_ricerca": tipo_ricerca, "provincia": provincia, **{k: v for k, v in fields.items() if v}}
+    if body.get("codice_fiscale"):
+        body["codice_fiscale"] = body["codice_fiscale"].upper()
+    if body.get("tipo_catasto"):
+        body["tipo_catasto"] = body["tipo_catasto"].upper()
+    console.print("[bold yellow]DRY RUN[/bold yellow] — request will not be sent (SERVIZIO A PAGAMENTO)")
+    console.print(f"  POST {VisuraClient().base_url}{API_V1_PREFIX}/visura/ispezione-ipotecaria")
+    console.print(f"  Body: {json.dumps(body, ensure_ascii=False)}")
+
+
 @query_app.command("ipotecaria-immobile")
 def ipotecaria_immobile(
     provincia: str = typer.Option(..., "--provincia", "-P", help="Nome della provincia"),
@@ -628,7 +661,7 @@ def ipotecaria_immobile(
     """Ispezione ipotecaria per immobile. SERVIZIO A PAGAMENTO."""
     client = VisuraClient()
     if dry_run:
-        console.print("[bold yellow]DRY RUN[/bold yellow] POST /api/v1/visura/ispezione-ipotecaria (immobile)")
+        _ipotecaria_dry_run("immobile", provincia, comune=comune, tipo_catasto=tipo_catasto, foglio=foglio, particella=particella)
         return
     _ipotecaria_command(
         "immobile",
@@ -641,6 +674,7 @@ def ipotecaria_immobile(
         tipo_catasto=tipo_catasto,
         foglio=foglio,
         particella=particella,
+        force=force,
     )
 
 
@@ -657,7 +691,7 @@ def ipotecaria_persona(
     """Ispezione ipotecaria per persona (codice fiscale). SERVIZIO A PAGAMENTO."""
     client = VisuraClient()
     if dry_run:
-        console.print("[bold yellow]DRY RUN[/bold yellow] POST /api/v1/visura/ispezione-ipotecaria (persona_fisica)")
+        _ipotecaria_dry_run("persona_fisica", provincia, codice_fiscale=codice_fiscale)
         return
     _ipotecaria_command(
         "persona_fisica",
@@ -667,6 +701,7 @@ def ipotecaria_persona(
         output,
         yes=yes,
         codice_fiscale=codice_fiscale,
+        force=force,
     )
 
 
@@ -683,7 +718,7 @@ def ipotecaria_azienda(
     """Ispezione ipotecaria per società (P.IVA o denominazione). SERVIZIO A PAGAMENTO."""
     client = VisuraClient()
     if dry_run:
-        console.print("[bold yellow]DRY RUN[/bold yellow] POST /api/v1/visura/ispezione-ipotecaria (persona_giuridica)")
+        _ipotecaria_dry_run("persona_giuridica", provincia, identificativo=identificativo)
         return
     _ipotecaria_command(
         "persona_giuridica",
@@ -693,6 +728,7 @@ def ipotecaria_azienda(
         output,
         yes=yes,
         identificativo=identificativo,
+        force=force,
     )
 
 
@@ -710,7 +746,7 @@ def ipotecaria_nota(
     """Ispezione ipotecaria per riferimento nota. SERVIZIO A PAGAMENTO."""
     client = VisuraClient()
     if dry_run:
-        console.print("[bold yellow]DRY RUN[/bold yellow] POST /api/v1/visura/ispezione-ipotecaria (nota)")
+        _ipotecaria_dry_run("nota", provincia, numero_nota=numero_nota, anno_nota=anno_nota)
         return
     _ipotecaria_command(
         "nota",
@@ -721,6 +757,7 @@ def ipotecaria_nota(
         yes=yes,
         numero_nota=numero_nota,
         anno_nota=anno_nota,
+        force=force,
     )
 
 
@@ -1295,6 +1332,48 @@ def workflow(
         _write_output(all_data, output)
 
 
+def _workflow_call(method: str, workflow_id: str, output: Optional[str]) -> dict:
+    client = VisuraClient()
+    try:
+        result = asyncio.run(getattr(client, method)(workflow_id))
+    except VisuraAPIError as e:
+        _handle_api_error(e)
+        raise typer.Exit(1)
+    if output:
+        _write_output(result, output)
+    return result
+
+
+@workflow_app.command("status")
+def workflow_status(
+    workflow_id: str = typer.Argument(help="ID del workflow (mostrato da `query workflow`)"),
+    output: Optional[str] = typer.Option(None, "--output", "-o", help="Percorso del file di output (.json)"),
+):
+    """Mostra lo stato di un workflow: passi completati, falliti, saltati."""
+    result = _workflow_call("workflow_status", workflow_id, output)
+    steps = result.get("steps") or []
+    console.print(f"[bold]Workflow {escape(workflow_id)}[/bold] — {result.get('status', 'unknown')}")
+    for step in steps:
+        status = step.get("status", "unknown")
+        style = "green" if status == "completed" else ("red" if status in {"error", "failed"} else "yellow")
+        console.print(f"  [{style}]{step.get('step', '?')}[/{style}] — {status}" + (f" {escape(str(step['error']))}" if step.get("error") else ""))
+    summary = result.get("summary") or {}
+    if summary:
+        console.print("  " + "  ".join(f"{key}: {value}" for key, value in summary.items()))
+    if not steps and not summary:
+        console.print(json.dumps(result, indent=2, ensure_ascii=False))
+
+
+@workflow_app.command("cancel")
+def workflow_cancel(
+    workflow_id: str = typer.Argument(help="ID del workflow da annullare"),
+    output: Optional[str] = typer.Option(None, "--output", "-o", help="Percorso del file di output (.json)"),
+):
+    """Annulla un workflow in corso (i passi gia' eseguiti restano salvati)."""
+    result = _workflow_call("cancel_workflow", workflow_id, output)
+    console.print(f"[yellow]Workflow {escape(workflow_id)}[/yellow] — {result.get('status', 'cancel requested')}")
+
+
 # -- batch command (supports all query types) ---------------------------------
 
 
@@ -1547,8 +1626,11 @@ def queries():
     # one row per single-step query, straight from the spec that also generates the commands
     rows = [(f"query {form.command}", "POST", f"/api/v1{form.path}", form.summary) for form in QUERY_FORMS.values()]
     rows += [
-        ("query workflow", "—", "search → intestati", "Full two-phase: immobili + intestati"),
-        ("query batch", "POST", "/api/v1/visura (×N)", "Batch of queries from a JSON/CSV file (resumable)"),
+        ("query workflow", "POST", "/api/v1/catasto/workflow/run", "Multi-step workflow (--preset), or search → intestati"),
+        ("workflow status", "GET", "/api/v1/catasto/workflow/runs/{id}", "Status of a workflow"),
+        ("workflow cancel", "POST", "/api/v1/catasto/workflow/runs/{id}/cancel", "Cancel a workflow"),
+        ("query ipotecaria-*", "POST", "/api/v1/visura/ispezione-ipotecaria", "Ispezione ipotecaria (PAID)"),
+        ("query batch", "POST", "/api/v1/visura (×N)", "Batch of queries from a JSON/Markdown/CSV file (resumable)"),
         ("get", "GET", "/api/v1/visura/{request_id}", "Poll for a single result"),
         ("wait", "GET", "/api/v1/visura/{request_id}", "Poll until complete or timeout"),
         ("requests", "GET", "/api/v1/visura/history", "List all requests with status"),
@@ -1671,31 +1753,18 @@ def requests(
             "particella": particella,
             "tipo_catasto": tipo_catasto,
         }
+        result = await client.history(**filters, limit=limit, offset=offset, status=status)
+        rows = result.get("results", [])
         if not status:
-            result = await client.history(**filters, limit=limit, offset=offset)
-            return result.get("results", [])
-
-        # The API has no status filter, so scan its 200-row pages until enough matching rows are found.
-        wanted = offset + limit
-        matches = []
-        page_offset = 0
-        while len(matches) < wanted:
-            page = (await client.history(**filters, limit=200, offset=page_offset)).get("results", [])
-            for row in page:
-                success = row.get("success")
-                responded = row.get("responded_at")
-                if (
-                    (status == "completed" and success is True)
-                    or (status == "failed" and success is False)
-                    or (status == "pending" and responded is None)
-                ):
-                    matches.append(row)
-                    if len(matches) >= wanted:
-                        break
-            page_offset += len(page)
-            if len(page) < 200:
-                break
-        return matches[offset : offset + limit]
+            return rows
+        # the service filters in SQL; the same test here keeps an older service (which ignores ``status``) correct
+        return [
+            row
+            for row in rows
+            if (status == "completed" and row.get("success") is True)
+            or (status == "failed" and row.get("success") is False)
+            or (status == "pending" and row.get("responded_at") is None)
+        ]
 
     try:
         items = asyncio.run(fetch_requests())
@@ -1929,7 +1998,8 @@ def db_backfill(
     what: str = typer.Argument(
         "all",
         help="projections (risultati -> immobili/intestati), xml (documenti -> tabelle tipizzate), "
-        "holdings (riepilogo immobili/valori per soggetto), names (nomi dei soggetti noti solo per codice) o all",
+        "holdings (riepilogo immobili/valori per soggetto), names (nomi dei soggetti noti solo per codice), "
+        "history (storico delle proprieta') o all",
     ),
     force: bool = typer.Option(False, "--force", help="Rielabora anche i documenti gia' popolati"),
     limit: int = typer.Option(0, "--limit", help="Massimo di righe da elaborare (0 = tutte)"),

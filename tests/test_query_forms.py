@@ -69,9 +69,38 @@ def sample_value(query: str, param: str) -> str:
     for fld in QUERY_FORMS[query].fields:
         if fld.param == param and fld.choices and fld.kind in ("radio", "select"):
             return next(iter(fld.choices))
-    return {"tipo_catasto": "F", "codice_fiscale": "RSSMRA85M01H501Z", "identificativo": "02471840997"}.get(
-        param, f"v-{param}"
-    )
+    return {
+        "tipo_catasto": "F",
+        "codice_fiscale": "RSSMRA85M01H501Z",
+        "identificativo": "02471840997",
+        "tipo_richiesta": "attualita",
+        "vista": "analitica",
+    }.get(param, f"v-{param}")
+
+
+def variants(query: str) -> list[dict[str, str]]:
+    """Self-consistent parameter sets that together cover every parameter of the query.
+
+    Some inputs exist only in one mode of a radio (``requires``): a set mixing modes is rejected by ``validate_params``,
+    so each variant picks one value per mode parameter and keeps only the inputs of those modes.
+    """
+    form = QUERY_FORMS[query]
+    modes: dict[str, list[str]] = {}
+    for fld in form.fields:
+        if fld.requires and fld.requires[1] not in modes.setdefault(fld.requires[0], []):
+            modes[fld.requires[0]].append(fld.requires[1])
+    if not modes:
+        return [{name: sample_value(query, name) for name in param_names(query)}]
+    result = []
+    for i in range(max(len(values) for values in modes.values())):
+        chosen = {mode: values[i % len(values)] for mode, values in modes.items()}
+        values: dict[str, str] = {}
+        for fld in form.fields:
+            if fld.param in values or (fld.requires and chosen.get(fld.requires[0]) != fld.requires[1]):
+                continue
+            values[fld.param] = chosen.get(fld.param, sample_value(query, fld.param))
+        result.append(values)
+    return result
 
 
 _CLIENT_METHODS = ("search", "intestati", "soggetto", "persona_giuridica", "elenco_immobili", "generic_search")
@@ -119,22 +148,28 @@ def test_cli_options_reach_the_client(query, monkeypatch):
         monkeypatch.setattr(VisuraClient, method, recorder(method))
 
     command = _cli_command(query)
-    args = ["query", query]
-    expected: dict[str, str] = {}
-    for param in command.params:
-        if param.name in _NOT_INPUTS or param.name not in param_names(query):
-            continue
-        flag = max(param.opts, key=len)
-        if getattr(param, "is_bool_flag", False):
-            args.append(flag)
-            expected[param.name] = "true"
-        else:
-            args += [flag, sample_value(query, param.name)]
-            expected[param.name] = sample_value(query, param.name)
-    result = CliRunner().invoke(app, args)
-    assert result.exit_code == 0, result.output
-    not_sent = {k for k in expected if k not in sent}
-    assert not not_sent, f"sister query {query}: options not passed on: {sorted(not_sent)}"
+    covered: set[str] = set()
+    for values in variants(query):
+        sent.clear()
+        args = ["query", query]
+        expected: dict[str, str] = {}
+        for param in command.params:
+            if param.name in _NOT_INPUTS or param.name not in values:
+                continue
+            flag = max(param.opts, key=len)
+            if getattr(param, "is_bool_flag", False):
+                args.append(flag)
+                expected[param.name] = "true"
+            else:
+                args += [flag, values[param.name]]
+                expected[param.name] = values[param.name]
+        result = CliRunner().invoke(app, args)
+        assert result.exit_code == 0, result.output
+        not_sent = {k for k in expected if k not in sent}
+        assert not not_sent, f"sister query {query}: options not passed on: {sorted(not_sent)}"
+        covered |= set(expected)
+    missing = {p.name for p in command.params} - _NOT_INPUTS - covered
+    assert missing <= {p.name for p in command.params if p.name not in param_names(query)}, f"{query}: never tried: {sorted(missing)}"
 
 
 # --------------------------------------------------------------------------------------------------
@@ -169,10 +204,14 @@ def api(main_module, monkeypatch):
 @pytest.mark.parametrize("query", sorted(QUERY_FORMS))
 async def test_every_parameter_reaches_the_service_request(query, api):
     client, service = api
-    params = {name: sample_value(query, name) for name in param_names(query)}
-    # the checkbox / choice parameters keep their documented values
-    params = {k: ("true" if k in _bool_params(query) else v) for k, v in params.items()}
+    for values in variants(query):
+        # the checkbox / choice parameters keep their documented values
+        params = {k: ("true" if k in _bool_params(query) else v) for k, v in values.items()}
+        service.submissions.clear()
+        await _submit_and_check(client, service, query, params)
 
+
+async def _submit_and_check(client, service, query, params):
     await client.submit(query, params)
 
     ((_, submitted),) = service.submissions
@@ -366,3 +405,67 @@ def test_web_proxies_send_the_api_key(main_module, monkeypatch):
     assert web.post("/api/ui/ipotecaria-stato-not-a-query", json={}).status_code == 200
     assert all(headers == {"X-API-Key": "secret-key"} for _, _, headers in seen), seen
     assert len(seen) == 2
+
+
+# --------------------------------------------------------------------------------------------------
+# validate_params: allowed values and modes
+# --------------------------------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "command, params",
+    [
+        ("soggetto-immobili", {"codice_fiscale": "02471840997", "tipo_catasto": "X"}),
+        ("soggetto-documento", {"codice_fiscale": "02471840997", "tipo_richiesta": "ieri"}),
+        ("soggetto-documento", {"codice_fiscale": "02471840997", "vista": "completa"}),
+        ("visura-storica", {"provincia": "Roma", "comune": "ROMA", "foglio": "1", "particella": "2", "tipo_catasto": "Z"}),
+    ],
+)
+def test_values_the_portal_does_not_know_are_rejected(command, params):
+    from sister.query_forms import validate_params
+
+    with pytest.raises(ValueError, match="valore non valido"):
+        validate_params(command, params)
+
+
+def test_an_input_of_another_mode_is_rejected_only_when_the_mode_is_explicit():
+    from sister.query_forms import validate_params
+
+    where = {"provincia": "Roma", "comune": "ROMA", "foglio": "1"}
+    validate_params("mappa", {**where, "foglio_storico": "1"})  # mode left out: its default decides, as before
+    validate_params("mappa", {**where, "foglio_storico": "1", "tipo_richiesta": "storica"})
+    with pytest.raises(ValueError, match="foglio_storico.*tipo_richiesta=storica"):
+        validate_params("mappa", {**where, "foglio_storico": "1", "tipo_richiesta": "attualita"})
+    with pytest.raises(ValueError, match="tipo_denuncia"):
+        validate_params(
+            "search",
+            {**where, "particella": "2", "tipo_denuncia": "protocollo", "identificativo_tipo": "definitivo"},
+        )
+
+
+def test_queries_that_request_documents_are_marked():
+    from sister.query_forms import documents_note
+
+    assert {c: f.documents for c, f in QUERY_FORMS.items() if f.documents} == {
+        "search": "optional",
+        "intestati": "optional",
+        "visura-storica": "always",
+        "soggetto-documento": "always",
+    }
+    assert "CAPTCHA" in documents_note(QUERY_FORMS["soggetto-documento"])
+    assert documents_note(QUERY_FORMS["soggetto"]) == ""
+
+
+def test_cli_dry_run_and_help_warn_about_document_requests():
+    from typer.testing import CliRunner
+
+    from sister.cli import app
+
+    runner = CliRunner()
+    dry = runner.invoke(app, ["query", "soggetto-documento", "--cf", "02471840997", "--dry-run"])
+    assert dry.exit_code == 0 and "CAPTCHA" in dry.output
+    search = ["query", "search", "-P", "Roma", "-C", "ROMA", "-F", "1", "-p", "2", "--dry-run"]
+    assert "CAPTCHA" in runner.invoke(app, search).output
+    assert "CAPTCHA" not in runner.invoke(app, [*search, "--richiedi-documenti", "false"]).output
+    assert "CAPTCHA" in runner.invoke(app, ["query", "intestati", "--help"]).output
+    assert "CAPTCHA" not in runner.invoke(app, ["query", "soggetto", "--help"]).output

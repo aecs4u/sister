@@ -1101,3 +1101,65 @@ def test_a_new_query_is_submitted_without_any_question(monkeypatch):
     assert result.exit_code == 0, result.output
     assert calls == [{"force": False, "reuse_previous": True}]
     assert "Already downloaded" not in result.output
+
+
+def test_single_query_warns_about_a_wrong_codice_fiscale_check_character(monkeypatch):
+    from typer.testing import CliRunner
+
+    from sister.cli import VisuraClient, app
+
+    sent = []
+
+    async def fake_submit(self, command, params, **kwargs):
+        sent.append(params)
+        return {"request_id": "r1", "status": "queued"}
+
+    monkeypatch.setattr(VisuraClient, "submit", fake_submit)
+    runner = CliRunner()
+    bad = runner.invoke(app, ["query", "soggetto", "--cf", "RSSMRA85M01H501A"])
+    assert bad.exit_code == 0 and "carattere di controllo" in bad.output and len(sent) == 1  # still sent
+    good = runner.invoke(app, ["query", "soggetto", "--cf", "RSSMRA85M01H501Q"])
+    assert good.exit_code == 0 and "carattere di controllo" not in good.output and len(sent) == 2
+
+
+def test_ipotecaria_dry_run_shows_the_body_and_force_reaches_the_client(monkeypatch):
+    from typer.testing import CliRunner
+
+    from sister.cli import VisuraClient, app
+
+    calls = []
+
+    async def fake(self, **kwargs):
+        calls.append(kwargs)
+        return {"request_id": "ip1", "status": "queued"}
+
+    monkeypatch.setattr(VisuraClient, "ispezione_ipotecaria", fake)
+    runner = CliRunner()
+    dry = runner.invoke(app, ["query", "ipotecaria-nota", "-P", "Roma", "--numero", "5678", "--dry-run"])
+    assert dry.exit_code == 0 and '"numero_nota": "5678"' in dry.output and '"tipo_ricerca": "nota"' in dry.output
+    assert calls == []
+
+    runner.invoke(app, ["query", "ipotecaria-nota", "-P", "Roma", "--numero", "5678", "--yes"])
+    runner.invoke(app, ["query", "ipotecaria-nota", "-P", "Roma", "--numero", "5678", "--yes", "--force"])
+    assert [c["force"] for c in calls] == [False, True]
+
+
+def test_workflow_status_and_cancel_commands(monkeypatch):
+    from typer.testing import CliRunner
+
+    from sister.cli import VisuraClient, app
+
+    async def status(self, workflow_id):
+        return {"status": "running", "steps": [{"step": "search", "status": "completed"}, {"step": "owners", "status": "error", "error": "boom"}],
+                "summary": {"completed": 1, "failed": 1}}
+
+    async def cancel(self, workflow_id):
+        return {"status": "cancelled"}
+
+    monkeypatch.setattr(VisuraClient, "workflow_status", status)
+    monkeypatch.setattr(VisuraClient, "cancel_workflow", cancel)
+    runner = CliRunner()
+    shown = runner.invoke(app, ["workflow", "status", "wf-1"])
+    assert shown.exit_code == 0 and "running" in shown.output and "owners" in shown.output and "boom" in shown.output
+    cancelled = runner.invoke(app, ["workflow", "cancel", "wf-1"])
+    assert cancelled.exit_code == 0 and "cancelled" in cancelled.output
