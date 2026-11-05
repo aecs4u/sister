@@ -98,26 +98,30 @@ def omi_zone_code(properties: dict[str, Any]) -> str:
     return ""
 
 
-def omi_zone_for_parcel(
+def omi_zone_ranking(
     province: str,
     cadastral_code: str,
     parcel_feature: dict[str, Any] | None,
-) -> str | None:
-    """Choose the OMI zone covering the largest area of a cadastral parcel polygon."""
+) -> list[str]:
+    """OMI zones overlapping a cadastral parcel polygon, the one covering the largest area first.
+
+    A large parcel (a mountain parcel with a lift station, a farm) can cross several zones, and the largest one is not
+    always the zone that quotes the unit's typology; the valuation falls back along this list.
+    """
     if not parcel_feature or not isinstance(parcel_feature.get("geometry"), dict):
-        return None
+        return []
     try:
         from shapely.geometry import shape
 
         parcel_geometry = shape(parcel_feature["geometry"])
         if parcel_geometry.is_empty or parcel_geometry.area <= 0:
-            return None
+            return []
     except Exception:
-        return None
+        return []
 
     comune_code = str(cadastral_code or "").strip().upper()
     if not comune_code:
-        return None
+        return []
     parcel_min_x, parcel_min_y, parcel_max_x, parcel_max_y = parcel_geometry.bounds
     overlap_by_zone: dict[str, float] = {}
     for zone_feature, zone_geometry in omi_boundary_geometries(province):
@@ -143,6 +147,14 @@ def omi_zone_for_parcel(
         if overlap > 0:
             overlap_by_zone[zone] = overlap_by_zone.get(zone, 0.0) + overlap
 
-    if not overlap_by_zone:
-        return None
-    return min(overlap_by_zone, key=lambda zone: (-overlap_by_zone[zone], zone))
+    return sorted(overlap_by_zone, key=lambda zone: (-overlap_by_zone[zone], zone))
+
+
+def omi_zone_for_parcel(
+    province: str,
+    cadastral_code: str,
+    parcel_feature: dict[str, Any] | None,
+) -> str | None:
+    """Choose the OMI zone covering the largest area of a cadastral parcel polygon."""
+    ranking = omi_zone_ranking(province, cadastral_code, parcel_feature)
+    return ranking[0] if ranking else None

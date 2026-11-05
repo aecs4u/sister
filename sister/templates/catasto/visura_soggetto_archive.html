@@ -36,6 +36,7 @@
         <th>{{ _('Sub.') }}</th>
         <th>{{ _('Zone') }}</th>
         <th>{{ _('Cat.') }}</th>
+        <th>Descrizione categoria</th>
         <th>{{ _('Class') }}</th>
         <th>{{ _('Consistency') }}</th>
         <th>{{ _('Income') }}</th>
@@ -52,6 +53,7 @@
         <td class="font-monospace">{{ p.subunit or '—' }}</td>
         <td>{{ p.census_zone or '—' }}</td>
         <td>{{ categoria_badge(p.category) }}</td>
+        <td class="small">{{ (category_description(p.category) if category_description is defined else '') or '—' }}</td>
         <td>{{ p.cadastral_class or '—' }}</td>
         <td>{{ p.consistency or '—' }}</td>
         <td class="text-nowrap">{{ p.income or '—' }}</td>
@@ -112,32 +114,88 @@ Visura soggetto {{ _variant_label|lower }}
                     <h5 class="card-title">
                         <i class="fas fa-user text-info me-2"></i>Soggetto Individuato
                     </h5>
+                    {% set _facts = subject_facts|default(none) %}
+                    {% set _person_facts = _facts and _facts.is_person %}
                     <div class="row g-3">
-                        <div class="{{ 'col-md-6' if _query_only else 'col-md-5' }}">
+                        <div class="{{ 'col-md-4' if _query_only and _person_facts else ('col-md-6' if _query_only else 'col-md-5') }}">
                             <span class="detail-label">{{ 'Denominazione' if _query_only and subject_route_prefix == '/companies' else 'Nominativo' }}</span>
                             <div class="fs-5 fw-bold">{{ _sogg.Cognome or '-' }} {{ _sogg.Nome or '' }}</div>
                             <div class="font-monospace text-muted small">{{ _sogg.CodiceFiscale or '-' }}</div>
                         </div>
                         {% if _query_only %}
-                        <div class="col-md-6">
-                            <span class="detail-label">{{ 'Partita IVA' if subject_route_prefix == '/companies' else 'Codice fiscale' }}</span>
-                            <div class="font-monospace">{{ _sogg.CodiceFiscale or '-' }}</div>
-                            <div class="text-muted small">Nessuna visura per soggetto archiviata: i dati vengono dalla ricerca (elenco immobili) e dai documenti delle particelle.</div>
-                        </div>
-                        {% else %}
-                        <div class="col-md-4">
+                        {% if _person_facts %}
+                        <div class="col-md-3">
                             <span class="detail-label">Nascita</span>
-                            <div>{{ _sogg.DataNascita or '-' }}</div>
-                            <div class="text-muted small">{{ _sogg.ComuneNascita or '' }}{% if _sogg.Provincia %} ({{ _sogg.Provincia }}){% endif %}</div>
+                            <div>{{ _facts.birth_date or '-' }}</div>
+                            <div class="text-muted small">{{ _facts.birth_place }}{% if _facts.birth_province %} ({{ _facts.birth_province }}){% endif %}</div>
+                        </div>
+                        <div class="col-md-2">
+                            <span class="detail-label">Età</span>
+                            <div>{% if _facts.age is not none %}{{ _facts.age }} anni{% else %}-{% endif %}</div>
                         </div>
                         <div class="col-md-3">
                             <span class="detail-label">Sesso</span>
-                            <div>{{ _sogg.Sesso or '-' }}</div>
+                            <div>{{ _facts.gender or '-' }}</div>
+                        </div>
+                        {% else %}
+                        <div class="col-md-6">
+                            <span class="detail-label">{{ 'Partita IVA' if subject_route_prefix == '/companies' else 'Codice fiscale' }}</span>
+                            <div class="font-monospace">{{ _sogg.CodiceFiscale or '-' }}</div>
+                        </div>
+                        {% endif %}
+                        {% else %}
+                        {# the visura's own data first; the archive fills what the visura leaves out, and adds the age #}
+                        {% set _birth_date = _sogg.DataNascita or (_facts.birth_date if _person_facts else '') %}
+                        {% set _birth_place = _sogg.ComuneNascita or (_facts.birth_place if _person_facts else '') %}
+                        {% set _birth_province = _sogg.Provincia or (_facts.birth_province if _person_facts else '') %}
+                        <div class="col-md-4">
+                            <span class="detail-label">Nascita</span>
+                            <div>{{ _birth_date or '-' }}{% if _person_facts and _facts.age is not none %} <span class="text-muted small">· {{ _facts.age }} anni</span>{% endif %}</div>
+                            <div class="text-muted small">{{ _birth_place or '' }}{% if _birth_province %} ({{ _birth_province }}){% endif %}</div>
+                        </div>
+                        <div class="col-md-3">
+                            <span class="detail-label">Sesso</span>
+                            <div>{{ _sogg.Sesso or (_facts.gender if _person_facts else '') or '-' }}</div>
                             <span class="detail-label mt-2 d-block">Protocollo</span>
                             <div class="small">{{ _dr.Protocollo or '-' }} / {{ _dr.Anno or '-' }}</div>
                         </div>
                         {% endif %}
                     </div>
+                    {% if _facts and _facts.properties is not none %}
+                    {# the latest subject search: what the subject holds, and how far the figures can be trusted #}
+                    <hr class="my-3">
+                    <div class="row g-3" aria-label="Patrimonio dall'ultima ricerca per soggetto">
+                        <div class="col-6 col-md-3">
+                            <span class="detail-label">Immobili</span>
+                            <div class="fw-semibold">{{ _facts.properties }}</div>
+                            <div class="text-muted small">{{ _facts.buildings or 0 }} fabbricati · {{ _facts.land or 0 }} terreni</div>
+                        </div>
+                        <div class="col-6 col-md-3">
+                            <span class="detail-label">Province</span>
+                            <div{% if _facts.provinces_short != _facts.provinces %} title="{{ _facts.provinces }}"{% endif %}>{{ _facts.provinces_short or '-' }}</div>
+                        </div>
+                        <div class="col-6 col-md-3">
+                            <span class="detail-label">Valore catastale pro quota</span>
+                            <div class="fw-semibold">{{ _facts.value_share or '-' }}{% if _facts.unknown_share %}<span title="{{ _facts.unknown_share }} immobili senza quota registrata, contati per intero"> *</span>{% endif %}</div>
+                            <div class="text-muted small">
+                                intero {{ _facts.value or '-' }}
+                                {% if _facts.unvalued %}<span title="Immobili senza valore calcolabile (categorie E/F, rendita mancante): il totale è per difetto">· +{{ _facts.unvalued }} n.v.</span>{% endif %}
+                            </div>
+                        </div>
+                        <div class="col-6 col-md-3">
+                            <span class="detail-label">Rendita · Reddito dominicale</span>
+                            <div>{{ _facts.rendita or '-' }} · {{ _facts.reddito_dominicale or '-' }}</div>
+                        </div>
+                    </div>
+                    <p class="text-muted small mb-0 mt-2">
+                        Dati della ricerca del {{ _facts.searched_at or '-' }} · {{ _facts.searches }} {{ 'ricerca' if _facts.searches == 1 else 'ricerche' }} e {{ _facts.visure }} {{ 'visura archiviata' if _facts.visure == 1 else 'visure archiviate' }}
+                        {% if _facts.last_seen %}· aggiornato il {{ _facts.last_seen }}{% endif %}
+                        · il valore catastale è la base IMU, non un valore di mercato.
+                    </p>
+                    {% endif %}
+                    {% if _query_only %}
+                    <p class="text-muted small mb-0 mt-2">Nessuna visura per soggetto archiviata: i dati vengono dalla ricerca (elenco immobili) e dai documenti delle particelle.</p>
+                    {% endif %}
                 </div>
             </div>
         </div>

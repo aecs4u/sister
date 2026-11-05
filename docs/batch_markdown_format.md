@@ -73,7 +73,9 @@ Rows are dropped when the answer already exists, with the same definitions as th
   `visura_soggetto`) for the same comune/provincia/foglio/particella/subalterno and `tipo_catasto` (`F`/`T`; none = either);
 * ids that differ only by a final `-F`/`-T` are the two guesses for an identifier of unknown type: when one is stored,
   both go;
-* other rows (any other command) are never touched.
+* other rows (any other command) are never touched;
+* a row with `reuse` = `force` is a repeat on purpose: it is never pruned (here and in `run-session`) and the runner sends it again
+  whatever the service has cached (so no "download it again?" question).
 
 A copy of the file goes to `backups/` next to it. `--dry-run` only reports.
 

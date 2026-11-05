@@ -350,8 +350,16 @@ def test_db_backfill_runs_both_projections_and_xml_and_records_activity(monkeypa
     async def fake_activity(*args, **kwargs):
         calls["activity"] = (args, kwargs)
 
+    async def fake_names():
+        return {"nameless": 0}
+
+    async def fake_holdings():
+        return 7
+
     monkeypatch.setattr(database, "backfill_projections", fake_projections)
     monkeypatch.setattr(xml_ingest, "backfill_documents", fake_xml)
+    monkeypatch.setattr(database, "backfill_subject_names", fake_names)
+    monkeypatch.setattr(database, "refresh_subject_holdings", fake_holdings)
     monkeypatch.setattr(database, "record_activity", fake_activity)
 
     result = runner.invoke(app, ["db", "backfill", "--force", "--limit", "12"])
@@ -361,14 +369,14 @@ def test_db_backfill_runs_both_projections_and_xml_and_records_activity(monkeypa
     assert calls["xml"] == (True, 12)
     assert calls["activity"][0] == ("db.backfill",)
     assert calls["activity"][1]["params"] == {"what": "all", "force": True, "limit": 12}
-    assert calls["activity"][1]["result"] == {"projections": 3, "xml": 5}
+    assert calls["activity"][1]["result"] == {"projections": 3, "xml": 5, "names": {"nameless": 0}, "holdings": 7}
 
 
 def test_db_backfill_rejects_unknown_target():
     result = runner.invoke(app, ["db", "backfill", "unknown"])
 
     assert result.exit_code == 2
-    assert "usa projections, xml o all" in result.output
+    assert "usa projections, xml, holdings, names o all" in result.output
 
 
 def test_floor_plan_validate_passes_inputs_and_writes_report(monkeypatch, tmp_path):

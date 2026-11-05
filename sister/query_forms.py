@@ -183,6 +183,7 @@ _BASE_FORMS: dict[str, QueryForm] = {
             _RICHIEDENTE,
             _MOTIVO,
         ),
+        extra_params=("provincia", "omonimo_da", "max_omonimi"),
     ),
     "elenco": QueryForm(
         "elenco",
@@ -460,6 +461,11 @@ FLAGS: dict[str, tuple[str, ...]] = {
 }
 
 _EXTRA_HELP = {
+    "omonimo_da": (
+        "Persona giuridica: primo record di anagrafe da aprire (1 = il primo). Un codice può avere centinaia di record; "
+        "usalo per continuare un risultato «incompleta»"
+    ),
+    "max_omonimi": "Persona giuridica: apri al massimo questo numero di record in questa richiesta (default: tutti)",
     "provincia": "Nome della provincia: seleziona l'ufficio SISTER (ometti per una ricerca nazionale)",
     "tipo_catasto": "T = Terreni, F = Fabbricati, E = entrambi (questa maschera non ha il campo catasto)",
     "foglio": "Numero di foglio (non è un campo di questa maschera)",

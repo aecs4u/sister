@@ -339,7 +339,7 @@
             cells.zone = document.createElement('td');
             cells.typology = document.createElement('td');
             if (!editable) {
-                cells.zone.textContent = estimate.omi_zona || '—';
+                cells.zone.textContent = estimate.omi_zona_label || estimate.omi_zona || '—';
                 cells.typology.textContent = estimate.omi_tipologia || estimate.omi_tipologia_default || '—';
                 cells.zone.title = cells.typology.title = 'Accedi per modificare la selezione OMI.';
             }
@@ -354,7 +354,7 @@
                 return String(item.code) === typologyCode;
             });
             cells.zone = document.createElement('td');
-            cells.zone.textContent = zone || '—';
+            cells.zone.textContent = estimate.omi_zona_label || zone || '—';
             cells.zone.title = 'Accedi per modificare la selezione OMI.';
             cells.typology = document.createElement('td');
             cells.typology.textContent = typology ? typology.label : (typologyCode || '—');
@@ -366,7 +366,8 @@
         var zoneSelect = text(zoneCell.body, 'select', 'form-select form-select-sm');
         zoneSelect.setAttribute('aria-label', 'Zona OMI per il fabbricato');
         var guessedZone = String(estimate.omi_zona || '');
-        option(zoneSelect, '', guessedZone ? 'Automatica · ' + guessedZone : 'Automatica · zona non determinata');
+        var guessedLabel = estimate.omi_zona_label || guessedZone;
+        option(zoneSelect, '', guessedZone ? 'Automatica · ' + guessedLabel : 'Automatica · zona non determinata');
         var seenZones = {};
         (options.zones || []).forEach(function (item) {
             var code = String(item.code || '');
@@ -374,7 +375,7 @@
             seenZones[code] = true;
             option(zoneSelect, code, item.label || code);
         });
-        if (guessedZone && !seenZones[guessedZone]) option(zoneSelect, guessedZone, guessedZone + ' · stima corrente');
+        if (guessedZone && !seenZones[guessedZone]) option(zoneSelect, guessedZone, guessedLabel + ' · stima corrente');
         if (estimate.omi_zone_selected && guessedZone) zoneSelect.value = guessedZone;
         else zoneSelect.value = '';
         var typologyCell = addSelectCell();

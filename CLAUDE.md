@@ -22,6 +22,19 @@ SISTER is a FastAPI service + Typer CLI for automated cadastral data extraction 
   - `cadastral_values.py` / `omi_quotes.py` / `land_registry_kpis.py` / `valuation_docs.py` — valore catastale (IMU base) and indicative OMI estimate
     on the subject-visura page, and the data behind `/valuation`. OMI quotes come from the local `omi` database (`public` schema;
     `OMI_POSTGRES_DSN`); OMI has no land quotes, so terreni get the cadastral value only. Details and gotchas: `docs/valuation.md`
+  - `/persons` and `/companies` — one archive table (`templates/subject_index.html`, `static/js/subject_index.js`, `kind` = person|company).
+    **The server does the work**: the HTML carries only aggregates (`database.subject_overview`: card totals + widest/max values per column,
+    used to size the columns), `<route>/index.json` returns one page (`database.query_subject_profiles`: search `q`, column filters
+    `f_<field>` with `>10`/`10-50` for numbers, sort, `page`/`size` ≤ 500, all SQL over the `p` CTE of `_subject_profile_ctes`; ETag → 304) and
+    `<route>/index.csv` the whole filtered list. Tabulator runs in remote mode; sort, filters, search and ranking links live in the URL
+    (`?q=&sort=&dir=&f_<field>=`, e.g. `?f_land=%3E5&sort=cadastral_value_share&dir=desc`), the shown columns are remembered per browser,
+    under 768 px it renders cards (server-paged), ★ toggles `PUT <route>/<code>/favorite`. When adding a column, add it to the `p` CTE,
+    `SUBJECT_*_FIELDS`/`_SUBJECT_SORT_SQL`, `_profile_from_row`, the JS `defs`, and the CSV columns. Holdings and valori catastali (full and pro quota, IMU base) are stored in `subject_holding`
+    (`database.refresh_subject_holdings`, refreshed by `save_response` for each subject search; `sister db backfill holdings` rebuilds all;
+    `unvalued` = properties with no computable value, `unknown_share` = properties counted 1/1 for lack of a quota, `searched_at` = the search the
+    figures come from; company totals sum every registry record sharing the P.IVA, so ANAS-like entities are inflated). A search by code returns no
+    name: `subject_names.py` + `sister db backfill names` fill code-only subjects from the batch lists (`inputs/**/*.md`, backups
+    included) and, if `OPENDATA_DATABASE_DSN` is set, from opendata managers/shareholders (fill-only, never overwrites a name)
   - `omi_zone_overview.py` — `/omi/valuation` zone overview: OMI quote history, variations, yield, successor hint, ISTAT/MEF/Eurostat
     context from the `omi` and `aecs4u-stats` databases (`docs/valuation.md`)
   - `pdf_typst.py` + `typst/visura.typ` + `GET /documents/<id>/pdf` — PDF of a visura (subject or property), typeset with **Typst** (`typst` package, no browser):
@@ -101,9 +114,8 @@ uv run sister build dossier-graph --seed <CF|PIVA>
 - The service **never logs in by itself**: it attaches to the SISTER session left open in the shared Chrome
   (`BROWSER_CDP_ENDPOINT`) by `sister app login`. One session per user ("Utente gia' in sessione" → `ade_login.py --close`);
   it expires after about 30 minutes and is lost when Chrome restarts. Details: `docs/portal_session.md`.
-- `scripts/start.sh` runs without `--reload` by default so edits cannot restart a live demo or batch process. Opt in to
-  hot reload for local UI work with `scripts/start.sh --reload`. Reload watches every `*.py` (including
-  `scripts/` and `tests/`) and can drop an in-flight request; do not use it for batches or crawlers. A restart does
+- `scripts/start.sh` runs uvicorn with `--reload` by default (edits to `*.py`/`*.html` restart the service). Reload watches every `*.py`
+  (including `scripts/` and `tests/`) and can drop an in-flight request: use `scripts/start.sh --no-reload` for demos, batches and crawlers. A restart does
   **not** log out (CDP mode).
 - **A SISTER session lasts ~30 minutes from the login, whatever the activity** (measured 2026-10-26: 29.6, 29.8 and 30.4 min;
   the keep-alive does not extend it). Run bulk work with `sister batch run-session --batch <dir> ...` right after the login:
@@ -278,7 +290,9 @@ See `docs/document_due_diligence_batch.md` for document-derived property jobs an
 
 ## Persona giuridica queries
 
-Companies must use `POST /api/v1/visura/persona-giuridica` with `{"identificativo": "<vat_number>", "tipo_catasto": "E"}` — **not** `/api/v1/visura/soggetto` (persona fisica). The SISTER portal has separate forms for natural persons vs legal entities.
+Companies must use `POST /api/v1/visura/persona-giuridica` with `{"identificativo": "<vat_number>", "tipo_catasto": "E"}` — **not** `/api/v1/visura/soggetto` (persona fisica). The SISTER portal has separate forms for natural persons vs legal entities. A code usually has **many registry records** (SISTER lists them first): the query opens every record and appends all the
+properties into one result (`omonimi`, `omonimo*` on each row, `incompleta`/`omonimo_prossimo` when it stopped early; `run-list` continues
+it, see `docs/data_extraction.md`).
 
 ## Recrowd integration
 

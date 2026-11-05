@@ -43,7 +43,7 @@ def classify(status: str | None, error: str | None = None) -> str:
         return TOO_MANY
     if any(marker in error for marker in _SESSION_MARKERS):
         return SESSION_EXPIRED
-    if status in ("queued", "running", None):
+    if status in ("queued", "running", "incomplete", None):
         return PENDING
     if "Error 500" in error or "NullPointerException" in error:
         return PORTAL_ERROR

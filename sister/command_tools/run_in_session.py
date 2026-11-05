@@ -159,7 +159,12 @@ async def answered_codes() -> set[str]:
                 text(
                     "SELECT DISTINCT subject_query FROM request WHERE subject_query IS NOT NULL "
                     "AND (cadastre_type IS NULL OR cadastre_type = 'E') "
-                    "AND (success IS TRUE OR error ILIKE '%NESSUNA CORRISPONDENZA%')"
+                    "AND (success IS TRUE OR error ILIKE '%NESSUNA CORRISPONDENZA%') "
+                    # an earlier persona giuridica answer that is only the list of registry records (or nothing at all) says
+                    # nothing about the properties: the code still has to be searched
+                    "AND NOT (success IS TRUE AND request_ref LIKE 'pnf\\_%' AND EXISTS ("
+                    "SELECT 1 FROM sister_archive.request_payload p WHERE p.request_id = request.id "
+                    "AND p.data NOT LIKE '%omonimi_totale%' AND p.data NOT LIKE '%visImmSel%'))"
                 )
             )
         ).scalars().all()
@@ -169,6 +174,8 @@ async def answered_codes() -> set[str]:
             await session.execute(text("SELECT fiscal_code FROM v_subject_search_outcome WHERE outcome = 'too_many'"))
         ).scalars().all()
         files = (await session.execute(text("SELECT file_name FROM document WHERE file_name ~* '^vs_'"))).scalars().all()
+    # "oltre 400" is final for a code (nothing narrows it) but not for a name: those are split by province of the seat
+    too_many = [code for code in too_many if len(str(code).strip()) in (11, 16) and str(code).strip().isalnum()]
     codes = {str(code).strip().upper() for code in [*rows, *too_many]}
     for name in files:
         match = re.match(r"vs_[a-z]+_([A-Z0-9]{11,16})_", name or "", re.I)
@@ -185,7 +192,8 @@ def prune_plan(directory: Path, answered: set[str]) -> tuple[int, int, int]:
     for query in plan.get("queries", []):
         params = query.get("params") or {}
         code = str(params.get("codice_fiscale") or params.get("identificativo") or "").strip().upper()
-        if code and code in answered:
+        forced = query.get("reuse") == "force"  # repeated on purpose: it stays even though SISTER already answered it
+        if code and code in answered and not forced:
             done += 1
         elif len(code) == 16 and not valid_codice_fiscale(code):
             invalid += 1

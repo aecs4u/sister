@@ -46,7 +46,7 @@ Columns observed in the stored responses (452 responses, 2026-10-09). `*` = no t
 | `search`, `intestati` — terreni | *Elenco Immobili* | Foglio, Particella, Qualità, Classe, **ha / are / ca**, **Reddito dominicale / agrario**, Partita, Porzioni\* | `visura_properties` (`area` in m², incomes) |
 | `intestati` (phase 1) | *Elenco Intestati* | Nominativo o denominazione (name + birth place + date), Codice fiscale, Titolarità, Quota, Altri dati\*; radios: sesso, luogo e data di nascita, sede | `cadastral_subjects`, `geographic_places`, `ownership_rights`, `visura_owners` (linked by `result_id`) |
 | `soggetto` / `soggetto-immobili` | *Elenco immobili* per provincia | Catasto, Titolarità (`Proprieta' per 1/2`), Ubicazione, Foglio, Particella, Sub, Classamento (`Zona 1 Cat.A/4`), Classe, Consistenza, Rendita, Partita; `provincia`, `visImmSel`; with `--con-intestati` the owners of each row | `visura_properties` + the queried subject as owner (`visura_owners`) |
-| `azienda` / persona giuridica | *Elenco soggetti* | Denominazione, Sede, Codice Fiscale | `visura_properties` (`property_type=entity`) + `cadastral_subjects` |
+| `azienda` / persona giuridica | *Elenco soggetti*, then *Elenco Province* and *Immobili* of **every** record | the properties of each record, tagged with `omonimo`, `omonimo_denominazione`, `omonimo_sede` | as `soggetto-immobili` |
 | `elenco` | *Elenco immobili* (6 583 rows for one foglio in the fixture) | Foglio, Particella, Subalterno, Zona, Partita, Rendita, Indirizzo, categoria_gruppo | `visura_properties` |
 | `indirizzo`, `partita` | list as `search` | + `indirizzo_trovato` | `visura_properties` |
 | `nota`, `mappa`, `export-mappa`, `originali`, `fiduciali`, `ispezioni`, `ispezioni-cartacee`, `elaborato-planimetrico`, `riepilogo`, `richieste` | generic result table (`risultati`) | headers not yet verified on live data (most fixtures are empty or rejected by the form) | raw JSON only (`visura_responses.data`) |
@@ -103,3 +103,55 @@ the application schema.
 * Classification/identifier history of a *storica* visura as typed rows (kept in `document_xml_nodes`).
 * The `risultati` tables of `nota`, `mappa`, `originali`, `fiduciali`, `ispezioni`, `elaborato-planimetrico`: capture a
   successful live result per query, add it to `tests/fixtures/single_step/`, then map its columns.
+
+
+## Persona giuridica: one code, many registry records
+
+For a codice fiscale / partita IVA SISTER lists one row per *registry record* that carries it (Denominazione, Sede, same
+code): the same code can be stored under many names and seats (a region, its comuni and its demanio; ANAS has hundreds).
+Each record is a different subject with its own properties, so `azienda` (`run_visura_persona_giuridica`) opens them one
+by one (Ricerca → Elenco Province → Immobili) and **appends everything into one result for the code**:
+
+* `immobili`: every property, with `omonimo` (1-based position), `omonimo_denominazione`, `omonimo_sede`;
+* `omonimi`: one summary line per record (`immobili` count, `province`, `errore` when that record could not be read);
+* `province`: the province table summed over the records; `omonimi_totale` / `omonimi_elaborati`.
+
+A long list is not read past `SISTER_OMONIMI_MAX_SECONDS` (150 s; a client waits 300 s for an answer) or a lost SISTER session. The result is then
+`incompleta: true` with `omonimo_prossimo` (the record to continue from) and `interrotta` (why). Options of the query:
+`--omonimo-da N` (first record) and `--max-omonimi N` (at most N records per request).
+
+`sister batch run-list` / `query batch --resume` follow this on their own: an `incompleta` answer is continued in the same
+row with `omonimo_da` until the code is complete; the follow-ups are listed in the row's `request_ids`. If the session
+ends in the middle the row is journaled `incomplete` with `omonimo_prossimo` and the next session resumes from that
+record. A row that an older run journaled `completed` without `omonimi_totale` only has the list of records, so
+`--resume` reads it again (forced), and `prune-list` / `answered_codes` do not count such an answer as done.
+
+### More than 400 matches
+
+SISTER lists at most 400 subjects for a search. Beyond that it answers on the search form itself with *"Superato il
+limite massimo di 400 elementi. Aggiungere altri parametri per la ricerca"* and shows no result. The `azienda` and
+`soggetto` flows recognise that page (`utils._too_many`) and answer with the clean error `TOO_MANY_ERROR` and
+`troppi_risultati: true`, instead of reading the form as if it were a result list. It is a final answer, never retried.
+
+* A **code** (codice fiscale / partita IVA) cannot be narrowed: the row ends as `too_many` (and `prune-list` counts it as answered).
+* A **name** (`identificativo` is a denominazione) can: `sister batch run-list` / `query batch` split the row into one
+  request per province of the seat (`provincia_sede`, the 107 options of the form, ids `<id>.<PR>`), each with its own journal
+  line. The row is `completed` when every province was answered, otherwise `incomplete` (`split_pending`; `--resume` asks
+  only those provinces). A province that still matches more than 400 is listed in `split_too_many`: narrow it with
+  `comune_sede` or a more exact name. Names are never pruned as `too_many`, because the split is how they get answered.
+
+## The intermediate pages of a subject search
+
+A search by codice fiscale / partita IVA goes through three pages before the properties, and each now ends up in the result:
+
+| Page | Shows | In the result (`data`) | Stored in |
+|---|---|---|---|
+| *Elenco Omonimi* (`RicercaPF.do` / `RicercaVisPNF.do`) | persons: cognome, nome, data e luogo di nascita, sesso, codice fiscale; companies: denominazione, sede, codice fiscale | `soggetti`: one entry per listed subject, selected or not (`tipo`, the decoded fields, `indice`, `selezionato`, and the whole row as `riga`) | `subject` (name and birth data, **only where missing**), `subject_record` (company records) |
+| *Elenco Province* | provincia, fabbricati, terreni | `province` | `request_province` |
+| *Elenco immobili* | the properties | `immobili` | `property`, `cadastral_unit`, owners |
+
+The Omonimi page used to be clicked through and its content dropped; it is the only place a code search shows who the subject is,
+so a subject first met by code (name = code, `/persons` without a name) is named by the next search of that code. A name search
+that lists several homonyms stores **all** of them, not only the one the flow opens. A company code with a single record names the
+subject; with several records (ANAS-like) the records are stored and the subject keeps its code as name.
+Parsers: `result_parsers.parse_omonimo_value` / `omonimo_details`; storage: `database._persist_listed_subjects`.

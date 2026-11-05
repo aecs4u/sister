@@ -14,7 +14,7 @@ from bs4 import BeautifulSoup
 from playwright.async_api import Page
 
 from .models import CaptchaRequired
-from .result_parsers import parse_intestato_value
+from .result_parsers import omonimo_details, parse_intestato_value
 from .query_forms import get_query_form
 
 log = logging.getLogger("sister.utils")
@@ -344,17 +344,11 @@ async def _navigate_to_scelta_servizio(page: Page, page_logger: PageLogger, max_
         raise Exception(f"Sessione scaduta o errore caricamento pagina - URL: {page.url}")
 
 
-def parse_table(html):
-    """Rows of a SISTER result table as dicts keyed by column header.
-
-    The unnamed leading column holds the row's radio button: it is dropped when blank, and the radio's ``value``
-    (which identifies the row on the portal, e.g. ``visImmSel`` with the catasto comune code) is kept under the
-    radio's ``name``. Short rows are padded with empty cells.
-    """
-    soup = BeautifulSoup(html, "html.parser")
-    headers = [th.get_text(strip=True) for th in soup.find_all("th")]
+def _table_rows(scope) -> list[dict]:
+    """Rows of one parsed SISTER result table (or page) as dicts keyed by column header."""
+    headers = [th.get_text(strip=True) for th in scope.find_all("th")]
     rows = []
-    for tr in soup.find_all("tr"):
+    for tr in scope.find_all("tr"):
         cells = [td.get_text(strip=True) for td in tr.find_all("td")]
         if cells:
             # Se ci sono meno celle che header, aggiungi celle vuote
@@ -367,6 +361,25 @@ def parse_table(html):
                     row[name] = value
             rows.append(row)
     return rows
+
+
+def parse_table(html):
+    """Rows of a SISTER result table as dicts keyed by column header.
+
+    The unnamed leading column holds the row's radio button: it is dropped when blank, and the radio's ``value``
+    (which identifies the row on the portal, e.g. ``visImmSel`` with the catasto comune code) is kept under the
+    radio's ``name``. Short rows are padded with empty cells.
+    """
+    return _table_rows(BeautifulSoup(html, "html.parser"))
+
+
+async def _radio_values(page, selector: str) -> list[str]:
+    """The ``value`` of every element matching ``selector``, in one browser call.
+
+    A list can hold thousands of rows (one owner: 5,190 immobili); asking the browser for each radio in turn is one
+    round trip per row and each has to find its row again, which took minutes. This is a single call.
+    """
+    return [str(value or "") for value in await page.eval_on_selector_all(selector, "els => els.map(e => e.value)")]
 
 
 async def _comune_selector(page) -> str:
@@ -782,18 +795,33 @@ async def _select_sezione(page, comune: str, sezione=None):
     return None
 
 
+def _urban_section_fallback(selected, sezione, sezione_urbana):
+    """The sezione urbana to type when the ``sezione`` given could not be selected.
+
+    The prefix of a listed foglio (``RA/103``, ``PON/4``) is a census section in Ravenna (a ``sezione`` option exists) but
+    an *urban* section in Genova, Napoli and others (no such option: the form has the separate ``sezUrb`` input). A list
+    built from the radios cannot tell which, so when the comune has no matching ``sezione`` the code is typed as the
+    sezione urbana. Without it the parcel is searched without its section and SISTER answers "nessuna corrispondenza",
+    a final answer that is not true.
+    """
+    if sezione_urbana or selected or not sezione:
+        return sezione_urbana
+    code = str(sezione).strip()
+    return code.upper() if re.fullmatch(r"[A-Za-z0-9]{1,3}", code) else None
+
+
 IMMOBILI_RADIOS = "input[type='radio'][property='visImmSel'], input[type='radio'][name='visImmSel']"
 _FALSE_VALUES = {"0", "false", "no", "n", "off", "f", "non"}
 
 
 async def _classify_immobili_radios(page, radio_count: int) -> tuple[list[int], set[int], int]:
     """Split the immobili list into the rows to visit, the 'Bene comune non censibile' rows and the soppressi count."""
-    radios = page.locator(IMMOBILI_RADIOS)
+    values = await _radio_values(page, IMMOBILI_RADIOS)
     active: list[int] = []
     bene_comune: set[int] = set()
     soppressi = 0
-    for i in range(radio_count):
-        val = await radios.nth(i).get_attribute("value") or ""
+    for i in range(min(radio_count, len(values))):
+        val = values[i]
         if "Soppress" in val:
             soppressi += 1
             continue
@@ -811,12 +839,11 @@ async def _extract_intestati_with_identity(page) -> list[dict]:
     their number matches and the codici fiscali agree.
     """
     rows = await _extract_intestati_playwright(page)
-    radios = page.locator("input[type='radio'][name='intestatoSelezionato']")
-    count = await radios.count()
-    if not rows or count != len(rows):
+    values = await _radio_values(page, "input[type='radio'][name='intestatoSelezionato']")
+    if not rows or len(values) != len(rows):
         return rows
     for i, row in enumerate(rows):
-        identity = parse_intestato_value(await radios.nth(i).get_attribute("value") or "")
+        identity = parse_intestato_value(values[i])
         row_id = (row.get("Codice fiscale") or "").strip().upper()
         if row_id and identity["codice_fiscale"] and row_id != identity["codice_fiscale"]:
             continue
@@ -1246,9 +1273,10 @@ async def run_visura(
     except Exception as e:
         raise Exception(f"Errore selezione comune '{comune_value}': {e}")
 
-    await _select_sezione(page, comune, sezione)
+    selected = await _select_sezione(page, comune, sezione)
+    sezione_urbana = _urban_section_fallback(selected, sezione, sezione_urbana)
 
-    # Fill "Sezione urbana" — only when explicitly provided (separate from dropdown sezione)
+    # Fill "Sezione urbana" — as given, or the sezione the comune has no such option for (see _urban_section_fallback)
     if sezione_urbana:
         sez_urb_field = page.locator("input[name='sezUrb']")
         if await sez_urb_field.count() > 0:
@@ -1303,6 +1331,10 @@ async def run_visura(
             "error": "NESSUNA CORRISPONDENZA TROVATA",
             "page_visits": page_logger.page_visits,
         }
+
+    # STEP 3.2: still on the search form? Then there is no result. The form's own table (it has a "Foglio" label) would be
+    # read as the immobili list and the request reported as a success with no owners.
+    await _raise_if_still_on_search_form(page)
 
     # STEP 4: Estrazione tabella Elenco Immobili
     log.info("Estraendo immobili...")
@@ -1462,7 +1494,8 @@ async def _resubmit_search_for_immobili_list(
     if comune_value:
         await page.locator(await _comune_selector(page)).select_option(comune_value)
 
-    await _select_sezione(page, comune, sezione)
+    selected = await _select_sezione(page, comune, sezione)
+    sezione_urbana = _urban_section_fallback(selected, sezione, sezione_urbana)
 
     if sezione_urbana:
         sez_urb = page.locator("input[name='sezUrb']")
@@ -3160,6 +3193,15 @@ async def _search_soggetto(
             "total_results": 0,
             "error": f"{NO_MATCH_ERROR} (codice fiscale non valido secondo SISTER)",
         }
+    if _too_many(page_text):
+        log.warning("Ricerca %s: oltre 400 risultati", codice_fiscale)
+        return {
+            "soggetto": codice_fiscale,
+            "immobili": [],
+            "total_results": 0,
+            "troppi_risultati": True,
+            "error": TOO_MANY_ERROR,
+        }
     if "NESSUNA CORRISPONDENZA TROVATA" in page_text:
         elapsed = time.time() - time0
         log.warning("Nessuna corrispondenza trovata (%.1fs)", elapsed)
@@ -3238,7 +3280,7 @@ async def run_visura_soggetto(
     return await run_soggetto_immobili(page, codice_fiscale, tipo_catasto=tipo_catasto, provincia=provincia)
 
 
-async def run_visura_persona_giuridica(
+async def _search_persona_giuridica(
     page,
     identificativo,
     tipo_catasto="E",
@@ -3246,10 +3288,14 @@ async def run_visura_persona_giuridica(
     motivo="Esplorazione",
     per_conto_di=None,
 ):
-    """Search by legal entity (P.IVA or denominazione) on SISTER.
+    """Search by legal entity (P.IVA or denominazione) on SISTER and stop on the page SISTER answers with.
 
     identificativo: partita IVA (11 digits) or company name (denominazione).
     If provincia is None, selects "NAZIONALE" for nationwide search.
+
+    For a codice fiscale SISTER usually answers with the *records* page (SceltaOmonimi): one row per registry record that
+    carries that code (denominazione, sede, ``omonimoSelezionato`` radio). Those rows are returned in ``immobili`` only
+    because they are what the table holds: they are not properties. ``run_visura_persona_giuridica`` opens every record.
     """
     import os
 
@@ -3335,6 +3381,17 @@ async def run_visura_persona_giuridica(
 
     # STEP 7: Check for errors
     page_text = await page.inner_text("body")
+    if _too_many(page_text):
+        # more than 400 subjects match: the page is the search form again, not a result. Narrow the search (for a
+        # denominazione: provincia_sede / comune_sede; run-list splits it by province on its own)
+        log.warning("Ricerca %s: oltre 400 risultati", identificativo)
+        return {
+            "soggetto": identificativo,
+            "immobili": [],
+            "total_results": 0,
+            "troppi_risultati": True,
+            "error": TOO_MANY_ERROR,
+        }
     if "NESSUNA CORRISPONDENZA TROVATA" in page_text:
         elapsed = time.time() - time0
         log.warning("Nessuna corrispondenza trovata (%.1fs)", elapsed)
@@ -3514,7 +3571,7 @@ def _extract_result_tables(page_html: str) -> list:
                 "Mappa",
             )
         ):
-            return parse_table(str(table))
+            return _table_rows(table)  # the page is parsed once: not again as a string
     return []
 
 
@@ -3793,6 +3850,25 @@ async def _raise_on_form_error(page) -> None:
     match = _FORM_ERROR_RE.search(re.sub(r"\s+", " ", await page.inner_text("body")))
     if match:
         raise Exception(f"SISTER ha rifiutato il modulo: {match.group(1).strip()}")
+
+
+async def _raise_if_still_on_search_form(page) -> None:
+    """Fail loudly when a property search left the browser on its own search form instead of an immobili list.
+
+    SISTER bounces a search it cannot run back to the form (a missing sezione urbana, a comune with several catasto
+    codes, a bad value) with or without a message. The portal's message is reported when there is one; the error is
+    not SISTER's "nessuna corrispondenza", so it is not final and the row can be repeated.
+    """
+    has_list = await page.locator(
+        "input[type='radio'][property='visImmSel'], input[type='radio'][name='visImmSel'], input[name='confAssSub']"
+    ).count()
+    on_form = await page.locator("input[name='particella1']").count() and await page.locator("input[name='foglio']").count()
+    if has_list or not on_form:
+        return
+    await _raise_on_form_error(page)
+    text = re.sub(r"\s+", " ", await page.inner_text("body"))
+    text = text.split("Dati della ricerca")[-1].strip()[:300]
+    raise Exception(f"Ricerca immobile senza risultato: il portale mostra ancora il modulo di ricerca ({text})")
 
 
 def _search_button(page):
@@ -5271,18 +5347,31 @@ async def run_visura_storica(
 _SOGGETTO_STORICA_VALUES = {"analitica": "0", "sintetica": "5"}
 _PROVINCE_RADIOS = "input[type='radio'][name='omonimonazionale'], input[type='radio'][property='omonimonazionale']"
 NO_MATCH_ERROR = "NESSUNA CORRISPONDENZA TROVATA"
+# SISTER lists at most 400 subjects for a search: more are refused on the search form itself, asking for more parameters
+TOO_MANY_MARKER = "Superato il limite massimo di 400 elementi"
+TOO_MANY_ERROR = f"{TOO_MANY_MARKER}. Aggiungere altri parametri per la ricerca"
+
+
+def _too_many(page_text: str) -> bool:
+    """Is this SISTER's refusal of a search that matches more than 400 subjects?"""
+    return TOO_MANY_MARKER in (page_text or "")
 # why the last search of a tab found no subject (SISTER's own answer, kept to report it as it is)
 _SEARCH_ERROR: "weakref.WeakKeyDictionary[Page, str]" = weakref.WeakKeyDictionary()
+# the subjects the last *Elenco Omonimi* page of a tab listed (persons: cognome, nome, nascita, sesso, codice fiscale; companies:
+# denominazione, sede, codice fiscale). The flow clicks through that page; this keeps what it showed
+_LISTED_SUBJECTS: "weakref.WeakKeyDictionary[Page, list[dict]]" = weakref.WeakKeyDictionary()
 
 
-async def _open_soggetto_province_page(page, identifier, tipo_catasto, provincia, azienda=False) -> bool:
+async def _open_soggetto_province_page(page, identifier, tipo_catasto, provincia, azienda=False, omonimo_index=0) -> bool:
     """Search a persona fisica (codice fiscale) or giuridica (partita IVA) and stop on the page offering
     Immobili / Visura per Soggetto.
+
+    ``omonimo_index``: which record of the homonym page to open (0 = the first). A code can carry many registry records.
 
     Returns False when SISTER finds no match.
     """
     if azienda:
-        found = await run_visura_persona_giuridica(page, identifier, tipo_catasto=tipo_catasto, provincia=provincia)
+        found = await _search_persona_giuridica(page, identifier, tipo_catasto=tipo_catasto, provincia=provincia)
     else:
         found = await _search_soggetto(page, identifier, tipo_catasto=tipo_catasto, provincia=provincia)
     if found.get("error"):
@@ -5290,14 +5379,24 @@ async def _open_soggetto_province_page(page, identifier, tipo_catasto, provincia
         return False
     # SceltaOmonimi rejects the submit ("Selezionare un Omonimo") unless one homonym is selected
     omonimo = page.locator("input[type='radio'][name='omonimoSelezionato']")
-    if await omonimo.count() > 0:
-        await omonimo.first.check()
+    available = await omonimo.count()
+    _LISTED_SUBJECTS.pop(page, None)
+    if available > 0:
+        if omonimo_index >= available:
+            raise Exception(f"Omonimo {omonimo_index + 1} non trovato: la pagina ne elenca {available}")
+        # keep everything the page says about the listed subjects before clicking through it
+        rows = [r for r in _extract_result_tables(await page.content()) if isinstance(r, dict) and r.get("omonimoSelezionato")]
+        _LISTED_SUBJECTS[page] = [omonimo_details(row, i + 1, i == omonimo_index) for i, row in enumerate(rows)]
+        await omonimo.nth(omonimo_index).check()
     ricerca = page.locator("input[name='visura'][value='Ricerca']")
     if await ricerca.count() == 0:
         if await page.locator("input[name='immobili'][value='Immobili']").count() > 0:
             return True  # no homonym step for this subject: the province table is already shown
         # neither page: say what is there instead of waiting 30 s for a button that never comes
         text = re.sub(r"\s+", " ", await page.inner_text("body"))
+        if _too_many(text):
+            _SEARCH_ERROR[page] = TOO_MANY_ERROR
+            return False
         text = text.split("Dati della ricerca")[-1].strip()[:1200]
         raise Exception(f"Pagina inattesa dopo la ricerca ({page.url}): {text}")
     await _click_nav(page, ricerca)
@@ -5388,8 +5487,7 @@ async def run_soggetto_documento(
 
 async def _extract_owners(page) -> list[dict]:
     """Owners of the selected immobile on the Intestati page (identity from the radios, shares from the table)."""
-    radios = page.locator("input[type='radio'][name='intestatoSelezionato']")
-    owners = [parse_intestato_value(await radios.nth(i).get_attribute("value")) for i in range(await radios.count())]
+    owners = [parse_intestato_value(value) for value in await _radio_values(page, "input[type='radio'][name='intestatoSelezionato']")]
     table = await _extract_intestati_playwright(page)
     for i, row in enumerate(table):
         extra = {
@@ -5432,13 +5530,14 @@ def _province_elenco(rows: list) -> list[dict]:
 
 
 async def run_soggetto_immobili(
-    page, codice_fiscale, tipo_catasto="E", provincia=None, con_intestati=False, azienda=False
+    page, codice_fiscale, tipo_catasto="E", provincia=None, con_intestati=False, azienda=False, omonimo_index=0
 ):
     """Owner → properties: list every immobile of a persona fisica/giuridica in each province.
 
     con_intestati: also open the Intestati page of each immobile (property → owners), so that the result holds
     both directions of the ownership graph. No document is requested and no CAPTCHA is involved.
     azienda: ``codice_fiscale`` is a partita IVA (persona giuridica).
+    omonimo_index: the record of the homonym page to open (0 = the first).
     """
     if isinstance(con_intestati, str):
         con_intestati = con_intestati.lower() in ("1", "true", "yes", "si")
@@ -5450,6 +5549,7 @@ async def run_soggetto_immobili(
     page_logger = PageLogger("soggetto_immobili")
     immobili: list[dict] = []
     province_elenco: list[dict] = []
+    soggetti: list[dict] = []  # the subjects of the Elenco Omonimi page (see _LISTED_SUBJECTS)
     index = 0
     n_province = None
 
@@ -5477,10 +5577,13 @@ async def run_soggetto_immobili(
                 await _click_nav(page, back.first)
                 if await page.locator(_PROVINCE_RADIOS).count() > 0:
                     return await pick_province(idx)
-        if not await _open_soggetto_province_page(page, codice_fiscale, tipo_catasto, provincia, azienda=azienda):
+        if not await _open_soggetto_province_page(
+            page, codice_fiscale, tipo_catasto, provincia, azienda=azienda, omonimo_index=omonimo_index
+        ):
             return None
         if not province_elenco:
             province_elenco.extend(_province_elenco(_extract_result_tables(await page.content())))
+        soggetti.extend(item for item in _LISTED_SUBJECTS.pop(page, []) if item not in soggetti)
         return await pick_province(idx)
 
     while True:
@@ -5501,8 +5604,9 @@ async def run_soggetto_immobili(
 
         rows = _extract_result_tables(await page.content()) or []
         list_radios = "input[type='radio'][name='visImmSel'], input[type='radio'][property='visImmSel']"
-        radios = page.locator(list_radios)
-        values = [await radios.nth(i).get_attribute("value") for i in range(await radios.count())]
+        started = time.monotonic()
+        values = await _radio_values(page, list_radios)
+        log.info("Elenco immobili %s: %d righe lette in %.1fs", label, len(rows), time.monotonic() - started)
         batch = []
         for i, value in enumerate(values):
             row = dict(rows[i]) if i < len(rows) and isinstance(rows[i], dict) else {}
@@ -5543,8 +5647,177 @@ async def run_soggetto_immobili(
     log.info("[green]Immobili soggetto[/green] %s: %d in %.1fs", codice_fiscale, len(immobili), time.time() - time0)
     return {
         "soggetto": codice_fiscale,
+        "soggetti": soggetti,
         "province": province_elenco,
         "immobili": immobili,
         "total_results": len(immobili),
         "page_visits": page_logger.page_visits,
     }
+
+
+# --- persona giuridica: every registry record of a code, appended into one result ---------------------------
+
+
+def _int_field(value, default: int) -> int:
+    try:
+        return int(str(value).strip())
+    except (TypeError, ValueError):
+        return default
+
+
+def _omonimi_records(rows) -> list[dict]:
+    """The registry records of the SceltaOmonimi table: one row per record that carries the searched code."""
+    records = []
+    for row in rows or []:
+        if isinstance(row, dict) and row.get("omonimoSelezionato"):
+            records.append(
+                {
+                    "denominazione": str(row.get("Denominazione") or "").strip(),
+                    "sede": str(row.get("Sede") or "").strip(),
+                    "codice_fiscale": str(row.get("Codice Fiscale") or "").strip(),
+                }
+            )
+    return records
+
+
+def _session_lost(exc: BaseException) -> bool:
+    text = str(exc).lower()
+    return "sessione" in text and ("scaduta" in text or "non valida" in text)
+
+
+def _append_omonimo(combined: dict, index: int, record: dict, result: dict | None, error: str | None = None) -> None:
+    """Append the properties of record ``index`` (0-based) to the combined result of the code.
+
+    Every property row keeps the record it was found under (``omonimo`` = 1-based position, ``omonimo_denominazione``,
+    ``omonimo_sede``); the per-province counts are summed; ``omonimi`` gets one summary line per record.
+    """
+    result = result or {}
+    rows = result.get("immobili") or []
+    for row in rows:
+        combined["immobili"].append(
+            {
+                **row,
+                "omonimo": index + 1,
+                "omonimo_denominazione": record.get("denominazione", ""),
+                "omonimo_sede": record.get("sede", ""),
+            }
+        )
+    for entry in result.get("province") or []:
+        key = (entry.get("codice"), entry.get("provincia"))
+        seen = combined["province"].setdefault(key, {**entry, "fabbricati": 0, "terreni": 0})
+        seen["fabbricati"] += entry.get("fabbricati", 0)
+        seen["terreni"] += entry.get("terreni", 0)
+    combined["page_visits"].extend(result.get("page_visits") or [])
+    summary = {
+        "indice": index + 1,
+        "denominazione": record.get("denominazione", ""),
+        "sede": record.get("sede", ""),
+        "codice_fiscale": record.get("codice_fiscale", ""),
+        "immobili": len(rows),
+        "province": [e.get("provincia") for e in result.get("province") or []],
+    }
+    if error or result.get("error"):
+        summary["errore"] = str(error or result.get("error"))[:300]
+    combined["omonimi"].append(summary)
+
+
+async def run_visura_persona_giuridica(
+    page,
+    identificativo,
+    tipo_catasto="E",
+    provincia=None,
+    motivo="Esplorazione",
+    per_conto_di=None,
+):
+    """Search a legal entity (partita IVA / codice fiscale / denominazione) and list its immobili.
+
+    SISTER answers a code with one row per *registry record* that carries it (the same code can be stored under many
+    denominazioni and sedi: ANAS has hundreds). Each record is a different subject with its own properties, so each one
+    is opened in turn (Ricerca → Elenco Province → Immobili) and **all the results are appended into one result for the
+    code**: ``immobili`` holds every property with the record it belongs to (``omonimo``, ``omonimo_denominazione``,
+    ``omonimo_sede``), ``omonimi`` one summary line per record, ``province`` the summed province table.
+
+    Optional form fields (``sister query azienda --omonimo-da N --max-omonimi N``):
+
+    * ``omonimo_da``: first record to open (1-based, default 1) — to continue an incomplete result;
+    * ``max_omonimi``: at most this many records in this request (default: all).
+
+    A long list is not run past ``SISTER_OMONIMI_MAX_SECONDS`` (150: a client waits 300 s for an answer) or a lost SISTER session: the result is then
+    ``incompleta`` and ``omonimo_prossimo`` is the record to continue from, so nothing already read is lost.
+    """
+    fields = current_form_fields()
+    first = max(_int_field(fields.get("omonimo_da"), 1), 1)
+    cap = max(_int_field(fields.get("max_omonimi"), 0), 0)
+    budget = float(os.getenv("SISTER_OMONIMI_MAX_SECONDS", "150") or 0)
+    started = time.monotonic()
+
+    found = await _search_persona_giuridica(
+        page, identificativo, tipo_catasto=tipo_catasto, provincia=provincia, motivo=motivo, per_conto_di=per_conto_di
+    )
+    if found.get("error"):
+        return found
+    records = _omonimi_records(found.get("immobili"))
+    listed = bool(records)  # False: SISTER went straight to the province table (one subject, no homonym step)
+    if not listed:
+        records = [{"denominazione": "", "sede": "", "codice_fiscale": str(identificativo)}]
+    total = len(records)
+    last = min(total, first - 1 + cap) if cap else total
+    log.info("Persona giuridica %s: %d record, apro da %d a %d", identificativo, total, first, last)
+
+    combined: dict = {"immobili": [], "province": {}, "omonimi": [], "page_visits": []}
+    index, failures, stopped = first - 1, 0, None
+    while index < last:
+        if budget and index > first - 1 and time.monotonic() - started > budget:
+            stopped = "tempo massimo raggiunto"
+            break
+        record = records[index]
+        try:
+            result = await run_soggetto_immobili(
+                page,
+                identificativo,
+                tipo_catasto=tipo_catasto,
+                provincia=provincia,
+                azienda=True,
+                omonimo_index=index if listed else 0,
+            )
+            failures = 0
+            _append_omonimo(combined, index, record, result)
+        except Exception as exc:  # noqa: BLE001 (one record must not lose the others)
+            if _session_lost(exc):
+                if not combined["omonimi"]:
+                    raise
+                stopped = "sessione SISTER scaduta"
+                break
+            failures += 1
+            log.warning("Record %d/%d di %s non letto: %s", index + 1, total, identificativo, exc)
+            _append_omonimo(combined, index, record, None, error=str(exc))
+            if failures >= 3:
+                stopped = f"3 errori consecutivi: {exc}"
+                break
+        index += 1
+        log.info("[green]%s[/green] record %d/%d: %d immobili finora", identificativo, index, total, len(combined["immobili"]))
+
+    done = len(combined["omonimi"])
+    all_failed = done > 0 and all(s.get("errore") for s in combined["omonimi"])
+    incomplete = index < total
+    out = {
+        "soggetto": identificativo,
+        "soggetti": [
+            omonimo_details(row, i + 1, False)
+            for i, row in enumerate(r for r in found.get("immobili") or [] if isinstance(r, dict) and r.get("omonimoSelezionato"))
+        ],
+        "omonimi": combined["omonimi"],
+        "omonimi_totale": total,
+        "omonimi_elaborati": done,
+        "incompleta": incomplete,
+        "omonimo_prossimo": index + 1 if incomplete else None,
+        "province": list(combined["province"].values()),
+        "immobili": combined["immobili"],
+        "total_results": len(combined["immobili"]),
+        "page_visits": combined["page_visits"],
+    }
+    if stopped:
+        out["interrotta"] = stopped
+    if all_failed:
+        out["error"] = combined["omonimi"][0]["errore"]
+    return out

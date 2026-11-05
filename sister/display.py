@@ -218,6 +218,12 @@ def readable_owners(tree: Any, as_of: date | None = None) -> Any:
 
 def register(env) -> None:
     """Attach the filters to a Jinja environment."""
+    from .cadastral_categories import CATEGORY_DESCRIPTIONS, category_description
+
+    # A global (not a filter): a template that is newer than the running code (templates reload from disk, Python does
+    # not) can test `category_description is defined` instead of failing to compile for a missing filter.
+    env.globals["category_description"] = category_description
+    env.globals["cadastral_category_descriptions"] = CATEGORY_DESCRIPTIONS
     env.filters.update(
         it_date=it_date,
         it_money=it_money,

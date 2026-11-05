@@ -318,6 +318,27 @@ self-hosted copy, passed as `chart_js_url`. The route (`web.web_omi_valuation`) 
 edit the theme and bump it in `uv.lock`. Without a zone the page lists the comune's zones of the newest release with a link
 to each overview. Tests: `tests/test_omi_zone_overview.py`.
 
+## Units, zones and coverage (2026-11-05)
+
+- **A unit listed under several quotas counts once.** The portal lists an immobile once per ownership entry (e.g. "per 32/100000"
+  and "per 32/300000" of the same unit). `subject_land_registry_kpis` keys buildings by `asset_key` (and land rows by
+  `asset_key` + classamento index): whole-asset totals (valore catastale, OMI card, surface, rendita) count the unit once
+  (`building_units` distinct, `building_rows` all rows, `duplicate_building_rows`), while every row keeps its own value and quota for
+  the owner assessment. `refresh_subject_holdings` (the `/persons` figures) dedupes by `cadastral_unit_id` the same way.
+- **The zone with the largest overlap may not quote the typology.** `omi_zones.omi_zone_ranking` lists every zone the parcel overlaps, largest
+  first. If the first does not quote the unit's typology (a mountain parcel mostly in a "residuale" zone), the valuation tries the next
+  zones in order (`omi_zona_used`, `neighbour_zone_units`), then the municipal range (`municipality_range_units`). A zone the user chose is
+  never overridden. Each row's note says which path was used.
+- **Parcel positions.** For a stored visura the valuation gets the visura's own map lookup *plus* the saved search's map
+  (`web._valuation_map`, `_hub_parcel_map_for_valuation`, which waits up to `SISTER_VALUATION_MAP_WAIT_SECONDS`, default 10, for the
+  background build). A calculation made with a placeholder map (positions "being looked up") is neither read from nor written to
+  `calculation_snapshot` (`_map_is_placeholder`), so it cannot stay cached for 12 hours. Calculation version 12.
+- **Coverage.** `asset_value_coverage` / `asset_value_coverage_note`: units valued over distinct units, and the share of the buildings'
+  cadastral value they carry. The card note keeps this sentence even when the long method text is shortened.
+- **Zone and category descriptions.** OMI zone options read "R1 · Residuale Montana (Extraurbana / rurale)" (`omi_quotes.zone_description`,
+  `zona_descrizione` and `fascia` of `omi_ref_zone`); the buildings table has a "Descrizione categoria" column from
+  `cadastral_categories.py` (complete D.M. 28/1998 list; the `cadastral_category` table lacks many).
+
 ## Limits to keep in mind
 
 - Not an appraisal. Superficie catastale is a proxy for the surface the OMI quote refers to.

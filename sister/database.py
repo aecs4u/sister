@@ -86,6 +86,7 @@ from .db_models import (
     RightKind,
     Subject,
     SubjectFavorite,
+    SubjectHolding,
     SubjectNote,
 )
 from .provinces import province_code, province_name
@@ -99,6 +100,7 @@ from .reference import (
     get_or_create_comune,
     get_or_create_right,
     get_or_create_subject,
+    get_or_create_subject_record,
     place_name,
 )
 from .request_types import request_type_info
@@ -133,7 +135,7 @@ DATABASE_SCHEMA = os.getenv("DATABASE_SCHEMA", "sister")
 DATABASE_ISTAT_SCHEMA = os.getenv("DATABASE_ISTAT_SCHEMA", DATABASE_SCHEMA)
 # raw payloads (response JSON, XML tree, extraction JSON) live in their own schema; tests point it at a throwaway one
 DATABASE_ARCHIVE_SCHEMA = os.getenv("DATABASE_ARCHIVE_SCHEMA", "sister_archive")
-DATABASE_REVISION = "20261122_office_listing"
+DATABASE_REVISION = "20261125_holding_details"
 
 # ---------------------------------------------------------------------------
 # Engine and session
@@ -224,6 +226,7 @@ async def init_db() -> None:
             "document_purchase",
             "subject_favorite",
             "subject_note",
+            "subject_holding",
             "manual_property_valuation",
             "property_valuation_preference",
             "property_affrancation_amount",
@@ -879,6 +882,26 @@ class ProjectedProperty:
     owners: list[tuple[dict[str, Any], dict[str, Any]]] = dc_field(default_factory=list)
     result_index: Optional[int] = None
     visura_present: bool = False
+    record: Optional[dict[str, Any]] = None  # the registry record (denominazione + sede) the row belongs to
+
+
+def _record_fields(data: dict, item: dict) -> Optional[dict[str, Any]]:
+    """The registry record of a persona giuridica row, so that entities sharing a fiscal code stay apart.
+
+    A row of the combined ``azienda`` answer carries ``omonimo_denominazione`` / ``omonimo_sede`` (the code is the
+    searched one); a row of the records list itself carries ``Denominazione`` / ``Sede`` / ``Codice Fiscale``.
+    """
+    if item.get("omonimo_denominazione") or item.get("omonimo_sede"):
+        code = str(data.get("soggetto") or item.get("Codice Fiscale") or "").strip().upper()
+        name, seat = item.get("omonimo_denominazione"), item.get("omonimo_sede")
+    elif item.get("omonimoSelezionato"):
+        code = str(item.get("Codice Fiscale") or data.get("soggetto") or "").strip().upper()
+        name, seat = item.get("Denominazione"), item.get("Sede")
+    else:
+        return None
+    if not identifier_kind(code):
+        return None
+    return {"fiscal_code": code, "denomination": name, "seat": seat}
 
 
 def _subject_query_owner(data: dict, item: dict) -> Optional[dict[str, Any]]:
@@ -911,7 +934,7 @@ def _project_response(
         if not isinstance(item, dict):
             continue
         prop, loc, subject = _property_row(response_id, tipo_catasto, item)
-        projected = ProjectedProperty(position, prop, loc, subject)
+        projected = ProjectedProperty(position, prop, loc, subject, record=_record_fields(data, item))
         result_item = result_items.get(position)
         raw_owners: list[dict] = []
         if result_item is not None:
@@ -1161,6 +1184,48 @@ async def _resolve_subject(session: AsyncSession, fields: dict[str, Any]) -> Opt
     return await get_or_create_subject(session, **fields)
 
 
+async def _persist_listed_subjects(session: AsyncSession, data: Optional[dict]) -> int:
+    """Store the persons and companies the *Elenco Omonimi* page listed (``data["soggetti"]``), selected or not.
+
+    A search by code goes through that page, which is the only place that shows the subject: cognome, nome, sesso, data and
+    luogo di nascita (persons) or denominazione and sede (companies). A person completes its ``subject`` (name and birth
+    data, only where missing); a company gets its registry record, and its name when the code has a single record. Returns
+    how many entries were stored.
+    """
+    entries = [e for e in (data.get("soggetti") if isinstance(data, dict) else None) or [] if isinstance(e, dict)]
+    records_per_code: dict[str, int] = {}
+    for entry in entries:
+        if entry.get("tipo") == "azienda" and (code := fiscal_code_key(entry.get("codice_fiscale"))):
+            records_per_code[code] = records_per_code.get(code, 0) + 1
+    stored = 0
+    for entry in entries:
+        code = fiscal_code_key(entry.get("codice_fiscale"))
+        if not code or not identifier_kind(code):
+            continue
+        if entry.get("tipo") == "azienda":
+            await get_or_create_subject_record(
+                session, fiscal_code=code, denomination=entry.get("denominazione"), seat=entry.get("sede")
+            )
+            if records_per_code.get(code) == 1 and entry.get("denominazione"):
+                await get_or_create_subject(
+                    session, fiscal_code=code, display_name=entry["denominazione"], subject_type="legal_entity"
+                )
+        else:
+            await get_or_create_subject(
+                session,
+                fiscal_code=code,
+                last_name=entry.get("cognome"),
+                first_name=entry.get("nome"),
+                gender=entry.get("sesso"),
+                date_of_birth=entry.get("data_nascita"),
+                birth_municipality=entry.get("luogo_nascita"),
+                birth_province=entry.get("provincia_nascita"),
+                subject_type="person",
+            )
+        stored += 1
+    return stored
+
+
 async def _persist_projection(
     session: AsyncSession,
     request_pk: int,
@@ -1173,6 +1238,7 @@ async def _persist_projection(
     One ``request_result`` row per property that has a result (or owners); the property and its owners both carry
     that ``result_id`` (the owner↔property views join on it), and ``owner_index`` keeps the portal's row order.
     """
+    await _persist_listed_subjects(session, data)
     properties, unlinked, result_rows = _project_response("", tipo_catasto, data)
     result_ids: dict[int, int] = {}
     for result_fields in result_rows:
@@ -1182,15 +1248,30 @@ async def _persist_projection(
         result_ids[result_fields["result_index"]] = row.id
 
     seen_owners: set[tuple] = set()
+    record_ids: dict[tuple, Optional[int]] = {}
 
-    async def add_owner(result_id: Optional[int], owner_index: int, subject_fields: dict, right_fields: dict) -> None:
+    async def add_owner(
+        result_id: Optional[int], owner_index: int, subject_fields: dict, right_fields: dict, record: Optional[dict] = None, record_id: Optional[int] = None
+    ) -> None:
         subject_id = await _resolve_subject(session, subject_fields) if subject_fields else None
+        # the queried company is the owner of this row *as* this registry record
+        if not (record and record_id and fiscal_code_key(subject_fields.get("fiscal_code")) == record["fiscal_code"]):
+            record_id = None
         right_id = await get_or_create_right(session, **right_fields) if right_fields else None
         key = (result_id, subject_id, right_id)
         if key in seen_owners:  # (request, result, subject, right) is unique
             return
         seen_owners.add(key)
-        session.add(ResultOwner(request_id=request_pk, result_id=result_id, owner_index=owner_index, subject_id=subject_id, right_id=right_id))
+        session.add(
+            ResultOwner(
+                request_id=request_pk,
+                result_id=result_id,
+                owner_index=owner_index,
+                subject_id=subject_id,
+                subject_record_id=record_id,
+                right_id=right_id,
+            )
+        )
 
     for projected in properties:
         loc_fields = dict(projected.location)
@@ -1200,17 +1281,24 @@ async def _persist_projection(
         unit_id = await get_or_create_cadastral_unit(session, **loc_fields)
         subject_id = await _resolve_subject(session, projected.subject) if projected.subject else None
         result_id = result_ids.get(projected.result_index) if projected.result_index is not None else None
+        record_id = None
+        if projected.record:
+            key = tuple(projected.record.items())
+            if key not in record_ids:
+                record_ids[key] = await get_or_create_subject_record(session, **projected.record)
+            record_id = record_ids[key]
         session.add(
             Property(
                 request_id=request_pk,
                 result_id=result_id,
                 cadastral_unit_id=unit_id,
                 subject_id=subject_id,
+                subject_record_id=record_id,
                 **await _property_columns(session, projected.prop),
             )
         )
         for owner_index, (subject_fields, right_fields) in enumerate(projected.owners, start=1):
-            await add_owner(result_id, owner_index, subject_fields, right_fields)
+            await add_owner(result_id, owner_index, subject_fields, right_fields, projected.record, record_id)
     for owner_index, (subject_fields, right_fields) in enumerate(unlinked, start=1):
         await add_owner(None, owner_index, subject_fields, right_fields)
     await session.flush()
@@ -1296,6 +1384,17 @@ async def save_response(
                 session.add(PageVisitError(page_visit_id=page_visit.id, error_index=error_index, message=str(message or "")))
 
         await session.commit()
+
+    subject_code = str(summary.get("subject_query") or "").strip().upper()
+    if success and len(subject_code) in (11, 16):
+        try:
+            await refresh_subject_holdings([subject_code])
+            if await nameless_subject_codes([subject_code]):
+                from .subject_names import names_from_opendata
+
+                await fill_subject_names(await names_from_opendata([subject_code]))
+        except Exception:  # noqa: BLE001 - derived ranking data must never fail the response save
+            logger.warning("Riepilogo immobili non aggiornato per %s", subject_code, exc_info=True)
 
     # Export to outputs/ directory
     if export:
@@ -2002,6 +2101,481 @@ async def get_subject_name(fiscal_code: str) -> Optional[str]:
             )
         ).first()
     return row[0] if row else None
+
+
+async def refresh_subject_holdings(codes: Optional[Iterable[str]] = None) -> int:
+    """Recompute ``subject_holding`` for the given codes (all codes with a successful subject search when ``None``).
+
+    Each row comes from the code's latest subject search: provinces and Fabbricati/Terreni counts from its "Elenco
+    Province" table, and from the properties it listed (with the subject's own right and quota: in a subject search
+    every result row has exactly one owner, the searched subject) the totals of rendita / reddito dominicale and the
+    valore catastale, full and pro quota (``cadastral_values``). Returns the number of rows written.
+    """
+    from .cadastral_values import building_cadastral_value, land_cadastral_value
+
+    wanted = None
+    if codes is not None:
+        wanted = sorted({str(c or "").strip().upper() for c in codes if str(c or "").strip()})
+        if not wanted:
+            return 0
+    code_filter = "" if wanted is None else " AND upper(btrim(r.subject_query)) = ANY(CAST(:codes AS text[]))"
+    params: dict[str, Any] = {} if wanted is None else {"codes": wanted}
+    latest = (
+        "SELECT DISTINCT ON (upper(btrim(r.subject_query))) upper(btrim(r.subject_query)) AS code, r.id,"
+        " r.responded_at AS searched_at"
+        " FROM request r WHERE r.success IS TRUE AND length(btrim(r.subject_query)) IN (11, 16)"
+        " AND EXISTS (SELECT 1 FROM {table} x WHERE x.request_id = r.id)" + code_filter +
+        " ORDER BY upper(btrim(r.subject_query)), r.responded_at DESC NULLS LAST, r.id DESC"
+    )
+    province_stmt = text(
+        f"WITH latest AS ({latest.format(table='request_province')}) "
+        "SELECT latest.code, latest.searched_at, sum(rp.buildings_count) AS buildings, sum(rp.land_parcels_count) AS land,"
+        " string_agg(DISTINCT coalesce(nullif(rp.province_code, ''), rp.province_name), ', ') AS provinces,"
+        " count(DISTINCT coalesce(nullif(rp.province_code, ''), rp.province_name)) AS province_count "
+        "FROM latest JOIN request_province rp ON rp.request_id = latest.id GROUP BY latest.code, latest.searched_at"
+    )
+    property_stmt = text(
+        f"WITH latest AS ({latest.format(table='property')}) "
+        "SELECT latest.code, latest.id AS request_id, latest.searched_at, p.cadastral_unit_id, p.property_type, p.category, p.income_eur,"
+        " p.dominical_income_eur, o.right_type, o.share_numerator, o.share_denominator "
+        "FROM latest JOIN property p ON p.request_id = latest.id AND p.property_type IN ('building', 'land') "
+        "LEFT JOIN v_result_owner o ON o.result_id = p.result_id AND upper(btrim(o.fiscal_code)) = latest.code"
+    )
+    async with _get_session_factory()() as session:
+        province_rows = (await session.execute(province_stmt, params)).mappings().all()
+        property_rows = (await session.execute(property_stmt, params)).mappings().all()
+
+    now = datetime.now(timezone.utc)
+    holdings: dict[str, dict[str, Any]] = {}
+
+    def entry(code: str) -> dict[str, Any]:
+        return holdings.setdefault(code, {"fiscal_code": code, "computed_at": now})
+
+    for row in province_rows:
+        item = entry(str(row["code"]))
+        item.update(
+            provinces=row["provinces"] or None,
+            searched_at=row["searched_at"],
+            province_count=row["province_count"],
+            buildings=int(row["buildings"] or 0),
+            land_parcels=int(row["land"] or 0),
+        )
+    zero = Decimal(0)
+    seen_units: set[tuple[str, Any]] = set()
+    for prop in property_rows:
+        item = entry(str(prop["code"]))
+        if "properties" not in item:
+            item.update(
+                request_id=prop["request_id"], searched_at=prop["searched_at"], properties=0, full_ownership=0,
+                unvalued=0, unknown_share=0,
+                cadastral_income_eur=zero, dominical_income_eur=zero,
+                cadastral_value_eur=zero, cadastral_value_share_eur=zero,
+            )
+        # The portal lists a unit once per ownership entry (a different quota each): the whole-asset figures count the
+        # unit once, while every row's own quota still adds to the pro quota value.
+        unit = (str(prop["code"]), prop["cadastral_unit_id"]) if prop["cadastral_unit_id"] is not None else None
+        first_row = unit is None or unit not in seen_units
+        if unit is not None:
+            seen_units.add(unit)
+        if prop["property_type"] == "land":
+            income = prop["dominical_income_eur"] or zero
+            computed = land_cadastral_value(prop["dominical_income_eur"])
+            if first_row:
+                item["dominical_income_eur"] += income
+        else:
+            income = prop["income_eur"] or zero
+            computed = building_cadastral_value(prop["income_eur"], prop["category"])
+            if first_row:
+                item["cadastral_income_eur"] += income
+        if first_row:
+            item["properties"] += 1
+        numerator, denominator = prop["share_numerator"], prop["share_denominator"]
+        share = min(Decimal(numerator) / Decimal(denominator), Decimal(1)) if numerator and denominator else Decimal(1)
+        if not (numerator and denominator):
+            item["unknown_share"] += 1
+        if share >= 1 and str(prop["right_type"] or "").lower().startswith("propriet"):
+            item["full_ownership"] += 1
+        if computed is None:
+            if first_row:
+                item["unvalued"] += 1
+            continue
+        if first_row:
+            item["cadastral_value_eur"] += computed.value
+        item["cadastral_value_share_eur"] += (computed.value * share).quantize(Decimal("0.01"))
+
+    async with _get_session_factory()() as session:
+        if wanted is None:
+            await session.execute(delete(SubjectHolding))
+        else:
+            await session.execute(delete(SubjectHolding).where(SubjectHolding.fiscal_code.in_(wanted)))
+        session.add_all(SubjectHolding(**item) for item in holdings.values())
+        await session.commit()
+    return len(holdings)
+
+
+async def nameless_subject_codes(codes: Optional[Iterable[str]] = None) -> list[str]:
+    """Codes (11/16 characters) whose subject has no real name: empty, or the code itself, and no surname."""
+    sql = (
+        "SELECT DISTINCT upper(btrim(fiscal_code)) FROM subject WHERE length(btrim(fiscal_code)) IN (11, 16) "
+        "AND coalesce(last_name, '') = '' AND coalesce(first_name, '') = '' "
+        "AND (coalesce(btrim(name), '') = '' OR upper(btrim(name)) = upper(btrim(fiscal_code)))"
+    )
+    params: dict[str, Any] = {}
+    if codes is not None:
+        params["codes"] = sorted({str(c or "").strip().upper() for c in codes if str(c or "").strip()})
+        if not params["codes"]:
+            return []
+        sql += " AND upper(btrim(fiscal_code)) = ANY(CAST(:codes AS text[]))"
+    async with _get_session_factory()() as session:
+        return [row[0] for row in (await session.execute(text(sql), params)).all()]
+
+
+async def fill_subject_names(names: dict[str, Any]) -> int:
+    """Give a name to subjects stored with only their code (a search by code never returns the name).
+
+    ``names`` maps a code to a display name, or to ``(name, last name, first name)`` when the source splits it.
+    Fill-only: a subject that already has a real name, or a surname, is left as it is. Returns the rows updated.
+    """
+    codes: list[str] = []
+    full: list[str] = []
+    last: list[Optional[str]] = []
+    first: list[Optional[str]] = []
+    for code, value in names.items():
+        name, last_name, first_name = value if isinstance(value, tuple) else (value, None, None)
+        name = " ".join(str(name or "").split())[:300]
+        if not name:
+            continue
+        codes.append(code.strip().upper())
+        full.append(name)
+        last.append(last_name or None)
+        first.append(first_name or None)
+    if not codes:
+        return 0
+    stmt = text(
+        "UPDATE subject s SET name = n.name, last_name = n.last_name, first_name = n.first_name "
+        "FROM unnest(CAST(:codes AS text[]), CAST(:names AS text[]), CAST(:last AS text[]), CAST(:first AS text[])) "
+        "AS n(code, name, last_name, first_name) "
+        "WHERE upper(btrim(s.fiscal_code)) = n.code AND coalesce(s.last_name, '') = '' AND coalesce(s.first_name, '') = '' "
+        "AND (coalesce(btrim(s.name), '') = '' OR upper(btrim(s.name)) = upper(btrim(s.fiscal_code)))"
+    )
+    async with _get_session_factory()() as session:
+        result = await session.execute(stmt, {"codes": codes, "names": full, "last": last, "first": first})
+        await session.commit()
+    return int(result.rowcount or 0)
+
+
+async def backfill_subject_names(list_paths: Optional[Iterable[Path]] = None) -> dict[str, int]:
+    """Name the subjects known only by code: first from the batch lists (``inputs/**/*.md``), then from opendata."""
+    from .subject_names import default_list_paths, names_from_markdown, names_from_opendata
+
+    if list_paths is None:
+        list_paths = default_list_paths(Path(__file__).resolve().parents[1])
+    nameless = await nameless_subject_codes()
+    stats = {"nameless": len(nameless), "from_lists": 0, "from_opendata": 0}
+    if not nameless:
+        return stats
+    listed = names_from_markdown(list_paths)
+    stats["from_lists"] = await fill_subject_names({c: listed[c] for c in nameless if c in listed})
+    remaining = await nameless_subject_codes(nameless)
+    stats["from_opendata"] = await fill_subject_names(await names_from_opendata(remaining))
+    stats["still_nameless"] = len(await nameless_subject_codes(nameless))
+    return stats
+
+
+def _subject_profile_ctes(istat: str) -> str:
+    """The CTEs behind the archive table: one row ``p`` per code (a successful subject search or a stored visura soggetto).
+
+    ``:length`` (16 persons / 11 companies) and ``:code`` (one subject, or NULL for all) are bind parameters. Columns of
+    ``p``: code, name, gender, birth_date, birth_place, birth_province, age, the stored ``subject_holding`` figures
+    (provinces … cadastral_value_share, searched_at), searches, visure, last_seen. A name that only repeats the code is
+    NULL; a real name is preferred over such a row, and a missing one is built from surname and first name.
+    """
+    return (
+        "req AS ("
+        "  SELECT upper(btrim(r.subject_query)) AS code, r.responded_at FROM request r"
+        "  WHERE r.success IS TRUE AND r.responded_at IS NOT NULL AND length(btrim(r.subject_query)) = :length"
+        "  AND (CAST(:code AS text) IS NULL OR upper(btrim(r.subject_query)) = CAST(:code AS text))"
+        "), docs AS ("
+        "  SELECT upper(btrim(s.fiscal_code)) AS code, count(DISTINCT d.id) AS visure,"
+        "         max(coalesce(d.requested_at, d.created_at)) AS last_doc"
+        "  FROM subject s JOIN document_subject ds ON ds.subject_id = s.id JOIN document d ON d.id = ds.document_id"
+        "  WHERE d.document_type = 'visura_soggetto' AND length(btrim(s.fiscal_code)) = :length"
+        "  AND (CAST(:code AS text) IS NULL OR upper(btrim(s.fiscal_code)) = CAST(:code AS text)) GROUP BY 1"
+        "), codes AS (SELECT code FROM req UNION SELECT code FROM docs"
+        "), reqs AS (SELECT code, count(*) AS searches, max(responded_at) AS last_search FROM req GROUP BY code"
+        "), subj AS ("
+        "  SELECT DISTINCT ON (upper(btrim(s.fiscal_code))) upper(btrim(s.fiscal_code)) AS code, s.name, s.last_name,"
+        "         s.first_name, s.gender, s.birth_date,"
+        "         coalesce(m.name, s.birth_municipality_text) AS birth_place,"
+        "         coalesce(nullif(s.birth_province_code, ''), m.province_abbreviation) AS birth_province"
+        "  FROM subject s"
+        f"  LEFT JOIN {istat}.municipalities m ON m.numeric_code = s.birth_comune_id"
+        "  WHERE length(btrim(s.fiscal_code)) = :length"
+        "  AND (CAST(:code AS text) IS NULL OR upper(btrim(s.fiscal_code)) = CAST(:code AS text))"
+        "  ORDER BY upper(btrim(s.fiscal_code)),"
+        "           (coalesce(s.last_name, '') = '' AND upper(btrim(s.name)) = upper(btrim(s.fiscal_code))),"
+        "           (s.birth_date IS NULL), s.id DESC"
+        "), p AS ("
+        "  SELECT c.code,"
+        "    CASE WHEN coalesce(btrim(subj.name), '') = '' OR upper(btrim(subj.name)) = c.code"
+        "         THEN nullif(btrim(coalesce(subj.last_name, '') || ' ' || coalesce(subj.first_name, '')), '')"
+        "         ELSE btrim(subj.name) END AS name,"
+        "    upper(left(coalesce(subj.gender, ''), 1)) AS gender, subj.birth_date, subj.birth_place,"
+        "    upper(subj.birth_province) AS birth_province,"
+        "    CASE WHEN subj.birth_date IS NULL THEN NULL"
+        "         ELSE date_part('year', age(current_date, subj.birth_date))::int END AS age,"
+        "    h.provinces, h.province_count, h.buildings, h.land_parcels AS land, h.properties, h.full_ownership,"
+        "    h.unvalued, h.unknown_share, round(h.cadastral_income_eur) AS rendita,"
+        "    round(h.dominical_income_eur) AS reddito_dominicale, round(h.cadastral_value_eur) AS cadastral_value,"
+        "    round(h.cadastral_value_share_eur) AS cadastral_value_share, h.searched_at,"
+        "    coalesce(reqs.searches, 0) AS searches, coalesce(docs.visure, 0) AS visure,"
+        "    greatest(reqs.last_search, docs.last_doc) AS last_seen"
+        "  FROM codes c LEFT JOIN subj ON subj.code = c.code LEFT JOIN subject_holding h ON h.fiscal_code = c.code"
+        "  LEFT JOIN reqs ON reqs.code = c.code LEFT JOIN docs ON docs.code = c.code"
+        ") "
+    )
+
+
+def _subject_kind_params(kind: str, code: Optional[str] = None) -> dict[str, Any]:
+    if kind not in ("person", "company"):
+        raise ValueError(f"kind must be 'person' or 'company', not {kind!r}")
+    return {"length": 16 if kind == "person" else 11, "code": str(code).strip().upper() if code else None}
+
+
+def _profile_from_row(row: Any, kind: str) -> dict[str, Any]:
+    """One archive row as the JSON/dict the table, the CSV and the profile header use."""
+
+    def number(value: Any) -> Any:
+        return None if value is None else float(value)
+
+    def stamp(value: Any) -> str:
+        return value.isoformat() if value else ""
+
+    profile: dict[str, Any] = {
+        "fiscal_code": str(row["code"]),
+        "name": row["name"] or "",
+        "provinces": row["provinces"] or "",
+        "province_count": row["province_count"],
+        "buildings": row["buildings"],
+        "land": row["land"],
+        "properties": row["properties"],
+        "full_ownership": row["full_ownership"],
+        "unvalued": row["unvalued"],
+        "unknown_share": row["unknown_share"],
+        "rendita": number(row["rendita"]),
+        "reddito_dominicale": number(row["reddito_dominicale"]),
+        "cadastral_value": number(row["cadastral_value"]),
+        "cadastral_value_share": number(row["cadastral_value_share"]),
+        "searched_at": stamp(row["searched_at"]),
+        "searches": int(row["searches"] or 0),
+        "visure": int(row["visure"] or 0),
+        "last_seen": stamp(row["last_seen"]),
+    }
+    if kind == "person":
+        profile.update(
+            gender=row["gender"] or "",
+            birth_date=row["birth_date"].isoformat() if row["birth_date"] else "",
+            age=row["age"],
+            birth_place=(row["birth_place"] or "").strip(),
+            birth_province=row["birth_province"] or "",
+        )
+    return profile
+
+
+async def list_subject_profiles(kind: str = "person", code: Optional[str] = None) -> list[dict[str, Any]]:
+    """Every archived person (``kind="person"``, 16-character codice fiscale) or company (``"company"``, 11-digit
+    partita IVA), or just ``code``: name, birth data (persons), the stored holdings, searches and visure.
+
+    The archive table pages through :func:`query_subject_profiles` instead; this returns everything.
+    """
+    params = _subject_kind_params(kind, code)
+    istat = postgresql.dialect().identifier_preparer.quote_schema(DATABASE_ISTAT_SCHEMA)
+    stmt = text(f"WITH {_subject_profile_ctes(istat)} SELECT * FROM p ORDER BY last_seen DESC NULLS LAST, code")
+    async with _get_session_factory()() as session:
+        rows = (await session.execute(stmt, params)).mappings().all()
+    return [_profile_from_row(row, kind) for row in rows]
+
+
+# --- the archive table: search, filters, sort and paging in SQL -----------------------------------------------------
+
+SUBJECT_NUMBER_FIELDS = (
+    "age", "province_count", "properties", "buildings", "land", "full_ownership", "rendita", "reddito_dominicale",
+    "cadastral_value", "cadastral_value_share", "unvalued", "visure", "searches",
+)
+SUBJECT_DATE_FIELDS = ("birth_date", "searched_at", "last_seen")
+SUBJECT_TEXT_FIELDS = ("name", "fiscal_code", "provinces", "birth_place", "gender", "favorite_label")
+SUBJECT_FILTER_FIELDS = SUBJECT_NUMBER_FIELDS + SUBJECT_DATE_FIELDS + SUBJECT_TEXT_FIELDS
+_SUBJECT_SORT_SQL = {
+    "name": "lower(name)", "fiscal_code": "code", "gender": "gender", "birth_place": "lower(birth_place)",
+    "provinces": "provinces", "favorite_label": "(code = ANY(CAST(:favs AS text[])))",
+    **{field: field for field in SUBJECT_NUMBER_FIELDS + SUBJECT_DATE_FIELDS},
+}
+SUBJECT_SORT_FIELDS = tuple(_SUBJECT_SORT_SQL)
+
+
+def _like_pattern(term: str) -> str:
+    return "%" + str(term).strip().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+
+
+def _number_condition(column: str, term: str, key: str, params: dict[str, Any]) -> Optional[str]:
+    """SQL for a numeric header filter: ``10``, ``>10``, ``>=10``, ``<5``, ``<=5``, ``10-50``; None when unparsable
+    (an unparsable filter does not filter, like the table's own number filter). Empty cells never match."""
+    term = re.sub(r"[\s.]", "", str(term or "")).replace(",", ".")
+    if not term:
+        return None
+    match = re.fullmatch(r"(-?\d+(?:\.\d+)?)-(\d+(?:\.\d+)?)", term)
+    if match:
+        params[f"{key}a"], params[f"{key}b"] = Decimal(match.group(1)), Decimal(match.group(2))
+        return f"{column} BETWEEN :{key}a AND :{key}b"
+    match = re.fullmatch(r"(>=|<=|>|<|=)?(-?\d+(?:\.\d+)?)", term)
+    if not match:
+        return None
+    params[key] = Decimal(match.group(2))
+    return f"{column} {match.group(1) or '='} :{key}"
+
+
+def _subject_where(
+    q: str, filters: dict[str, str], favorites: Iterable[str], name_status: Optional[str] = None
+) -> tuple[str, dict[str, Any]]:
+    """WHERE clause (over ``p``) and bind parameters for the search box and the column filters."""
+    clauses: list[str] = []
+    params: dict[str, Any] = {"favs": sorted({str(c).upper() for c in favorites})}
+    haystack = (
+        "(coalesce(name, '') || ' ' || code || ' ' || coalesce(birth_place, '') || ' ' || "
+        "coalesce(birth_province, '') || ' ' || coalesce(provinces, ''))"
+    )
+    for index, term in enumerate(str(q or "").split()[:8]):
+        params[f"q{index}"] = _like_pattern(term)
+        clauses.append(f"{haystack} ILIKE :q{index} ESCAPE '\\'")
+    if name_status == "missing":
+        clauses.append("coalesce(btrim(name), '') = ''")
+    elif name_status == "named":
+        clauses.append("coalesce(btrim(name), '') <> ''")
+    for index, (field, value) in enumerate(sorted(filters.items())):
+        value = str(value or "").strip()
+        if not value or field not in SUBJECT_FILTER_FIELDS:
+            continue
+        key = f"f{index}"
+        if field in SUBJECT_NUMBER_FIELDS:
+            clause = _number_condition(field, value, key, params)
+        elif field in SUBJECT_DATE_FIELDS:  # typed as dd/mm/yyyy or as an ISO date, or just a year
+            params[key] = _like_pattern(value)
+            clause = (
+                f"(to_char({field}, 'DD/MM/YYYY') ILIKE :{key} ESCAPE '\\' "
+                f"OR to_char({field}, 'YYYY-MM-DD') ILIKE :{key} ESCAPE '\\')"
+            )
+        elif field == "gender":
+            params[key] = value.upper()[:1]
+            clause = f"gender = :{key}"
+        elif field == "favorite_label":
+            clause = "code = ANY(CAST(:favs AS text[]))" if value == "si" else (
+                "NOT (code = ANY(CAST(:favs AS text[])))" if value == "no" else None
+            )
+        elif field == "birth_place":
+            params[key] = _like_pattern(value)
+            clause = f"(coalesce(birth_place, '') || ' ' || coalesce(birth_province, '')) ILIKE :{key} ESCAPE '\\'"
+        else:
+            column = {"fiscal_code": "code"}.get(field, field)
+            params[key] = _like_pattern(value)
+            clause = f"coalesce({column}, '') ILIKE :{key} ESCAPE '\\'"
+        if clause:
+            clauses.append(clause)
+    return (" WHERE " + " AND ".join(clauses)) if clauses else "", params
+
+
+async def query_subject_profiles(
+    kind: str = "person",
+    *,
+    q: str = "",
+    filters: Optional[dict[str, str]] = None,
+    name_status: Optional[str] = None,
+    sort: str = "last_seen",
+    direction: str = "desc",
+    limit: Optional[int] = 50,
+    offset: int = 0,
+    favorites: Iterable[str] = (),
+) -> tuple[list[dict[str, Any]], int]:
+    """One page of the archive table and the number of rows that match (all pages).
+
+    ``q`` is the search box (every word must appear in name, code, birthplace or provinces), ``filters`` the column
+    filters (field → text; numeric fields take ``>10`` / ``10-50``), ``sort`` one of ``SUBJECT_SORT_FIELDS``
+    ``name_status`` optionally selects named or unnamed profiles. ``sort`` is one of ``SUBJECT_SORT_FIELDS`` (empty
+    values last, ties broken by code). ``limit=None`` returns every match (the CSV export). Rows carry
+    ``favorite`` for the codes in ``favorites``.
+    """
+    params = _subject_kind_params(kind)
+    where, where_params = _subject_where(q, filters or {}, favorites, name_status)
+    params.update(where_params)
+    order = _SUBJECT_SORT_SQL.get(sort, "last_seen")
+    way = "ASC" if str(direction).lower() == "asc" else "DESC"
+    istat = postgresql.dialect().identifier_preparer.quote_schema(DATABASE_ISTAT_SCHEMA)
+    paging = ""
+    if limit is not None:
+        params.update(limit=max(1, int(limit)), offset=max(0, int(offset)))
+        paging = " LIMIT :limit OFFSET :offset"
+    stmt = text(
+        f"WITH {_subject_profile_ctes(istat)} SELECT p.*, count(*) OVER () AS total_rows FROM p{where} "
+        f"ORDER BY {order} {way} NULLS LAST, code{paging}"
+    )
+    async with _get_session_factory()() as session:
+        rows = (await session.execute(stmt, params)).mappings().all()
+    favorite_codes = set(params["favs"])
+    profiles = []
+    for row in rows:
+        profile = _profile_from_row(row, kind)
+        profile["favorite"] = profile["fiscal_code"] in favorite_codes
+        profiles.append(profile)
+    return profiles, int(rows[0]["total_rows"]) if rows else 0
+
+
+async def subject_overview(kind: str = "person") -> dict[str, Any]:
+    """Aggregates over the whole archive in one pass, for the page's summary cards and column widths.
+
+    ``subjects`` / ``with_visura`` / ``buildings`` / ``land`` / ``value_share`` are the card totals; ``widest`` holds the
+    longest value of each text column and ``max`` the largest of each numeric one, so the table can size its columns
+    to the widest value without loading the rows.
+    """
+    params = _subject_kind_params(kind)
+    istat = postgresql.dialect().identifier_preparer.quote_schema(DATABASE_ISTAT_SCHEMA)
+
+    def widest(expression: str) -> str:
+        return f"(array_agg({expression} ORDER BY length({expression}) DESC) FILTER (WHERE {expression} IS NOT NULL))[1]"
+
+    place = "(birth_place || coalesce(' (' || nullif(birth_province, '') || ')', ''))"
+    maxima = ", ".join(f"max({field}) AS max_{field}" for field in SUBJECT_NUMBER_FIELDS)
+    stmt = text(
+        f"WITH {_subject_profile_ctes(istat)} SELECT count(*) AS subjects, count(*) FILTER (WHERE visure > 0) AS with_visura,"
+        " coalesce(sum(buildings), 0) AS buildings, coalesce(sum(land), 0) AS land,"
+        f" coalesce(sum(cadastral_value_share), 0) AS value_share, {widest('name')} AS w_name,"
+        f" {widest('code')} AS w_fiscal_code, {widest('provinces')} AS w_provinces, {widest(place)} AS w_birth_place,"
+        f" {maxima} FROM p"
+    )
+    async with _get_session_factory()() as session:
+        row = (await session.execute(stmt, params)).mappings().one()
+    return {
+        "subjects": int(row["subjects"]),
+        "with_visura": int(row["with_visura"]),
+        "buildings": int(row["buildings"]),
+        "land": int(row["land"]),
+        "value_share": float(row["value_share"]),
+        "widest": {
+            field: row[f"w_{field}"] or "" for field in ("name", "fiscal_code", "provinces", "birth_place")
+        },
+        "max": {
+            field: float(row[f"max_{field}"]) for field in SUBJECT_NUMBER_FIELDS if row[f"max_{field}"] is not None
+        },
+    }
+
+
+async def get_subject_profile(code: str, kind: str = "person") -> Optional[dict[str, Any]]:
+    """The :func:`list_subject_profiles` row of one code, or ``None`` when the archive has nothing for it."""
+    rows = await list_subject_profiles(kind, code=code)
+    return rows[0] if rows else None
+
+
+async def list_person_profiles() -> list[dict[str, Any]]:
+    """Archived persons (see :func:`list_subject_profiles`)."""
+    return await list_subject_profiles("person")
 
 
 async def search_person_profiles(query: str, limit: int = 50) -> tuple[list[dict[str, str | None]], bool]:

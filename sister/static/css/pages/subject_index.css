@@ -1,0 +1,50 @@
+/* /persons and /companies: archive table */
+.subjects-open-form {
+  min-width: min(100%, 22rem);
+}
+
+#subjects-table .tabulator-cell a {
+  text-decoration: none;
+}
+
+#subjects-table .tabulator-cell a:hover,
+#subjects-table .tabulator-cell a:focus-visible {
+  text-decoration: underline;
+}
+
+#subjects-table .subject-fav {
+  line-height: 1;
+  text-decoration: none;
+}
+
+[data-rank].active {
+  background: var(--bs-primary);
+  color: var(--bs-white);
+}
+
+.subjects-columns summary,
+.subjects-help summary {
+  cursor: pointer;
+  min-height: 32px;
+}
+
+.subjects-help dt {
+  font-weight: 600;
+}
+
+/* Narrow screens: cards instead of the wide table (the list is built by subject_index.js). */
+#subjects-cards {
+  display: none;
+}
+
+@media (max-width: 767.98px) {
+  #subjects-table,
+  .subjects-columns,
+  #subjects-csv {
+    display: none;
+  }
+
+  #subjects-cards {
+    display: block;
+  }
+}

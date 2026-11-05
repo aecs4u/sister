@@ -517,6 +517,55 @@ def _error_request_id(request: Request) -> str:
 # ---------------------------------------------------------------------------
 # Theme, static files, and web UI
 # ---------------------------------------------------------------------------
+# Pages a signed-in user may email a link to. The link only opens after the recipient signs in (the web UI fails closed), so
+# this is a whitelist of page families, not an access grant; the admin area is never shareable.
+SHAREABLE_PREFIXES = ("/documents/", "/persons/", "/companies/", "/results/", "/dossiers/", "/omi/valuation", "/valuation", "/reports/")
+
+
+def _public_base_url() -> str:
+    """The externally visible URL of this app, put in the emailed links (``SISTER_PUBLIC_URL``, else ``APP_BASE_URL``).
+
+    ``aecs4u-email`` 2.x accepts only https (or http on localhost) and checks it when a link is sent, so a wrong value
+    fails that request with a clear error instead of stopping the service.
+    """
+    configured = os.getenv("SISTER_PUBLIC_URL") or os.getenv("APP_BASE_URL")
+    return (configured or f"http://localhost:{os.getenv('PORT', '8025')}").strip()
+
+
+def _authorize_report_path(user, path: str) -> bool:
+    """May this signed-in user email a link to ``path``? SISTER has no per-user ownership of pages: any signed-in user
+    sees the same archive, so the path only has to be one of the shareable page families (never ``/admin``, ``/api``)."""
+    return any(path == prefix.rstrip("/") or path.startswith(prefix.rstrip("/") + "/") for prefix in SHAREABLE_PREFIXES)
+
+
+def _mount_report_sharing(app: FastAPI, auth_dependency) -> bool:
+    """Add the e-mail report-sharing routes of ``aecs4u-email``; True when mounted.
+
+    The package's API changed: 2.x requires ``public_base_url`` and ``authorize_report_path`` (it used to take neither), and an
+    older install may not have the module at all. The routes are an add-on: whatever is wrong, the rest of the web UI stays up.
+    """
+    try:
+        import inspect
+
+        from aecs4u_email import create_report_sharing_router
+
+        accepted = inspect.signature(create_report_sharing_router).parameters
+        options: dict = {"auth_dependency": auth_dependency, "app_name": "SISTER"}
+        if "public_base_url" in accepted:
+            options["public_base_url"] = _public_base_url
+        if "authorize_report_path" in accepted:
+            options["authorize_report_path"] = _authorize_report_path
+        if "allowed_path_prefixes" in accepted:
+            options["allowed_path_prefixes"] = SHAREABLE_PREFIXES
+        app.include_router(create_report_sharing_router(**options))
+        return True
+    except ImportError as e:
+        logger.warning("Email report-sharing routes non disponibili: %s", e)
+    except Exception as e:  # noqa: BLE001 (an API mismatch must not take the service down)
+        logger.error("Email report-sharing routes non montate: %s", e)
+    return False
+
+
 try:
     from aecs4u_theme import ThemeConfig, setup_theme
 
@@ -859,15 +908,8 @@ try:
     # Include web routes
     from .web import _require_auth, router as web_router
 
-    try:
-        from aecs4u_email import create_report_sharing_router
-    except ImportError as e:
-        # Older shared-venv installs may not include report sharing yet; keep the
-        # rest of SISTER's web UI available in that case.
-        logger.warning("Email report-sharing routes non disponibili: %s", e)
-    else:
-        # Register these before the web router's /api/ui/{path} proxy.
-        app.include_router(create_report_sharing_router(auth_dependency=_require_auth, app_name="SISTER"))
+    # Register these before the web router's /api/ui/{path} proxy.
+    _mount_report_sharing(app, _require_auth)
 
     app.include_router(web_router)
 

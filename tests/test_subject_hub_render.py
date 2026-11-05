@@ -626,6 +626,9 @@ def test_subject_buildings_table_exposes_keyboard_scroll_and_hint():
         autoescape=True,
     )
     env.globals["_"] = lambda value: value
+    from sister.display import register as register_display_filters
+
+    register_display_filters(env)  # the app registers these on its environment (main.py)
     module = env.get_template("catasto/visura_soggetto_archive.html").make_module(
         vars={
             "base_template": "test_base.html",

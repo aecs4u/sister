@@ -83,8 +83,8 @@ WITH latest AS (
     ORDER BY anno DESC, semestre DESC
     LIMIT 1
 )
-SELECT DISTINCT z.anno, z.semestre, z.zona, v.cod_tipologia, v.tipologia, v.stato_conservazione,
-       v.stato_prevalente, v.prezzo_min, v.prezzo_max, v.superficie_nl_compravendita
+SELECT DISTINCT z.anno, z.semestre, z.zona, z.fascia, z.zona_descrizione, v.cod_tipologia, v.tipologia,
+       v.stato_conservazione, v.stato_prevalente, v.prezzo_min, v.prezzo_max, v.superficie_nl_compravendita
 FROM public.omi_ref_zone AS z
 JOIN public.omi_fact_quotazioni_valori AS v ON v.zona_id = z.zona_id
 JOIN latest AS latest ON latest.anno = z.anno AND latest.semestre = z.semestre
@@ -102,14 +102,45 @@ WITH latest AS (
     ORDER BY anno DESC, semestre DESC
     LIMIT 1
 )
-SELECT DISTINCT z.anno, z.semestre, z.zona, v.cod_tipologia, v.tipologia, v.stato_conservazione,
-       v.stato_prevalente, v.prezzo_min, v.prezzo_max, v.superficie_nl_compravendita
+SELECT DISTINCT z.anno, z.semestre, z.zona, z.fascia, z.zona_descrizione, v.cod_tipologia, v.tipologia,
+       v.stato_conservazione, v.stato_prevalente, v.prezzo_min, v.prezzo_max, v.superficie_nl_compravendita
 FROM public.omi_ref_zone AS z
 JOIN public.omi_fact_quotazioni_valori AS v ON v.zona_id = z.zona_id
 JOIN latest AS latest ON latest.anno = z.anno AND latest.semestre = z.semestre
 WHERE (z.cod_comune_amm = $1 OR z.cod_comune_catastale = $1
        OR ($2::float8 IS NOT NULL AND z.cod_comune_istat = $2::float8))
 """
+
+
+# OMI "fascia" (band) letters: where in the municipality a zone lies (Manuale della Banca Dati Quotazioni OMI).
+OMI_ZONE_BANDS = {"B": "Centrale", "C": "Semicentrale", "D": "Periferica", "E": "Suburbana", "R": "Extraurbana / rurale"}
+
+
+_SMALL_WORDS = {"a", "al", "alla", "alle", "ai", "agli", "da", "dal", "dalla", "di", "del", "della", "delle", "dei", "degli",
+                "e", "ed", "il", "lo", "la", "le", "i", "gli", "in", "nel", "nella", "nelle", "su", "sul", "sulla", "per", "con"}
+
+
+def _title_it(value: str) -> str:
+    """OMI writes zone descriptions in capitals: "FRAZIONI A SUD DEL CAPOLUOGO" -> "Frazioni a sud del Capoluogo"."""
+    words = " ".join(str(value or "").split()).lower().split(" ")
+    out = []
+    for index, word in enumerate(words):
+        if not word:
+            continue
+        if index and word in _SMALL_WORDS:
+            out.append(word)
+        else:
+            out.append("-".join(part[:1].upper() + part[1:] for part in word.split("-")))
+    return " ".join(out)
+
+
+def zone_description(zone: str, description: str = "", band: str = "") -> str:
+    """Self-explanatory zone label: ``"R1 · Residuale montana (Extraurbana / rurale)"``; just the code when OMI gives none."""
+    zone = str(zone or "").strip().upper()
+    text = _title_it(description)
+    band_name = OMI_ZONE_BANDS.get(str(band or "").strip().upper(), "")
+    label = f"{zone} · {text}" if text else zone
+    return f"{label} ({band_name})" if band_name and zone else label
 
 
 def cache_ttl_seconds() -> float:
@@ -145,6 +176,8 @@ def _latest_period(rows: list[Any]) -> list[dict[str, Any]]:
             continue
         quotes.append({
             "zona": row["zona"],
+            "fascia": (row.get("fascia") or "").strip().upper(),
+            "zona_descrizione": " ".join(str(row.get("zona_descrizione") or "").split()),
             "periodo": f"{row['anno']}S{row['semestre']}",
             "cod_tipologia": row["cod_tipologia"],
             "tipologia": row["tipologia"],

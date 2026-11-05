@@ -333,6 +333,63 @@ async def get_or_create_subject(
     return row.id
 
 
+def parse_seat(seat: Any) -> tuple[Optional[str], Optional[str]]:
+    """``'LECCO (LC)'`` → (``'LECCO'``, ``'LC'``); a seat without the province in brackets gives (seat, None)."""
+    text_ = clean(seat)
+    if not text_:
+        return None, None
+    found = re.match(r"^(.*?)\s*\(([A-Za-z]{2})\)\s*$", text_)
+    if found:
+        return clean(found.group(1)), found.group(2).upper()
+    return text_, None
+
+
+async def get_or_create_subject_record(
+    session: AsyncSession, *, fiscal_code: Any, denomination: Any = None, seat: Any = None
+) -> Optional[int]:
+    """The registry record (denominazione + sede) that carries ``fiscal_code``; created on first sight.
+
+    SISTER keeps a code under several records and every record has its own properties, while ``subject`` is unique per
+    code. The record is what tells a region from its comuni when they share a code. Returns None without a code.
+    """
+    code = fiscal_code_key(fiscal_code)
+    if not code:
+        return None
+    name = clean(denomination) or "(senza denominazione)"
+    seat_text = clean(seat) or ""
+    found = await _one(
+        session,
+        "SELECT id FROM subject_record WHERE fiscal_code = :c AND denomination = :d AND seat = :s",
+        c=code,
+        d=name,
+        s=seat_text,
+    )
+    if found is not None:
+        return found.id
+    subject_id = await get_or_create_subject(session, fiscal_code=code, subject_type="legal_entity" if code.isdigit() else None)
+    municipality, province = parse_seat(seat_text)
+    row = await _one(
+        session,
+        "INSERT INTO subject_record (subject_id, fiscal_code, denomination, seat, seat_municipality, seat_province_code) "
+        "VALUES (:i, :c, :d, :s, :m, :p) ON CONFLICT ON CONSTRAINT uq_subject_record_identity DO NOTHING RETURNING id",
+        i=subject_id,
+        c=code,
+        d=name,
+        s=seat_text,
+        m=municipality,
+        p=province,
+    )
+    if row is None:  # a concurrent writer inserted the same record
+        row = await _one(
+            session,
+            "SELECT id FROM subject_record WHERE fiscal_code = :c AND denomination = :d AND seat = :s",
+            c=code,
+            d=name,
+            s=seat_text,
+        )
+    return row.id
+
+
 # ---------------------------------------------------------------------------------------------------------
 # Rights
 # ---------------------------------------------------------------------------------------------------------

@@ -1,0 +1,160 @@
+{#
+  /persons and /companies: the archive table. One template for both (kind = "person" | "company"). The page carries only
+  aggregates (cards, column widths); static/js/subject_index.js pages the rows from {{ route }}/index.json, where the
+  server does search, filters, sort and paging, so neither the page nor a request grows with the archive.
+#}
+{% extends "_base.html" %}
+{% from "_macros.html" import metric_card %}
+{% set is_person = kind == "person" %}
+{% block page_title %}{{ kind_label }}{% endblock %}
+
+{% block extra_css %}
+{{ super() }}
+<link rel="stylesheet" href="/static/vendor/tabulator-6.3.1/css/tabulator_bootstrap5.min.css">
+<link rel="stylesheet" href="{{ static_url_path|default('/static/aecs4u-theme') }}/css/data-table.css{{ theme_asset_v|default('') }}">
+<link rel="stylesheet" href="/static/css/pages/subject_index.css?v=20261105g">
+<script src="/static/vendor/tabulator-6.3.1/js/tabulator.min.js"></script>
+{% endblock %}
+
+{% block content %}
+<div class="container-fluid py-4">
+    <nav aria-label="breadcrumb" class="mb-3">
+        <ol class="breadcrumb mb-0">
+            <li class="breadcrumb-item"><a href="/">Dashboard</a></li>
+            <li class="breadcrumb-item active" aria-current="page">{{ kind_label }}</li>
+        </ol>
+    </nav>
+
+    <div class="d-flex flex-wrap align-items-end justify-content-between gap-3 mb-3">
+        <div>
+            <h1 class="h3 mb-1">
+                <i class="fas {{ 'fa-user' if is_person else 'fa-building' }} text-primary me-2" aria-hidden="true"></i>{{ 'Persone' if is_person else 'Società' }} in archivio
+            </h1>
+            <p class="text-muted mb-0 small">
+                Profili con una ricerca per soggetto o una visura archiviata. Questa pagina non avvia richieste SISTER:
+                <a href="/forms" class="link-primary">invia una query</a> per acquisire nuovi dati.
+            </p>
+        </div>
+        <form method="get" action="{{ route }}/" class="subjects-open-form">
+            <label class="form-label small fw-semibold mb-1" for="subject-code">Apri per {{ 'codice fiscale' if is_person else 'partita IVA' }}</label>
+            <div class="input-group">
+                <input class="form-control font-monospace" id="subject-code" name="code" type="text" maxlength="80"
+                       placeholder="{{ 'RSSMRA80A01H501U' if is_person else '01234567890' }}" autocomplete="off" spellcheck="false" required
+                       aria-invalid="{{ 'true' if error_message else 'false' }}"
+                       {% if error_message %}aria-describedby="subject-code-error"{% endif %}>
+                <button class="btn btn-primary" type="submit"><i class="fas fa-arrow-right" aria-hidden="true"></i><span class="visually-hidden">Apri profilo</span></button>
+            </div>
+        </form>
+    </div>
+
+    {% if error_message %}
+    <div class="alert alert-danger d-flex align-items-start gap-2" id="subject-code-error" role="alert">
+        <i class="fas fa-circle-exclamation mt-1" aria-hidden="true"></i>
+        <div>{{ error_message }}</div>
+    </div>
+    {% endif %}
+
+    {# The cards open the table already filtered: the filter is in the URL, so the view can be bookmarked or shared. #}
+    <div class="row row-cols-2 row-cols-lg-5 g-3 mb-3">
+        <div class="col">{{ metric_card(kind_label, stats.subjects, "fa-users" if is_person else "fa-building", "primary", route ~ "/") }}</div>
+        <div class="col">{{ metric_card("Con visura archiviata", stats.with_visura, "fa-file-alt", "info", route ~ "/?f_visure=%3E0") }}</div>
+        <div class="col">{{ metric_card("Fabbricati", stats.buildings, "fa-building", "success", route ~ "/?f_buildings=%3E0&sort=buildings&dir=desc") }}</div>
+        <div class="col">{{ metric_card("Terreni", stats.land, "fa-seedling", "warning", route ~ "/?f_land=%3E0&sort=land&dir=desc") }}</div>
+        <div class="col">{{ metric_card("Valore pro quota (milioni €)", (stats.value_share / 1000000)|round|int, "fa-euro-sign", "danger", route ~ "/?sort=cadastral_value_share&dir=desc") }}</div>
+    </div>
+
+    <section class="card border-0 shadow-sm" aria-labelledby="subjects-title">
+        <div class="card-body">
+            <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-3">
+                <h2 class="h5 mb-0" id="subjects-title">Elenco</h2>
+                <div class="d-flex flex-wrap align-items-center gap-2">
+                    <span class="small text-muted" id="subjects-count" aria-live="polite"></span>
+                    <button type="button" class="btn btn-outline-secondary btn-sm" id="subjects-reset">
+                        <i class="fas fa-filter-circle-xmark me-1" aria-hidden="true"></i>Azzera filtri
+                    </button>
+                    <button type="button" class="btn btn-outline-secondary btn-sm" id="subjects-csv">
+                        <i class="fas fa-file-csv me-1" aria-hidden="true"></i>CSV
+                    </button>
+                </div>
+            </div>
+
+            <div class="row g-2 align-items-center mb-2">
+                <div class="col-12 col-lg-{{ '4' if is_person else '5' }}">
+                    <label class="visually-hidden" for="subjects-quick">
+                        {{ 'Cerca nome, codice fiscale, luogo di nascita o provincia' if is_person else 'Cerca denominazione, partita IVA o provincia' }}
+                    </label>
+                    <div class="input-group input-group-sm">
+                        <span class="input-group-text"><i class="fas fa-magnifying-glass" aria-hidden="true"></i></span>
+                        <input type="search" class="form-control" id="subjects-quick"
+                               placeholder="{{ 'Nome, codice fiscale, luogo di nascita, provincia…' if is_person else 'Denominazione, partita IVA, provincia…' }}"
+                               autocomplete="off">
+                    </div>
+                </div>
+                {% if is_person %}
+                <div class="col-12 col-lg-3">
+                    <label class="visually-hidden" for="subjects-name-status">Filtro nominativo</label>
+                    <select class="form-select form-select-sm" id="subjects-name-status">
+                        <option value="">Tutti i nominativi</option>
+                        <option value="named">Solo con nominativo</option>
+                        <option value="missing">Solo senza nominativo</option>
+                    </select>
+                </div>
+                {% endif %}
+                <div class="col-12 col-lg-{{ '5' if is_person else '7' }}">
+                    <nav class="d-flex flex-wrap gap-1 justify-content-lg-end align-items-center" aria-label="Classifiche rapide">
+                        <span class="small text-muted me-1">Classifica:</span>
+                        <a class="btn btn-outline-primary btn-sm" data-rank="cadastral_value_share" href="?sort=cadastral_value_share&dir=desc">{{ 'Più ricchi' if is_person else 'Più ricche' }}</a>
+                        <a class="btn btn-outline-primary btn-sm" data-rank="properties" href="?sort=properties&dir=desc">Più immobili</a>
+                        <a class="btn btn-outline-primary btn-sm" data-rank="buildings" href="?sort=buildings&dir=desc">Più fabbricati</a>
+                        <a class="btn btn-outline-primary btn-sm" data-rank="land" href="?sort=land&dir=desc">Più terreni</a>
+                        <a class="btn btn-outline-primary btn-sm" data-rank="rendita" href="?sort=rendita&dir=desc">Rendita più alta</a>
+                        <a class="btn btn-outline-primary btn-sm" data-rank="province_count" href="?sort=province_count&dir=desc">Più province</a>
+                    </nav>
+                </div>
+            </div>
+
+            <details class="subjects-columns mb-2">
+                <summary class="small"><i class="fas fa-table-columns me-1" aria-hidden="true"></i>Colonne</summary>
+                <fieldset class="mt-2">
+                    <legend class="visually-hidden">Colonne visibili</legend>
+                    <div id="subjects-columns-body"></div>
+                    <div class="mt-1">
+                        <button type="button" class="btn btn-link btn-sm p-0 me-3" id="subjects-cols-compact">Solo le principali</button>
+                        <button type="button" class="btn btn-link btn-sm p-0" id="subjects-cols-all">Tutte</button>
+                    </div>
+                </fieldset>
+            </details>
+
+            <details class="subjects-help mb-3">
+                <summary class="small"><i class="fas fa-circle-info me-1" aria-hidden="true"></i>Come leggere le colonne</summary>
+                <dl class="small text-muted mt-2 mb-0">
+                    <dt>Filtri numerici</dt>
+                    <dd>Nel filtro di una colonna numerica scrivi <code>10</code>, <code>&gt;10</code>, <code>&lt;=5</code> oppure <code>10-50</code>.</dd>
+                    <dt>Immobili, Fabbricati, Terreni</dt>
+                    <dd>Gli immobili elencati dall’ultima ricerca per soggetto; fabbricati e terreni secondo l’elenco province di SISTER.</dd>
+                    <dt>Valore catastale e pro quota</dt>
+                    <dd>Base imponibile IMU (rendita × 1,05 × moltiplicatore; reddito dominicale × 1,25 × 135) degli immobili dell’ultima ricerca. Non è un valore di mercato.
+                        “Pro quota” lo riduce alla quota del soggetto.</dd>
+                    <dt>n.v. e *</dt>
+                    <dd><strong>+N n.v.</strong>: N immobili senza valore calcolabile (categorie E/F, rendita mancante), quindi il totale è per difetto.
+                        <strong>*</strong>: almeno un immobile senza quota registrata, contato per intero. Il tooltip riporta anche la data della ricerca.</dd>
+                    <dt>Dati del / Aggiornato</dt>
+                    <dd>La data della ricerca da cui vengono i valori / l’ultima ricerca o visura per questo soggetto.</dd>
+                </dl>
+            </details>
+
+            <p class="small mb-2" id="subjects-status" role="status" hidden></p>
+            <div id="subjects-table" role="region" aria-label="Tabella {{ 'delle persone' if is_person else 'delle società' }} in archivio"
+                 data-kind="{{ kind }}" data-route="{{ route }}" data-json-url="{{ route }}/index.json" data-csv-url="{{ route }}/index.csv"
+                 data-overview='{{ overview|tojson }}'
+                 data-initial-quick="{{ code if not error_message else '' }}"></div>
+            <div id="subjects-cards" aria-label="Elenco {{ 'delle persone' if is_person else 'delle società' }}"></div>
+        </div>
+    </section>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+{{ super() }}
+<script src="/static/js/subject_index.js?v=20261105h" nonce="{{ csp_nonce }}"></script>
+{% endblock %}

@@ -103,8 +103,17 @@ def omi_stubs(monkeypatch):
         calls.append((comune, zone))
         return [omi_quote(20, "Abitazioni civili", 1400.0, 1800.0), omi_quote(13, "Box", 1300.0, 1700.0)]
 
+    async def comune_quotes(code):
+        # the municipal fallback reads the same quotes: this comune quotes no shops anywhere (and the test must not
+        # depend on a real OMI database being reachable)
+        return [
+            {**omi_quote(20, "Abitazioni civili", 1400.0, 1800.0), "zona": "D1"},
+            {**omi_quote(13, "Box", 1300.0, 1700.0), "zona": "D1"},
+        ]
+
     monkeypatch.setattr(stats_service, "aget_omi_zone_at_point", zone_at_point)
     monkeypatch.setattr(omi_quotes, "omi_zone_quotes", zone_quotes)
+    monkeypatch.setattr(omi_quotes, "omi_comune_quotes", comune_quotes)
     return calls
 
 
@@ -171,7 +180,7 @@ async def test_omi_reason_is_visible_and_summarised_when_no_range_can_be_compute
     rows = kpis["table_estimates"][0]["buildings"]
     assert rows[0]["missing"] == "Categoria senza tipologia OMI"
     assert rows[1]["missing"] == "Non quotata da OMI"
-    assert "non stimati: " in kpis["asset_value_note"] and "Non quotata da OMI (1)" in kpis["asset_value_note"]
+    assert "Non stimati: " in kpis["asset_value_note"] and "Non quotata da OMI (1)" in kpis["asset_value_note"]
 
 
 async def test_visura_without_buildings_is_not_reported_as_unavailable():
@@ -345,3 +354,240 @@ def test_amounts_in_value_notes_keep_both_decimals():
     from sister.land_registry_kpis import _note_amount
 
     assert [_note_amount(v) for v in (217710.2, 1000, 2540.97, 199.87)] == ["217.710,20", "1.000", "2.540,97", "199,87"]
+
+
+# --- a unit listed once per ownership entry counts once in the totals -----------------------------------------------
+
+
+async def test_a_unit_listed_under_two_quotas_counts_once_in_the_whole_asset_totals():
+    unit = building("11", "100", "A02", "1.000,00", "100")  # 1000 x 1.05 x 160 = 168.000
+    other = building("11", "101", "A02", "500,00", "50")  # 84.000
+    xml = visura(buildings=[unit, other, unit])  # the same unit again: another ownership entry
+
+    kpis = await subject_land_registry_kpis(xml, None)
+
+    rows = kpis["table_estimates"][0]["buildings"]
+    assert [row["cadastral_value"] for row in rows] == ["€ 168.000", "€ 84.000", "€ 168.000"]  # every row keeps its own
+    assert [row.get("duplicate_unit") for row in rows] == [False, False, True]
+    assert "contato una sola volta" in rows[2]["cadastral_note"]
+    assert (kpis["building_rows"], kpis["building_units"], kpis["duplicate_building_rows"]) == (3, 2, 1)
+    assert kpis["cadastral_value_buildings"] == "€ 252.000"  # not 420.000
+    assert kpis["building_area"] == "150 m²" and kpis["building_income"] == "€ 1.500,00"
+    assert "2 fabbricati con rendita" in kpis["cadastral_value_note"] and "1 righe di fabbricati ripetono" in kpis["cadastral_value_note"]
+
+
+async def test_a_parcel_listed_under_two_quotas_counts_its_classamenti_once():
+    parcel = land("12", "5", {"ClassamentoT": [
+        {"SuperficieMQ": "1000", "RedditoDominicaleEuro": "10,00"},
+        {"SuperficieMQ": "500", "RedditoDominicaleEuro": "2,00"},  # a second quality of the same parcel: it counts
+    ]})
+    xml = {"VisuraSoggettoAttuale": {"GruppoUnitaImmobiliari": [
+        {"CodiceComune": "G273", "Descrizione": "PALERMO (PA)", "Provincia": "PA", "ImmobileTerreniS": [parcel]},
+        {"CodiceComune": "G273", "Descrizione": "PALERMO (PA)", "Provincia": "PA", "ImmobileTerreniS": [parcel]},
+    ]}}
+
+    kpis = await subject_land_registry_kpis(xml, None)
+
+    assert kpis["cadastral_value_lands"] == "€ 2.025"  # (10 + 2) x 1.25 x 135, once
+    assert kpis["grounds_area"] == "1.500 m²" and kpis["duplicate_land_rows"] == 2
+    assert [len(group["lands"]) for group in kpis["table_estimates"]] == [2, 2]  # the tables keep every row
+
+
+# --- the zone with the largest overlap may not quote the unit's typology ----------------------------------------------
+
+
+MOUNTAIN_MAP = {
+    "parcel_markers": [{"municipality_code": "G273", "sheet": "11", "parcel": "100", "latitude": 38.1, "longitude": 13.3, "province": "PA"}],
+    "parcel_features": [{
+        "properties": {"municipality_code": "G273", "sheet": "11", "parcel": "100"},
+        "geometry": {"type": "Polygon", "coordinates": [[[13.2, 38.0], [13.4, 38.0], [13.4, 38.2], [13.2, 38.0]]]},
+    }],
+}
+
+
+@pytest.fixture
+def mountain_zones(monkeypatch):
+    """The parcel overlaps R1 (residuale montana: only economici) most, then E2 (civili)."""
+    from land_registry import stats_service
+
+    zone_quotes = {
+        "R1": [{**omi_quote(21, "Abitazioni di tipo economico", 1450.0, 1750.0), "zona": "R1"}],
+        "E2": [{**omi_quote(20, "Abitazioni civili", 3000.0, 5000.0), "zona": "E2"}],
+    }
+
+    async def zone_at_point(province, lat, lng, cadastral_code=None):
+        return {"zone": "R1"}
+
+    async def one_zone(comune, zone, **kwargs):
+        return zone_quotes.get(zone, [])
+
+    async def comune_quotes(code):
+        return [quote for quotes in zone_quotes.values() for quote in quotes]
+
+    monkeypatch.setattr(stats_service, "aget_omi_zone_at_point", zone_at_point)
+    monkeypatch.setattr(omi_quotes, "omi_zone_quotes", one_zone)
+    monkeypatch.setattr(omi_quotes, "omi_comune_quotes", comune_quotes)
+    return monkeypatch
+
+
+async def test_unquoted_typology_falls_back_to_the_next_zone_the_parcel_overlaps(mountain_zones):
+    mountain_zones.setattr(land_registry_kpis, "omi_zone_ranking", lambda province, code, feature: ["R1", "E2"])
+
+    kpis = await subject_land_registry_kpis(visura(buildings=[building("11", "100", "A02", "1.000,00", "100")]), MOUNTAIN_MAP)
+
+    row = kpis["table_estimates"][0]["buildings"][0]
+    assert row["range"] == "€ 300.000 – € 500.000"  # E2's civili quote x 100 m2
+    assert "zona E2" in row["note"] and "la zona R1" in row["note"] and "maggiore sovrapposizione" in row["note"]
+    assert row["omi_zona"] == "R1" and row["omi_zona_used"] == "E2"  # the selected zone is unchanged
+    assert kpis["asset_value"] == "€ 300.000 – € 500.000"
+    assert kpis["asset_value_coverage"]["neighbour_zone_units"] == 1 and kpis["asset_value_coverage"]["exact_zone_units"] == 0
+
+
+async def test_unquoted_typology_without_any_overlapping_zone_uses_the_municipal_range(mountain_zones):
+    mountain_zones.setattr(land_registry_kpis, "omi_zone_ranking", lambda province, code, feature: ["R1"])
+
+    kpis = await subject_land_registry_kpis(visura(buildings=[building("11", "100", "A02", "1.000,00", "100")]), MOUNTAIN_MAP)
+
+    row = kpis["table_estimates"][0]["buildings"][0]
+    assert row["range"] == "€ 300.000 – € 500.000"  # the only zone of the comune that quotes civili
+    assert "né la zona R1 né le altre zone" in row["note"] and "Intervallo OMI comunale" in row["note"]
+    assert kpis["asset_value_coverage"]["municipality_range_units"] == 1
+
+
+async def test_a_zone_chosen_by_the_user_is_not_overridden_by_the_fallback(mountain_zones):
+    mountain_zones.setattr(land_registry_kpis, "omi_zone_ranking", lambda province, code, feature: ["R1", "E2"])
+
+    async def selections(user_id, keys):
+        return {key: {"zone_code": "R1", "is_manual": True, "typology_code": None} for key in keys}
+
+    from sister import database
+
+    mountain_zones.setattr(database, "get_user_property_omi_selections", selections)
+    kpis = await subject_land_registry_kpis(
+        visura(buildings=[building("11", "100", "A02", "1.000,00", "100")]), MOUNTAIN_MAP, selection_user_id="u1"
+    )
+
+    row = kpis["table_estimates"][0]["buildings"][0]
+    assert row["range"] == "" and row["missing"] == "Non quotata da OMI"  # the choice stands; the row says why
+
+
+async def test_the_omi_card_reports_how_much_of_the_portfolio_it_covers(omi_stubs):
+    xml = visura(buildings=[
+        building("11", "100", "A02", "1.000,00", "100"),  # valued: 168.000 of cadastral value
+        building("11", "101", "A09", "100,00", "100"),  # no OMI typology; only 16.800 of cadastral value
+    ])
+
+    kpis = await subject_land_registry_kpis(xml, MAP_LOOKUP)
+
+    coverage = kpis["asset_value_coverage"]
+    assert (coverage["valued_units"], coverage["units"]) == (1, 2)
+    assert 0.5 < coverage["cadastral_share"] < 1  # the valued unit carries most of the cadastral value
+    assert "1 di 2 fabbricati" in kpis["asset_value_coverage_note"] and "% del valore catastale" in kpis["asset_value_coverage_note"]
+    assert kpis["asset_value_note"].startswith(kpis["asset_value_coverage_note"])
+
+
+async def test_duplicate_rows_are_not_added_twice_to_the_omi_card(omi_stubs):
+    unit = building("11", "100", "A02", "1.000,00", "100")  # Abitazioni civili 1400-1800 x 100 m2
+
+    kpis = await subject_land_registry_kpis(visura(buildings=[unit, unit]), MAP_LOOKUP)
+
+    rows = kpis["table_estimates"][0]["buildings"]
+    assert [row["range"] for row in rows] == ["€ 140.000 – € 180.000"] * 2  # each row keeps its estimate for its quota
+    assert kpis["asset_value"] == "€ 140.000 – € 180.000"  # once in the card
+    assert "1 di 1 fabbricato distinto (2 righe)" in kpis["asset_value_coverage_note"]
+
+
+# --- zone descriptions in the OMI selectors ---------------------------------------------------------------------------
+
+
+def test_zone_label_names_the_zone_and_its_band():
+    assert omi_quotes.zone_description("R1", "RESIDUALE MONTANA", "R") == "R1 · Residuale Montana (Extraurbana / rurale)"
+    assert omi_quotes.zone_description("b1", "CAPOLUOGO", "B") == "B1 · Capoluogo (Centrale)"
+    assert omi_quotes.zone_description("E1", "BREUIL-CERVINIA", "E") == "E1 · Breuil-Cervinia (Suburbana)"
+    assert omi_quotes.zone_description("D5", "FRAZIONI A NORD DEL CAPOLUOGO", "D") == "D5 · Frazioni a Nord del Capoluogo (Periferica)"
+    assert omi_quotes.zone_description("D4", "", "") == "D4"  # OMI gives no description: just the code
+    assert omi_quotes.zone_description("E2", "Cielo alto", "X") == "E2 · Cielo Alto"  # unknown band letter is not invented
+
+
+async def test_zone_options_and_rows_carry_the_zone_description(mountain_zones):
+    mountain_zones.setattr(land_registry_kpis, "omi_zone_ranking", lambda province, code, feature: ["R1", "E2"])
+
+    async def comune_quotes(code):
+        return [
+            {**omi_quote(21, "Abitazioni di tipo economico", 1450.0, 1750.0), "zona": "R1", "fascia": "R", "zona_descrizione": "RESIDUALE MONTANA"},
+            {**omi_quote(20, "Abitazioni civili", 3000.0, 5000.0), "zona": "E2", "fascia": "E", "zona_descrizione": "CIELO ALTO"},
+        ]
+
+    mountain_zones.setattr(omi_quotes, "omi_comune_quotes", comune_quotes)
+
+    kpis = await subject_land_registry_kpis(visura(buildings=[building("11", "100", "A02", "1.000,00", "100")]), MOUNTAIN_MAP)
+
+    zones = {zone["code"]: zone for zone in kpis["omi_options_by_comune"]["G273"]["zones"]}
+    assert zones["R1"]["label"] == "R1 · Residuale Montana (Extraurbana / rurale)"
+    assert zones["E2"]["label"] == "E2 · Cielo Alto (Suburbana)" and zones["E2"]["description"] == "CIELO ALTO"
+    assert kpis["table_estimates"][0]["buildings"][0]["omi_zona_label"] == "R1 · Residuale Montana (Extraurbana / rurale)"
+
+
+# --- the valuation gets the parcel positions of the saved search's map too --------------------------------------------
+
+
+def test_valuation_map_adds_the_hub_positions_the_visura_lookup_lacks():
+    from sister import web
+
+    doc_map = {
+        "sheet": "424", "parcel": "33", "listed_only": True, "mapped_parcel_count": 0, "data_url": "/x",
+        "parcel_markers": [], "parcel_features": [],
+    }
+    marker = {"municipality_code": "H501", "sheet": "424", "parcel": "33", "section": "", "latitude": 41.9, "longitude": 12.5}
+    feature = {"properties": {"municipality_code": "H501", "sheet": "424", "parcel": "33"}, "geometry": {"type": "Point", "coordinates": [12.5, 41.9]}}
+    hub_map = {"parcel_markers": [marker, dict(marker)], "parcel_features": [feature]}
+
+    merged = web._valuation_map(doc_map, hub_map)
+
+    assert merged["parcel_markers"] == [marker] and merged["parcel_features"] == [feature]  # each parcel once
+    assert merged["mapped_parcel_count"] == 1 and doc_map["parcel_markers"] == []  # the visura's own lookup is untouched
+    assert web._valuation_map(doc_map, None) is doc_map and web._valuation_map(None, None) is None
+    assert web._valuation_map(doc_map, {"parcel_markers": [], "parcel_features": []}) is doc_map  # hub still loading
+    # the visura's own entry wins over the hub's for the same parcel
+    own = {**marker, "latitude": 1.0}
+    assert web._valuation_map({**doc_map, "parcel_markers": [own]}, hub_map)["parcel_markers"] == [own]
+
+
+def test_a_map_that_only_says_positions_are_being_looked_up_is_a_placeholder():
+    from sister import web
+
+    assert web._map_is_placeholder({"listed_only": True, "parcel_markers": [], "parcel_features": [], "mapped_parcel_count": 0})
+    assert not web._map_is_placeholder({"listed_only": True, "parcel_markers": [{"latitude": 1, "longitude": 2}]})
+    assert not web._map_is_placeholder({"listed_only": True, "mapped_parcel_count": 3})
+    assert not web._map_is_placeholder({"listed_only": False, "parcel_markers": []})
+    assert not web._map_is_placeholder(None)
+
+
+async def test_a_placeholder_map_neither_reads_nor_writes_the_calculation_snapshot(monkeypatch):
+    from sister import database, web
+
+    touched = []
+
+    async def get_snapshot(**kwargs):
+        touched.append("get")
+
+    async def set_snapshot(**kwargs):
+        touched.append("set")
+
+    async def fake_kpis(xml, map_lookup, **kwargs):
+        return {"ok": True}
+
+    async def no_manual(kpis, user):
+        return kpis
+
+    monkeypatch.setattr(database, "get_calculation_snapshot", get_snapshot)
+    monkeypatch.setattr(database, "set_calculation_snapshot", set_snapshot)
+    monkeypatch.setattr(land_registry_kpis, "subject_land_registry_kpis", fake_kpis)
+    monkeypatch.setattr(web, "_apply_user_manual_valuations", no_manual)
+    placeholder = {"listed_only": True, "parcel_markers": [], "parcel_features": [], "mapped_parcel_count": 0}
+    real = {"listed_only": True, "parcel_markers": [{"municipality_code": "H501", "sheet": "1", "parcel": "2"}]}
+
+    await web._subject_land_registry_calculation({"x": 1}, placeholder, None, scope_type="document", scope_id=7)
+    assert touched == []  # nothing remembered about a valuation made without parcel positions
+    await web._subject_land_registry_calculation({"x": 1}, real, None, scope_type="document", scope_id=7)
+    assert touched == ["get", "set"]

@@ -424,6 +424,22 @@
                       "boolean",
                       "null"
                     ]
+                  },
+                  "omonimo_da": {
+                    "type": [
+                      "string",
+                      "number",
+                      "boolean",
+                      "null"
+                    ]
+                  },
+                  "max_omonimi": {
+                    "type": [
+                      "string",
+                      "number",
+                      "boolean",
+                      "null"
+                    ]
                   }
                 },
                 "additionalProperties": false

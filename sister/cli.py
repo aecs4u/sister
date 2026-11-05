@@ -1892,7 +1892,9 @@ def db_status():
 @db_app.command("backfill")
 def db_backfill(
     what: str = typer.Argument(
-        "all", help="projections (risultati -> immobili/intestati), xml (documenti -> tabelle tipizzate) o all"
+        "all",
+        help="projections (risultati -> immobili/intestati), xml (documenti -> tabelle tipizzate), "
+        "holdings (riepilogo immobili/valori per soggetto), names (nomi dei soggetti noti solo per codice) o all",
     ),
     force: bool = typer.Option(False, "--force", help="Rielabora anche i documenti gia' popolati"),
     limit: int = typer.Option(0, "--limit", help="Massimo di righe da elaborare (0 = tutte)"),
@@ -1902,8 +1904,8 @@ def db_backfill(
 
     from . import database, xml_ingest
 
-    if what not in {"all", "projections", "xml"}:
-        raise typer.BadParameter("usa projections, xml o all")
+    if what not in {"all", "projections", "xml", "holdings", "names"}:
+        raise typer.BadParameter("usa projections, xml, holdings, names o all")
 
     async def _run():
         import getpass
@@ -1918,6 +1920,12 @@ def db_backfill(
             if what in {"all", "xml"}:
                 result["xml"] = await xml_ingest.backfill_documents(force=force, limit=limit or None)
                 console.print(f"Documenti XML: {result['xml']}")
+            if what in {"all", "names"}:
+                result["names"] = await database.backfill_subject_names()
+                console.print(f"Nomi dei soggetti: {result['names']}")
+            if what in {"all", "holdings"}:
+                result["holdings"] = await database.refresh_subject_holdings()
+                console.print(f"Riepiloghi per soggetto: {result['holdings']}")
         except Exception as exc:  # noqa: BLE001
             await database.record_activity(
                 "db.backfill",

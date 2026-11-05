@@ -24,7 +24,7 @@ from typing import Any
 
 from . import omi_quotes
 from .cadastral_values import building_cadastral_value, building_multiplier, land_cadastral_value, normalize_category
-from .omi_zones import omi_zone_for_parcel
+from .omi_zones import omi_zone_ranking
 from .result_parsers import (
     birth_date_from_codice_fiscale,
     clean_quota,
@@ -1329,7 +1329,11 @@ async def subject_land_registry_kpis(
     building_area_units = 0
     building_area_proxy = 0.0
     building_area_proxy_units = 0
-    building_units = 0
+    building_units = 0  # distinct units: a unit listed twice (one row per ownership entry) counts once in the totals
+    building_rows = 0
+    seen_building_keys: set[str] = set()
+    seen_land_keys: set[tuple[str, int]] = set()
+    duplicate_land_rows = 0
     building_income = 0.0
     building_income_units = 0
     grounds_area = 0.0
@@ -1371,7 +1375,6 @@ async def subject_land_registry_kpis(
         group_rights = _current_group_rights(group, subject_cf, _as_of)
 
         for property_row in _items(group.get("ImmobileFabbricatiS")):
-            building_units += 1
             identifier = _first(
                 _first(property_row.get("DatiIdentificativi")).get("IdentificativoDefinitivo")
             )
@@ -1385,6 +1388,15 @@ async def subject_land_registry_kpis(
                 parcel=identifier.get("ParticellaNum") or identifier.get("Particella"),
                 subunit=identifier.get("Subalterno"),
             )
+            # The portal lists a unit once per ownership entry (different quotas of the same unit). Every row keeps
+            # its own quota for the owner assessment, but the whole-asset totals count the unit once.
+            building_rows += 1
+            unit_key = (asset_identity or {}).get("asset_key")
+            is_duplicate = bool(unit_key) and unit_key in seen_building_keys
+            if unit_key:
+                seen_building_keys.add(unit_key)
+            if not is_duplicate:
+                building_units += 1
             classamento = _first(property_row.get("DatiClassamentoF"))
             surface = _first(property_row.get("SuperficieF"))
             area = _number(surface.get("Totale"))
@@ -1412,22 +1424,25 @@ async def subject_land_registry_kpis(
                 f"{_format_number_it(area)} m² di superficie catastale" if area is not None else ""
             )
             income = _number(classamento.get("RenditaEuro"))
-            if area is not None:
+            if is_duplicate:
+                pass  # already counted through the first row of this unit
+            elif area is not None:
                 building_area += area
                 building_area_units += 1
             elif omi_area is not None:
                 # Fill missing visura surfaces with the cadastral-consistency proxy already used for OMI.
                 building_area_proxy += omi_area
                 building_area_proxy_units += 1
-            if income is not None:
+            if income is not None and not is_duplicate:
                 building_income += income
                 building_income_units += 1
             code = str(identifier.get("CodiceComune") or municipality_code).strip().upper()
             table_row_index = len(table_estimates[group_index]["buildings"])
             cadastral = building_cadastral_value(income, classamento.get("Categoria"))
             if cadastral is not None:
-                cadastral_buildings += cadastral.value
-                cadastral_building_units += 1
+                if not is_duplicate:
+                    cadastral_buildings += cadastral.value
+                    cadastral_building_units += 1
                 cadastral_value, cadastral_note = (
                     _format_currency_it(float(cadastral.value)),
                     _building_value_note(cadastral, classamento.get("Categoria")),
@@ -1438,6 +1453,10 @@ async def subject_land_registry_kpis(
                 cadastral_value, cadastral_note = "", "Categoria catastale senza moltiplicatore IMU (gruppo E/F o assente)."
             else:
                 cadastral_value, cadastral_note = "", "Rendita catastale nulla."
+            if is_duplicate:
+                cadastral_note = (
+                    f"{cadastral_note} Stesso immobile di un'altra riga (altra quota): nei totali è contato una sola volta."
+                ).strip()
             omi_note = _initial_omi_note(classamento.get("Categoria"), area)
             normalized_category = normalize_category(classamento.get("Categoria"))
             if (consistency_area is not None or vani_area is not None) and omi_quotes.OMI_TYPOLOGY_BY_CATEGORY.get(normalized_category):
@@ -1461,6 +1480,7 @@ async def subject_land_registry_kpis(
                 "cadastral_value": cadastral_value,
                 "cadastral_note": cadastral_note,
                 "category": normalize_category(classamento.get("Categoria")),
+                "duplicate_unit": is_duplicate,
                 # A category link can still show all OMI zones for this municipality when
                 # no parcel geometry is available to resolve the property's exact zone.
                 "omi_comune": code,
@@ -1492,6 +1512,8 @@ async def subject_land_registry_kpis(
                 "group_index": group_index,
                 "table_row_index": table_row_index,
                 "asset_key": (asset_identity or {}).get("asset_key"),
+                "duplicate": is_duplicate,
+                "cadastral_value": cadastral.value if cadastral is not None else None,
             })
 
         for property_row in _items(group.get("ImmobileTerreniS")):
@@ -1508,12 +1530,19 @@ async def subject_land_registry_kpis(
                 parcel=identifier.get("ParticellaNum") or identifier.get("Particella"),
             )
             classamento = _first(property_row.get("DatiClassamentoT"))
-            for row in _items(classamento.get("ClassamentoT")) or [{}]:
+            for land_index, row in enumerate(_items(classamento.get("ClassamentoT")) or [{}]):
                 area = _number(row.get("SuperficieMQ"))
                 dominical = _number(row.get("RedditoDominicaleEuro"))
                 agricultural = _number(row.get("RedditoAgrarioEuro"))
                 land_value = land_cadastral_value(dominical)
-                if land_value is not None:
+                # the same parcel listed under another quota repeats its classamenti: count each once in the totals
+                land_key = ((asset_identity or {}).get("asset_key") or "", land_index)
+                land_is_duplicate = bool(land_key[0]) and land_key in seen_land_keys
+                if land_key[0]:
+                    seen_land_keys.add(land_key)
+                if land_is_duplicate:
+                    duplicate_land_rows += 1
+                if land_value is not None and not land_is_duplicate:
                     cadastral_lands += land_value.value
                     cadastral_land_rows += 1
                 table_row_index = len(table_estimates[group_index]["lands"])
@@ -1522,6 +1551,7 @@ async def subject_land_registry_kpis(
                     "cadastral_note": (
                         _land_value_note(land_value) if land_value else "Reddito dominicale assente."
                     ),
+                    "duplicate_unit": land_is_duplicate,
                     "asset_identity": asset_identity,
                 })
                 owner_assessment_assets.append({
@@ -1534,6 +1564,8 @@ async def subject_land_registry_kpis(
                     "dominical_income": dominical,
                     "agricultural_income": agricultural,
                 })
+                if land_is_duplicate:
+                    continue
                 if area is not None:
                     grounds_area += area
                     grounds_area_rows += 1
@@ -1610,9 +1642,27 @@ async def subject_land_registry_kpis(
     else:
         building_area_note = "La visura non elenca fabbricati"
 
+    duplicate_building_rows = building_rows - building_units
+    duplicates_note = ""
+    if duplicate_building_rows or duplicate_land_rows:
+        parts = []
+        if duplicate_building_rows:
+            parts.append(f"{duplicate_building_rows} righe di fabbricati")
+        if duplicate_land_rows:
+            parts.append(f"{duplicate_land_rows} righe di terreni")
+        duplicates_note = (
+            f" {' e '.join(parts)} ripetono un immobile già elencato con un'altra quota: nei totali ogni immobile è "
+            "contato una sola volta (le quote restano separate per diritto)."
+        )
+    if building_units and duplicate_building_rows:
+        building_area_note += f" · {building_units} immobili distinti su {building_rows} righe"
+
     kpis: dict[str, Any] = {
         "distinct_comuni": len(distinct_municipalities),
-        "building_rows": building_units,
+        "building_rows": building_rows,
+        "building_units": building_units,
+        "duplicate_building_rows": duplicate_building_rows,
+        "duplicate_land_rows": duplicate_land_rows,
         "land_rows": land_rows,
         "building_area": building_figure(building_area_figure),
         "building_area_note": building_area_note,
@@ -1649,6 +1699,7 @@ async def subject_land_registry_kpis(
             f"{'fabbricato' if cadastral_building_units == 1 else 'fabbricati'} con rendita e "
             f"{cadastral_land_rows} {'classamento' if cadastral_land_rows == 1 else 'classamenti'} con reddito dominicale: rendita × 1,05 × moltiplicatore di categoria, "
             "reddito dominicale × 1,25 × 135. È un valore fiscale, non di mercato; quote di proprietà non applicate."
+            + duplicates_note
         ),
         "asset_value": NOT_AVAILABLE if building_units else NO_BUILDINGS,
         "asset_value_note": (
@@ -1762,14 +1813,17 @@ async def subject_land_registry_kpis(
 
     geometry_items = list(geometry_requests.items())
     geometry_results = await asyncio.gather(*(
-        asyncio.to_thread(omi_zone_for_parcel, province, cadastral_code, feature)
+        asyncio.to_thread(omi_zone_ranking, province, cadastral_code, feature)
         for _parcel_key, (province, cadastral_code, feature) in geometry_items
     ))
-    geometry_parcel_zones = {
-        parcel_key: zone
-        for (parcel_key, _request), zone in zip(geometry_items, geometry_results)
-        if zone
+    # every zone the parcel overlaps, the largest first: the first is the parcel's zone, the others are the fallback
+    # when that zone does not quote the unit's typology (a mountain parcel crossing the "residuale montana" zone)
+    parcel_zone_rankings = {
+        parcel_key: [str(zone).strip().upper() for zone in ranking]
+        for (parcel_key, _request), ranking in zip(geometry_items, geometry_results)
+        if ranking
     }
+    geometry_parcel_zones = {parcel_key: ranking[0] for parcel_key, ranking in parcel_zone_rankings.items()}
     for parcel_key in geometry_parcel_zones:
         zone_point_methods[parcel_key] = "zona OMI con maggiore sovrapposizione alla particella catastale"
 
@@ -1866,6 +1920,7 @@ async def subject_land_registry_kpis(
     quotes_by_zone, quotes_by_comune = await asyncio.gather(exact_quotes_task, municipality_quotes_task)
 
     options_by_comune: dict[str, dict[str, Any]] = {}
+    zone_details_by_comune: dict[str, dict[str, tuple[str, str]]] = {}
     for code in comune_codes:
         payload = quotes_by_comune.get(code)
         all_quotes = payload.get("quotes", []) if isinstance(payload, dict) else []
@@ -1934,8 +1989,23 @@ async def subject_land_registry_kpis(
                 known_zones.add(zone)
                 zones_by_code.setdefault(zone, [])
                 typologies_by_zone.setdefault(zone, [])
+        zone_info: dict[str, tuple[str, str]] = {}  # zone -> (description, band), from the quotes OMI published
+        for zone_code, zone_quotes in zones_by_code.items():
+            for quote in zone_quotes:
+                if quote.get("zona_descrizione") or quote.get("fascia"):
+                    zone_info[zone_code] = (str(quote.get("zona_descrizione") or ""), str(quote.get("fascia") or ""))
+                    break
+        zone_details_by_comune[code] = zone_info
         options_by_comune[code] = {
-            "zones": [{"code": zone, "label": zone} for zone in sorted(known_zones)],
+            "zones": [
+                {
+                    "code": zone,
+                    "label": omi_quotes.zone_description(zone, *zone_info.get(zone, ("", ""))),
+                    "description": zone_info.get(zone, ("", ""))[0],
+                    "band": zone_info.get(zone, ("", ""))[1],
+                }
+                for zone in sorted(known_zones)
+            ],
             "typologies_by_zone": typologies_by_zone,
             "defaults_by_category": defaults_by_category,
         }
@@ -1952,6 +2022,8 @@ async def subject_land_registry_kpis(
         )
         saved_typology = saved_selections.get(building.get("asset_key"), {}).get("typology_code")
         default_typology = category_defaults.get(zone, category_defaults.get(""))
+        description, band = zone_details_by_comune.get(building["municipality_code"], {}).get(zone, ("", ""))
+        row_estimate["omi_zona_label"] = omi_quotes.zone_description(zone, description, band) if zone else ""
         row_estimate["omi_tipologia_default"] = str(default_typology or "")
         row_estimate["omi_tipologia"] = str(saved_typology or default_typology or "")
         # A saved code can equal the current category guess. Still show that persisted value in the selector,
@@ -1963,7 +2035,29 @@ async def subject_land_registry_kpis(
     value_estimate = 0.0
     valued_units = 0
     exact_zone_units = 0
+    neighbour_zone_units = 0
     municipality_range_units = 0
+    valued_cadastral = Decimal(0)  # cadastral value of the units that got an OMI estimate (coverage of the card)
+    quotes_by_comune_zone: dict[str, dict[str, list[dict[str, Any]]]] = {}
+    for comune, payload in quotes_by_comune.items():
+        if not isinstance(payload, dict):
+            continue
+        for quote in payload.get("quotes") or []:
+            zone_code = str(quote.get("zona") or "").strip().upper()
+            if zone_code:
+                quotes_by_comune_zone.setdefault(comune, {}).setdefault(zone_code, []).append(quote)
+
+    def count_unit(building: dict[str, Any], low: float, high: float, estimate: float) -> None:
+        """Add a unit's range to the card totals, once per distinct unit (rows of one unit differ only by quota)."""
+        nonlocal value_min, value_max, value_estimate, valued_units, valued_cadastral
+        if building.get("duplicate"):
+            return
+        value_min += low
+        value_max += high
+        value_estimate += estimate
+        valued_units += 1
+        valued_cadastral += building.get("cadastral_value") or Decimal(0)
+
     for building in buildings:
         row_estimate = table_estimates[building["group_index"]]["buildings"][building["table_row_index"]]
         if not building.get("category"):
@@ -1991,6 +2085,32 @@ async def subject_land_registry_kpis(
         except (TypeError, ValueError):
             typology_code = None
         quote, reason = omi_quotes.select_quote(quotes, building["category"], typology_code=typology_code)
+        used_zone = zone
+        zone_note = ""
+        not_quoted = reason == "Tipologia OMI non quotata in questa zona."
+        if quote is None and not_quoted and not row_estimate.get("omi_zone_selected"):
+            # The parcel's zone does not quote this typology. Try the other zones the parcel overlaps, largest first
+            # (a zone chosen by the user is respected and left as it is).
+            for other_zone in parcel_zone_rankings.get(parcel_key, []):
+                if other_zone == zone:
+                    continue
+                other_quotes = quotes_by_comune_zone.get(building["municipality_code"], {}).get(other_zone)
+                if not other_quotes:
+                    continue
+                candidate, _why = omi_quotes.select_quote(other_quotes, building["category"], typology_code=typology_code)
+                if candidate is not None:
+                    quote, used_zone = candidate, other_zone
+                    zone_note = (
+                        f"la zona {zone}, quella con la maggiore sovrapposizione alla particella, non quota questa "
+                        f"tipologia: usata la zona {other_zone}, che la particella interseca"
+                    )
+                    break
+            if quote is None:
+                # No overlapped zone quotes it: the unit is valued with the municipal range (below), like a parcel
+                # without a zone, and the row says why.
+                row_estimate["_zone_without_quote"] = zone
+                fallback_buildings.append(building)
+                continue
         if quote is not None:
             row_estimate["omi_tipologia"] = str(quote.get("cod_tipologia") or row_estimate.get("omi_tipologia") or "")
         if quote is None:
@@ -2007,16 +2127,19 @@ async def subject_land_registry_kpis(
             continue
         if low < 0 or high < low or estimate < low or estimate > high:
             continue
-        value_min += low
-        value_max += high
-        value_estimate += estimate
+        count_unit(building, low, high, estimate)
         row_estimate["value_min"] = low
         row_estimate["value_max"] = high
         row_estimate["value_estimate"] = estimate
         row_estimate["omi_price_min"] = price_min
         row_estimate["omi_price_max"] = price_max
-        valued_units += 1
-        exact_zone_units += 1
+        if not building.get("duplicate"):
+            if used_zone == zone:
+                exact_zone_units += 1
+            else:
+                neighbour_zone_units += 1
+        if used_zone != zone:
+            row_estimate["omi_zona_used"] = used_zone
         surface = {"L": "lorda", "N": "netta"}.get(quote.get("superficie"), "")
         area_formula = building.get("omi_area_formula") or f"{_format_number_it(building['omi_area'])} m²"
         value_formula = (
@@ -2031,12 +2154,13 @@ async def subject_land_registry_kpis(
             str(quote.get("tipologia") or ""),
             str(quote.get("stato_conservazione") or "").capitalize(),
             str(quote.get("periodo") or ""),
-            f"zona {zone}",
+            f"zona {used_zone}",
             f"€ {_format_number_it(price_min)}–{_format_number_it(price_max)} al m²"
             + (f" di superficie {surface}" if surface else ""),
             f"Formula: {value_formula}",
             central_formula,
             row_estimate.get("omi_zone_point_method"),
+            zone_note,
             f"calcolata su {building['omi_area_source']}; non è una perizia",
         ) if part)
 
@@ -2044,7 +2168,12 @@ async def subject_land_registry_kpis(
         row_estimate = table_estimates[building["group_index"]]["buildings"][building["table_row_index"]]
         payload = quotes_by_comune.get(building["municipality_code"])
         if not isinstance(payload, dict):
-            row_estimate["note"] = "Quotazioni OMI comunali non disponibili per stimare l'immobile senza zona puntuale."
+            if row_estimate.get("_zone_without_quote"):
+                # the real obstacle is the zone's missing quote; the municipal range was only a way around it
+                row_estimate.pop("_zone_without_quote", None)
+                row_estimate["note"] = "Tipologia OMI non quotata in questa zona."
+            else:
+                row_estimate["note"] = "Quotazioni OMI comunali non disponibili per stimare l'immobile senza zona puntuale."
             continue
         all_quotes = payload.get("quotes")
         if not isinstance(all_quotes, list):
@@ -2065,20 +2194,25 @@ async def subject_land_registry_kpis(
         low = building["omi_area"] * quote_range["prezzo_min"]
         high = building["omi_area"] * quote_range["prezzo_max"]
         estimate = building["omi_area"] * quote_range["prezzo_mid"]
-        value_min += low
-        value_max += high
-        value_estimate += estimate
+        count_unit(building, low, high, estimate)
         row_estimate["value_min"] = low
         row_estimate["value_max"] = high
         row_estimate["value_estimate"] = estimate
         row_estimate["omi_price_min"] = quote_range["prezzo_min"]
         row_estimate["omi_price_max"] = quote_range["prezzo_max"]
-        valued_units += 1
-        municipality_range_units += 1
+        if not building.get("duplicate"):
+            municipality_range_units += 1
         row_estimate["range"] = f"{_format_currency_it(low)} – {_format_currency_it(high)}"
         area_formula = building.get("omi_area_formula") or f"{_format_number_it(building['omi_area'])} m²"
-        row_estimate["note"] = (
+        unquoted_zone = row_estimate.pop("_zone_without_quote", "")
+        why_municipal = (
+            f"Intervallo OMI comunale: né la zona {unquoted_zone} né le altre zone che la particella interseca "
+            "quotano questa tipologia; "
+            if unquoted_zone else
             "Intervallo OMI comunale: zona della particella non determinata; "
+        )
+        row_estimate["note"] = (
+            why_municipal +
             f"minimo e massimo della tipologia catastale tra {quote_range['zone_count']} zone OMI disponibili. "
             f"Formula: {area_formula} × "
             f"€ {_format_number_it(quote_range['prezzo_min'])}–€ {_format_number_it(quote_range['prezzo_max'])}/m² = "
@@ -2104,10 +2238,44 @@ async def subject_land_registry_kpis(
         for row_index, estimate in enumerate(group["buildings"])
         if estimate.get("missing")
     })
+    # How much of the portfolio the OMI figure stands for: the share of the buildings' cadastral value that belongs to
+    # units with an estimate. A card that values 3 of 168 units must not look like the whole portfolio.
+    coverage_share = (
+        float(valued_cadastral / cadastral_buildings) if cadastral_buildings and valued_cadastral else
+        (valued_units / building_units if building_units else 0.0)
+    )
+    how_valued = ", ".join(part for part in (
+        f"{exact_zone_units} con zona puntuale" if exact_zone_units else "",
+        f"{neighbour_zone_units} con un'altra zona intersecata dalla particella" if neighbour_zone_units else "",
+        f"{municipality_range_units} con intervallo comunale su tutte le zone OMI" if municipality_range_units else "",
+    ) if part)
+    coverage_note = (
+        f"Stima OMI indicativa su {valued_units} di {building_units} "
+        f"{'fabbricato' if building_units == 1 else 'fabbricati'}"
+        + (
+            f" {'distinto' if building_units == 1 else 'distinti'} ({building_rows} righe)"
+            if building_rows != building_units else ""
+        )
+        + f", pari al {round(coverage_share * 100)}% del valore catastale dei fabbricati"
+        + (f" ({how_valued})" if how_valued else "")
+        + (
+            ". Copertura parziale: il totale è per difetto."
+            if valued_units < building_units and coverage_share < 0.95 else "."
+        )
+    )
+    kpis["asset_value_coverage"] = {
+        "valued_units": valued_units,
+        "units": building_units,
+        "rows": building_rows,
+        "cadastral_share": round(coverage_share, 4),
+        "exact_zone_units": exact_zone_units,
+        "neighbour_zone_units": neighbour_zone_units,
+        "municipality_range_units": municipality_range_units,
+    }
+    kpis["asset_value_coverage_note"] = coverage_note
     kpis["asset_value_note"] = (
-        f"Stima OMI indicativa su {valued_units} di {building_units} fabbricati "
-        f"({exact_zone_units} con zona puntuale, {municipality_range_units} con intervallo comunale su tutte le zone OMI); "
-        + (f"non stimati: {unvalued_reasons}; " if unvalued_reasons else "")
+        coverage_note + " "
+        + (f"Non stimati: {unvalued_reasons}; " if unvalued_reasons else "")
         + "terreni esclusi perché OMI non pubblica quotazioni per i terreni, quote di proprietà non applicate. "
         "La stima usa la superficie catastale quando disponibile; se manca, usa la consistenza in m² come proxy o, per i vani "
         "delle categorie A, stima la superficie moltiplicando i vani per il fattore medio nazionale della categoria (Statistiche "

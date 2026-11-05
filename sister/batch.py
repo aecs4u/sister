@@ -44,9 +44,19 @@ COMPLETED = "completed"
 ERROR = "error"  # the portal/service failed the request (retried ``retries`` times)
 NEEDS_HUMAN = "needs_human"  # a CAPTCHA nobody solved: a human action, never retried
 TIMEOUT = "timeout"  # still running when polling stopped; resume polls it again
+INCOMPLETE = "incomplete"  # a persona giuridica code with many registry records, read only up to ``omonimo_prossimo``
+MAX_CONTINUATIONS = 200  # follow-up requests of one row (records are read in chunks when a code has hundreds)
 # SISTER's own answer to a search: the subject does not exist. It comes back as an error, but a repeat gets the same
 # answer, so ``--resume`` does not send it again (a changed query is still a new request).
 FINAL_ERRORS = ("NESSUNA CORRISPONDENZA", "Superato il limite massimo")
+TOO_MANY = "Superato il limite massimo"  # SISTER lists at most 400 subjects for a search
+# the "Provincia della sede" options of the persona giuridica form (EE = estero): a search by name that matches more than
+# 400 subjects is split into one request per province
+SEDE_PROVINCES = (
+    "AG AL AN AO AP AQ AR AT AV BA BG BI BL BN BO BR BS BZ CA CB CE CH CL CN CO CR CS CT CZ EE EN FC FE FG FI FM FO FR FU "
+    "GE GO GR IM IS KR LC LE LI LO LT LU MC ME MI MN MO MS MT NA NO NU OR PA PC PD PE PG PI PL PN PO PR PS PT PU PV PZ RA "
+    "RC RE RG RI RM RN RO SA SI SO SP SR SS SV TA TE TN TO TP TR TS TV UD VA VB VC VE VI VR VT VV ZA"
+).split()
 INVALID = "invalid"
 DUPLICATE = "duplicate"
 DISABLED = "disabled"
@@ -444,7 +454,8 @@ class BatchRunner:
                 if self._stop:
                     return self._not_run(item, SKIPPED)
                 entry = await self._execute(item, total)
-            if entry["status"] not in OK_STATUSES and self.options.on_error == "stop":
+            partial = entry["status"] == INCOMPLETE and not entry.get("error")
+            if entry["status"] not in OK_STATUSES and not partial and self.options.on_error == "stop":
                 self._stop = True
             return entry
 
@@ -477,6 +488,16 @@ class BatchRunner:
         entry.update(label=item.label, fingerprint=item.fingerprint, **extra)
         return entry
 
+    @staticmethod
+    def _stamp_records(entry: dict) -> dict:
+        """Keep the number of registry records of a persona giuridica code in the journal row (see ``_execute``)."""
+        for result in (entry.get("results") or {}).values():
+            data = result.get("data") if isinstance(result, dict) else None
+            if isinstance(data, dict) and data.get("omonimi_totale") is not None:
+                entry["omonimi_totale"] = data["omonimi_totale"]
+                break
+        return entry
+
     def _record(self, entry: dict) -> None:
         if self.journal:
             self.journal.append({**{k: v for k, v in entry.items() if k != "results"}, "updated_at": _now()})
@@ -487,6 +508,10 @@ class BatchRunner:
             prior = None  # the query was edited: it is a new request
         request_ids: list[str] = []
         force = item.reuse == "force"
+        if prior and item.command == "azienda" and prior.get("status") == COMPLETED and prior.get("omonimi_totale") is None:
+            # answered before every registry record of a code was opened: that answer was only the list of records,
+            # not the properties. Read it again, whatever the service still has cached.
+            prior, force = None, True
         if prior:
             status = prior.get("status")
             if status == COMPLETED or (status == QUEUED and not self.options.wait):
@@ -508,6 +533,15 @@ class BatchRunner:
                     **self._entry(item, status),
                     **{k: prior[k] for k in ("request_ids", "result_file") if k in prior},
                 }
+            if (status == INCOMPLETE and prior.get("split") or status == ERROR and TOO_MANY in str(prior.get("error", ""))) and (
+                self._splittable(item)
+            ):
+                self.emit("start", item, total=total)
+                entry = await self._split(item, total, self._entry(item, ERROR, error=prior.get("error", "")))
+                self._record(entry)
+                self._write_row(item, entry)
+                self.emit("done", item, entry=entry)
+                return entry
             if status == ERROR and any(marker in str(prior.get("error", "")) for marker in FINAL_ERRORS):
                 try:
                     await self._tag_requests(item, prior.get("request_ids", []))
@@ -527,6 +561,23 @@ class BatchRunner:
                     **self._entry(item, status, error=prior.get("error", "")),
                     **{k: prior[k] for k in ("request_ids", "result_file") if k in prior},
                 }
+            if status == INCOMPLETE and prior.get("omonimo_prossimo") and prior.get("request_ids"):
+                self.emit("start", item, total=total)
+                entry = await self._continue(
+                    item,
+                    self._entry(
+                        item,
+                        INCOMPLETE,
+                        request_ids=list(prior["request_ids"]),
+                        results={},
+                        omonimo_prossimo=int(prior["omonimo_prossimo"]),
+                    ),
+                )
+                self._stamp_records(entry)
+                self._record(entry)
+                self._write_row(item, entry)
+                self.emit("done", item, entry=entry)
+                return entry
             if (
                 status == ERROR
                 and str(prior.get("error", "")).startswith(TAG_PERSISTENCE_ERROR)
@@ -544,17 +595,137 @@ class BatchRunner:
             attempts += 1
             entry = await self._attempt(item, request_ids, force)
             entry["attempts"] = attempts
-            retryable = entry.pop("retryable", True)
+            retryable = entry.pop("retryable", True) and not self._final(entry)
             if not (entry["status"] == ERROR and retryable and attempts <= item.retries):
                 break
             delay = self.options.retry_delay * 2 ** (attempts - 1)
             self.emit("retry", item, attempt=attempts, delay=delay, error=entry.get("error", ""))
             await asyncio.sleep(delay)
             request_ids, force = [], True
+        if entry["status"] == COMPLETED and (following := self._next_record(entry)):
+            entry = await self._continue(item, {**entry, "omonimo_prossimo": following})
+        elif entry["status"] == ERROR and TOO_MANY in str(entry.get("error", "")) and self._splittable(item):
+            entry = await self._split(item, total, entry)
+        self._stamp_records(entry)
         self._record(entry)
         self._write_row(item, entry)
         self.emit("done", item, entry=entry)
         return entry
+
+    @staticmethod
+    def _final(entry: dict) -> bool:
+        """SISTER's own answer ("nessuna corrispondenza", "oltre 400"): asking again gets the same one."""
+        return entry.get("status") == ERROR and any(marker in str(entry.get("error", "")) for marker in FINAL_ERRORS)
+
+    @staticmethod
+    def _splittable(item: PlannedQuery) -> bool:
+        """A persona giuridica search by *name* with no seat given: it can be narrowed by the province of the seat."""
+        ident = str(item.params.get("identificativo", "")).strip()
+        is_code = len(ident) in (11, 16) and ident.isalnum()
+        return (
+            item.command == "azienda"
+            and bool(ident)
+            and not is_code
+            and not item.params.get("provincia_sede")
+            and not item.params.get("comune_sede")
+        )
+
+    async def _split(self, item: PlannedQuery, total: int, first: dict) -> dict:
+        """A name that matches more than 400 subjects: one request per province of the seat, all under this row.
+
+        Each child is a normal row (``<id>.<PR>``) with its own journal line, so ``--resume`` carries on province by
+        province. The row is ``completed`` when every province was answered (some with SISTER's "nessuna
+        corrispondenza", which is final), ``incomplete`` otherwise. A province that still matches more than 400 is listed
+        in ``split_too_many``: it needs ``comune_sede`` (or a more precise name).
+        """
+        from .search_outcome import SESSION_EXPIRED, classify
+
+        entry = self._entry(item, ERROR, error=first.get("error", ""), request_ids=list(first.get("request_ids", [])))
+        entry["results"] = dict(first.get("results") or {})
+        found, empty, too_many, pending = 0, 0, [], []
+        session_lost = False
+        for number, province in enumerate(SEDE_PROVINCES, start=1):
+            if session_lost or self._stop:
+                pending.append(province)
+                continue
+            params = {**item.params, "provincia_sede": province}
+            child = PlannedQuery(
+                index=item.index * 1000 + number,
+                id=f"{item.id[:58]}.{province}",
+                command=item.command,
+                params=params,
+                reuse=item.reuse,
+                retries=item.retries,
+                metadata={**item.metadata, "split_of": item.id},
+                fingerprint=fingerprint(item.command, params),
+            )
+            result = await self._execute(child, total)
+            entry["request_ids"] = [*entry.get("request_ids", []), *result.get("request_ids", [])]
+            entry["results"].update(result.get("results") or {})
+            error = str(result.get("error", ""))
+            if result["status"] == COMPLETED:
+                found += 1
+            elif result["status"] == ERROR and "NESSUNA CORRISPONDENZA" in error:
+                empty += 1
+            elif result["status"] == ERROR and TOO_MANY in error:
+                too_many.append(province)
+            else:
+                pending.append(province)
+                session_lost = classify(result.get("status"), error) == SESSION_EXPIRED
+        entry.update(split=True, split_found=found, split_empty=empty, split_too_many=too_many, split_pending=pending)
+        entry.pop("error", None)
+        if pending:
+            entry.update(status=INCOMPLETE, error=f"{len(pending)} province da completare")
+        else:
+            entry["status"] = COMPLETED
+        return entry
+
+    @staticmethod
+    def _next_record(entry: dict) -> int | None:
+        """The persona giuridica record to continue from when an answer stopped early (``incompleta``), else None."""
+        for result in (entry.get("results") or {}).values():
+            data = result.get("data") if isinstance(result, dict) else None
+            if isinstance(data, dict) and data.get("incompleta") and data.get("omonimo_prossimo"):
+                try:
+                    return int(data["omonimo_prossimo"])
+                except (TypeError, ValueError):
+                    return None
+        return None
+
+    async def _continue(self, item: PlannedQuery, entry: dict) -> dict:
+        """Read the next chunk of registry records of one code until the code is complete.
+
+        A code can carry hundreds of records (SISTER answers with one row per record). One request reads as many as its
+        time budget allows and says where it stopped; the follow-ups append the rest to the same row, so the row has all
+        the results of the code. A follow-up that fails (the SISTER session ended) leaves the row ``incomplete`` with the
+        record to start from, and ``--resume`` carries on from there instead of reading the first records again.
+        """
+        entry.setdefault("results", {})
+        following = entry.get("omonimo_prossimo")
+        for _ in range(MAX_CONTINUATIONS):
+            if not following:
+                break
+            try:
+                submitted = await self.client.submit(item.command, {**item.params, "omonimo_da": str(following)}, force=True)
+                new_ids = VisuraClient.request_ids(submitted)
+                if not new_ids:
+                    raise RuntimeError("il servizio non ha restituito alcun request_id")
+                entry["request_ids"] = [*entry.get("request_ids", []), *new_ids]
+                self._record(self._entry(item, INCOMPLETE, request_ids=entry["request_ids"], omonimo_prossimo=following))
+                self.emit("submitted", item, request_ids=new_ids)
+                part = await self._wait(item, new_ids)
+            except Exception as exc:  # noqa: BLE001
+                detail = f"HTTP {exc.status_code}: {exc.detail}" if isinstance(exc, VisuraAPIError) else repr(exc)
+                return {**entry, "status": INCOMPLETE, "error": detail, "omonimo_prossimo": following}
+            entry["results"].update(part.get("results", {}))
+            if part["status"] != COMPLETED:
+                return {**entry, "status": INCOMPLETE, "error": part.get("error") or part["status"], "omonimo_prossimo": following}
+            following = self._next_record(part)
+        entry.pop("error", None)
+        if following:
+            return {**entry, "status": INCOMPLETE, "omonimo_prossimo": following}
+        entry.pop("omonimo_prossimo", None)
+        return {**entry, "status": COMPLETED}
 
     async def _attempt(self, item: PlannedQuery, request_ids: list[str], force: bool) -> dict:
         try:

@@ -317,6 +317,72 @@ def parse_intestato_value(value: str) -> dict:
     return owner
 
 
+def parse_omonimo_value(value: Any) -> dict[str, str]:
+    """Decode an ``omonimoSelezionato`` radio value of the *Elenco Omonimi* page (the page after a code search).
+
+    Persona fisica: ``id#0#COGNOME#NOME#CODICE FISCALE#LUOGO#GG/MM/AAAA#PR``;
+    persona giuridica: ``id#0#DENOMINAZIONE#SEDE (PR)#CODICE FISCALE``. Blank parts are omitted; an unreadable value gives ``{}``.
+    """
+    parts = [squeeze(part) for part in str(value or "").split("#")]
+    at = next((i for i, part in enumerate(parts) if _IDENTIFIER.match(part)), None)
+    if at is None:
+        return {}
+    code = parts[at]
+    if len(code) == 16:
+        out = {"tipo": "persona", "codice_fiscale": code}
+        if at >= 2:
+            out.update(cognome=parts[at - 2], nome=parts[at - 1])
+        for offset, key in ((1, "luogo_nascita"), (2, "data_nascita"), (3, "provincia_nascita")):
+            if at + offset < len(parts):
+                out[key] = parts[at + offset]
+    else:
+        out = {"tipo": "azienda", "codice_fiscale": code}
+        if at >= 2:
+            out.update(denominazione=parts[at - 2], sede=parts[at - 1])
+    return {key: val for key, val in out.items() if val}
+
+
+def _row_value(row: dict, *keys: str) -> str:
+    folded = {squeeze(k).casefold(): v for k, v in row.items()}
+    for key in keys:
+        value = squeeze(folded.get(key.casefold()))
+        if value:
+            return value
+    return ""
+
+
+def omonimo_details(row: dict, index: int, selected: bool = False) -> dict[str, Any]:
+    """Everything the *Elenco Omonimi* page says about one listed subject (person or company).
+
+    The table cells win over the radio value, which fills what the table does not show. ``riga`` keeps the whole row as the
+    portal wrote it, so nothing the page shows is lost.
+    """
+    out: dict[str, Any] = parse_omonimo_value(row.get("omonimoSelezionato"))
+    for key, cells in (
+        ("cognome", ("Cognome",)),
+        ("nome", ("Nome",)),
+        ("sesso", ("Sesso",)),
+        ("data_nascita", ("Data di nascita", "Data nascita")),
+        ("luogo_nascita", ("Luogo di nascita", "Luogo nascita")),
+        ("denominazione", ("Denominazione",)),
+        ("sede", ("Sede",)),
+        ("codice_fiscale", ("Codice Fiscale", "Codice fiscale")),
+    ):
+        value = _row_value(row, *cells)
+        if value:
+            out[key] = value.upper() if key == "codice_fiscale" else value
+    place = re.match(r"^(.*?)\s*\(([A-Za-z]{2})\)\s*$", out.get("luogo_nascita", ""))
+    if place:  # 'ERICE (TP)' → place and province
+        out["luogo_nascita"] = place.group(1)
+        out.setdefault("provincia_nascita", place.group(2).upper())
+    code = out.get("codice_fiscale", "")
+    out["tipo"] = "azienda" if _COMPANY_ID.match(code) or (out.get("denominazione") and not out.get("cognome")) else "persona"
+    out["indice"] = index
+    out["selezionato"] = selected
+    out["riga"] = {k: v for k, v in row.items() if k != "omonimoSelezionato"}
+    return {key: val for key, val in out.items() if val not in ("", None)}
+
+
 _NOMINATIVO_KEYS = ("Nominativo o denominazione", "Nominativo", "nome", "Denominazione")
 _CF_KEYS = ("Codice fiscale", "Codice Fiscale", "codice_fiscale", "CF")
 

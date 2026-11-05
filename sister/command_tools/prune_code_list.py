@@ -12,7 +12,9 @@ Works on every list ``sister batch build-list`` reads (``docs/batch_markdown_for
   (``visura``, ``visura_fabbricati``, ``visura_terreni``, ``visura_soggetto``) of that comune/foglio/particella/subalterno
   and catasto. Rows whose ids differ only by a final ``-F``/``-T`` are alternatives for one identifier of unknown type:
   when one is available, all go;
-* other rows stay.
+* other rows stay;
+* a row with ``reuse: force`` is repeated on purpose and always stays (the runner also sends it again, whatever the
+  service has cached).
 
 The file is rewritten in place (a copy goes to ``backups/`` next to it). Ids are never renumbered, so a journal stays valid.
 The older codici lists are renumbered and their totals updated, as before.
@@ -98,6 +100,10 @@ def available_lines(text: str, answered: set[str], stored: set) -> tuple[list[in
     for query in parsed.batch.queries:
         params = {key: value for key, value in query.params.items() if value}
         code = str(params.get("codice_fiscale") or params.get("identificativo") or "").strip().upper()
+        if query.reuse == "force":  # a row that asks to be repeated on purpose is never "already answered"
+            counts["subject" if code else "other"] += 1
+            verdicts.append(False)
+            continue
         if code:
             counts["subject"] += 1
             verdicts.append(code in answered)

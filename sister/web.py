@@ -25,7 +25,7 @@ from urllib.parse import quote, urlencode, urlsplit
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, Query, Request
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 from jinja2 import TemplateNotFound
 from starlette.concurrency import run_in_threadpool
 from starlette.responses import StreamingResponse
@@ -61,7 +61,6 @@ from .database import (
     iter_all_documents,
     parcel_key,
     record_activity,
-    search_person_profiles,
 )
 from .document_scope import subject_search_scope as _subject_search_scope
 from .form_config import get_available_form_groups, get_single_step_groups, get_workflow_groups
@@ -2703,8 +2702,53 @@ async def _apply_user_manual_valuations(kpis: dict[str, Any] | None, user) -> di
     return decorated
 
 
+def _map_parcel_key(item: dict, properties: bool = False) -> tuple[str, str, str, str]:
+    source = (item.get("properties") or {}) if properties else item
+    return tuple(  # type: ignore[return-value]
+        str(source.get(name) or "").strip().upper() for name in ("municipality_code", "section", "sheet", "parcel")
+    )
+
+
+def _valuation_map(doc_map: dict | None, hub_map: dict | None) -> dict | None:
+    """Parcel positions for the valuation: the visura's own lookup plus those of the saved search's map.
+
+    A stored visura's lookup only knows the parcels the local geometry cache already holds; the page's map also places
+    the parcels of the saved search (cache, then address geocoding). Without this, a parcel that the map shows with its
+    OMI zone was valued as "zone not determined". The visura's entries win; the hub's only add what is missing.
+    """
+    if not hub_map or not (hub_map.get("parcel_markers") or hub_map.get("parcel_features")):
+        return doc_map
+    merged = dict(doc_map or {k: hub_map.get(k) for k in ("sheet", "parcel", "municipality", "province")})
+    markers = list(merged.get("parcel_markers") or [])
+    features = [f for f in (merged.get("parcel_features") or []) if isinstance(f, dict)]
+    marker_keys = {_map_parcel_key(m) for m in markers if isinstance(m, dict)}
+    feature_keys = {_map_parcel_key(f, True) for f in features}
+    for marker in hub_map.get("parcel_markers") or []:
+        if isinstance(marker, dict) and _map_parcel_key(marker) not in marker_keys and all(_map_parcel_key(marker)[2:]):
+            markers.append(marker)
+            marker_keys.add(_map_parcel_key(marker))
+    for feature in hub_map.get("parcel_features") or []:
+        if isinstance(feature, dict) and _map_parcel_key(feature, True) not in feature_keys:
+            features.append(feature)
+            feature_keys.add(_map_parcel_key(feature, True))
+    merged["parcel_markers"] = markers
+    merged["parcel_features"] = features
+    merged["mapped_parcel_count"] = max(int(merged.get("mapped_parcel_count") or 0), len(marker_keys | feature_keys))
+    return merged
+
+
+def _map_is_placeholder(map_lookup: dict | None) -> bool:
+    """True when the map only says "positions are being looked up": nothing is placed yet, so a valuation made with it
+    cannot know any OMI zone and must not be remembered (the positions arrive a moment later)."""
+    if not map_lookup:
+        return False
+    return bool(map_lookup.get("listed_only")) and not (
+        map_lookup.get("parcel_markers") or map_lookup.get("parcel_features") or map_lookup.get("mapped_parcel_count")
+    )
+
+
 _LAND_REGISTRY_CALCULATION_TYPE = "subject_land_registry_kpis"
-_LAND_REGISTRY_CALCULATION_VERSION = "11"
+_LAND_REGISTRY_CALCULATION_VERSION = "12"  # 12: units counted once, zone fallback + descriptions
 _LAND_REGISTRY_CALCULATION_MAX_AGE_SECONDS = 12 * 60 * 60
 
 
@@ -2713,6 +2757,8 @@ async def _subject_land_registry_calculation(
 ) -> dict[str, Any]:
     """Load or persist the complete subject valuation/KPI result for these source inputs."""
     normalized_scope_id = str(scope_id or "").strip()
+    if _map_is_placeholder(map_lookup):
+        normalized_scope_id = ""  # neither read nor write the snapshot: the parcel positions are not known yet
     viewer_key = _favorite_user_key(user) or "anonymous"
     input_payload = json.dumps(
         {"xml": xml_parsed, "map": map_lookup},
@@ -5382,6 +5428,7 @@ async def _render_doc_from_db(
     subject_favorite_enabled: bool = False,
     subject_is_favorite: bool = False,
     as_pdf: bool = False,
+    subject_facts: dict | None = None,
 ):
     """Finalize a doc dict fetched from the DB and render the matching visura template.
 
@@ -5502,14 +5549,18 @@ async def _render_doc_from_db(
         async def _no_hub_map():
             return None
 
-        # The valuation, the ownership history and the hub map do not depend on each other: they used to run one after
-        # the other (3-4 s each on a large subject), now they overlap.
-        land_registry_kpis, land_registry_history, hub_map = await asyncio.gather(
-            _subject_land_registry_calculation(
-                xml_shown, map_lookup, user, scope_type="document", scope_id=doc.get("id") or doc.get("filename")
-            ),
+        # The ownership history and the hub map do not depend on each other and overlap; the valuation follows, because
+        # it needs the hub map's parcel positions.
+        land_registry_history, hub_map = await asyncio.gather(
             subject_land_registry_history(xml_p, max_events=None) if as_pdf else subject_land_registry_history(xml_p),
             _hub_parcel_map(subject_hub) if (subject_hub and not as_pdf) else _no_hub_map(),
+        )
+        # the valuation places each parcel in its OMI zone: it needs the positions the page's map has (saved search)
+        if subject_hub:
+            hub_map = await _hub_parcel_map_for_valuation(subject_hub, hub_map)  # also what the page then draws
+        land_registry_kpis = await _subject_land_registry_calculation(
+            xml_shown, _valuation_map(map_lookup, hub_map), user,
+            scope_type="document", scope_id=doc.get("id") or doc.get("filename"),
         )
     from .display import merge_identifiers, readable_owners, subject_for_theme
 
@@ -5563,6 +5614,7 @@ async def _render_doc_from_db(
         subject_archive=subject_archive,
         subject_favorite_enabled=subject_favorite_enabled,
         subject_is_favorite=subject_is_favorite,
+        subject_facts=subject_facts,
         document_favorites_enabled=document_favorites_enabled,
         subject_document_id=doc.get("id") if subject_fiscal_code else None,
         manual_valuation_enabled=bool(_favorite_user_key(user)),
@@ -11365,6 +11417,32 @@ async def _hub_parcel_map(profile: dict) -> dict | None:
     })
 
 
+_VALUATION_MAP_WAIT_SECONDS = float(os.getenv("SISTER_VALUATION_MAP_WAIT_SECONDS", "10"))
+
+
+async def _hub_parcel_map_for_valuation(profile: dict, hub_map: dict | None) -> dict | None:
+    """The saved search's map once its background build has finished, waiting at most ``SISTER_VALUATION_MAP_WAIT_SECONDS``.
+
+    The page only waits a couple of seconds for the map (it then draws it progressively), but the OMI valuation is
+    computed on the server and needs the parcel positions: without them each unit falls back to the whole municipality's
+    range. Returns ``hub_map`` unchanged when there is nothing to wait for or the build is still running.
+    """
+    if _VALUATION_MAP_WAIT_SECONDS <= 0 or not _map_is_placeholder(hub_map):
+        return hub_map
+    parcels = _hub_map_parcels(profile)
+    task = _HUB_MAP_TASKS.get(_hub_map_key(parcels)) if parcels else None
+    if task is None:
+        return hub_map
+    done, _pending = await asyncio.wait({task}, timeout=_VALUATION_MAP_WAIT_SECONDS)
+    if not done:
+        return hub_map
+    try:
+        return task.result() or hub_map
+    except Exception as exc:  # noqa: BLE001 - the valuation then simply has no positions, as before
+        logger.warning("Hub parcel map unavailable for the valuation: %s", type(exc).__name__)
+        return hub_map
+
+
 async def _hub_parcel_map_for_pdf(profile: dict) -> dict | None:
     """Wait for the complete hub map before embedding it in a downloadable report."""
     parcel_map = await _hub_parcel_map(profile)
@@ -11411,6 +11489,76 @@ async def _subject_pdf_response(
     return Response(content=content, media_type="application/pdf", headers=headers)
 
 
+def _it_date(iso: str | None) -> str:
+    return "/".join(reversed(str(iso)[:10].split("-"))) if iso else ""
+
+
+def _it_amount(value: float | None) -> str:
+    return "" if value is None else f"{value:,.0f}".replace(",", ".") + " €"
+
+
+def _short_list(joined: str, limit: int = 12) -> str:
+    """``"AG, AL, …"`` cut to ``limit`` items plus a count of the rest (a company can span over a hundred provinces)."""
+    items = [item.strip() for item in (joined or "").split(",") if item.strip()]
+    if len(items) <= limit:
+        return ", ".join(items)
+    return ", ".join(items[:limit]) + f" … (+{len(items) - limit})"
+
+
+async def _subject_facts(code: str, kind: str) -> dict | None:
+    """What the archive knows about a subject, ready to show in the profile header (``None`` when nothing is stored).
+
+    Persons: birth date and place, age, sex. Both kinds: properties, provinces and valore catastale of the latest
+    subject search (with the same caveats as the /persons table), the date of that search, searches and visure.
+    A lookup failure only leaves the header without these extras.
+    """
+    from datetime import date
+
+    from .database import get_subject_profile
+
+    try:
+        profile = await get_subject_profile(code, kind)
+    except Exception as exc:  # noqa: BLE001 - the header extras must never stop the profile from opening
+        logger.warning("Dati del soggetto non disponibili: %s", type(exc).__name__)
+        return None
+    if not profile:
+        return None
+    facts: dict = {
+        "is_person": kind == "person",
+        "name": profile["name"],
+        "properties": profile["properties"],
+        "buildings": profile["buildings"],
+        "land": profile["land"],
+        "provinces": profile["provinces"],
+        "provinces_short": _short_list(profile["provinces"]),
+        "unvalued": profile["unvalued"] or 0,
+        "unknown_share": profile["unknown_share"] or 0,
+        "value_share": _it_amount(profile["cadastral_value_share"]),
+        "value": _it_amount(profile["cadastral_value"]),
+        "rendita": _it_amount(profile["rendita"]),
+        "reddito_dominicale": _it_amount(profile["reddito_dominicale"]),
+        "searched_at": _it_date(profile["searched_at"]),
+        "last_seen": _it_date(profile["last_seen"]),
+        "searches": profile["searches"],
+        "visure": profile["visure"],
+    }
+    if kind == "person":
+        age = None
+        birth = profile.get("birth_date")
+        if birth:
+            born = date.fromisoformat(birth)
+            today = date.today()
+            age = today.year - born.year - ((today.month, today.day) < (born.month, born.day))
+        facts.update(
+            birth_date=_it_date(birth),
+            age=age,
+            birth_place=profile.get("birth_place") or "",
+            birth_province=profile.get("birth_province") or "",
+            gender={"M": "Maschio", "F": "Femmina"}.get(profile.get("gender") or "", ""),
+        )
+    return facts
+
+
 def _query_only_subject_doc(profile: dict) -> dict:
     """Page data of a subject that has a saved soggetto query but no stored visura: the elenco as visura groups."""
     return {
@@ -11445,6 +11593,7 @@ async def _render_query_only_subject(
     as_pdf: bool = False,
     subject_favorite_enabled: bool = False,
     subject_is_favorite: bool = False,
+    subject_facts: dict | None = None,
 ):
     """Render a subject that has a saved soggetto query but no structured visura on the visura layout.
 
@@ -11457,6 +11606,8 @@ async def _render_query_only_subject(
         land_registry_map = await (
             _hub_parcel_map_for_pdf(profile) if as_pdf else _hub_parcel_map(profile)
         )
+        if not as_pdf:
+            land_registry_map = await _hub_parcel_map_for_valuation(profile, land_registry_map)
     except Exception as exc:  # noqa: BLE001 - the map and OMI estimate are optional additions to the subject archive
         logger.warning("Subject parcel map unavailable: %s", type(exc).__name__)
         land_registry_map = None
@@ -11489,6 +11640,7 @@ async def _render_query_only_subject(
         subject_archive=subject_archive,
         subject_favorite_enabled=subject_favorite_enabled,
         subject_is_favorite=subject_is_favorite,
+        subject_facts=subject_facts,
         land_registry_kpis=land_registry_kpis,
         manual_valuation_enabled=bool(_favorite_user_key(user)),
         land_registry_map=land_registry_map,
@@ -11556,6 +11708,7 @@ async def _web_subject_profile(
         from .database import is_subject_favorite
 
         subject_is_favorite = await is_subject_favorite(favorite_user_key, subject_type, normalized_code)
+    subject_facts = None if as_pdf else await _subject_facts(normalized_code, subject_type)
     if subject_hub is not None and document is not None:
         subject_hub["pagination"]["query"] = f"&document={document}"
     if subject_hub is not None and not subject_documents:
@@ -11576,20 +11729,19 @@ async def _web_subject_profile(
             as_pdf,
             subject_favorite_enabled=subject_favorite_enabled,
             subject_is_favorite=subject_is_favorite,
+            subject_facts=subject_facts,
         )
     if not subject_documents:
         if as_pdf:
             raise HTTPException(status_code=404, detail="Nessuna visura né ricerca per soggetto archiviata")
         # a code nobody has queried yet is the normal outcome of the lookup form: stay on the form with a hint
-        response = _get_theme(request).render(
-            "companies_index.html" if is_company else "persons_index.html",
+        response = await _render_subject_index(
             request,
-            user=user,
-            code=normalized_code,
-            error_message=(
-                f"Nessuna visura soggetto salvata per {normalized_code}. "
-                "Richiedila dalla pagina Query (visura per soggetto), poi riapri questo profilo."
-            ),
+            user,
+            "company" if is_company else "person",
+            normalized_code,
+            f"Nessuna visura soggetto salvata per {normalized_code}. "
+            "Richiedila dalla pagina Query (visura per soggetto), poi riapri questo profilo.",
         )
         response.status_code = 404
         return response
@@ -11699,6 +11851,7 @@ async def _web_subject_profile(
             as_pdf,
             subject_favorite_enabled=subject_favorite_enabled,
             subject_is_favorite=subject_is_favorite,
+            subject_facts=subject_facts,
         )
     cadastral_group_usage.setdefault(selected_id, []).append(
         "Gruppi catastali dalla visura per soggetto selezionata"
@@ -11729,6 +11882,7 @@ async def _web_subject_profile(
         subject_archive=subject_archive,
         subject_favorite_enabled=subject_favorite_enabled,
         subject_is_favorite=subject_is_favorite,
+        subject_facts=subject_facts,
         as_pdf=as_pdf,
     )
 
@@ -11749,86 +11903,172 @@ async def web_company_pdf(request: Request, fiscal_code: str, document: int | No
     )
 
 
-@router.get("/persons/", response_class=HTMLResponse, name="persons_index")
-async def web_persons_index(
-    request: Request,
-    code: str | None = None,
-    user=Depends(_require_auth),
-):
-    """Search archived person profiles by full fiscal code or partial name/code text."""
-    submitted = " ".join((code or "").strip().split())
-    normalized_code = re.sub(r"[^A-Z0-9]", "", submitted.upper())
-    if submitted and not any(character.isalnum() for character in submitted):
-        response = _get_theme(request).render(
-            "persons_index.html",
-            request,
-            user=user,
-            code=submitted,
-            error_message="Inserisci almeno una lettera o un numero.",
-            search_results=None,
-            search_has_more=False,
-        )
-        response.status_code = 422
-        return response
-    if submitted:
-        if len(submitted) > 80:
-            response = _get_theme(request).render(
-                "persons_index.html",
-                request,
-                user=user,
-                code=submitted,
-                error_message="La ricerca può contenere al massimo 80 caratteri.",
-                search_results=None,
-                search_has_more=False,
-            )
-            response.status_code = 422
-            return response
-        if len(normalized_code) == 16 and re.fullmatch(r"[A-Z0-9 ./-]+", submitted.upper()):
-            return RedirectResponse(url=f"/persons/{normalized_code}", status_code=303)
-        search_results, search_has_more = await search_person_profiles(submitted)
-        return _get_theme(request).render(
-            "persons_index.html",
-            request,
-            user=user,
-            code=submitted,
-            error_message=None,
-            search_results=search_results,
-            search_has_more=search_has_more,
-        )
+_SUBJECT_KINDS = {
+    "person": {"route": "/persons", "code_length": 16, "label": "Persone", "label_one": "persona"},
+    "company": {"route": "/companies", "code_length": 11, "label": "Società", "label_one": "società"},
+}
 
-    return _get_theme(request).render(
-        "persons_index.html",
+
+async def _render_subject_index(request: Request, user, kind: str, code: str = "", error_message: str | None = None):
+    """The archive table page. Only aggregates are computed here (summary cards, column widths): the rows are paged
+    from ``<route>/index.json``, so the cost does not grow with the number of subjects shown."""
+    from .database import subject_overview
+
+    spec = _SUBJECT_KINDS[kind]
+    overview = await subject_overview(kind)
+    response = _get_theme(request).render(
+        "subject_index.html",
         request,
         user=user,
-        code="",
-        error_message=None,
-        search_results=None,
-        search_has_more=False,
+        kind=kind,
+        route=spec["route"],
+        kind_label=spec["label"],
+        code=code,
+        error_message=error_message,
+        stats=overview,
+        overview={"total": overview["subjects"], "widest": overview["widest"], "max": overview["max"]},
+    )
+    if error_message:
+        response.status_code = 422
+    return response
+
+
+async def _subject_index(request: Request, kind: str, code: str | None, user):
+    """Archive table of one subject kind; a full code opens its profile, other text pre-fills the table's search."""
+    spec = _SUBJECT_KINDS[kind]
+    submitted = " ".join((code or "").strip().split())
+    normalized_code = re.sub(r"[^A-Z0-9]", "", submitted.upper())
+    error_message = None
+    if submitted and not any(character.isalnum() for character in submitted):
+        error_message = "Inserisci almeno una lettera o un numero."
+    elif len(submitted) > 80:
+        error_message = "La ricerca può contenere al massimo 80 caratteri."
+    elif len(normalized_code) == spec["code_length"] and re.fullmatch(r"[A-Z0-9 ./-]+", submitted.upper()):
+        return RedirectResponse(url=f"{spec['route']}/{normalized_code}", status_code=303)
+    return await _render_subject_index(request, user, kind, submitted, error_message)
+
+
+async def _subject_table_query(request: Request, kind: str, user, *, paged: bool):
+    """Run the table query described by the request's query string.
+
+    ``page`` / ``size`` (max 500), ``q`` (search box), ``sort`` / ``dir``, ``name_status`` (persons), and
+    ``f_<field>`` column filters: the same names the page keeps in its URL. Unknown values are ignored.
+    ``paged=False`` returns every match (CSV).
+    """
+    from .database import (
+        SUBJECT_FILTER_FIELDS,
+        SUBJECT_SORT_FIELDS,
+        get_subject_favorite_codes,
+        query_subject_profiles,
+    )
+
+    query = request.query_params
+
+    def whole(name: str, default: int, low: int, high: int) -> int:
+        try:
+            return min(high, max(low, int(query.get(name) or default)))
+        except ValueError:
+            return default
+
+    page, size = whole("page", 1, 1, 100000), whole("size", 50, 1, 500)
+    sort = query.get("sort") if query.get("sort") in SUBJECT_SORT_FIELDS else "last_seen"
+    filters = {
+        key[2:]: value[:80] for key, value in query.items() if key.startswith("f_") and key[2:] in SUBJECT_FILTER_FIELDS
+    }
+    user_key = _favorite_user_key(user)
+    favorites = await get_subject_favorite_codes(user_key, kind) if user_key else set()
+    rows, total = await query_subject_profiles(
+        kind,
+        q=(query.get("q") or "")[:200],
+        filters=filters,
+        name_status=(
+            query.get("name_status")
+            if kind == "person" and query.get("name_status") in {"named", "missing"}
+            else None
+        ),
+        sort=sort,
+        direction="asc" if query.get("dir") == "asc" else "desc",
+        limit=size if paged else None,
+        offset=(page - 1) * size,
+        favorites=favorites,
+    )
+    return rows, total, size
+
+
+async def _subject_index_json(request: Request, kind: str, user):
+    """One page of the table as JSON (``data`` + ``last_page`` + ``total``), revalidated with an ETag."""
+    rows, total, size = await _subject_table_query(request, kind, user, paged=True)
+    payload = {"data": rows, "last_page": max(1, -(-total // size)), "total": total}
+    body = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    etag = '"' + hashlib.sha1(body).hexdigest()[:20] + '"'  # noqa: S324 - cache validator, not a security hash
+    headers = {"ETag": etag, "Cache-Control": "private, no-cache"}
+    if request.headers.get("if-none-match") == etag:
+        return Response(status_code=304, headers=headers)
+    return Response(content=body, media_type="application/json", headers=headers)
+
+
+_SUBJECT_CSV_COLUMNS = (
+    ("fiscal_code", "Codice"), ("name", "Nome"), ("gender", "Sesso"), ("birth_date", "Data di nascita"), ("age", "Età"),
+    ("birth_place", "Luogo di nascita"), ("birth_province", "Provincia di nascita"), ("provinces", "Province immobili"),
+    ("province_count", "N. province"), ("properties", "Immobili"), ("buildings", "Fabbricati"), ("land", "Terreni"),
+    ("full_ownership", "Piena proprietà"), ("rendita", "Rendita €"), ("reddito_dominicale", "Reddito dominicale €"),
+    ("cadastral_value", "Valore catastale €"), ("cadastral_value_share", "Valore pro quota €"),
+    ("unvalued", "Non valutati"), ("unknown_share", "Senza quota"), ("visure", "Visure"), ("searches", "Ricerche"),
+    ("searched_at", "Dati del"), ("last_seen", "Aggiornato"),
+)
+
+
+async def _subject_index_csv(request: Request, kind: str, user):
+    """Every row matching the table's current search/filters/sort as CSV (``;``-separated, UTF-8 with BOM)."""
+    import csv
+    import io
+
+    rows, _total, _size = await _subject_table_query(request, kind, user, paged=False)
+    columns = [(field, label) for field, label in _SUBJECT_CSV_COLUMNS if kind == "person" or field not in
+               ("gender", "birth_date", "age", "birth_place", "birth_province")]
+    out = io.StringIO()
+    writer = csv.writer(out, delimiter=";")
+    writer.writerow([label for _field, label in columns])
+    for row in rows:
+        writer.writerow(["" if row.get(field) is None else row.get(field) for field, _label in columns])
+    filename = "persone.csv" if kind == "person" else "societa.csv"
+    return Response(
+        content="\ufeff" + out.getvalue(),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"', "Cache-Control": "private, no-store"},
     )
 
 
-@router.get("/companies/", response_class=HTMLResponse, name="companies_index")
-async def web_companies_index(
-    request: Request,
-    code: str | None = None,
-    user=Depends(_require_auth),
-):
-    """Lookup entry point for a company's stored subject visura."""
-    normalized_code = (code or "").strip()
-    if normalized_code:
-        if not re.fullmatch(r"\d{11}", normalized_code):
-            response = _get_theme(request).render(
-                "companies_index.html",
-                request,
-                user=user,
-                code=normalized_code,
-                error_message="Inserisci una partita IVA composta da 11 cifre.",
-            )
-            response.status_code = 422
-            return response
-        return RedirectResponse(url=f"/companies/{normalized_code}", status_code=303)
+@router.get("/persons/", response_class=HTMLResponse, name="persons_index")
+async def web_persons_index(request: Request, code: str | None = None, user=Depends(_require_auth)):
+    """Sortable, filterable table of every archived person profile; a full fiscal code opens its profile."""
+    return await _subject_index(request, "person", code, user)
 
-    return _get_theme(request).render("companies_index.html", request, user=user, code="", error_message=None)
+
+@router.get("/persons/index.json", response_class=JSONResponse)
+async def web_persons_index_json(request: Request, user=Depends(_require_auth)):
+    return await _subject_index_json(request, "person", user)
+
+
+@router.get("/persons/index.csv")
+async def web_persons_index_csv(request: Request, user=Depends(_require_auth)):
+    return await _subject_index_csv(request, "person", user)
+
+
+@router.get("/companies/", response_class=HTMLResponse, name="companies_index")
+async def web_companies_index(request: Request, code: str | None = None, user=Depends(_require_auth)):
+    """Sortable, filterable table of every archived company; a full partita IVA opens its profile."""
+    return await _subject_index(request, "company", code, user)
+
+
+@router.get("/companies/index.json", response_class=JSONResponse)
+async def web_companies_index_json(request: Request, user=Depends(_require_auth)):
+    return await _subject_index_json(request, "company", user)
+
+
+@router.get("/companies/index.csv")
+async def web_companies_index_csv(request: Request, user=Depends(_require_auth)):
+    return await _subject_index_csv(request, "company", user)
 
 
 @router.get("/persons/{fiscal_code}", response_class=HTMLResponse)

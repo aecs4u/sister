@@ -200,6 +200,34 @@ class Subject(SQLModel, table=True):
     birth_province_code: Optional[str] = Field(default=None)
 
 
+class SubjectRecord(SQLModel, table=True):
+    """One registry record that carries a fiscal code.
+
+    SISTER stores a codice fiscale / partita IVA under several records (denominazione + sede): a region, its comuni and
+    its demanio; ANAS has hundreds. They are different subjects of the cadastre with their own properties, while
+    ``subject`` is unique per code. Each property found for a code points at the record it was found under
+    (``property.subject_record_id``), so the entities that share a code stay distinguishable.
+    """
+
+    __tablename__ = "subject_record"
+    __table_args__ = (
+        sa.UniqueConstraint("fiscal_code", "denomination", "seat", name="uq_subject_record_identity"),
+        sa.Index("ix_subject_record_subject", "subject_id"),
+        sa.Index("ix_subject_record_fiscal_code", "fiscal_code"),
+    )
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    subject_id: Optional[int] = Field(default=None, foreign_key="subject.id")
+    fiscal_code: str
+    denomination: str
+    seat: str = Field(default="", description="Sede as SISTER writes it, e.g. 'LECCO (LC)'; empty when unknown")
+    seat_municipality: Optional[str] = Field(default=None)
+    seat_province_code: Optional[str] = Field(default=None)
+    created_at: datetime = Field(
+        sa_column=Column(sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now())
+    )
+
+
 class RightKind(SQLModel, table=True):
     __tablename__ = "right_kind"
 
@@ -331,6 +359,7 @@ class Property(SQLModel, table=True):
     property_type: Optional[str] = Field(default=None)
     cadastral_unit_id: Optional[int] = Field(default=None, foreign_key="cadastral_unit.id")
     subject_id: Optional[int] = Field(default=None, foreign_key="subject.id")
+    subject_record_id: Optional[int] = Field(default=None, foreign_key="subject_record.id")
     address: Optional[str] = Field(default=None)
     partita: Optional[str] = Field(default=None)
     category: Optional[str] = Field(default=None, foreign_key="cadastral_category.code")
@@ -356,6 +385,7 @@ class ResultOwner(SQLModel, table=True):
     result_id: Optional[int] = Field(default=None, foreign_key="request_result.id")
     owner_index: Optional[int] = Field(default=None)
     subject_id: Optional[int] = Field(default=None, foreign_key="subject.id")
+    subject_record_id: Optional[int] = Field(default=None, foreign_key="subject_record.id")
     right_id: Optional[int] = Field(default=None, foreign_key="ownership_right.id")
 
 
@@ -460,6 +490,41 @@ class SubjectFavorite(SQLModel, table=True):
     subject_type: str = Field(sa_column=Column(sa.String(16), primary_key=True))
     subject_code: str = Field(sa_column=Column(sa.String(16), primary_key=True))
     created_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc),
+        sa_column=Column(sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
+    )
+
+
+class SubjectHolding(SQLModel, table=True):
+    """What a codice fiscale / partita IVA holds, computed from its latest subject search (``/persons`` ranking).
+
+    Derived data: ``database.refresh_subject_holdings`` rewrites the row when a subject search is saved and
+    ``sister db backfill holdings`` rebuilds them all. Valori catastali are the IMU base (``cadastral_values``), not
+    market values; ``cadastral_value_share`` scales each unit by the subject's quota (a missing quota counts as 1/1).
+    """
+
+    __tablename__ = "subject_holding"
+
+    fiscal_code: str = Field(sa_column=Column(sa.String(16), primary_key=True))
+    request_id: Optional[int] = Field(
+        default=None, sa_column=Column(sa.BigInteger, sa.ForeignKey("request.id", ondelete="SET NULL"), nullable=True)
+    )
+    provinces: Optional[str] = Field(default=None)
+    province_count: Optional[int] = Field(default=None)
+    buildings: Optional[int] = Field(default=None)
+    land_parcels: Optional[int] = Field(default=None)
+    properties: Optional[int] = Field(default=None)
+    full_ownership: Optional[int] = Field(default=None)
+    unvalued: Optional[int] = Field(default=None)
+    unknown_share: Optional[int] = Field(default=None)
+    searched_at: Optional[datetime] = Field(default=None, sa_column=Column(sa.DateTime(timezone=True), nullable=True))
+    cadastral_income_eur: Optional[Decimal] = Field(default=None, sa_column=Column(sa.Numeric(16, 2), nullable=True))
+    dominical_income_eur: Optional[Decimal] = Field(default=None, sa_column=Column(sa.Numeric(16, 2), nullable=True))
+    cadastral_value_eur: Optional[Decimal] = Field(default=None, sa_column=Column(sa.Numeric(18, 2), nullable=True))
+    cadastral_value_share_eur: Optional[Decimal] = Field(
+        default=None, sa_column=Column(sa.Numeric(18, 2), nullable=True)
+    )
+    computed_at: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc),
         sa_column=Column(sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
     )

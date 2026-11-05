@@ -31,7 +31,8 @@
 {% set subject_archive = subject_archive|default(none) %}
 {% set land_registry_kpis_display = land_registry_kpis|default(none) %}
 {% if land_registry_kpis_display and land_registry_kpis_display.asset_value_note and land_registry_kpis_display.asset_value_note|length > 320 %}
-{% set land_registry_kpis_display = dict(land_registry_kpis, asset_value_note='Stima OMI indicativa; per metodo, ipotesi e limiti consulta «Come si calcola».') %}
+{# the long method text is shortened, but how much of the portfolio the estimate covers stays on the card #}
+{% set land_registry_kpis_display = dict(land_registry_kpis, asset_value_note=(land_registry_kpis.asset_value_coverage_note ~ ' ' if land_registry_kpis.asset_value_coverage_note else '') ~ 'Per metodo, ipotesi e limiti consulta «Come si calcola».' if land_registry_kpis.asset_value_coverage_note else 'Stima OMI indicativa; per metodo, ipotesi e limiti consulta «Come si calcola».') %}
 {% endif %}
 
 {# The subject's visure as a bullet list (the theme's subject_document_nav is a row of buttons), shown at the page bottom.
@@ -250,6 +251,8 @@
 </script>
 {% endif %}
 {{ cadastral_table_scripts() }}
+<script type="application/json" nonce="{{ csp_nonce }}" data-cadastral-category-descriptions>{{ cadastral_category_descriptions|default({}, true)|tojson }}</script>
+<script src="/static/js/cadastral_category_descriptions.js?v=20261105a" defer></script>
 {{ document_parcel_map_scripts(land_registry_map, nonce=csp_nonce,
     renderer_url='/land-registry/static/document_parcel_map.js?v=20261029-listed-viewport-unmapped-v6') }}
 {# PDF export: the page's own print layout rendered by headless Chromium (/documents/<id>/pdf). #}
@@ -315,6 +318,6 @@
 {% if manual_valuation_enabled %}
 <script src="/static/js/manual_property_valuations.js?v=20261109b" defer></script>
 {% endif %}
-{% if land_registry_kpis %}<script src="/static/js/property_omi_selections.js?v=20261102a" defer></script>{% endif %}
+{% if land_registry_kpis %}<script src="/static/js/property_omi_selections.js?v=20261105a" defer></script>{% endif %}
 {% endif %}
 {% endblock %}

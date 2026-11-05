@@ -80,6 +80,9 @@ def _apply_table_migrations(engine, schema: str, istat_schema: str) -> None:
         "20261120_wallet_environment_endpoint.py",
         "20261121_territory_courts_and_conservatorie.py",
         "20261122_cadastral_office_listing.py",
+        "20261123_subject_record.py",
+        "20261124_subject_holding.py",
+        "20261125_subject_holding_details.py",
     ):
         path = migration_dir / name
         spec = importlib.util.spec_from_file_location(f"_{path.stem}_migration", path)
