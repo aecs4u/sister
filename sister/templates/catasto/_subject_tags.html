@@ -1,0 +1,104 @@
+{# Tags of a person/company profile (included by catasto/entity.html). Shared labels that group profiles: a chip opens the
+   list filtered by that tag; the pencil edits them ("a, b, c"). Needs subject_fiscal_code, subject_route_prefix, subject_tags,
+   subject_favorite_enabled (= signed in with a key, who may edit) and csp_nonce. No inline handlers: the CSP blocks them. #}
+<section class="no-print mb-3 d-flex flex-wrap align-items-center gap-2" aria-label="Tag del profilo" data-subject-tags
+         data-tags-url="{{ subject_route_prefix }}/{{ subject_fiscal_code }}/tags" data-list-url="{{ subject_route_prefix }}/"
+         data-tags-list-url="{{ subject_route_prefix }}/tags.json">
+    <span class="small text-muted"><i class="fas fa-tags me-1" aria-hidden="true"></i>Tag</span>
+    <span class="d-flex flex-wrap gap-1" data-tags-chips>
+        {% for tag in subject_tags|default([]) %}
+        <a class="badge rounded-pill text-bg-light border text-decoration-none" href="{{ subject_route_prefix }}/?tag={{ tag|urlencode }}"
+           title="Mostra tutti i profili con il tag «{{ tag }}»">{{ tag }}</a>
+        {% endfor %}
+    </span>
+    <span class="small text-muted" data-tags-empty{% if subject_tags %} hidden{% endif %}>nessun tag</span>
+    {% if subject_favorite_enabled %}
+    <button type="button" class="btn btn-link btn-sm p-0" data-tags-edit aria-label="Modifica i tag" title="Modifica i tag">
+        <i class="fas fa-pen text-muted" aria-hidden="true"></i>
+    </button>
+    <form class="d-flex gap-1 align-items-center" data-tags-form hidden>
+        <label class="visually-hidden" for="subject-tags-input">Tag, separati da virgola</label>
+        <input type="text" class="form-control form-control-sm" id="subject-tags-input" list="subject-tags-suggestions"
+               value="{{ subject_tags|default([])|join(', ') }}" placeholder="tag, tag…" autocomplete="off">
+        <datalist id="subject-tags-suggestions"></datalist>
+        <button type="submit" class="btn btn-primary btn-sm py-0">Salva</button>
+        <button type="button" class="btn btn-outline-secondary btn-sm py-0" data-tags-cancel>Annulla</button>
+    </form>
+    <span class="small" data-tags-status role="status" hidden></span>
+    {% endif %}
+</section>
+{% if subject_favorite_enabled %}
+<script nonce="{{ csp_nonce }}">
+(function () {
+    var box = document.querySelector('[data-subject-tags]');
+    if (!box) return;
+    var chips = box.querySelector('[data-tags-chips]');
+    var empty = box.querySelector('[data-tags-empty]');
+    var edit = box.querySelector('[data-tags-edit]');
+    var form = box.querySelector('[data-tags-form]');
+    var input = form.querySelector('input');
+    var status = box.querySelector('[data-tags-status]');
+    var suggestions = form.querySelector('datalist');
+    var loaded = false;
+
+    function say(text, bad) {
+        status.textContent = text || '';
+        status.classList.toggle('text-danger', !!bad);
+        status.hidden = !text;
+    }
+    function draw(tags) {
+        chips.textContent = '';
+        tags.forEach(function (tag) {
+            var a = document.createElement('a');
+            a.className = 'badge rounded-pill text-bg-light border text-decoration-none';
+            a.href = box.dataset.listUrl + '?tag=' + encodeURIComponent(tag);
+            a.title = 'Mostra tutti i profili con il tag «' + tag + '»';
+            a.textContent = tag;
+            chips.appendChild(a);
+        });
+        empty.hidden = tags.length > 0;
+        input.value = tags.join(', ');
+    }
+    function open(on) {
+        form.hidden = !on;
+        edit.hidden = on;
+        if (on) {
+            input.focus();
+            if (!loaded) {  // suggestions: the tags already in use, fetched once when the editor first opens
+                loaded = true;
+                fetch(box.dataset.tagsListUrl, {credentials: 'same-origin', headers: {'Accept': 'application/json'}})
+                    .then(function (r) { return r.ok ? r.json() : null; })
+                    .then(function (body) {
+                        (body && body.tags || []).forEach(function (item) {
+                            var option = document.createElement('option');
+                            option.value = item.tag;
+                            suggestions.appendChild(option);
+                        });
+                    }).catch(function () {});
+            }
+        }
+    }
+    edit.addEventListener('click', function () { say(''); open(true); });
+    box.querySelector('[data-tags-cancel]').addEventListener('click', function () { open(false); });
+    input.addEventListener('keydown', function (event) { if (event.key === 'Escape') { event.preventDefault(); open(false); } });
+    form.addEventListener('submit', function (event) {
+        event.preventDefault();
+        var wanted = input.value.split(',').map(function (t) { return t.trim(); }).filter(Boolean);
+        fetch(box.dataset.tagsUrl, {
+            method: 'PUT', credentials: 'same-origin',
+            headers: {'Content-Type': 'application/json', 'Accept': 'application/json'},
+            body: JSON.stringify({tags: wanted})
+        }).then(function (response) {
+            if (response.ok) return response.json();
+            return response.json().catch(function () { return {}; }).then(function (body) {
+                throw new Error(body.detail || ('HTTP ' + response.status));
+            });
+        }).then(function (body) {
+            draw(body.tags);
+            open(false);
+            say('Tag salvati.');
+        }).catch(function (error) { say('Tag non salvati: ' + error.message + '.', true); });
+    });
+})();
+</script>
+{% endif %}

@@ -76,6 +76,9 @@ Rows are dropped when the answer already exists, with the same definitions as th
 * other rows (any other command) are never touched;
 * a row with `reuse` = `force` is a repeat on purpose: it is never pruned (here and in `run-session`) and the runner sends it again
   whatever the service has cached (so no "download it again?" question).
+* `run-list` resumes the latest batch folder of a list only while something is left in it (pending rows, errors to repeat,
+  an interrupted session). A finished batch is not resumed: a new folder is started, so the `force` rows are sent again
+  (`batch_progress.is_finished`). Rows already done in an interrupted batch are never repeated by its resume.
 
 A copy of the file goes to `backups/` next to it. `--dry-run` only reports.
 

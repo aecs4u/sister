@@ -81,6 +81,20 @@ def snapshot(directory: Path) -> dict:
     }
 
 
+def is_finished(directory: Path) -> bool:
+    """Every row of the batch has its final answer (results, or SISTER's own "no match" / "too many").
+
+    ``run-list`` resumes a batch only while something is left in it (pending rows, errors to repeat, an interrupted
+    session); a finished one is not resumed, a new batch folder is started instead. Otherwise the journal of the
+    finished run keeps every row "done" and a row with ``reuse: force`` would never be sent again.
+    """
+    try:
+        snap = snapshot(directory)
+    except (OSError, ValueError):
+        return False
+    return snap["total"] > 0 and snap["done"] >= snap["total"]
+
+
 def eta(snap: dict) -> str:
     left = snap["total"] - snap["done"]
     if left <= 0:

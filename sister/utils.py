@@ -14,7 +14,7 @@ from bs4 import BeautifulSoup
 from playwright.async_api import Page
 
 from .models import CaptchaRequired
-from .result_parsers import omonimo_details, parse_intestato_value
+from .result_parsers import omonimo_details, parse_intestato_value, parse_soggetto_selezionato
 from .query_forms import get_query_form
 
 log = logging.getLogger("sister.utils")
@@ -5360,6 +5360,27 @@ _SEARCH_ERROR: "weakref.WeakKeyDictionary[Page, str]" = weakref.WeakKeyDictionar
 # the subjects the last *Elenco Omonimi* page of a tab listed (persons: cognome, nome, nascita, sesso, codice fiscale; companies:
 # denominazione, sede, codice fiscale). The flow clicks through that page; this keeps what it showed
 _LISTED_SUBJECTS: "weakref.WeakKeyDictionary[Page, list[dict]]" = weakref.WeakKeyDictionary()
+_OMONIMO_RADIOS = "input[type='radio'][name='omonimoSelezionato'], input[type='radio'][property='omonimoSelezionato']"
+
+
+def _omonimi_table_rows(page_html: str) -> list[dict]:
+    """The rows of the *Elenco Omonimi* table, found by its radios (a person's table has no property-style header)."""
+    soup = BeautifulSoup(page_html, "html.parser")
+    for table in soup.find_all("table"):
+        if table.find("input", attrs={"name": "omonimoSelezionato"}) or table.find("input", attrs={"property": "omonimoSelezionato"}):
+            return [row for row in _table_rows(table) if isinstance(row, dict) and row.get("omonimoSelezionato")]
+    return []
+
+
+async def _selected_subject(page) -> dict:
+    """The "Soggetto selezionato" block of the properties page (who the list belongs to), or ``{}``."""
+    try:
+        box = page.locator("fieldset", has_text="Soggetto selezionato")
+        text = await box.first.inner_text(timeout=3000) if await box.count() else ""
+        return parse_soggetto_selezionato(text)
+    except Exception as e:  # noqa: BLE001 (nice to have: never fail a search for it)
+        log.debug("Soggetto selezionato non letto: %s", e)
+        return {}
 
 
 async def _open_soggetto_province_page(page, identifier, tipo_catasto, provincia, azienda=False, omonimo_index=0) -> bool:
@@ -5378,14 +5399,14 @@ async def _open_soggetto_province_page(page, identifier, tipo_catasto, provincia
         _SEARCH_ERROR[page] = found["error"]
         return False
     # SceltaOmonimi rejects the submit ("Selezionare un Omonimo") unless one homonym is selected
-    omonimo = page.locator("input[type='radio'][name='omonimoSelezionato']")
+    omonimo = page.locator(_OMONIMO_RADIOS)
     available = await omonimo.count()
     _LISTED_SUBJECTS.pop(page, None)
     if available > 0:
         if omonimo_index >= available:
             raise Exception(f"Omonimo {omonimo_index + 1} non trovato: la pagina ne elenca {available}")
         # keep everything the page says about the listed subjects before clicking through it
-        rows = [r for r in _extract_result_tables(await page.content()) if isinstance(r, dict) and r.get("omonimoSelezionato")]
+        rows = _omonimi_table_rows(await page.content())
         _LISTED_SUBJECTS[page] = [omonimo_details(row, i + 1, i == omonimo_index) for i, row in enumerate(rows)]
         await omonimo.nth(omonimo_index).check()
     ricerca = page.locator("input[name='visura'][value='Ricerca']")
@@ -5601,6 +5622,10 @@ async def run_soggetto_immobili(
         if n_province is None:
             n_province = count
         await page_logger.log(page, f"immobili_{index + 1}")
+        if index == 0:
+            chosen = await _selected_subject(page)
+            if chosen and not any(item.get("codice_fiscale") == chosen["codice_fiscale"] for item in soggetti):
+                soggetti.append(chosen)
 
         rows = _extract_result_tables(await page.content()) or []
         list_radios = "input[type='radio'][name='visImmSel'], input[type='radio'][property='visImmSel']"
@@ -5647,6 +5672,7 @@ async def run_soggetto_immobili(
     log.info("[green]Immobili soggetto[/green] %s: %d in %.1fs", codice_fiscale, len(immobili), time.time() - time0)
     return {
         "soggetto": codice_fiscale,
+        "ambito": provincia or "NAZIONALE",  # the office searched: only a national search lists every property
         "soggetti": soggetti,
         "province": province_elenco,
         "immobili": immobili,
@@ -5802,6 +5828,7 @@ async def run_visura_persona_giuridica(
     incomplete = index < total
     out = {
         "soggetto": identificativo,
+        "ambito": provincia or "NAZIONALE",
         "soggetti": [
             omonimo_details(row, i + 1, False)
             for i, row in enumerate(r for r in found.get("immobili") or [] if isinstance(r, dict) and r.get("omonimoSelezionato"))

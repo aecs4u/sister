@@ -11,6 +11,7 @@ import json
 import logging
 import os
 import re
+import unicodedata
 from dataclasses import dataclass
 from dataclasses import field as dc_field
 from datetime import date, datetime, timedelta, timezone
@@ -88,6 +89,7 @@ from .db_models import (
     SubjectFavorite,
     SubjectHolding,
     SubjectNote,
+    SubjectTag,
 )
 from .provinces import province_code, province_name
 from .reference import (
@@ -135,7 +137,7 @@ DATABASE_SCHEMA = os.getenv("DATABASE_SCHEMA", "sister")
 DATABASE_ISTAT_SCHEMA = os.getenv("DATABASE_ISTAT_SCHEMA", DATABASE_SCHEMA)
 # raw payloads (response JSON, XML tree, extraction JSON) live in their own schema; tests point it at a throwaway one
 DATABASE_ARCHIVE_SCHEMA = os.getenv("DATABASE_ARCHIVE_SCHEMA", "sister_archive")
-DATABASE_REVISION = "20261125_holding_details"
+DATABASE_REVISION = "20261127_subject_tags"
 
 # ---------------------------------------------------------------------------
 # Engine and session
@@ -226,6 +228,7 @@ async def init_db() -> None:
             "document_purchase",
             "subject_favorite",
             "subject_note",
+            "subject_tag",
             "subject_holding",
             "manual_property_valuation",
             "property_valuation_preference",
@@ -592,6 +595,11 @@ async def get_recent_activity(
 # ---------------------------------------------------------------------------
 
 
+def _content_request_id():
+    """The request that holds a request's content: itself, or the earlier identical answer it points at."""
+    return func.coalesce(Request.same_as_request_id, Request.id)
+
+
 def compute_cache_key(request_type: str, **params) -> str:
     """Deterministic cache key from search parameters."""
     # Filter out None values and sort for determinism
@@ -622,7 +630,7 @@ async def find_cached_response(cache_key: str, ttl_seconds: Optional[int]) -> Op
             conditions.append(Request.responded_at >= datetime.now(timezone.utc) - timedelta(seconds=ttl_seconds))
         stmt = (
             select(Request, RequestPayload.data)
-            .outerjoin(RequestPayload, RequestPayload.request_id == Request.id)
+            .outerjoin(RequestPayload, RequestPayload.request_id == _content_request_id())
             .where(*conditions)
             .order_by(Request.responded_at.desc())
             .limit(1)
@@ -883,6 +891,7 @@ class ProjectedProperty:
     result_index: Optional[int] = None
     visura_present: bool = False
     record: Optional[dict[str, Any]] = None  # the registry record (denominazione + sede) the row belongs to
+    owners_complete: bool = False  # the owners come from the unit's own Intestati page: the full list, not just one owner
 
 
 def _record_fields(data: dict, item: dict) -> Optional[dict[str, Any]]:
@@ -942,6 +951,7 @@ def _project_response(
             projected.visura_present = bool(result_item.get("visura"))
             raw_owners += [o for o in result_item.get("intestati") or [] if isinstance(o, dict)]
         raw_owners += [o for o in item.get("intestati") or [] if isinstance(o, dict)]
+        projected.owners_complete = bool(raw_owners)  # read from the Intestati page (all owners), before the queried one
         queried = _subject_query_owner(data, item)
         if queried and not any(o.get("codice_fiscale") == queried["codice_fiscale"] for o in raw_owners):
             raw_owners.append(queried)
@@ -1097,8 +1107,83 @@ async def _replace_projection(session: AsyncSession, request_pk: int, tipo_catas
     """Rebuild the structured rows of one response from its JSON (results, properties, owners, document links)."""
     for table_name in ("result_owner", "property", "request_result", "request_province"):
         await session.execute(text(f"DELETE FROM {table_name} WHERE request_id = :rid"), {"rid": request_pk})  # noqa: S608
-    # the request's own unit supplies the province/municipality a row of the list does not carry
-    unit = (
+    if data is None:
+        return
+    unit = await _request_unit(session, request_pk)
+    await _persist_projection(session, request_pk, tipo_catasto, data, unit)
+    await _persist_provinces(session, request_pk, data)
+    await _link_documents(session, request_pk, data)
+
+
+async def _identical_previous(session: AsyncSession, request_pk: int, data: Optional[dict]):
+    """(content hash, the previous answer of the same query when it has the same content, else None)."""
+    from .ownership_history import content_hash
+
+    digest = content_hash(data) if isinstance(data, dict) and not data.get("error") else None
+    if digest is None:
+        return None, None
+    previous = (
+        await session.execute(
+            text(
+                "SELECT p.id, coalesce(p.same_as_request_id, p.id) AS content_id, p.content_hash FROM request r "
+                "JOIN request p ON p.cache_key = r.cache_key AND p.id <> r.id "
+                "WHERE r.id = :id AND r.cache_key IS NOT NULL AND p.success IS TRUE AND p.content_hash IS NOT NULL "
+                "ORDER BY p.responded_at DESC NULLS LAST, p.id DESC LIMIT 1"
+            ),
+            {"id": request_pk},
+        )
+    ).first()
+    return digest, previous if previous is not None and previous.content_hash == digest else None
+
+
+def _search_is_national(data: Optional[dict], scope: Optional[str]) -> bool:
+    ambito = str((data or {}).get("ambito") or scope or "NAZIONALE").strip().upper()
+    return ambito in ("", "NAZIONALE", "NONE")
+
+
+async def _request_scope(session: AsyncSession, request_pk: int) -> Optional[str]:
+    """The office a subject search ran at (``province`` of the queued job; NAZIONALE when it is not known)."""
+    raw = (
+        await session.execute(
+            text("SELECT j.payload_json FROM sister_request_jobs j JOIN request r ON r.request_ref = j.request_id WHERE r.id = :id"),
+            {"id": request_pk},
+        )
+    ).scalar()
+    try:
+        return (json.loads(raw) or {}).get("province") if raw else None
+    except (TypeError, ValueError):
+        return None
+
+
+async def _history(session: AsyncSession, action: str, request_pk: int, observed_at: datetime, **kwargs) -> None:
+    """Update the ownership / property-state history; a failure here is logged and never fails the response save."""
+    from .ownership_history import collect_observations, extend_identical, record_observations, subject_search_is_complete
+
+    try:
+        async with session.begin_nested():
+            if action == "extend":
+                await extend_identical(session, kwargs["previous_pk"], request_pk, observed_at)
+                return
+            data, tipo_catasto = kwargs.get("data"), kwargs.get("tipo_catasto")
+            if not isinstance(data, dict):
+                return
+            code = str(data.get("soggetto") or "").strip().upper()
+            national = _search_is_national(data, await _request_scope(session, request_pk)) if code else False
+            if data.get("error"):
+                # SISTER found nothing for a subject searched everywhere, in both catasti: it owns nothing any more
+                if code and national and "NESSUNA CORRISPONDENZA" in str(data["error"]) and (tipo_catasto or "E").upper() == "E":
+                    await record_observations(session, request_pk, observed_at, [], code, subject_complete=True)
+                return
+            observations = await collect_observations(session, tipo_catasto, data, await _request_unit(session, request_pk))
+            complete = bool(code) and national and subject_search_is_complete(data, tipo_catasto)
+            await record_observations(session, request_pk, observed_at, observations, code or None, subject_complete=complete)
+    except Exception:  # noqa: BLE001
+        logger.warning("Storico proprieta' non aggiornato per la richiesta %s", request_pk, exc_info=True)
+
+
+async def _request_unit(session: AsyncSession, request_pk: int):
+    """The request's own unit: it supplies the province/municipality a row of the list does not carry."""
+    return (
         await session.execute(
             select(
                 IstatMunicipality.province_abbreviation.label("province_code"),
@@ -1110,9 +1195,6 @@ async def _replace_projection(session: AsyncSession, request_pk: int, tipo_catas
             .where(Request.id == request_pk)
         )
     ).first()
-    await _persist_projection(session, request_pk, tipo_catasto, data, unit)
-    await _persist_provinces(session, request_pk, data)
-    await _link_documents(session, request_pk, data)
 
 
 async def _persist_provinces(session: AsyncSession, request_pk: int, data: Optional[dict]) -> None:
@@ -1139,6 +1221,135 @@ async def _persist_provinces(session: AsyncSession, request_pk: int, data: Optio
             )
         )
     await session.flush()
+
+
+async def subject_ownership_history(fiscal_code: str, only_changed: bool = True) -> list[dict]:
+    """Ownership periods of every unit the subject holds or held, all owners included, oldest period first.
+
+    One entry per unit: its location, ``periods`` (owner, right and share, first/last seen, when it stopped being listed)
+    and ``changed`` (more than one period, or one that ended). With ``only_changed`` the units seen always in the same
+    hands are left out: the page lists the variations.
+    """
+    code = fiscal_code_key(fiscal_code)
+    if not code:
+        return []
+    session_factory = _get_session_factory()
+    async with session_factory() as session:
+        rows = (
+            await session.execute(
+                text(
+                    "SELECT v.* FROM v_ownership_history v WHERE v.cadastral_unit_id IN ("
+                    " SELECT h.cadastral_unit_id FROM ownership_history h JOIN subject s ON s.id = h.subject_id WHERE s.fiscal_code = :c)"
+                    " ORDER BY v.cadastral_unit_id, v.first_seen_at, v.id"
+                ),
+                {"c": code},
+            )
+        ).mappings().all()
+        comuni_ids = {r["comune_id"] for r in rows if r["comune_id"] is not None}
+        names = {}
+        if comuni_ids:
+            names = dict(
+                (
+                    await session.execute(
+                        select(IstatMunicipality.numeric_code, func.coalesce(IstatMunicipality.italian_name, IstatMunicipality.name))
+                        .where(IstatMunicipality.numeric_code.in_(comuni_ids))
+                    )
+                ).all()
+            )
+    units: dict[int, dict] = {}
+    for row in rows:
+        unit = units.setdefault(
+            row["cadastral_unit_id"],
+            {
+                "cadastral_unit_id": row["cadastral_unit_id"],
+                "comune": names.get(row["comune_id"], ""),
+                "catasto": row["cadastre_type"],
+                "sezione": row["section"],
+                "foglio": row["sheet"],
+                "particella": row["parcel"],
+                "subalterno": row["subunit"],
+                "periods": [],
+            },
+        )
+        share = f"{row['share_numerator']}/{row['share_denominator']}" if row["share_numerator"] and row["share_denominator"] else ""
+        unit["periods"].append(
+            {
+                "fiscal_code": row["fiscal_code"],
+                "name": row["subject_name"],
+                "is_subject": row["fiscal_code"] == code,
+                "record": " - ".join(x for x in (row["record_denomination"], row["record_seat"]) if x),
+                "right": row["right_description"] or row["right_type"] or "",
+                "share": share,
+                "first_seen_at": row["first_seen_at"],
+                "last_seen_at": row["last_seen_at"],
+                "seen_count": row["seen_count"],
+                "ended_at": row["ended_at"],
+                "current": row["current"],
+            }
+        )
+    result = []
+    for unit in units.values():
+        unit["changed"] = len(unit["periods"]) > 1 and any(not p["current"] for p in unit["periods"])
+        unit["last_change_at"] = max(
+            [p["ended_at"] for p in unit["periods"] if p["ended_at"]] + [p["first_seen_at"] for p in unit["periods"] if p["ended_at"] is None and len(unit["periods"]) > 1],
+            default=None,
+        )
+        if unit["changed"] or not only_changed:
+            result.append(unit)
+    result.sort(key=lambda u: (u["last_change_at"] is None, -(u["last_change_at"].timestamp() if u["last_change_at"] else 0)))
+    return result
+
+
+async def backfill_ownership_history() -> dict[str, int]:
+    """Rebuild ``ownership_history`` / ``property_state_history`` from every stored answer, oldest first (idempotent).
+
+    Each answer gets its ``content_hash``; an answer identical to the previous answer of the same query is marked
+    ``same_as_request_id`` (its stored copy stays: nothing is deleted) and only extends the periods. Answers are replayed
+    in the order SISTER gave them, so a change of owner, share or classamento becomes a new period at the date it was seen.
+    """
+    from .ownership_history import content_hash
+
+    session_factory = _get_session_factory()
+    async with session_factory() as session:
+        await session.execute(text("DELETE FROM ownership_history"))
+        await session.execute(text("DELETE FROM property_state_history"))
+        await session.execute(text("UPDATE request SET content_hash = NULL, same_as_request_id = NULL"))
+        await session.commit()
+        todo = (
+            await session.execute(
+                text(
+                    "SELECT r.id, r.cache_key, r.cadastre_type, coalesce(r.responded_at, r.created_at) AS at, r.success "
+                    "FROM request r JOIN sister_archive.request_payload p ON p.request_id = r.id "
+                    "ORDER BY coalesce(r.responded_at, r.created_at), r.id"
+                )
+            )
+        ).all()
+    stats = {"answers": 0, "identical": 0, "recorded": 0}
+    last_by_key: dict[str, tuple[int, int, str]] = {}  # cache_key -> (request id, content request id, hash)
+    for start in range(0, len(todo), 100):
+        async with session_factory() as session:
+            for row in todo[start : start + 100]:
+                payload = await session.get(RequestPayload, row.id)
+                data = _decode_payload(payload.data) if payload else None
+                stats["answers"] += 1
+                digest = content_hash(data) if row.success and isinstance(data, dict) and not data.get("error") else None
+                previous = last_by_key.get(row.cache_key) if row.cache_key else None
+                if digest and previous and previous[2] == digest:
+                    await session.execute(
+                        text("UPDATE request SET content_hash = :h, same_as_request_id = :s WHERE id = :id"),
+                        {"h": digest, "s": previous[1], "id": row.id},
+                    )
+                    await _history(session, "extend", row.id, row.at, previous_pk=previous[0])
+                    last_by_key[row.cache_key] = (row.id, previous[1], digest)
+                    stats["identical"] += 1
+                    continue
+                await session.execute(text("UPDATE request SET content_hash = :h WHERE id = :id"), {"h": digest, "id": row.id})
+                await _history(session, "record", row.id, row.at, tipo_catasto=row.cadastre_type or "E", data=data)
+                if digest and row.cache_key:
+                    last_by_key[row.cache_key] = (row.id, row.id, digest)
+                stats["recorded"] += 1
+            await session.commit()
+    return stats
 
 
 async def backfill_projections(limit: Optional[int] = None, batch: int = 50) -> dict[str, int]:
@@ -1348,13 +1559,29 @@ async def save_response(
                 "id": request_pk,
             },
         )
-        # the raw response is kept, as sent, in the archive (nothing is read back from it except by the cache / detail page)
+        # An answer identical to the previous answer of the same query (cache_key) is not stored again: the request keeps its
+        # date and points at the request that holds the content; only the history periods are extended.
+        observed_at = datetime.now(timezone.utc)
+        digest, previous = await _identical_previous(session, request_pk, data if success else None)
         await session.execute(delete(RequestPayload).where(RequestPayload.request_id == request_pk))
-        if data is not None:
-            session.add(RequestPayload(request_id=request_pk, data=json.dumps(data, ensure_ascii=False, default=str)))
-        await session.flush()
-
-        await _replace_projection(session, request_pk, tipo_catasto, data)
+        if previous is not None:
+            await session.execute(
+                text("UPDATE request SET content_hash = :h, same_as_request_id = :s WHERE id = :id"),
+                {"h": digest, "s": previous.content_id, "id": request_pk},
+            )
+            await _replace_projection(session, request_pk, tipo_catasto, None)
+            await _history(session, "extend", request_pk, observed_at, previous_pk=previous.id)
+        else:
+            await session.execute(
+                text("UPDATE request SET content_hash = :h, same_as_request_id = NULL WHERE id = :id"), {"h": digest, "id": request_pk}
+            )
+            # the raw response is kept, as sent, in the archive (nothing is read back from it except by the cache / detail page)
+            if data is not None:
+                session.add(RequestPayload(request_id=request_pk, data=json.dumps(data, ensure_ascii=False, default=str)))
+            await session.flush()
+            await _replace_projection(session, request_pk, tipo_catasto, data)
+            await session.flush()
+            await _history(session, "record", request_pk, observed_at, tipo_catasto=tipo_catasto, data=data)
         await session.flush()
         for visit in _parse_page_visits(request_id, data):
             page_visit = PageVisit(
@@ -1445,7 +1672,7 @@ async def get_response(request_id: str) -> Optional[dict]:
         row = (
             await session.execute(
                 select(Request, RequestPayload.data)
-                .outerjoin(RequestPayload, RequestPayload.request_id == Request.id)
+                .outerjoin(RequestPayload, RequestPayload.request_id == _content_request_id())
                 .where(Request.request_ref == request_id)
             )
         ).first()
@@ -1483,7 +1710,7 @@ async def get_result_record(request_id: str) -> Optional[dict]:
     async with session_factory() as session:
         stmt = (
             select(Request, RequestPayload.data, CadastralUnit, IstatMunicipality)
-            .outerjoin(RequestPayload, RequestPayload.request_id == Request.id)
+            .outerjoin(RequestPayload, RequestPayload.request_id == _content_request_id())
             .outerjoin(CadastralUnit, Request.cadastral_unit_id == CadastralUnit.id)
             .outerjoin(IstatMunicipality, CadastralUnit.comune_id == IstatMunicipality.numeric_code)
             .where(Request.request_ref == request_id)
@@ -1575,7 +1802,7 @@ async def get_db_properties_for_response(request_id: str) -> list[dict]:
     async with session_factory() as session:
         stmt = (
             select(Property, CadastralUnit, IstatMunicipality, Subject, office)
-            .join(Request, Request.id == Property.request_id)
+            .join(Request, _content_request_id() == Property.request_id)
             .outerjoin(CadastralUnit, Property.cadastral_unit_id == CadastralUnit.id)
             .outerjoin(IstatMunicipality, CadastralUnit.comune_id == IstatMunicipality.numeric_code)
             .outerjoin(Subject, Property.subject_id == Subject.id)
@@ -1636,7 +1863,7 @@ async def get_db_owners_for_response(request_id: str) -> list[dict]:
     async with session_factory() as session:
         stmt = (
             select(ResultOwner, Subject, OwnershipRight, RightKind)
-            .join(Request, Request.id == ResultOwner.request_id)
+            .join(Request, _content_request_id() == ResultOwner.request_id)
             .outerjoin(Subject, ResultOwner.subject_id == Subject.id)
             .outerjoin(OwnershipRight, ResultOwner.right_id == OwnershipRight.id)
             .outerjoin(RightKind, OwnershipRight.right_kind_id == RightKind.id)
@@ -2282,13 +2509,23 @@ async def backfill_subject_names(list_paths: Optional[Iterable[Path]] = None) ->
     return stats
 
 
+# The name a subject carries itself: its own name (not one that only repeats the code), else surname and first name.
+_OWN_NAME_SQL = (
+    "CASE WHEN coalesce(btrim(subj.name), '') = '' OR upper(btrim(subj.name)) = c.code"
+    " THEN nullif(btrim(coalesce(subj.last_name, '') || ' ' || coalesce(subj.first_name, '')), '')"
+    " ELSE btrim(subj.name) END"
+)
+
+
 def _subject_profile_ctes(istat: str) -> str:
     """The CTEs behind the archive table: one row ``p`` per code (a successful subject search or a stored visura soggetto).
 
     ``:length`` (16 persons / 11 companies) and ``:code`` (one subject, or NULL for all) are bind parameters. Columns of
     ``p``: code, name, gender, birth_date, birth_place, birth_province, age, the stored ``subject_holding`` figures
-    (provinces … cadastral_value_share, searched_at), searches, visure, last_seen. A name that only repeats the code is
-    NULL; a real name is preferred over such a row, and a missing one is built from surname and first name.
+    (provinces … cadastral_value_share, searched_at), searches, visure, last_seen, ``tags`` (``text[]`` or NULL, see
+    :func:`normalize_tag`), ``name_inferred`` / ``name_records`` (see below). A name that only repeats the code is
+    NULL; a real name is preferred over such a row, and a missing one is built from surname and first name, else (a code
+    with registry records, e.g. a company found by a ``persona_giuridica`` search) the first record's denomination.
     """
     return (
         "req AS ("
@@ -2315,11 +2552,18 @@ def _subject_profile_ctes(istat: str) -> str:
         "  ORDER BY upper(btrim(s.fiscal_code)),"
         "           (coalesce(s.last_name, '') = '' AND upper(btrim(s.name)) = upper(btrim(s.fiscal_code))),"
         "           (s.birth_date IS NULL), s.id DESC"
-        "), p AS ("
-        "  SELECT c.code,"
-        "    CASE WHEN coalesce(btrim(subj.name), '') = '' OR upper(btrim(subj.name)) = c.code"
-        "         THEN nullif(btrim(coalesce(subj.last_name, '') || ' ' || coalesce(subj.first_name, '')), '')"
-        "         ELSE btrim(subj.name) END AS name,"
+        "), rec AS ("
+        "  SELECT code, (array_agg(clean ORDER BY id))[1] AS rec_name, count(DISTINCT upper(clean)) AS name_records FROM ("
+        "    SELECT upper(btrim(r.fiscal_code)) AS code, r.id,"
+        "           nullif(btrim(regexp_replace(regexp_replace(r.denomination, '^[\\s\"]+|[\\s\"]+$', '', 'g'),"
+        "                  '\\s+con sede in\\s.*$', '', 'i')), '') AS clean"
+        "    FROM subject_record r WHERE length(btrim(r.fiscal_code)) = :length"
+        "    AND (CAST(:code AS text) IS NULL OR upper(btrim(r.fiscal_code)) = CAST(:code AS text))"
+        "  ) x WHERE clean IS NOT NULL GROUP BY code"
+        f"), p AS ("
+        f"  SELECT c.code, coalesce({_OWN_NAME_SQL}, rec.rec_name) AS name,"
+        f"    coalesce(rec.name_records, 0) AS name_records,"
+        f"    ({_OWN_NAME_SQL} IS NULL AND rec.rec_name IS NOT NULL) AS name_inferred,"
         "    upper(left(coalesce(subj.gender, ''), 1)) AS gender, subj.birth_date, subj.birth_place,"
         "    upper(subj.birth_province) AS birth_province,"
         "    CASE WHEN subj.birth_date IS NULL THEN NULL"
@@ -2329,8 +2573,11 @@ def _subject_profile_ctes(istat: str) -> str:
         "    round(h.dominical_income_eur) AS reddito_dominicale, round(h.cadastral_value_eur) AS cadastral_value,"
         "    round(h.cadastral_value_share_eur) AS cadastral_value_share, h.searched_at,"
         "    coalesce(reqs.searches, 0) AS searches, coalesce(docs.visure, 0) AS visure,"
-        "    greatest(reqs.last_search, docs.last_doc) AS last_seen"
-        "  FROM codes c LEFT JOIN subj ON subj.code = c.code LEFT JOIN subject_holding h ON h.fiscal_code = c.code"
+        "    greatest(reqs.last_search, docs.last_doc) AS last_seen,"
+        "    (SELECT array_agg(t.tag ORDER BY t.tag_key) FROM subject_tag t"
+        "      WHERE t.subject_type = :stype AND t.subject_code = c.code) AS tags"
+        "  FROM codes c LEFT JOIN subj ON subj.code = c.code LEFT JOIN rec ON rec.code = c.code"
+        "  LEFT JOIN subject_holding h ON h.fiscal_code = c.code"
         "  LEFT JOIN reqs ON reqs.code = c.code LEFT JOIN docs ON docs.code = c.code"
         ") "
     )
@@ -2339,7 +2586,11 @@ def _subject_profile_ctes(istat: str) -> str:
 def _subject_kind_params(kind: str, code: Optional[str] = None) -> dict[str, Any]:
     if kind not in ("person", "company"):
         raise ValueError(f"kind must be 'person' or 'company', not {kind!r}")
-    return {"length": 16 if kind == "person" else 11, "code": str(code).strip().upper() if code else None}
+    return {
+        "length": 16 if kind == "person" else 11,
+        "code": str(code).strip().upper() if code else None,
+        "stype": kind,
+    }
 
 
 def _profile_from_row(row: Any, kind: str) -> dict[str, Any]:
@@ -2370,6 +2621,11 @@ def _profile_from_row(row: Any, kind: str) -> dict[str, Any]:
         "searches": int(row["searches"] or 0),
         "visure": int(row["visure"] or 0),
         "last_seen": stamp(row["last_seen"]),
+        "tags": list(row["tags"] or []),
+        # a code with several registry records keeps no name of its own (it would be arbitrary): the list shows the first
+        # record's denomination and says how many distinct ones SISTER has
+        "name_inferred": bool(row["name_inferred"]),
+        "name_records": int(row["name_records"] or 0),
     }
     if kind == "person":
         profile.update(
@@ -2434,19 +2690,39 @@ def _number_condition(column: str, term: str, key: str, params: dict[str, Any]) 
     return f"{column} {match.group(1) or '='} :{key}"
 
 
+SUBJECT_NO_TAG = "-"  # the ``tag`` filter value that selects the subjects without any tag
+
+
 def _subject_where(
-    q: str, filters: dict[str, str], favorites: Iterable[str], name_status: Optional[str] = None
+    q: str,
+    filters: dict[str, str],
+    favorites: Iterable[str],
+    name_status: Optional[str] = None,
+    tag: Optional[str] = None,
 ) -> tuple[str, dict[str, Any]]:
     """WHERE clause (over ``p``) and bind parameters for the search box and the column filters."""
     clauses: list[str] = []
     params: dict[str, Any] = {"favs": sorted({str(c).upper() for c in favorites})}
     haystack = (
         "(coalesce(name, '') || ' ' || code || ' ' || coalesce(birth_place, '') || ' ' || "
-        "coalesce(birth_province, '') || ' ' || coalesce(provinces, ''))"
+        "coalesce(birth_province, '') || ' ' || coalesce(provinces, '') || ' ' || "
+        "coalesce(array_to_string(tags, ' '), ''))"
     )
     for index, term in enumerate(str(q or "").split()[:8]):
         params[f"q{index}"] = _like_pattern(term)
         clauses.append(f"{haystack} ILIKE :q{index} ESCAPE '\\'")
+    if tag == SUBJECT_NO_TAG:
+        clauses.append("tags IS NULL")
+    elif tag:
+        try:
+            params["tag_key"] = normalize_tag(tag)[0]
+        except ValueError:  # a tag nobody can have matches nothing
+            clauses.append("FALSE")
+        else:
+            clauses.append(
+                "EXISTS (SELECT 1 FROM subject_tag st WHERE st.subject_type = :stype AND st.subject_code = code"
+                " AND st.tag_key = :tag_key)"
+            )
     if name_status == "missing":
         clauses.append("coalesce(btrim(name), '') = ''")
     elif name_status == "named":
@@ -2489,6 +2765,7 @@ async def query_subject_profiles(
     q: str = "",
     filters: Optional[dict[str, str]] = None,
     name_status: Optional[str] = None,
+    tag: Optional[str] = None,
     sort: str = "last_seen",
     direction: str = "desc",
     limit: Optional[int] = 50,
@@ -2499,12 +2776,12 @@ async def query_subject_profiles(
 
     ``q`` is the search box (every word must appear in name, code, birthplace or provinces), ``filters`` the column
     filters (field → text; numeric fields take ``>10`` / ``10-50``), ``sort`` one of ``SUBJECT_SORT_FIELDS``
-    ``name_status`` optionally selects named or unnamed profiles. ``sort`` is one of ``SUBJECT_SORT_FIELDS`` (empty
+    ``name_status`` optionally selects named or unnamed profiles, ``tag`` one tag (``SUBJECT_NO_TAG``: no tag at all). ``sort`` is one of ``SUBJECT_SORT_FIELDS`` (empty
     values last, ties broken by code). ``limit=None`` returns every match (the CSV export). Rows carry
     ``favorite`` for the codes in ``favorites``.
     """
     params = _subject_kind_params(kind)
-    where, where_params = _subject_where(q, filters or {}, favorites, name_status)
+    where, where_params = _subject_where(q, filters or {}, favorites, name_status, tag)
     params.update(where_params)
     order = _SUBJECT_SORT_SQL.get(sort, "last_seen")
     way = "ASC" if str(direction).lower() == "asc" else "DESC"
@@ -3705,6 +3982,134 @@ async def set_subject_favorite(user_id: str, subject_type: str, subject_code: st
         await session.commit()
 
 
+# --- tags: shared labels that group persons and companies -----------------------------------------------------------
+
+SUBJECT_TAG_MAX_LENGTH = 40
+SUBJECT_TAGS_PER_SUBJECT = 20
+
+
+def normalize_tag(value: Any) -> tuple[str, str]:
+    """``(key, label)`` of a tag as typed: whitespace squeezed, at most 40 characters, case-insensitive identity.
+
+    Raises ``ValueError`` for an empty or too long tag, one with control characters, or one without a letter/digit
+    (``-`` is reserved for "no tag" in the table filter).
+    """
+    label = " ".join(str(value or "").split())
+    if not label:
+        raise ValueError("il tag è vuoto")
+    if len(label) > SUBJECT_TAG_MAX_LENGTH:
+        raise ValueError(f"il tag può avere al massimo {SUBJECT_TAG_MAX_LENGTH} caratteri")
+    if any(unicodedata.category(ch).startswith("C") for ch in label):
+        raise ValueError("il tag contiene caratteri non validi")
+    if not any(ch.isalnum() for ch in label):
+        raise ValueError("il tag deve contenere almeno una lettera o un numero")
+    return label.casefold()[:SUBJECT_TAG_MAX_LENGTH], label
+
+
+def _subject_tag_kind(kind: str) -> str:
+    if kind not in ("person", "company"):
+        raise ValueError(f"kind must be 'person' or 'company', not {kind!r}")
+    return kind
+
+
+async def get_subject_tags(kind: str, code: str) -> list[str]:
+    """The tags of one person or company, in alphabetical order."""
+    async with _get_session_factory()() as session:
+        result = await session.execute(
+            select(SubjectTag.tag)
+            .where(SubjectTag.subject_type == _subject_tag_kind(kind), SubjectTag.subject_code == code)
+            .order_by(SubjectTag.tag_key)
+        )
+        return [str(tag) for tag in result.scalars()]
+
+
+async def set_subject_tags(kind: str, code: str, tags: Iterable[Any], user: Optional[str] = None) -> list[str]:
+    """Replace the tags of one subject with ``tags`` (case-insensitive duplicates collapse, the first spelling wins).
+
+    A tag that is already on the subject keeps its stored spelling and author. Returns the tags now stored.
+    """
+    kind = _subject_tag_kind(kind)
+    wanted: dict[str, str] = {}
+    for value in tags:
+        key, label = normalize_tag(value)
+        wanted.setdefault(key, label)
+    if len(wanted) > SUBJECT_TAGS_PER_SUBJECT:
+        raise ValueError(f"al massimo {SUBJECT_TAGS_PER_SUBJECT} tag per profilo")
+    async with _get_session_factory()() as session:
+        await session.execute(
+            text(
+                "DELETE FROM subject_tag WHERE subject_type = :kind AND subject_code = :code "
+                "AND NOT (tag_key = ANY(CAST(:keys AS text[])))"
+            ),
+            {"kind": kind, "code": code, "keys": sorted(wanted)},
+        )
+        for key, label in wanted.items():
+            await session.execute(
+                text(
+                    "INSERT INTO subject_tag (subject_type, subject_code, tag_key, tag, created_by, created_at) "
+                    "VALUES (:kind, :code, :key, :tag, :user, :now) ON CONFLICT DO NOTHING"
+                ),
+                {"kind": kind, "code": code, "key": key, "tag": label, "user": user, "now": datetime.now(timezone.utc)},
+            )
+        await session.commit()
+    return await get_subject_tags(kind, code)
+
+
+async def tag_subjects(kind: str, codes: Iterable[str], tag: str, user: Optional[str] = None) -> int:
+    """Add ``tag`` to every code (those that already have it are left alone); returns how many were newly tagged."""
+    kind = _subject_tag_kind(kind)
+    key, label = normalize_tag(tag)
+    codes = sorted({str(c).strip().upper() for c in codes if str(c).strip()})
+    if not codes:
+        return 0
+    async with _get_session_factory()() as session:
+        result = await session.execute(
+            text(
+                "INSERT INTO subject_tag (subject_type, subject_code, tag_key, tag, created_by, created_at) "
+                "SELECT :kind, c, :key, :tag, :user, :now FROM unnest(CAST(:codes AS text[])) AS c "
+                "ON CONFLICT DO NOTHING"
+            ),
+            {"kind": kind, "key": key, "tag": label, "user": user, "now": datetime.now(timezone.utc), "codes": codes},
+        )
+        await session.commit()
+        return int(result.rowcount or 0)
+
+
+async def untag_subjects(kind: str, codes: Iterable[str], tag: str) -> int:
+    """Remove ``tag`` from every code that has it; returns how many lost it."""
+    kind = _subject_tag_kind(kind)
+    key, _label = normalize_tag(tag)
+    codes = sorted({str(c).strip().upper() for c in codes if str(c).strip()})
+    if not codes:
+        return 0
+    async with _get_session_factory()() as session:
+        result = await session.execute(
+            text(
+                "DELETE FROM subject_tag WHERE subject_type = :kind AND tag_key = :key "
+                "AND subject_code = ANY(CAST(:codes AS text[]))"
+            ),
+            {"kind": kind, "key": key, "codes": codes},
+        )
+        await session.commit()
+        return int(result.rowcount or 0)
+
+
+async def list_subject_tags(kind: str) -> list[dict[str, Any]]:
+    """Every tag in use for one kind with the number of subjects carrying it, most used first."""
+    kind = _subject_tag_kind(kind)
+    async with _get_session_factory()() as session:
+        rows = (
+            await session.execute(
+                text(
+                    "SELECT (array_agg(tag ORDER BY created_at))[1] AS tag, count(*) AS subjects FROM subject_tag "
+                    "WHERE subject_type = :kind GROUP BY tag_key ORDER BY count(*) DESC, tag_key"
+                ),
+                {"kind": kind},
+            )
+        ).all()
+    return [{"tag": str(tag), "count": int(count)} for tag, count in rows]
+
+
 async def get_subject_note(user_id: str, subject_type: str, subject_code: str) -> str | None:
     """Return the signed-in user's private note for one person or company profile."""
     async with _get_session_factory()() as session:
@@ -4236,7 +4641,7 @@ async def find_responses(
     async with session_factory() as session:
         stmt = (
             select(Request, RequestPayload.data, CadastralUnit, IstatMunicipality)
-            .outerjoin(RequestPayload, RequestPayload.request_id == Request.id)
+            .outerjoin(RequestPayload, RequestPayload.request_id == _content_request_id())
             .outerjoin(CadastralUnit, Request.cadastral_unit_id == CadastralUnit.id)
             .outerjoin(IstatMunicipality, CadastralUnit.comune_id == IstatMunicipality.numeric_code)
             .where(*_build_single_where(provincia, comune, foglio, particella, tipo_catasto))
@@ -4294,13 +4699,13 @@ def _request_subject_aggregate(value, *subject_conditions, joins=()):
     """Aggregate normalized subjects linked through owners or the queried subject's fiscal code."""
     owner_match = (
         select(ResultOwner.id)
-        .where(ResultOwner.request_id == Request.id, ResultOwner.subject_id == Subject.id)
+        .where(ResultOwner.request_id == _content_request_id(), ResultOwner.subject_id == Subject.id)
         .correlate(Request, Subject)
         .exists()
     )
     property_match = (
         select(Property.id)
-        .where(Property.request_id == Request.id, Property.subject_id == Subject.id)
+        .where(Property.request_id == _content_request_id(), Property.subject_id == Subject.id)
         .correlate(Request, Subject)
         .exists()
     )
@@ -4342,10 +4747,10 @@ async def find_result_rows(
     single_rows: list[dict] = []
     if source in (None, "single"):
         property_count = (
-            select(func.count(Property.id)).where(Property.request_id == Request.id).correlate(Request).scalar_subquery()
+            select(func.count(Property.id)).where(Property.request_id == _content_request_id()).correlate(Request).scalar_subquery()
         )
         owner_count = (
-            select(func.count(ResultOwner.id)).where(ResultOwner.request_id == Request.id).correlate(Request).scalar_subquery()
+            select(func.count(ResultOwner.id)).where(ResultOwner.request_id == _content_request_id()).correlate(Request).scalar_subquery()
         )
         subject_fiscal_codes = _request_subject_aggregate(
             Subject.fiscal_code,
@@ -4686,7 +5091,7 @@ def _build_single_where(
             select(Property.id)
             .select_from(Property)
             .outerjoin(property_unit, Property.cadastral_unit_id == property_unit.id)
-            .where(Property.request_id == Request.id, *property_conditions)
+            .where(Property.request_id == _content_request_id(), *property_conditions)
             .correlate(Request)
             .exists()
         )
@@ -4765,13 +5170,13 @@ def _build_single_where(
     def subject_match(*subject_conditions):
         owner_match = (
             select(ResultOwner.id)
-            .where(ResultOwner.request_id == Request.id, ResultOwner.subject_id == Subject.id)
+            .where(ResultOwner.request_id == _content_request_id(), ResultOwner.subject_id == Subject.id)
             .correlate(Request, Subject)
             .exists()
         )
         property_match = (
             select(Property.id)
-            .where(Property.request_id == Request.id, Property.subject_id == Subject.id)
+            .where(Property.request_id == _content_request_id(), Property.subject_id == Subject.id)
             .correlate(Request, Subject)
             .exists()
         )

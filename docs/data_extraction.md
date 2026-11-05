@@ -150,6 +150,8 @@ A search by codice fiscale / partita IVA goes through three pages before the pro
 | *Elenco Province* | provincia, fabbricati, terreni | `province` | `request_province` |
 | *Elenco immobili* | the properties | `immobili` | `property`, `cadastral_unit`, owners |
 
+Two pages show the subject: the *Elenco Omonimi* table (found by its radios; a person's table has no property-style header, so a header-based extractor skips it) and the "Soggetto selezionato" block of the *Elenco immobili* page (`result_parsers.parse_soggetto_selezionato`), which is read as well, so the details are captured even when the Omonimi page is not.
+
 The Omonimi page used to be clicked through and its content dropped; it is the only place a code search shows who the subject is,
 so a subject first met by code (name = code, `/persons` without a name) is named by the next search of that code. A name search
 that lists several homonyms stores **all** of them, not only the one the flow opens. A company code with a single record names the

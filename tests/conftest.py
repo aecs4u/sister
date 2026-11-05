@@ -15,6 +15,19 @@ from .pg_isolation import fresh_db, pg_test_schema  # noqa: F401  (isolated Post
 # enforcement itself (tests/test_web_auth.py) override it per test. Must be set before ``sister.main`` is imported.
 os.environ.setdefault("REQUIRE_AUTHENTICATION", "false")
 
+@pytest.fixture(autouse=True)
+def _isolated_outputs_dir(tmp_path_factory, monkeypatch):
+    """``save_response`` writes a JSON copy of every response into ``database.OUTPUTS_DIR``. Tests must never fill the real
+    ``outputs/`` folder: the admin "Importa output" button would import their made-up responses into the live database."""
+    try:
+        from sister import database
+    except Exception:  # noqa: BLE001 (a test that stubs the package away has nothing to redirect)
+        yield
+        return
+    monkeypatch.setattr(database, "OUTPUTS_DIR", str(tmp_path_factory.getbasetemp() / "outputs"))
+    yield
+
+
 # ---------------------------------------------------------------------------
 # Stub heavy optional dependencies that may not be installed in CI
 # ---------------------------------------------------------------------------

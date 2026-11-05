@@ -1,0 +1,45 @@
+{# Variazioni di proprietà: the ownership periods of every unit of this subject that changed hands (database.subject_ownership_history). #}
+<section class="container-fluid py-3" aria-labelledby="ownership-history-title" data-ownership-history>
+  <div class="card border-0 shadow-sm">
+    <div class="card-header bg-white">
+      <h2 id="ownership-history-title" class="h5 mb-0">
+        <i class="fas fa-history me-1 text-warning" aria-hidden="true"></i>Variazioni di proprietà
+        <span class="badge bg-warning-subtle text-warning-emphasis border border-warning-subtle ms-1">{{ ownership_history|length }} immobili</span>
+      </h2>
+      <p class="small text-muted mb-0 mt-1">Dalle ricerche archiviate: un titolare resta tale finché una ricerca completa lo elenca;
+        «non più elencato» indica la prima ricerca che non lo riporta più.</p>
+    </div>
+    <div class="card-body p-0">
+      {% for unit in ownership_history %}
+      <details class="border-top" {% if loop.first %}open{% endif %}>
+        <summary class="px-3 py-2">
+          <strong>{{ unit.comune or 'Comune n.d.' }}</strong>
+          <span class="badge bg-secondary ms-1">{{ unit.catasto or '' }}</span>
+          <span class="ms-1">{% if unit.sezione %}Sez. {{ unit.sezione }} {% endif %}Fg {{ unit.foglio }} · Part. {{ unit.particella }}{% if unit.subalterno %} · Sub {{ unit.subalterno }}{% endif %}</span>
+          {% if unit.last_change_at %}<span class="small text-muted ms-2">ultima variazione vista il {{ unit.last_change_at.strftime('%d/%m/%Y') }}</span>{% endif %}
+        </summary>
+        <div class="table-responsive">
+          <table class="table table-sm table-hover mb-0 align-middle">
+            <thead class="table-light">
+              <tr><th scope="col">Titolare</th><th scope="col">Diritto</th><th scope="col">Quota</th><th scope="col">Visto dal</th><th scope="col">Visto fino al</th><th scope="col">Stato</th></tr>
+            </thead>
+            <tbody>
+              {% for p in unit.periods %}
+              <tr class="{{ '' if p.current else 'text-muted' }}">
+                <td>{% if p.is_subject %}<strong>{% endif %}{{ p.name or p.fiscal_code }}{% if p.is_subject %}</strong>{% endif %}
+                  <span class="small font-monospace text-muted d-block">{{ p.fiscal_code }}{% if p.record %} · {{ p.record }}{% endif %}</span></td>
+                <td>{{ p.right }}</td>
+                <td>{{ p.share }}</td>
+                <td>{{ p.first_seen_at.strftime('%d/%m/%Y') if p.first_seen_at else '' }}</td>
+                <td>{{ p.last_seen_at.strftime('%d/%m/%Y') if p.last_seen_at else '' }}{% if p.seen_count > 1 %} <span class="small text-muted">({{ p.seen_count }} ricerche)</span>{% endif %}</td>
+                <td>{% if p.current %}<span class="badge bg-success-subtle text-success-emphasis border border-success-subtle">attuale</span>{% else %}<span class="badge bg-light text-dark border">non più elencato dal {{ p.ended_at.strftime('%d/%m/%Y') }}</span>{% endif %}</td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </details>
+      {% endfor %}
+    </div>
+  </div>
+</section>

@@ -176,3 +176,48 @@ async def test_companies_of_the_page_get_their_records_and_a_single_record_names
         shared = (await session.execute(text("SELECT name FROM subject WHERE fiscal_code = :c"), {"c": CODE})).scalar_one()
     assert records == 3 and single == "ACME SRL"
     assert shared == CODE  # several records share this code: none of the names is "the" name
+
+
+# --- the pages SISTER shows for a code search (screenshots of 2026-10-26) ------------------------------------------
+
+PERSON_PAGE = """<html><body><fieldset><legend>Elenco Omonimi</legend><table>
+<tr><th></th><th>Cognome</th><th>Nome</th><th>Data di nascita</th><th>Luogo di nascita</th><th>Sesso</th><th>Codice Fiscale</th></tr>
+<tr><td><input type="radio" name="omonimoSelezionato" value="123#0#CORTESI#MAURIZIO#CRTMRZ59P07H199E#RAVENNA#07/09/1959#RA"/></td>
+<td>CORTESI</td><td>MAURIZIO</td><td>07/09/1959</td><td>RAVENNA (RA)</td><td>M</td><td><a href="#">CRTMRZ59P07H199E</a></td></tr>
+</table></fieldset></body></html>"""
+
+SELECTED_BLOCK = """Soggetto selezionato
+Tipo richiesta: Attualità
+Cognome: CORTESI Nome: MAURIZIO
+Data di Nascita: 07/09/1959
+Comune di Nascita: RAVENNA (RA)
+Codice Fiscale: CRTMRZ59P07H199E
+
+Immobili individuati: 3
+Motivazione: Esplorazione"""
+
+
+def test_the_omonimi_table_of_a_person_is_found_by_its_radios_not_by_a_property_header():
+    from sister import utils
+    from sister.result_parsers import omonimo_details
+
+    rows = utils._omonimi_table_rows(PERSON_PAGE)
+    assert len(rows) == 1 and rows[0]["Cognome"] == "CORTESI"
+    # the property-oriented extractor ignores this table: that is why the details were lost before
+    assert utils._extract_result_tables(PERSON_PAGE) == []
+    details = omonimo_details(rows[0], 1, True)
+    assert (details["cognome"], details["nome"], details["luogo_nascita"], details["provincia_nascita"], details["sesso"]) == (
+        "CORTESI", "MAURIZIO", "RAVENNA", "RA", "M")
+
+
+def test_the_selected_subject_block_of_the_properties_page_is_parsed():
+    from sister.result_parsers import parse_soggetto_selezionato
+
+    assert parse_soggetto_selezionato(SELECTED_BLOCK) == {
+        "tipo": "persona", "codice_fiscale": "CRTMRZ59P07H199E", "cognome": "CORTESI", "nome": "MAURIZIO", "data_nascita": "07/09/1959",
+        "luogo_nascita": "RAVENNA", "provincia_nascita": "RA", "indice": 1, "selezionato": True, "fonte": "Soggetto selezionato",
+    }
+    assert parse_soggetto_selezionato("Cognome: DE LUCA Nome: ANNA MARIA Data di Nascita: 01/02/1970 Comune di Nascita: SAN GIOVANNI (TO) Codice Fiscale: DLCNMR70B41H501Z")["cognome"] == "DE LUCA"
+    company = parse_soggetto_selezionato("Soggetto selezionato Denominazione: ACME SRL Sede: VARESE (VA) Codice Fiscale: 02342730120")
+    assert (company["tipo"], company["denominazione"], company["sede"]) == ("azienda", "ACME SRL", "VARESE (VA)")
+    assert parse_soggetto_selezionato("Elenco immobili per diritti e quote") == {} and parse_soggetto_selezionato(None) == {}

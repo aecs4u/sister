@@ -1904,8 +1904,8 @@ def db_backfill(
 
     from . import database, xml_ingest
 
-    if what not in {"all", "projections", "xml", "holdings", "names"}:
-        raise typer.BadParameter("usa projections, xml, holdings, names o all")
+    if what not in {"all", "projections", "xml", "holdings", "names", "history"}:
+        raise typer.BadParameter("usa projections, xml, holdings, names, history o all")
 
     async def _run():
         import getpass
@@ -1923,6 +1923,9 @@ def db_backfill(
             if what in {"all", "names"}:
                 result["names"] = await database.backfill_subject_names()
                 console.print(f"Nomi dei soggetti: {result['names']}")
+            if what in {"all", "history"}:
+                result["history"] = await database.backfill_ownership_history()
+                console.print(f"Storico proprieta': {result['history']}")
             if what in {"all", "holdings"}:
                 result["holdings"] = await database.refresh_subject_holdings()
                 console.print(f"Riepiloghi per soggetto: {result['holdings']}")

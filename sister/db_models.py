@@ -323,6 +323,10 @@ class Request(SQLModel, table=True):
     total_intestati: Optional[int] = Field(default=None)
     skipped_soppresso: Optional[int] = Field(default=None)
     subject_query: Optional[str] = Field(default=None)
+    # hash of the answer's content; an answer identical to the previous one of the same query (cache_key) is not stored
+    # again: it points at the request that holds the content (payload, properties, owners)
+    content_hash: Optional[str] = Field(default=None, index=True)
+    same_as_request_id: Optional[int] = Field(default=None, foreign_key="request.id", index=True)
 
 
 class RequestProvince(SQLModel, table=True):
@@ -387,6 +391,74 @@ class ResultOwner(SQLModel, table=True):
     subject_id: Optional[int] = Field(default=None, foreign_key="subject.id")
     subject_record_id: Optional[int] = Field(default=None, foreign_key="subject_record.id")
     right_id: Optional[int] = Field(default=None, foreign_key="ownership_right.id")
+
+
+class OwnershipHistory(SQLModel, table=True):
+    """One period in which a subject held a right on a cadastral unit, as the searches saw it.
+
+    Appended only when something changes: an identical observation moves ``last_seen_at``/``last_request_id`` and adds
+    to ``seen_count``; a different right or record opens a new period; a search that lists everything (all the owners of
+    a unit, or all the properties of a subject) and no longer shows it closes the period (``ended_at``).
+    """
+
+    __tablename__ = "ownership_history"
+    __table_args__ = (
+        sa.Index("ix_ownership_history_unit", "cadastral_unit_id"),
+        sa.Index("ix_ownership_history_subject", "subject_id"),
+        sa.Index("ix_ownership_history_last_request", "last_request_id"),
+        sa.Index(
+            "uq_ownership_history_open", "cadastral_unit_id", "subject_id", "right_id", "subject_record_id",
+            unique=True, postgresql_where=sa.text("ended_at IS NULL"), postgresql_nulls_not_distinct=True,
+        ),
+    )
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    cadastral_unit_id: int = Field(foreign_key="cadastral_unit.id")
+    subject_id: int = Field(foreign_key="subject.id")
+    subject_record_id: Optional[int] = Field(default=None, foreign_key="subject_record.id")
+    right_id: Optional[int] = Field(default=None, foreign_key="ownership_right.id")
+    first_seen_at: datetime = Field(sa_column=Column(sa.DateTime(timezone=True), nullable=False))
+    first_request_id: int = Field(foreign_key="request.id")
+    last_seen_at: datetime = Field(sa_column=Column(sa.DateTime(timezone=True), nullable=False))
+    last_request_id: int = Field(foreign_key="request.id")
+    seen_count: int = Field(default=1)
+    ended_at: Optional[datetime] = Field(default=None, sa_column=Column(sa.DateTime(timezone=True), nullable=True))
+    ended_request_id: Optional[int] = Field(default=None, foreign_key="request.id")
+
+
+class PropertyStateHistory(SQLModel, table=True):
+    """One period of a cadastral unit's classamento, consistenza, rendita and address, appended only when one changes."""
+
+    __tablename__ = "property_state_history"
+    __table_args__ = (
+        sa.Index("ix_property_state_history_unit", "cadastral_unit_id"),
+        sa.Index("ix_property_state_history_last_request", "last_request_id"),
+        sa.Index("uq_property_state_history_open", "cadastral_unit_id", unique=True, postgresql_where=sa.text("ended_at IS NULL")),
+    )
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    cadastral_unit_id: int = Field(foreign_key="cadastral_unit.id")
+    state_hash: str
+    property_type: Optional[str] = Field(default=None)
+    category: Optional[str] = Field(default=None)
+    cadastral_class: Optional[str] = Field(default=None)
+    consistency_value: Optional[Decimal] = Field(default=None)
+    consistency_unit: Optional[str] = Field(default=None)
+    census_zone: Optional[str] = Field(default=None)
+    land_quality: Optional[str] = Field(default=None)
+    area_sqm: Optional[Decimal] = Field(default=None)
+    income_eur: Optional[Decimal] = Field(default=None)
+    dominical_income_eur: Optional[Decimal] = Field(default=None)
+    agricultural_income_eur: Optional[Decimal] = Field(default=None)
+    address: Optional[str] = Field(default=None)
+    partita: Optional[str] = Field(default=None)
+    first_seen_at: datetime = Field(sa_column=Column(sa.DateTime(timezone=True), nullable=False))
+    first_request_id: int = Field(foreign_key="request.id")
+    last_seen_at: datetime = Field(sa_column=Column(sa.DateTime(timezone=True), nullable=False))
+    last_request_id: int = Field(foreign_key="request.id")
+    seen_count: int = Field(default=1)
+    ended_at: Optional[datetime] = Field(default=None, sa_column=Column(sa.DateTime(timezone=True), nullable=True))
+    ended_request_id: Optional[int] = Field(default=None, foreign_key="request.id")
 
 
 class Document(SQLModel, table=True):
@@ -547,6 +619,30 @@ class SubjectNote(SQLModel, table=True):
         sa_column=Column(sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
     )
     updated_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc),
+        sa_column=Column(sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
+    )
+
+
+class SubjectTag(SQLModel, table=True):
+    """A shared label that groups person and company profiles (any signed-in user sees and edits the same tags).
+
+    ``tag_key`` is the casefolded tag, so "Politici" and "politici" are one tag; ``tag`` keeps the spelling of the
+    first user who wrote it. Several tags per subject, several subjects per tag.
+    """
+
+    __tablename__ = "subject_tag"
+    __table_args__ = (
+        sa.CheckConstraint("subject_type IN ('company', 'person')", name="ck_subject_tag_type"),
+        sa.Index("ix_subject_tag_type_key", "subject_type", "tag_key"),
+    )
+
+    subject_type: str = Field(sa_column=Column(sa.String(16), primary_key=True))
+    subject_code: str = Field(sa_column=Column(sa.String(16), primary_key=True))
+    tag_key: str = Field(sa_column=Column(sa.String(40), primary_key=True))
+    tag: str = Field(sa_column=Column(sa.String(40), nullable=False))
+    created_by: Optional[str] = Field(default=None, sa_column=Column(sa.String(), nullable=True))
+    created_at: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc),
         sa_column=Column(sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
     )

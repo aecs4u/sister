@@ -342,6 +342,50 @@ def parse_omonimo_value(value: Any) -> dict[str, str]:
     return {key: val for key, val in out.items() if val}
 
 
+_SELECTED_PERSON = re.compile(
+    r"Cognome:\s*(?P<cognome>.+?)\s+Nome:\s*(?P<nome>.+?)\s+Data di Nascita:\s*(?P<data>\d{2}/\d{2}/\d{4})\s+"
+    r"Comune di Nascita:\s*(?P<luogo>.+?)\s*(?:\((?P<prov>[A-Za-z]{2})\))?\s+Codice Fiscale:\s*(?P<cf>[A-Z0-9]{16})",
+    re.I,
+)
+_SELECTED_COMPANY = re.compile(
+    r"Denominazione:\s*(?P<den>.+?)\s+Sede:\s*(?P<sede>.+?)\s+(?:Codice Fiscale|Partita IVA|P\.? ?IVA)\s*:?\s*(?P<cf>\d{11})", re.I
+)
+
+
+def parse_soggetto_selezionato(text: Any) -> dict[str, Any]:
+    """The "Soggetto selezionato" block of the *Elenco immobili* page: who the properties belong to.
+
+    ``Cognome: CORTESI Nome: MAURIZIO Data di Nascita: 07/09/1959 Comune di Nascita: RAVENNA (RA) Codice Fiscale: CRT…``
+    (persona fisica) or ``Denominazione: … Sede: … Codice Fiscale: …`` (persona giuridica). Anything else gives ``{}``.
+    """
+    flat = squeeze(text)
+    if "Soggetto selezionato" in flat:  # leave out the rest of the page (menus, the search that was run)
+        flat = flat.split("Soggetto selezionato", 1)[1]
+    person = _SELECTED_PERSON.search(flat)
+    if person:
+        out = {
+            "tipo": "persona",
+            "codice_fiscale": person["cf"].upper(),
+            "cognome": squeeze(person["cognome"]),
+            "nome": squeeze(person["nome"]),
+            "data_nascita": person["data"],
+            "luogo_nascita": squeeze(person["luogo"]),
+            "provincia_nascita": (person["prov"] or "").upper(),
+        }
+    else:
+        company = _SELECTED_COMPANY.search(flat)
+        if not company:
+            return {}
+        out = {
+            "tipo": "azienda",
+            "codice_fiscale": company["cf"],
+            "denominazione": squeeze(company["den"]),
+            "sede": squeeze(company["sede"]),
+        }
+    out.update(indice=1, selezionato=True, fonte="Soggetto selezionato")
+    return {key: val for key, val in out.items() if val not in ("", None)}
+
+
 def _row_value(row: dict, *keys: str) -> str:
     folded = {squeeze(k).casefold(): v for k, v in row.items()}
     for key in keys:

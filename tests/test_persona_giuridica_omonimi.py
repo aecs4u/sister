@@ -373,3 +373,28 @@ def test_a_list_page_or_a_confirmation_page_passes():
     asyncio.run(utils._raise_if_still_on_search_form(FormPage({"visImmSel": 5, "particella1": 1, "foglio": 1})))
     asyncio.run(utils._raise_if_still_on_search_form(FormPage({"confAssSub": 1, "particella1": 1, "foglio": 1})))
     asyncio.run(utils._raise_if_still_on_search_form(FormPage({})))  # not the form at all
+
+
+# --- run-list: a finished batch is not resumed (so reuse: force rows are sent again) ----------------------------------
+
+
+def _batch(tmp_path, statuses):
+    import json
+
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    (tmp_path / "batch.json").write_text(json.dumps({"queries": [{"id": i} for i in statuses]}))
+    (tmp_path / "batch_journal.jsonl").write_text(
+        "".join(json.dumps({"id": i, "status": s, "error": e, "updated_at": "2026-11-05T14:00:00+00:00"}) + "\n" for i, (s, e) in statuses.items())
+    )
+    return tmp_path
+
+
+def test_only_a_batch_with_nothing_left_counts_as_finished(tmp_path):
+    from sister.command_tools.batch_progress import is_finished
+
+    done = {"a": ("completed", None), "b": ("error", "NESSUNA CORRISPONDENZA TROVATA")}
+    assert is_finished(_batch(tmp_path / "done", done))
+    assert not is_finished(_batch(tmp_path / "error", {**done, "c": ("error", "HTTP 422: subalterno")}))
+    assert not is_finished(_batch(tmp_path / "pending", {**done, "c": ("queued", None)}))
+    assert not is_finished(_batch(tmp_path / "expired", {**done, "c": ("incomplete", "Sessione SISTER scaduta")}))
+    assert not is_finished(tmp_path / "missing")

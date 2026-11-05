@@ -5608,6 +5608,8 @@ async def _render_doc_from_db(
         land_registry_history=land_registry_history,
         subject_fiscal_code=subject_fiscal_code,
         subject_route_prefix=subject_route_prefix,
+        ownership_history=await _ownership_history_for_page(subject_fiscal_code),
+        subject_tags=await _subject_tags_for_page(subject_fiscal_code, subject_route_prefix),
         subject_documents=subject_documents,
         subject_portfolio=subject_portfolio,
         subject_hub=subject_hub,
@@ -8086,6 +8088,121 @@ async def web_person_favorite(request: Request, fiscal_code: str, user=Depends(_
     return JSONResponse(
         {"subject_type": "person", "subject_code": normalized_code, "favorite": payload["favorite"]}
     )
+
+
+_TAG_BULK_LIMIT = 5000
+
+
+def _subject_tag_code(kind: str, fiscal_code: str) -> str:
+    """The normalised code of a person/company in a URL, or a 404."""
+    from fastapi import HTTPException
+
+    code = fiscal_code.strip().upper()
+    pattern = r"[A-Z0-9]{16}" if kind == "person" else r"\d{11}"
+    if not re.fullmatch(pattern, code):
+        raise HTTPException(status_code=404, detail="Persona non trovata" if kind == "person" else "Azienda non trovata")
+    return code
+
+
+async def _json_body(request: Request) -> dict:
+    from fastapi import HTTPException
+
+    try:
+        payload = await request.json()
+    except (ValueError, UnicodeDecodeError):
+        raise HTTPException(status_code=400, detail="Expected a JSON body") from None
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=422, detail="Expected a JSON object")
+    return payload
+
+
+def _tag_editor(user) -> str:
+    """Who is editing (the stored ``created_by``); tags are shared, but an anonymous request may not write them."""
+    from fastapi import HTTPException
+
+    user_key = _favorite_user_key(user)
+    if not user_key:
+        raise HTTPException(status_code=401, detail="Authentication required to edit tags")
+    return user_key
+
+
+async def _subject_tags_replace(request: Request, kind: str, fiscal_code: str, user) -> JSONResponse:
+    """``PUT <route>/<code>/tags`` with ``{"tags": [...]}``: the subject's tags become exactly this list."""
+    from fastapi import HTTPException
+
+    from .database import set_subject_tags
+
+    editor = _tag_editor(user)
+    code = _subject_tag_code(kind, fiscal_code)
+    payload = await _json_body(request)
+    tags = payload.get("tags")
+    if not isinstance(tags, list) or not all(isinstance(tag, str) for tag in tags):
+        raise HTTPException(status_code=422, detail="tags must be a list of strings")
+    try:
+        stored = await set_subject_tags(kind, code, tags, editor)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from None
+    return JSONResponse({"subject_type": kind, "subject_code": code, "tags": stored})
+
+
+async def _subject_tags_bulk(request: Request, kind: str, user) -> JSONResponse:
+    """``POST <route>/tags/bulk?<the table's query string>`` with ``{"action": "add"|"remove", "tag": ..., "expected": N}``.
+
+    Adds a tag to (or removes it from) every row the table currently shows, all pages. ``expected`` is the count the
+    user confirmed: when the filter now matches another number of rows nothing is changed (409).
+    """
+    from fastapi import HTTPException
+
+    from .database import list_subject_tags, tag_subjects, untag_subjects
+
+    editor = _tag_editor(user)
+    payload = await _json_body(request)
+    action = payload.get("action")
+    if action not in {"add", "remove"} or not isinstance(payload.get("tag"), str):
+        raise HTTPException(status_code=422, detail='expected {"action": "add"|"remove", "tag": "..."}')
+    expected = payload.get("expected")
+    if type(expected) is not int:
+        raise HTTPException(status_code=422, detail="expected must be the number of rows the user confirmed")
+    rows, total, _size = await _subject_table_query(request, kind, user, paged=False)
+    if total != expected:
+        raise HTTPException(status_code=409, detail=f"I risultati sono cambiati: ora sono {total}, non {expected}")
+    if total > _TAG_BULK_LIMIT:
+        raise HTTPException(status_code=413, detail=f"Troppi risultati ({total}): restringi i filtri (massimo {_TAG_BULK_LIMIT})")
+    codes = [row["fiscal_code"] for row in rows]
+    try:
+        changed = (
+            await tag_subjects(kind, codes, payload["tag"], editor)
+            if action == "add"
+            else await untag_subjects(kind, codes, payload["tag"])
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from None
+    return JSONResponse({"action": action, "matched": total, "changed": changed, "tags": await list_subject_tags(kind)})
+
+
+async def _subject_tags_for_page(code: str | None, route_prefix: str | None) -> list[str]:
+    """The tags shown on a profile page; never fails the page."""
+    if not code or route_prefix not in ("/persons", "/companies"):
+        return []
+    try:
+        from .database import get_subject_tags
+
+        return await get_subject_tags("company" if route_prefix == "/companies" else "person", code)
+    except Exception:  # noqa: BLE001 - an optional section
+        logger.warning("Tag non disponibili per %s", code, exc_info=True)
+        return []
+
+
+@router.put("/persons/{fiscal_code}/tags", response_class=JSONResponse)
+async def web_person_tags(request: Request, fiscal_code: str, user=Depends(_require_auth)):
+    """Replace the shared tags of one person profile."""
+    return await _subject_tags_replace(request, "person", fiscal_code, user)
+
+
+@router.put("/companies/{fiscal_code}/tags", response_class=JSONResponse)
+async def web_company_tags(request: Request, fiscal_code: str, user=Depends(_require_auth)):
+    """Replace the shared tags of one company profile."""
+    return await _subject_tags_replace(request, "company", fiscal_code, user)
 
 
 async def _web_subject_note(request: Request, fiscal_code: str, subject_type: str, user):
@@ -11583,6 +11700,19 @@ def _query_only_subject_doc(profile: dict) -> dict:
     }
 
 
+async def _ownership_history_for_page(code: str | None) -> list[dict]:
+    """The units of the subject that changed hands (ownership periods from the history); never fails the page."""
+    if not code:
+        return []
+    try:
+        from .database import subject_ownership_history
+
+        return await subject_ownership_history(code)
+    except Exception:  # noqa: BLE001 - an optional section
+        logger.warning("Storico proprieta' non disponibile per %s", code, exc_info=True)
+        return []
+
+
 async def _render_query_only_subject(
     request,
     theme,
@@ -11635,6 +11765,8 @@ async def _render_query_only_subject(
         doc=doc,
         subject_fiscal_code=profile["code"],
         subject_route_prefix=route_prefix,
+        ownership_history=await _ownership_history_for_page(profile["code"]),
+        subject_tags=await _subject_tags_for_page(profile["code"], route_prefix),
         subject_documents=[],
         subject_hub=profile,
         subject_archive=subject_archive,
@@ -11912,7 +12044,7 @@ _SUBJECT_KINDS = {
 async def _render_subject_index(request: Request, user, kind: str, code: str = "", error_message: str | None = None):
     """The archive table page. Only aggregates are computed here (summary cards, column widths): the rows are paged
     from ``<route>/index.json``, so the cost does not grow with the number of subjects shown."""
-    from .database import subject_overview
+    from .database import list_subject_tags, subject_overview
 
     spec = _SUBJECT_KINDS[kind]
     overview = await subject_overview(kind)
@@ -11927,6 +12059,8 @@ async def _render_subject_index(request: Request, user, kind: str, code: str = "
         error_message=error_message,
         stats=overview,
         overview={"total": overview["subjects"], "widest": overview["widest"], "max": overview["max"]},
+        subject_tags=await list_subject_tags(kind),
+        tags_editable=bool(_favorite_user_key(user)),
     )
     if error_message:
         response.status_code = 422
@@ -11951,7 +12085,8 @@ async def _subject_index(request: Request, kind: str, code: str | None, user):
 async def _subject_table_query(request: Request, kind: str, user, *, paged: bool):
     """Run the table query described by the request's query string.
 
-    ``page`` / ``size`` (max 500), ``q`` (search box), ``sort`` / ``dir``, ``name_status`` (persons), and
+    ``page`` / ``size`` (max 500), ``q`` (search box), ``sort`` / ``dir``, ``name_status`` (``named`` / ``missing``), ``tag`` (one tag,
+    ``-`` = no tag), and
     ``f_<field>`` column filters: the same names the page keeps in its URL. Unknown values are ignored.
     ``paged=False`` returns every match (CSV).
     """
@@ -11981,11 +12116,8 @@ async def _subject_table_query(request: Request, kind: str, user, *, paged: bool
         kind,
         q=(query.get("q") or "")[:200],
         filters=filters,
-        name_status=(
-            query.get("name_status")
-            if kind == "person" and query.get("name_status") in {"named", "missing"}
-            else None
-        ),
+        name_status=query.get("name_status") if query.get("name_status") in {"named", "missing"} else None,
+        tag=(query.get("tag") or "").strip()[:80] or None,
         sort=sort,
         direction="asc" if query.get("dir") == "asc" else "desc",
         limit=size if paged else None,
@@ -12014,7 +12146,7 @@ _SUBJECT_CSV_COLUMNS = (
     ("full_ownership", "Piena proprietà"), ("rendita", "Rendita €"), ("reddito_dominicale", "Reddito dominicale €"),
     ("cadastral_value", "Valore catastale €"), ("cadastral_value_share", "Valore pro quota €"),
     ("unvalued", "Non valutati"), ("unknown_share", "Senza quota"), ("visure", "Visure"), ("searches", "Ricerche"),
-    ("searched_at", "Dati del"), ("last_seen", "Aggiornato"),
+    ("searched_at", "Dati del"), ("last_seen", "Aggiornato"), ("tags", "Tag"),
 )
 
 
@@ -12030,7 +12162,10 @@ async def _subject_index_csv(request: Request, kind: str, user):
     writer = csv.writer(out, delimiter=";")
     writer.writerow([label for _field, label in columns])
     for row in rows:
-        writer.writerow(["" if row.get(field) is None else row.get(field) for field, _label in columns])
+        writer.writerow(
+            [" | ".join(row["tags"]) if field == "tags" else "" if row.get(field) is None else row.get(field)
+             for field, _label in columns]
+        )
     filename = "persone.csv" if kind == "person" else "societa.csv"
     return Response(
         content="\ufeff" + out.getvalue(),
@@ -12055,6 +12190,19 @@ async def web_persons_index_csv(request: Request, user=Depends(_require_auth)):
     return await _subject_index_csv(request, "person", user)
 
 
+@router.get("/persons/tags.json", response_class=JSONResponse)
+async def web_persons_tags_json(user=Depends(_require_auth)):
+    """Every tag in use for persons with its number of profiles."""
+    from .database import list_subject_tags
+
+    return JSONResponse({"tags": await list_subject_tags("person")}, headers={"Cache-Control": "private, no-store"})
+
+
+@router.post("/persons/tags/bulk", response_class=JSONResponse)
+async def web_persons_tags_bulk(request: Request, user=Depends(_require_auth)):
+    return await _subject_tags_bulk(request, "person", user)
+
+
 @router.get("/companies/", response_class=HTMLResponse, name="companies_index")
 async def web_companies_index(request: Request, code: str | None = None, user=Depends(_require_auth)):
     """Sortable, filterable table of every archived company; a full partita IVA opens its profile."""
@@ -12069,6 +12217,19 @@ async def web_companies_index_json(request: Request, user=Depends(_require_auth)
 @router.get("/companies/index.csv")
 async def web_companies_index_csv(request: Request, user=Depends(_require_auth)):
     return await _subject_index_csv(request, "company", user)
+
+
+@router.get("/companies/tags.json", response_class=JSONResponse)
+async def web_companies_tags_json(user=Depends(_require_auth)):
+    """Every tag in use for companies with its number of profiles."""
+    from .database import list_subject_tags
+
+    return JSONResponse({"tags": await list_subject_tags("company")}, headers={"Cache-Control": "private, no-store"})
+
+
+@router.post("/companies/tags/bulk", response_class=JSONResponse)
+async def web_companies_tags_bulk(request: Request, user=Depends(_require_auth)):
+    return await _subject_tags_bulk(request, "company", user)
 
 
 @router.get("/persons/{fiscal_code}", response_class=HTMLResponse)

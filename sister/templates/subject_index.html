@@ -79,7 +79,7 @@
             </div>
 
             <div class="row g-2 align-items-center mb-2">
-                <div class="col-12 col-lg-{{ '4' if is_person else '5' }}">
+                <div class="col-12 col-lg-4">
                     <label class="visually-hidden" for="subjects-quick">
                         {{ 'Cerca nome, codice fiscale, luogo di nascita o provincia' if is_person else 'Cerca denominazione, partita IVA o provincia' }}
                     </label>
@@ -90,7 +90,6 @@
                                autocomplete="off">
                     </div>
                 </div>
-                {% if is_person %}
                 <div class="col-12 col-lg-3">
                     <label class="visually-hidden" for="subjects-name-status">Filtro nominativo</label>
                     <select class="form-select form-select-sm" id="subjects-name-status">
@@ -99,8 +98,7 @@
                         <option value="missing">Solo senza nominativo</option>
                     </select>
                 </div>
-                {% endif %}
-                <div class="col-12 col-lg-{{ '5' if is_person else '7' }}">
+                <div class="col-12 col-lg-5">
                     <nav class="d-flex flex-wrap gap-1 justify-content-lg-end align-items-center" aria-label="Classifiche rapide">
                         <span class="small text-muted me-1">Classifica:</span>
                         <a class="btn btn-outline-primary btn-sm" data-rank="cadastral_value_share" href="?sort=cadastral_value_share&dir=desc">{{ 'Più ricchi' if is_person else 'Più ricche' }}</a>
@@ -111,6 +109,38 @@
                         <a class="btn btn-outline-primary btn-sm" data-rank="province_count" href="?sort=province_count&dir=desc">Più province</a>
                     </nav>
                 </div>
+            </div>
+
+            <div class="row g-2 align-items-start mb-2">
+                <div class="col-12 col-sm-6 col-lg-3">
+                    <label class="visually-hidden" for="subjects-tag">Filtra per tag</label>
+                    <select class="form-select form-select-sm" id="subjects-tag">
+                        <option value="">Tutti i tag</option>
+                        <option value="-">Senza tag</option>
+                        {% for item in subject_tags %}<option value="{{ item.tag }}">{{ item.tag }} ({{ item.count }})</option>{% endfor %}
+                    </select>
+                </div>
+                {% if tags_editable %}
+                <div class="col-12 col-lg-9">
+                    <details class="subjects-tags-manage">
+                        <summary class="small"><i class="fas fa-tags me-1" aria-hidden="true"></i>Gestisci i tag dei risultati</summary>
+                        <div class="mt-2">
+                            <p class="small text-muted mb-2">
+                                Applica un tag a <strong>tutti</strong> i risultati attuali (di tutte le pagine), oppure toglilo.
+                                Per un solo profilo usa la matita nella colonna Tag.
+                            </p>
+                            <div class="input-group input-group-sm" style="max-width: 38rem;">
+                                <label class="visually-hidden" for="subjects-tag-input">Nome del tag</label>
+                                <input type="text" class="form-control" id="subjects-tag-input" list="subjects-tag-list" maxlength="40"
+                                       placeholder="Nome del tag" autocomplete="off">
+                                <datalist id="subjects-tag-list">{% for item in subject_tags %}<option value="{{ item.tag }}"></option>{% endfor %}</datalist>
+                                <button type="button" class="btn btn-outline-primary" id="subjects-tag-add">Aggiungi ai risultati</button>
+                                <button type="button" class="btn btn-outline-secondary" id="subjects-tag-remove">Togli dai risultati</button>
+                            </div>
+                        </div>
+                    </details>
+                </div>
+                {% endif %}
             </div>
 
             <details class="subjects-columns mb-2">
@@ -146,7 +176,7 @@
             <p class="small mb-2" id="subjects-status" role="status" hidden></p>
             <div id="subjects-table" role="region" aria-label="Tabella {{ 'delle persone' if is_person else 'delle società' }} in archivio"
                  data-kind="{{ kind }}" data-route="{{ route }}" data-json-url="{{ route }}/index.json" data-csv-url="{{ route }}/index.csv"
-                 data-overview='{{ overview|tojson }}'
+                 data-overview='{{ overview|tojson }}' data-tags-editable="{{ 'true' if tags_editable else 'false' }}"
                  data-initial-quick="{{ code if not error_message else '' }}"></div>
             <div id="subjects-cards" aria-label="Elenco {{ 'delle persone' if is_person else 'delle società' }}"></div>
         </div>
@@ -156,5 +186,5 @@
 
 {% block extra_js %}
 {{ super() }}
-<script src="/static/js/subject_index.js?v=20261105h" nonce="{{ csp_nonce }}"></script>
+<script src="/static/js/subject_index.js?v=20261127b" nonce="{{ csp_nonce }}"></script>
 {% endblock %}

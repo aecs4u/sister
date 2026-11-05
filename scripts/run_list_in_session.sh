@@ -57,6 +57,12 @@ else
       BATCH_DIR="$candidate"
     fi
   done
+  # A finished batch is not resumed: its journal says every row is done, so nothing (not even a `reuse: force` row)
+  # would be sent again. Start a new folder; the pruning still drops the rows already answered.
+  if [[ -n "$BATCH_DIR" ]] && "${PYTHON_CMD[@]}" -c 'import sys; from pathlib import Path; sys.path.insert(0, sys.argv[1]); from sister.command_tools.batch_progress import is_finished; sys.exit(0 if is_finished(Path(sys.argv[2])) else 1)' "$ROOT" "$BATCH_DIR" 2>/dev/null; then
+    printf 'Saved batch for %s is finished (%s): starting a new one\n' "$(basename -- "$SOURCE_LIST")" "$BATCH_DIR"
+    BATCH_DIR=""
+  fi
   if [[ -n "$BATCH_DIR" ]]; then
     printf 'Resuming saved batch for %s: %s\n' "$(basename -- "$SOURCE_LIST")" "$BATCH_DIR"
   else

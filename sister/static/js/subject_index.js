@@ -19,6 +19,7 @@
     var OVERVIEW = JSON.parse(root.getAttribute("data-overview") || "{}");
     var TOTAL = OVERVIEW.total || 0;
     var INITIAL_QUICK = root.getAttribute("data-initial-quick") || "";
+    var TAGS_EDITABLE = root.getAttribute("data-tags-editable") === "true";
     var IS_PERSON = KIND === "person";
     var NOUN = IS_PERSON ? ["persona", "persone"] : ["società", "società"];
     var CODE_LABEL = IS_PERSON ? "Codice fiscale" : "Partita IVA";
@@ -29,6 +30,9 @@
     var countEl = document.getElementById("subjects-count");
     var quick = document.getElementById("subjects-quick");
     var nameStatus = document.getElementById("subjects-name-status");
+    var tagSelect = document.getElementById("subjects-tag");
+    var tagInput = document.getElementById("subjects-tag-input");
+    var tagList = document.getElementById("subjects-tag-list");
     var cardsEl = document.getElementById("subjects-cards");
     var chooserBody = document.getElementById("subjects-columns-body");
 
@@ -126,6 +130,16 @@
             a.textContent = d.name || "(nome non disponibile)";
             if (!d.name) a.classList.add("text-muted", "fst-italic", "fw-normal");
             wrap.appendChild(a);
+            if (d.name_inferred) {
+                // no name of its own: the first registry record of the code. Several records = several entities sharing it.
+                var note = document.createElement("small");
+                note.className = "text-muted ms-2";
+                if (d.name_records > 1) note.textContent = "+" + (d.name_records - 1);
+                note.title = d.name_records > 1
+                    ? "Il codice ha " + d.name_records + " denominazioni distinte nel registro di SISTER: questa è la prima"
+                    : "Denominazione dal registro di SISTER";
+                wrap.appendChild(note);
+            }
             if (!d.name) {
                 var req = document.createElement("a");
                 req.href = "/forms";
@@ -168,13 +182,17 @@
         formatter: function (cell) { return cell.getRow().getData().searched_label || "–"; }});
     textCol("Aggiornato", "last_seen", true, {headerFilterPlaceholder: "data…",
         formatter: function (cell) { return cell.getRow().getData().last_seen_label || "–"; }});
+    // Tags group profiles; they are shared by everybody who signs in. A chip filters by its tag, the pencil edits the cell.
+    textCol("Tag", "tags", true, {headerFilter: false, headerSort: false, tooltip: function (e, cell) { return (cell.getRow().getData().tags || []).join(", "); },
+        formatter: function (cell) { return tagsCell(cell.getRow()); }});
 
     // The widest sample of each column over the WHOLE archive (the page carries it: data-overview), for the width
     // measurement; must match the formatters above. Numeric columns use the largest value.
     var NOTE_ALLOWANCE = " +99 n.v. *";
     var SAMPLES = {
+        tags: function () { return ["tag lungo tag lungo   ✎"]; },
         favorite_label: function () { return ["★"]; },
-        name: function () { return [OVERVIEW.widest.name || "", "(nome non disponibile)      "]; },
+        name: function () { return [OVERVIEW.widest.name || "", "(nome non disponibile)      ", (OVERVIEW.widest.name || "") + " +99"]; },
         fiscal_code: function () { return [OVERVIEW.widest.fiscal_code || ""]; },
         gender: function () { return ["M"]; },
         birth_date: function () { return ["00/00/0000"]; },
@@ -193,7 +211,7 @@
         };
     });
     var CELL_CLASS = {fiscal_code: "font-monospace small", name: "fw-semibold"};
-    var MAX_WIDTH = {name: 420, provinces: 300};
+    var MAX_WIDTH = {name: 420, provinces: 300, tags: 320};
     var MIN_WIDTH = 64;  // room for a header filter ("Tutti", "es. >10")
 
     // ---------------------------------------------------------------- URL state
@@ -203,6 +221,7 @@
     var urlSort = defs.some(function (d) { return d.field === query.get("sort"); }) ? query.get("sort") : null;
     var urlDir = query.get("dir") === "asc" ? "asc" : "desc";
     var startQuick = query.has("q") ? query.get("q") : (query.get("code") || INITIAL_QUICK);
+    var startTag = query.get("tag") || "";
     if (nameStatus) {
         var requestedNameStatus = query.get("name_status");
         nameStatus.value = requestedNameStatus === "named" || requestedNameStatus === "missing" ? requestedNameStatus : "";
@@ -232,6 +251,7 @@
         d.last_seen_label = dateLabel(d.last_seen);
         d.searched_label = dateLabel(d.searched_at);
         d.favorite_label = d.favorite ? "si" : "no";
+        d.tags = d.tags || [];
         return d;
     }
 
@@ -242,6 +262,7 @@
         var q = quick.value.trim();
         if (q) p.set("q", q);
         if (nameStatus && nameStatus.value) p.set("name_status", nameStatus.value);
+        if (tagSelect && tagSelect.value) p.set("tag", tagSelect.value);
         var sorter = (params.sort || [])[0];
         if (sorter) { p.set("sort", sorter.field); p.set("dir", sorter.dir); }
         (params.filter || []).forEach(function (f) { if (f.value !== "" && f.value !== null && f.value !== undefined) p.set("f_" + f.field, f.value); });
@@ -299,6 +320,7 @@
         var initialFilters = Object.keys(urlFilters).filter(function (f) { return defs.some(function (d) { return d.field === f; }); })
             .map(function (f) { return {field: f, value: urlFilters[f]}; });
         quick.value = startQuick;
+        if (tagSelect && startTag) selectTag(startTag);
         table = new Tabulator(root, {
             ajaxURL: JSON_URL,
             ajaxURLGenerator: function (url, config, params) { return url + "?" + stateQuery(params, true); },
@@ -415,6 +437,7 @@
     quick.addEventListener("input", function () { clearTimeout(timer); timer = setTimeout(reload, 250); });
     quick.addEventListener("search", reload);
     if (nameStatus) nameStatus.addEventListener("change", reload);
+    if (tagSelect) tagSelect.addEventListener("change", reload);
 
     document.querySelectorAll("[data-rank]").forEach(function (link) {
         link.addEventListener("click", function (event) {
@@ -427,9 +450,10 @@
     });
     // Reset to the default view with as few requests as possible (a new load must not start while one is running).
     document.getElementById("subjects-reset").addEventListener("click", function () {
-        var hadSearch = quick.value.trim() !== "" || !!(nameStatus && nameStatus.value);
+        var hadSearch = quick.value.trim() !== "" || !!(nameStatus && nameStatus.value) || !!(tagSelect && tagSelect.value);
         quick.value = "";
         if (nameStatus) nameStatus.value = "";
+        if (tagSelect) tagSelect.value = "";
         var sorter = table.getSorters()[0];
         var sortChanged = !sorter || sorter.field !== DEFAULT_SORT.field || sorter.dir !== DEFAULT_SORT.dir;
         var hadFilters = table.getHeaderFilters().length > 0;
@@ -502,6 +526,180 @@
         });
     }
 
+    // ---------------------------------------------------------------- tags
+    var TAG_NOUN = IS_PERSON ? ["persona", "persone"] : ["società", "società"];
+
+    // Make `tag` the selected filter, adding it to the list when the link names a tag the page was not rendered with.
+    function selectTag(tag) {
+        if (!tagSelect) return;
+        var found = Array.prototype.some.call(tagSelect.options, function (o) { return o.value === tag; });
+        if (!found && tag && tag !== "-") {
+            var option = document.createElement("option");
+            option.value = tag;
+            option.textContent = tag;
+            tagSelect.appendChild(option);
+        }
+        tagSelect.value = tag;
+    }
+    // Rebuild the filter and the suggestions after tags were added or removed; the current choice stays if it still exists.
+    function refreshTagLists(tags) {
+        var current = tagSelect ? tagSelect.value : "";
+        if (tagSelect) {
+            while (tagSelect.options.length > 2) tagSelect.remove(2);
+            tags.forEach(function (item) {
+                var option = document.createElement("option");
+                option.value = item.tag;
+                option.textContent = item.tag + " (" + item.count + ")";
+                tagSelect.appendChild(option);
+            });
+            tagSelect.value = current;
+            if (tagSelect.value !== current) tagSelect.value = "";
+        }
+        if (tagList) {
+            tagList.textContent = "";
+            tags.forEach(function (item) {
+                var option = document.createElement("option");
+                option.value = item.tag;
+                tagList.appendChild(option);
+            });
+        }
+    }
+    function tagChip(tag) {
+        var chip = document.createElement("button");
+        chip.type = "button";
+        chip.className = "badge rounded-pill text-bg-light border me-1 subject-tag";
+        chip.setAttribute("data-tag", tag);
+        chip.title = "Mostra solo i profili con il tag «" + tag + "»";
+        chip.textContent = tag;
+        return chip;
+    }
+    function tagsCell(row) {
+        var d = row.getData();
+        var wrap = document.createElement("span");
+        wrap.className = "subject-tags-cell";
+        (d.tags || []).forEach(function (tag) { wrap.appendChild(tagChip(tag)); });
+        if (TAGS_EDITABLE) {
+            var edit = document.createElement("button");
+            edit.type = "button";
+            edit.className = "btn btn-link btn-sm p-0 subject-tag-edit";
+            edit.setAttribute("data-code", d.fiscal_code);
+            edit.setAttribute("aria-label", "Modifica i tag di " + (d.name || d.fiscal_code));
+            edit.title = "Modifica i tag";
+            edit.innerHTML = '<i class="fas fa-pen text-muted" aria-hidden="true"></i>';
+            wrap.appendChild(edit);
+        }
+        return wrap;
+    }
+    function saveTags(code, tags) {
+        return fetch(ROUTE + "/" + encodeURIComponent(code) + "/tags", {
+            method: "PUT", credentials: "same-origin",
+            headers: {"Content-Type": "application/json", "Accept": "application/json"},
+            body: JSON.stringify({tags: tags})
+        }).then(function (response) {
+            if (response.status === 401) throw new Error("accedi per modificare i tag");
+            if (response.status === 422) return response.json().then(function (body) { throw new Error(body.detail || "tag non valido"); });
+            if (!response.ok) throw new Error("HTTP " + response.status);
+            return response.json();
+        });
+    }
+    function refreshTagsFromServer() {
+        return fetch(ROUTE + "/tags.json", {credentials: "same-origin", headers: {"Accept": "application/json"}})
+            .then(function (r) { return r.ok ? r.json() : null; })
+            .then(function (body) { if (body && body.tags) refreshTagLists(body.tags); })
+            .catch(function () { /* the lists refresh on the next load */ });
+    }
+    // The cell becomes a text field ("a, b, c"); Enter saves, Escape cancels.
+    function editTags(row, cellEl) {
+        var d = row.getData();
+        var form = document.createElement("form");
+        form.className = "d-flex gap-1 align-items-center";
+        var input = document.createElement("input");
+        input.type = "text";
+        input.className = "form-control form-control-sm";
+        input.value = (d.tags || []).join(", ");
+        input.setAttribute("list", "subjects-tag-list");
+        input.setAttribute("aria-label", "Tag di " + (d.name || d.fiscal_code) + ", separati da virgola");
+        input.placeholder = "tag, tag…";
+        var save = document.createElement("button");
+        save.type = "submit";
+        save.className = "btn btn-primary btn-sm py-0";
+        save.textContent = "OK";
+        form.appendChild(input);
+        form.appendChild(save);
+        var original = cellEl.firstChild;
+        cellEl.textContent = "";
+        cellEl.appendChild(form);
+        input.focus();
+        function cancel() { cellEl.textContent = ""; cellEl.appendChild(tagsCell(row)); }
+        input.addEventListener("keydown", function (event) { if (event.key === "Escape") { event.preventDefault(); cancel(); } });
+        form.addEventListener("submit", function (event) {
+            event.preventDefault();
+            save.disabled = true;
+            var wanted = input.value.split(",").map(function (t) { return t.trim(); }).filter(Boolean);
+            saveTags(d.fiscal_code, wanted).then(function (body) {
+                row.update({tags: body.tags});
+                cellEl.textContent = "";
+                cellEl.appendChild(tagsCell(row));
+                refreshTagsFromServer();
+                if (tagSelect && tagSelect.value) reload();  // the row may no longer match the tag filter
+                setStatus("Tag salvati.");
+            }).catch(function (error) {
+                save.disabled = false;
+                setStatus("Tag non salvati: " + error.message + ".", true);
+                input.focus();
+            });
+        });
+    }
+    root.addEventListener("click", function (event) {
+        var chip = event.target.closest(".subject-tag");
+        if (chip && table) {
+            event.preventDefault();
+            selectTag(chip.getAttribute("data-tag"));
+            reload();
+            return;
+        }
+        var edit = event.target.closest(".subject-tag-edit");
+        if (!edit || !table) return;
+        event.preventDefault();
+        var row = table.getRow(edit.getAttribute("data-code"));
+        if (row) editTags(row, edit.closest(".subject-tags-cell").parentNode);
+    });
+
+    // One tag for every row the table matches (all pages): the server re-runs the same query, and refuses when the
+    // number of matches is no longer the one the user confirmed.
+    function bulkTag(action) {
+        var tag = tagInput ? tagInput.value.trim() : "";
+        if (!tag) { setStatus("Scrivi il nome del tag.", true); tagInput.focus(); return; }
+        if (!matching) { setStatus("Nessun risultato a cui applicare il tag.", true); return; }
+        var noun = matching === 1 ? TAG_NOUN[0] : TAG_NOUN[1];
+        var question = (action === "add" ? "Aggiungere" : "Togliere") + " il tag «" + tag + "» " +
+            (action === "add" ? "a " : "da ") + intFmt.format(matching) + " " + noun + " (tutte le pagine)?";
+        if (!window.confirm(question)) return;
+        [document.getElementById("subjects-tag-add"), document.getElementById("subjects-tag-remove")].forEach(function (b) { b.disabled = true; });
+        fetch(ROUTE + "/tags/bulk?" + stateQuery(currentParams(), false), {
+            method: "POST", credentials: "same-origin",
+            headers: {"Content-Type": "application/json", "Accept": "application/json"},
+            body: JSON.stringify({action: action, tag: tag, expected: matching})
+        }).then(function (response) {
+            if (response.ok) return response.json();
+            return response.json().catch(function () { return {}; }).then(function (body) {
+                throw new Error(body.detail || ("HTTP " + response.status));
+            });
+        }).then(function (body) {
+            refreshTagLists(body.tags);
+            setStatus((action === "add" ? "Tag aggiunto a " : "Tag tolto da ") + intFmt.format(body.changed) + " di " + intFmt.format(body.matched) + " " + TAG_NOUN[1] + ".");
+            if (table) table.replaceData();
+        }).catch(function (error) {
+            setStatus("Tag non modificato: " + error.message + ".", true);
+        }).then(function () {
+            [document.getElementById("subjects-tag-add"), document.getElementById("subjects-tag-remove")].forEach(function (b) { b.disabled = false; });
+        });
+    }
+    if (TAGS_EDITABLE && tagInput) {
+        document.getElementById("subjects-tag-add").addEventListener("click", function () { bulkTag("add"); });
+        document.getElementById("subjects-tag-remove").addEventListener("click", function () { bulkTag("remove"); });
+    }
+
     // ---------------------------------------------------------------- favourites
     root.addEventListener("click", function (event) {
         var button = event.target.closest(".subject-fav");
@@ -557,6 +755,17 @@
             code.className = "font-monospace small text-muted";
             code.textContent = d.fiscal_code + (IS_PERSON && d.birth_place ? " · " + d.birth_place + (d.birth_province ? " (" + d.birth_province + ")" : "") : "");
             body.appendChild(code);
+            if ((d.tags || []).length) {
+                var tagsLine = document.createElement("div");
+                tagsLine.className = "mt-1";
+                d.tags.forEach(function (tag) {
+                    var badge = document.createElement("span");
+                    badge.className = "badge rounded-pill text-bg-light border me-1";
+                    badge.textContent = tag;
+                    tagsLine.appendChild(badge);
+                });
+                body.appendChild(tagsLine);
+            }
             var facts = document.createElement("dl");
             facts.className = "row g-0 small mb-0 mt-1";
             [["Valore pro quota", eurText(d.cadastral_value_share) + (d.cadastral_value_share == null ? "" : (valueNote(d, "cadastral_value_share") ? " " + valueNote(d, "cadastral_value_share") : ""))],

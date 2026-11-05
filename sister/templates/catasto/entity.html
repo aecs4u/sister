@@ -142,6 +142,7 @@
     {{ subject_favorite_button(subject_fiscal_code, subject_favorite_enabled|default(false), subject_is_favorite|default(false), 'company' if subject_route_prefix == '/companies' else 'person') }}
     {{ subject_note_panel(subject_fiscal_code, subject_favorite_enabled|default(false), 'company' if subject_route_prefix == '/companies' else 'person') }}
 </div>
+{% include "catasto/_subject_tags.html" %}
 {% endif %}
 {% if kpis_in_main and land_registry_kpis %}
 <div class="document-land-map-kpis-main mb-4">
@@ -175,6 +176,7 @@
         {{ super() }}
         {% if land_map_parent == 'catasto/visura_soggetto_archive.html' %}{{ manual_property_valuation_panel(land_registry_kpis) }}{% endif %}
         {{ subject_document_archive(subject_archive) }}
+        {% if ownership_history %}{% include "catasto/_ownership_history.html" %}{% endif %}
         {% if subject_documents %}{{ subject_visure_list(subject_documents, subject_fiscal_code, subject_route_prefix, subject_document_id, subject_portfolio) }}{% endif %}
         {% if land_registry_kpis or land_registry_history %}
         {{ cadastral_asset_enrichment_data(land_registry_kpis, land_registry_history, {
@@ -206,6 +208,7 @@
 {{ super() }}
 {% if land_map_parent == 'catasto/visura_soggetto_archive.html' %}{{ manual_property_valuation_panel(land_registry_kpis) }}{% endif %}
 {{ subject_document_archive(subject_archive) }}
+{% if ownership_history %}{% include "catasto/_ownership_history.html" %}{% endif %}
 {% if land_map_slot == 'content' %}
 <div class="container-fluid py-3">
     {{ document_parcel_map(land_registry_map, labels=subject_map_labels) }}

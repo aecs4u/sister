@@ -28,7 +28,13 @@ SISTER is a FastAPI service + Typer CLI for automated cadastral data extraction 
     `f_<field>` with `>10`/`10-50` for numbers, sort, `page`/`size` ≤ 500, all SQL over the `p` CTE of `_subject_profile_ctes`; ETag → 304) and
     `<route>/index.csv` the whole filtered list. Tabulator runs in remote mode; sort, filters, search and ranking links live in the URL
     (`?q=&sort=&dir=&f_<field>=`, e.g. `?f_land=%3E5&sort=cadastral_value_share&dir=desc`), the shown columns are remembered per browser,
-    under 768 px it renders cards (server-paged), ★ toggles `PUT <route>/<code>/favorite`. When adding a column, add it to the `p` CTE,
+    under 768 px it renders cards (server-paged), ★ toggles `PUT <route>/<code>/favorite`. **Tags** (`subject_tag`, migration `20261127_subject_tags`)
+    group subjects: shared by every signed-in user (favorites are per user), identity = casefolded `tag_key`, max 40 characters, 20 per subject.
+    `tags` is a `text[]` column of the `p` CTE; the table filters with `?tag=<tag>` (`-` = no tag; also searched by `q`), the Tag column's chips set
+    that filter, its pencil does `PUT <route>/<code>/tags` (`{"tags": [...]}` replaces the list; same editor on the profile page,
+    `catasto/_subject_tags.html`), and "Gestisci i tag dei risultati" does `POST <route>/tags/bulk?<same query>` (`{"action","tag","expected"}`:
+    every row the filter matches, all pages; 409 if the count changed, max 5000). `GET <route>/tags.json` lists the tags with counts; the CSV has a Tag
+    column (` | `-separated). Automatic tags (PVP roles, owners of auctioned properties, politicians, companies unknown to the cadastre): `scripts/tag_subjects.py`, dry run by default, `docs/subject_tags.md`. When adding a column, add it to the `p` CTE,
     `SUBJECT_*_FIELDS`/`_SUBJECT_SORT_SQL`, `_profile_from_row`, the JS `defs`, and the CSV columns. Holdings and valori catastali (full and pro quota, IMU base) are stored in `subject_holding`
     (`database.refresh_subject_holdings`, refreshed by `save_response` for each subject search; `sister db backfill holdings` rebuilds all;
     `unvalued` = properties with no computable value, `unknown_share` = properties counted 1/1 for lack of a quota, `searched_at` = the search the
