@@ -4695,8 +4695,17 @@ async def find_responses(
     tipo_catasto: Optional[str] = None,
     limit: int = 50,
     offset: int = 0,
+    status: Optional[str] = None,
 ) -> list[dict]:
-    """Search stored responses by cadastral coordinates."""
+    """Search stored responses by cadastral coordinates.
+
+    ``status`` (``completed`` | ``failed`` | ``pending``) filters in SQL, so a page holds ``limit`` matching rows.
+    """
+    status_where = {
+        "completed": [Request.responded_at.is_not(None), Request.success.is_(True)],
+        "failed": [Request.responded_at.is_not(None), Request.success.is_(False)],
+        "pending": [Request.responded_at.is_(None)],
+    }.get((status or "").lower(), [])
     session_factory = _get_session_factory()
     async with session_factory() as session:
         stmt = (
@@ -4704,7 +4713,7 @@ async def find_responses(
             .outerjoin(RequestPayload, RequestPayload.request_id == _content_request_id())
             .outerjoin(CadastralUnit, Request.cadastral_unit_id == CadastralUnit.id)
             .outerjoin(IstatMunicipality, CadastralUnit.comune_id == IstatMunicipality.numeric_code)
-            .where(*_build_single_where(provincia, comune, foglio, particella, tipo_catasto))
+            .where(*_build_single_where(provincia, comune, foglio, particella, tipo_catasto), *status_where)
             .order_by(Request.created_at.desc())
             .limit(limit)
             .offset(offset)

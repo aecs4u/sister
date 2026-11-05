@@ -14,7 +14,6 @@ from fastapi.responses import JSONResponse
 
 from .database import count_responses, find_responses
 from .models import (
-    AuthenticationError,
     CaptchaRequired,
     ElencoImmobiliInput,
     ElencoImmobiliRequest,
@@ -284,8 +283,11 @@ async def visura_history(
     tipo_catasto: Optional[str] = None,
     limit: int = 50,
     offset: int = 0,
+    status: Optional[str] = None,
 ):
-    """Cerca nello storico delle visure salvate nel database."""
+    """Cerca nello storico delle visure salvate nel database (``status``: completed, failed o pending)."""
+    if status and status.lower() not in {"completed", "failed", "pending"}:
+        raise HTTPException(status_code=422, detail="status deve essere completed, failed o pending")
     results = await find_responses(
         provincia=provincia,
         comune=comune,
@@ -294,6 +296,7 @@ async def visura_history(
         tipo_catasto=tipo_catasto,
         limit=min(limit, 200),
         offset=offset,
+        status=status,
     )
     return JSONResponse({"count": len(results), "results": results})
 

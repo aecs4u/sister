@@ -589,6 +589,23 @@ async def test_find_responses_filter_by_tipo_catasto():
 
 
 @pytest.mark.asyncio
+async def test_find_responses_filters_by_status_in_sql():
+    for rid, par in (("done", "1"), ("bad", "2"), ("waiting", "3")):
+        await database.save_request(
+            request_id=rid, request_type="visura", tipo_catasto="F", provincia="Roma", comune="ROMA", foglio="1", particella=par
+        )
+    await database.save_response(request_id="done", success=True, tipo_catasto="F", data={"ok": True})
+    await database.save_response(request_id="bad", success=False, tipo_catasto="F", data={}, error="portal down")
+
+    assert {r["request_id"] for r in await database.find_responses(status="completed")} == {"done"}
+    assert {r["request_id"] for r in await database.find_responses(status="failed")} == {"bad"}
+    assert {r["request_id"] for r in await database.find_responses(status="pending")} == {"waiting"}
+    assert len(await database.find_responses()) == 3
+    # the limit counts matching rows: a page of one failed row is found even though newer rows exist
+    assert [r["request_id"] for r in await database.find_responses(status="failed", limit=1)] == ["bad"]
+
+
+@pytest.mark.asyncio
 async def test_find_responses_combined_filters():
     await _seed_search_data()
     results = await database.find_responses(provincia="Trieste", tipo_catasto="F")

@@ -540,9 +540,12 @@ class VisuraClient:
         tipo_catasto: str | None = None,
         limit: int = 50,
         offset: int = 0,
+        status: str | None = None,
     ) -> dict:
-        """Query response history (GET /api/v1/visura/history)."""
+        """Query response history (GET /api/v1/visura/history); ``status`` = completed | failed | pending."""
         params: dict[str, Any] = {"limit": limit, "offset": offset}
+        if status:
+            params["status"] = status
         if provincia:
             params["provincia"] = provincia
         if comune:

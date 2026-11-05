@@ -1324,9 +1324,10 @@ async def _visura_history(
     tipo_catasto: Optional[str] = None,
     limit: int = 50,
     offset: int = 0,
+    status: Optional[str] = None,
     _: None = Depends(require_api_key_dependency),
 ):
-    return await visura_history(provincia, comune, foglio, particella, tipo_catasto, limit, offset)
+    return await visura_history(provincia, comune, foglio, particella, tipo_catasto, limit, offset, status)
 
 
 LONG_POLL_MAX_SECONDS = 30.0
