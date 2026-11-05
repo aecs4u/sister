@@ -198,10 +198,21 @@
   {{ document_parcel_map(result.land_registry_map) }}
   {{ optional_data_notice(result.land_registry_map) }}
 
+  {% if result.kind != 'dossier' and result.status in ('failed', 'error', 'no_match') %}
+  <div class="d-flex flex-wrap gap-2 mb-4 no-print">
+    {% if result.request_type %}<a class="btn btn-outline-secondary btn-sm" href="/results?request_type={{ result.request_type|urlencode }}&amp;status={{ result.status|urlencode }}"><i class="fas fa-list me-1" aria-hidden="true"></i>Altre richieste dello stesso tipo e stato</a>{% endif %}
+    <a class="btn btn-outline-primary btn-sm" href="/forms"><i class="fas fa-clipboard-list me-1" aria-hidden="true"></i>Invia una nuova richiesta</a>
+  </div>
+  {% endif %}
+
   {% if result.status == 'pending' %}
   <div class="alert alert-info border-0 shadow-sm">
     <i class="fas fa-hourglass-half me-2"></i>
     La richiesta esiste, ma non è ancora stata salvata una risposta. Riprova più tardi.
+  </div>
+  <div class="d-flex flex-wrap gap-2 mb-4 no-print">
+    <a class="btn btn-outline-primary btn-sm" href="{{ request.url.path }}"><i class="fas fa-rotate me-1" aria-hidden="true"></i>Aggiorna la pagina</a>
+    <a class="btn btn-outline-secondary btn-sm" href="/results?status=pending"><i class="fas fa-hourglass-half me-1" aria-hidden="true"></i>Tutte le richieste in attesa</a>
   </div>
 
   {% elif result.data %}
@@ -210,7 +221,23 @@
   {{ jump_nav(result.sections) }}
 
   {# ── Data sections ─────────────────────────────────────────────────────── #}
+  {# Scalar sections (totals, skipped counts, ...) were one card each; they read better as one summary. #}
+  {% set scalar_sections = result.sections | selectattr('kind', 'equalto', 'value') | list %}
+  {% if scalar_sections|length > 1 %}
+  <section class="card border-0 shadow-sm mb-4 result-section" aria-labelledby="result-summary-heading">
+    <div class="card-header"><h2 class="h5 mb-0" id="result-summary-heading"><i class="fas fa-clipboard-list text-secondary me-2" aria-hidden="true"></i>Riepilogo</h2></div>
+    <div class="card-body">
+      <dl class="row mb-0">
+        {% for section in scalar_sections %}
+        <dt class="col-sm-4 col-lg-3">{{ section.title }}</dt>
+        <dd class="col-sm-8 col-lg-9">{{ section.value if section.value not in (None, '') else '-' }}</dd>
+        {% endfor %}
+      </dl>
+    </div>
+  </section>
+  {% endif %}
   {% for section in result.sections %}
+  {% if not (section.kind == 'value' and scalar_sections|length > 1) %}
   <div id="section-{{ section.dom_id }}"
        class="card border-0 shadow-sm mb-4 result-section {{ section_border(section.name, section.kind) }}">
     <div class="card-header">
@@ -280,6 +307,7 @@
     </div>
     {% endif %}
   </div>
+  {% endif %}
   {% endfor %}
 
   {# ── Downloaded Documents (DB-backed) ─────────────────────────────────── #}
@@ -300,17 +328,23 @@
   </div>
   {% endif %}
 
-  {# ── Page Visits ───────────────────────────────────────────────────────── #}
+  {# ── Page Visits (a debug log of the portal pages visited: collapsed, the table is built on first open) ── #}
   {% if result.page_visit_rows %}
   <div class="card border-0 shadow-sm mb-4">
-    <div class="card-header">
+    <div class="card-header d-flex flex-wrap justify-content-between align-items-center gap-2">
       <h2 class="h5 mb-0">
-        <i class="fas fa-route text-warning me-2"></i>
+        <i class="fas fa-route text-warning me-2" aria-hidden="true"></i>
         Accessi alle pagine ({{ result.page_visit_rows|length }})
       </h2>
+      <button class="btn btn-sm btn-outline-secondary" type="button" data-bs-toggle="collapse"
+              data-bs-target="#page-visits-body" aria-expanded="false" aria-controls="page-visits-body">
+        <i class="fas fa-eye me-1" aria-hidden="true"></i>Mostra il registro
+      </button>
     </div>
-    <div class="card-body p-0">
-      <div id="tabulator-page-visits"></div>
+    <div class="collapse" id="page-visits-body">
+      <div class="card-body p-0">
+        <div id="tabulator-page-visits"></div>
+      </div>
     </div>
   </div>
   {% endif %}
@@ -1191,7 +1225,20 @@
     {% if result and result.page_visit_rows %}
     (function() {
         var el = document.getElementById("tabulator-page-visits");
-        if (!el) return;
+        var body = document.getElementById("page-visits-body");
+        if (!el || !body) return;
+        var built = false;
+        var toggle = document.querySelector('[data-bs-target="#page-visits-body"]');
+        body.addEventListener("hidden.bs.collapse", function() {
+            if (toggle) toggle.innerHTML = '<i class="fas fa-eye me-1" aria-hidden="true"></i>Mostra il registro';
+        });
+        body.addEventListener("shown.bs.collapse", function() {
+            if (toggle) toggle.innerHTML = '<i class="fas fa-eye-slash me-1" aria-hidden="true"></i>Nascondi il registro';
+            if (built) return;
+            built = true;
+            buildPageVisits();
+        });
+        function buildPageVisits() {
         new Tabulator(el, Object.assign({}, commonOpts, {
             data: {{ result.page_visit_rows | tojson }},
             columns: [
@@ -1211,6 +1258,7 @@
                 {title: "Errori",     field: "Errors",    minWidth: headerMinWidth("Errori"),    headerFilter: "input", sorter: "string"},
             ],
         }));
+        }
     })();
     {% endif %}
 })();

@@ -1329,12 +1329,19 @@ async def _visura_history(
     return await visura_history(provincia, comune, foglio, particella, tipo_catasto, limit, offset)
 
 
+LONG_POLL_MAX_SECONDS = 30.0
+
+
 @api_v1_router.get("/visura/{request_id}")
 async def _ottieni_visura(
     request_id: str,
+    wait: float = 0,
     service: VisuraService = Depends(get_visura_service),
     _: None = Depends(require_api_key_dependency),
 ):
+    """``?wait=N`` (at most 30): hold the call until a queued request has its answer, instead of answering "processing"."""
+    if wait > 0:
+        await service.wait_for_response(request_id, min(wait, LONG_POLL_MAX_SECONDS))
     return await ottieni_visura(request_id, service)
 
 

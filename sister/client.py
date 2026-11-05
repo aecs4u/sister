@@ -5,9 +5,10 @@ Configuration is read from environment variables:
 
     VISURA_API_URL        — Base URL (default: http://localhost:8025)
     VISURA_API_KEY        — Optional X-API-Key header value
-    VISURA_API_TIMEOUT    — HTTP request timeout in seconds (default: 30)
-    VISURA_POLL_INTERVAL  — Seconds between polls (default: 5)
+    VISURA_API_TIMEOUT    — HTTP request timeout in seconds (default: 120)
+    VISURA_POLL_INTERVAL  — Seconds between polls when the service cannot hold a poll open (default: 5)
     VISURA_POLL_TIMEOUT   — Max seconds to wait for a result (default: 300)
+    VISURA_LONG_POLL      — Seconds the service may hold one poll open until the answer is ready (default: 25, 0 = off)
 """
 
 from __future__ import annotations
@@ -31,6 +32,7 @@ DEFAULT_BASE_URL = "http://localhost:8025"
 DEFAULT_TIMEOUT = 120.0
 DEFAULT_POLL_INTERVAL = 5.0
 DEFAULT_POLL_TIMEOUT = 300.0
+DEFAULT_LONG_POLL = 25.0
 API_V1_PREFIX = "/api/v1"
 _VERSIONED_API_ROOTS = (
     "/visura",
@@ -96,25 +98,15 @@ class VisuraClient:
         self.timeout = timeout or float(os.getenv("VISURA_API_TIMEOUT", DEFAULT_TIMEOUT))
         self.poll_interval = poll_interval or float(os.getenv("VISURA_POLL_INTERVAL", DEFAULT_POLL_INTERVAL))
         self.poll_timeout = poll_timeout or float(os.getenv("VISURA_POLL_TIMEOUT", DEFAULT_POLL_TIMEOUT))
+        self.long_poll = float(os.getenv("VISURA_LONG_POLL", DEFAULT_LONG_POLL))
         self._client: httpx.AsyncClient | None = None
 
     # -- lifecycle ------------------------------------------------------------
 
     def _get_client(self) -> httpx.AsyncClient:
-        # If a client was injected (e.g. tests) or set via context manager, reuse it
-        if self._client is not None and not self._client.is_closed:
-            return self._client
-        # Otherwise create a fresh client per call — the CLI uses multiple
-        # asyncio.run() calls which close the event loop between invocations,
-        # invalidating any persistent connection pool.
-        headers: dict[str, str] = {"Content-Type": "application/json"}
-        if self.api_key:
-            headers["X-API-Key"] = self.api_key
-        return httpx.AsyncClient(
-            base_url=self.base_url,
-            headers=headers,
-            timeout=self.timeout,
-        )
+        """A new HTTP client. Outside ``async with client:`` each request uses its own (the CLI calls ``asyncio.run()``
+        several times, and a pool cannot outlive its event loop); inside it, one client serves every request."""
+        return httpx.AsyncClient(base_url=self.base_url, headers=self._headers(), timeout=self.timeout)
 
     async def close(self) -> None:
         """Close the underlying HTTP client."""
@@ -123,6 +115,8 @@ class VisuraClient:
             self._client = None
 
     async def __aenter__(self):
+        if self._client is None or self._client.is_closed:
+            self._client = self._get_client()
         return self
 
     async def __aexit__(self, *exc):
@@ -154,8 +148,11 @@ class VisuraClient:
                 params["reuse_cached"] = "true"
             if _REUSE_PREVIOUS.get():
                 params["reuse_previous"] = "true"
-        async with self._get_client() as client:
-            resp = await client.request(method, _versioned_api_path(path), json=json, params=params)
+        if self._client is not None and not self._client.is_closed:
+            resp = await self._client.request(method, _versioned_api_path(path), json=json, params=params)
+        else:
+            async with self._get_client() as client:
+                resp = await client.request(method, _versioned_api_path(path), json=json, params=params)
         if resp.status_code >= 400:
             detail = resp.text
             try:
@@ -445,9 +442,14 @@ class VisuraClient:
                 query[k] = v
         return await self._request("POST", f"/visura/{search_type}", params=query, force=force)
 
-    async def get_result(self, request_id: str) -> dict:
-        """Poll a single request result (GET /api/v1/visura/{request_id})."""
-        return await self._request("GET", f"/visura/{request_id}")
+    async def get_result(self, request_id: str, *, wait: float = 0) -> dict:
+        """Poll a single request result (GET /api/v1/visura/{request_id}).
+
+        ``wait`` > 0 lets the service hold the call open until the answer is ready (at most that many seconds), so a
+        result is seen when it arrives instead of at the next poll. An older service ignores it and answers at once.
+        """
+        params = {"wait": f"{wait:g}"} if wait >= 1 else None
+        return await self._request("GET", f"/visura/{request_id}", params=params)
 
     async def submit(
         self, command: str, params: dict[str, Any], *, force: bool = False, reuse_previous: bool = False
@@ -514,14 +516,19 @@ class VisuraClient:
         start = time.monotonic()
 
         while True:
-            result = await self.get_result(request_id)
+            remaining = timeout - (time.monotonic() - start)
+            hold = max(0.0, min(self.long_poll, remaining, self.timeout - 5))
+            asked = time.monotonic()
+            result = await (self.get_result(request_id, wait=hold) if hold >= 1 else self.get_result(request_id))
             status = result.get("status", "")
             if status in ("completed", "error", "expired", "needs_human"):
                 return result
             elapsed = time.monotonic() - start
             if elapsed + interval > timeout:
                 raise TimeoutError(f"Timed out after {elapsed:.0f}s waiting for {request_id} (last status: {status})")
-            await asyncio.sleep(interval)
+            if time.monotonic() - asked < max(1.0, hold * 0.8):
+                # the service answered at once (no long poll, or the request is not in its queue): wait as before
+                await asyncio.sleep(interval)
 
     async def history(
         self,

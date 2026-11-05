@@ -728,6 +728,50 @@ async def _collapse_streamed_documents(documents: AsyncIterable[dict]) -> tuple[
     return accumulator.finish(), raw_count
 
 
+_DOCUMENT_SEARCH_FIELDS = (
+    "oggetto",
+    "display_name",
+    "filename",
+    "document_type",
+    "visura_subtype",
+    "tipo_catasto",
+    "provincia",
+    "comune",
+    "foglio",
+    "particella",
+    "subalterno",
+    "sezione_urbana",
+    "protocollo",
+    "queried_fiscal_code",
+    "search_scope_label",
+)
+
+
+def _document_search_text(document: dict) -> str:
+    """Casefolded text a document is found by: its object, file name, place, parcel, protocol and codice fiscale."""
+    parts = [str(document.get(field) or "") for field in _DOCUMENT_SEARCH_FIELDS]
+    try:
+        parts.append(_extract_cf(document) or "")
+    except Exception:  # noqa: BLE001 - a malformed row must not break the whole catalogue search
+        pass
+    return " ".join(part for part in parts if part).casefold()
+
+
+def _search_terms(query: str) -> list[str]:
+    """The words of a search box, casefolded: every one must match (``lugo 103`` = comune Lugo and foglio 103)."""
+    return [term for term in str(query or "").casefold().split() if term][:8]
+
+
+def _logical_document_matches(document: dict, terms: list[str]) -> bool:
+    """True when every search term appears in the logical document or in one of its attached files."""
+    if not terms:
+        return True
+    text = _document_search_text(document)
+    for attached in document.get("files") or []:
+        text += " " + str(attached.get("filename") or "").casefold()
+    return all(term in text for term in terms)
+
+
 async def _iter_documents_of_type(documents: AsyncIterable[dict], document_type: str) -> AsyncIterator[dict]:
     """Stream all documents or only rows matching the catalog's type filter."""
     async for document in documents:
@@ -741,8 +785,14 @@ async def _page_streamed_documents(
     page_size: int = _DOCUMENTS_PAGE_SIZE,
     *,
     include_all_ipotecari: bool = False,
+    search: str = "",
 ) -> tuple[list[dict], int, int, int, int, int, list[dict]]:
-    """Group a streamed catalogue on disk and materialize only one logical page."""
+    """Group a streamed catalogue on disk and materialize only one logical page.
+
+    ``search`` keeps the logical documents (a P7M and its PDFs count as one) in which every word appears; the total
+    and the pages are those of the matching documents.
+    """
+    terms = _search_terms(search)
     import sqlite3
     import tempfile
 
@@ -764,7 +814,8 @@ async def _page_streamed_documents(
                     primary_rank INTEGER NOT NULL,
                     primary_document_id INTEGER NOT NULL,
                     primary_created_at TEXT NOT NULL,
-                    first_sequence INTEGER NOT NULL
+                    first_sequence INTEGER NOT NULL,
+                    search_text TEXT NOT NULL DEFAULT ''
                 );
                 CREATE TABLE catalog_files (
                     group_id INTEGER NOT NULL,
@@ -801,6 +852,7 @@ async def _page_streamed_documents(
                 )
                 rank = _LogicalDocumentAccumulator._format_rank(document)
                 document_id = int(document.get("id") or 0)
+                search_text = _document_search_text(document) if terms else ""
                 existing = connection.execute(
                     "SELECT id, primary_rank, primary_document_id FROM logical_groups WHERE identity = ?",
                     (identity,),
@@ -810,8 +862,8 @@ async def _page_streamed_documents(
                         """
                         INSERT INTO logical_groups (
                             identity, primary_json, primary_rank, primary_document_id,
-                            primary_created_at, first_sequence
-                        ) VALUES (?, ?, ?, ?, ?, ?)
+                            primary_created_at, first_sequence, search_text
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?)
                         """,
                         (
                             identity,
@@ -820,6 +872,7 @@ async def _page_streamed_documents(
                             document_id,
                             str(document.get("created_at") or ""),
                             raw_count,
+                            search_text,
                         ),
                     )
                     group_id = int(cursor.lastrowid)
@@ -829,6 +882,11 @@ async def _page_streamed_documents(
                     )
                 else:
                     group_id = int(existing[0])
+                    if search_text:
+                        connection.execute(
+                            "UPDATE logical_groups SET search_text = search_text || ' ' || ? WHERE id = ?",
+                            (search_text, group_id),
+                        )
                     if (rank, document_id) < (int(existing[1]), int(existing[2])):
                         connection.execute(
                             """
@@ -951,7 +1009,8 @@ async def _page_streamed_documents(
                     primary_json TEXT NOT NULL,
                     primary_created_at TEXT NOT NULL,
                     primary_document_id INTEGER NOT NULL,
-                    first_sequence INTEGER NOT NULL
+                    first_sequence INTEGER NOT NULL,
+                    search_text TEXT NOT NULL DEFAULT ''
                 );
                 """
             )
@@ -964,6 +1023,7 @@ async def _page_streamed_documents(
                         groups.primary_created_at,
                         groups.primary_document_id,
                         groups.first_sequence,
+                        groups.search_text,
                         ROW_NUMBER() OVER (
                             PARTITION BY roots.root_id
                             ORDER BY groups.primary_rank, groups.primary_document_id, groups.first_sequence
@@ -972,14 +1032,15 @@ async def _page_streamed_documents(
                     JOIN group_roots roots ON roots.group_id = groups.id
                 )
                 INSERT INTO logical_documents (
-                    root_id, primary_json, primary_created_at, primary_document_id, first_sequence
+                    root_id, primary_json, primary_created_at, primary_document_id, first_sequence, search_text
                 )
                 SELECT
                     root_id,
                     MAX(CASE WHEN choice = 1 THEN primary_json END),
                     MAX(CASE WHEN choice = 1 THEN primary_created_at END),
                     MAX(CASE WHEN choice = 1 THEN primary_document_id END),
-                    MIN(first_sequence)
+                    MIN(first_sequence),
+                    GROUP_CONCAT(search_text, ' ')
                 FROM ranked
                 GROUP BY root_id
                 """
@@ -988,7 +1049,14 @@ async def _page_streamed_documents(
                 "CREATE INDEX ix_logical_documents_order ON logical_documents(primary_created_at, primary_document_id)"
             )
 
-            total = int(connection.execute("SELECT COUNT(*) FROM logical_documents").fetchone()[0])
+            # instr() instead of LIKE: no wildcard escaping, and the words are already casefolded.
+            match_sql = "".join(" AND instr(search_text, ?) > 0" for _ in terms)
+            match_args = tuple(terms)
+            total = int(
+                connection.execute(
+                    f"SELECT COUNT(*) FROM logical_documents WHERE 1 = 1{match_sql}", match_args
+                ).fetchone()[0]
+            )
             inspection_rows = []
             if include_all_ipotecari:
                 for root_id, primary_json in connection.execute(
@@ -1007,10 +1075,11 @@ async def _page_streamed_documents(
                 """
                 SELECT root_id, primary_json
                 FROM logical_documents
+                WHERE 1 = 1""" + match_sql + """
                 ORDER BY primary_created_at DESC, primary_document_id DESC, first_sequence
                 LIMIT ? OFFSET ?
                 """,
-                (page_size, page_offset),
+                (*match_args, page_size, page_offset),
             ).fetchall()
             roots = [int(row[0]) for row in selected]
             inspection_roots = [root_id for root_id, _ in inspection_rows]
@@ -3097,6 +3166,26 @@ def _dom_id(value: str) -> str:
     return safe or "section"
 
 
+def _drop_mirrored_sections(sections: list[dict]) -> list[dict]:
+    """Remove the ``immobili`` / ``intestati`` tables that repeat ``results`` / ``results_intestati`` row for row.
+
+    The master/detail pair keeps the same rows plus the join column that links an immobile to its owners, so showing
+    both made the page print every property and owner twice (three times with the database-backed tables).
+    """
+    by_name = {section.get("name"): section for section in sections}
+
+    def same_rows(mirror: str, original: str) -> bool:
+        a, b = by_name.get(mirror), by_name.get(original)
+        return bool(a and b and a.get("count") == b.get("count"))
+
+    drop = set()
+    if same_rows("immobili", "results"):
+        drop.add("immobili")
+    if same_rows("intestati", "results_intestati"):
+        drop.add("intestati")
+    return [section for section in sections if section.get("name") not in drop] if drop else sections
+
+
 def _build_result_sections(data: Optional[dict]) -> list[dict]:
     """Normalize arbitrary response payloads into render-friendly sections."""
     if not isinstance(data, dict):
@@ -3409,7 +3498,7 @@ def _build_result_sections(data: Optional[dict]) -> list[dict]:
                     "value": value,
                 }
             )
-    return sections
+    return _drop_mirrored_sections(sections)
 
 
 # ---------------------------------------------------------------------------
@@ -7724,7 +7813,17 @@ def _read_planimetria_geojson(file_path: str) -> dict | None:
     if m:
         epsg = int(m.group(1))
 
+    # Monte Mario / Gauss-Boaga (3003 Ovest, 3004 Est) is what SISTER exports by default; without it the
+    # fallback (UTM 32) put a Bologna sheet in Bulgaria. towgs84 = IGM's national 7-parameter shift.
+    _GAUSS_BOAGA = "+proj=tmerc +lat_0=0 +lon_0={lon0} +k=0.9996 +x_0={x0} +y_0=0 +ellps=intl " \
+        "+towgs84=-104.1,-49.1,-9.9,0.971,-2.917,0.714,-11.68 +units=m +no_defs"
     _PROJ4 = {
+        3003: _GAUSS_BOAGA.format(lon0=9, x0=1500000),
+        3004: _GAUSS_BOAGA.format(lon0=15, x0=2520000),
+        6707: "+proj=utm +zone=32 +ellps=GRS80 +units=m +no_defs",
+        6708: "+proj=utm +zone=33 +ellps=GRS80 +units=m +no_defs",
+        25832: "+proj=utm +zone=32 +ellps=GRS80 +units=m +no_defs",
+        25833: "+proj=utm +zone=33 +ellps=GRS80 +units=m +no_defs",
         7791: "+proj=utm +zone=32 +ellps=GRS80 +units=m +no_defs",
         7792: "+proj=utm +zone=33 +ellps=GRS80 +units=m +no_defs",
         32632: "+proj=utm +zone=32 +datum=WGS84 +units=m +no_defs",
@@ -9574,6 +9673,7 @@ async def web_documents(
     view: str = "",
     page: int = 1,
     favorites: bool = False,
+    q: str = "",
     user=Depends(_require_auth),
 ):
     """Documents hub — single-step query responses.
@@ -9588,10 +9688,14 @@ async def web_documents(
         template: force a viewer template, e.g. ``?template=result_detail`` for
             the exhaustive field-by-field view.
         page: one-based page number for the document hub's newest-first list.
+        q: words to search in every document (object, file name, place, parcel, protocol, codice fiscale), not only
+            in the shown page; every word must match.
     """
 
     theme = _get_theme(request)
     document_type_filter = str(request.query_params.get("type") or "").strip().casefold()[:64]
+    search_query = " ".join(str(q or "").split())[:80]
+    search_terms = _search_terms(search_query)
 
     # Normalize trailing slash (e.g. /documents/21/ → "21")
     path = path.strip("/")
@@ -9825,7 +9929,7 @@ async def web_documents(
     favorite_user = _favorite_user_key(user)
     favorites_only = bool(favorites and favorite_user)
     include_full_inspections = (
-        active_view == "categories" and not document_type_filter and not favorites_only
+        active_view == "categories" and not document_type_filter and not favorites_only and not search_terms
     )
     favorite_document_ids: set[int] = set()
     inspection_documents: list[dict] = []
@@ -9857,6 +9961,7 @@ async def web_documents(
                 _iter_documents_of_type(iter_all_documents(), document_type_filter),
                 page,
                 include_all_ipotecari=include_full_inspections,
+                search=search_query,
             )
             logical = None
         else:
@@ -9877,6 +9982,9 @@ async def web_documents(
             for document in logical
             if str(document.get("document_type") or "").casefold() == document_type_filter
         ]
+        raw_document_file_count = sum(document.get("n_files") or 1 for document in logical)
+    if logical is not None and search_terms:
+        logical = [document for document in logical if _logical_document_matches(document, search_terms)]
         raw_document_file_count = sum(document.get("n_files") or 1 for document in logical)
     if favorite_user and not favorites_only:
         from .database import get_document_favorite_ids
@@ -9904,7 +10012,7 @@ async def web_documents(
             logical = [document for document in logical if document.get("is_favorite")]
         document_file_count = (
             sum(document.get("n_files") or 1 for document in logical)
-            if favorites_only or document_type_filter
+            if favorites_only or document_type_filter or search_terms
             else raw_document_file_count
         )
         page_documents, page, page_count, page_offset = _paginate_documents(logical, page)
@@ -10058,6 +10166,7 @@ async def web_documents(
         page_start=document_page_start,
         page_end=document_page_end,
         document_type_filter=document_type_filter,
+        search_query=search_query,
         document_type_label={
             "ispezione_ipotecaria": "Ispezioni ipotecarie",
             "nota_trascrizione_iscrizione": "Note di trascrizione e iscrizione",

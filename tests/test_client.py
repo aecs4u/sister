@@ -74,13 +74,71 @@ def test_headers_omit_api_key_when_empty():
     assert "X-API-Key" not in headers
 
 
-def test_client_reuses_injected_session():
+@pytest.mark.asyncio
+async def test_client_reuses_injected_session_and_keeps_it_open():
+    # it used to be closed after the first request (``async with`` around the shared client)
+    calls = []
+
+    def handler(request):
+        calls.append(request.url.path)
+        return httpx.Response(200, json={"status": "healthy"})
+
     c = VisuraClient(base_url="http://x")
-    # When _client is injected (e.g. tests), it's reused
-    c._client = httpx.AsyncClient(base_url="http://x")
-    c1 = c._get_client()
-    c2 = c._get_client()
-    assert c1 is c2
+    _inject_transport(c, handler)
+    shared = c._client
+    await c.health()
+    await c.health()
+    assert len(calls) == 2 and c._client is shared and not shared.is_closed
+
+
+@pytest.mark.asyncio
+async def test_async_with_uses_one_client_for_every_request(monkeypatch):
+    made = []
+
+    def factory():
+        made.append(httpx.AsyncClient(base_url="http://x", transport=httpx.MockTransport(
+            lambda request: httpx.Response(200, json={"status": "healthy"})
+        )))
+        return made[-1]
+
+    c = VisuraClient(base_url="http://x")
+    monkeypatch.setattr(c, "_get_client", factory)
+    async with c:
+        await c.health()
+        await c.health()
+    assert len(made) == 1 and made[0].is_closed
+
+
+@pytest.mark.asyncio
+async def test_wait_for_result_asks_the_service_to_hold_the_poll(monkeypatch):
+    seen = []
+
+    def handler(request):
+        seen.append(request.url.params.get("wait"))
+        status = "completed" if len(seen) > 1 else "processing"
+        return httpx.Response(200, json={"request_id": "r1", "status": status})
+
+    monkeypatch.setenv("VISURA_LONG_POLL", "20")
+    c = VisuraClient(base_url="http://x", timeout=60, poll_interval=0.01, poll_timeout=100)
+    _inject_transport(c, handler)
+    result = await c.wait_for_result("r1")
+    assert result["status"] == "completed"
+    assert seen == ["20", "20"]
+
+
+@pytest.mark.asyncio
+async def test_wait_for_result_never_holds_longer_than_the_http_timeout(monkeypatch):
+    seen = []
+
+    def handler(request):
+        seen.append(request.url.params.get("wait"))
+        return httpx.Response(200, json={"request_id": "r1", "status": "completed"})
+
+    monkeypatch.setenv("VISURA_LONG_POLL", "25")
+    c = VisuraClient(base_url="http://x", timeout=5, poll_timeout=100)
+    _inject_transport(c, handler)
+    await c.wait_for_result("r1")
+    assert seen == [None]  # 5 s timeout: no room for a held poll
 
 
 def test_client_creates_fresh_when_no_injection():

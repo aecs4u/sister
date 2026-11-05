@@ -1298,6 +1298,20 @@ def workflow(
 # -- batch command (supports all query types) ---------------------------------
 
 
+EXIT_SESSION_EXPIRED = 75  # EX_TEMPFAIL: `batch run-session` stops at once and asks for a new login
+
+
+def _parse_stop_at(value: str):
+    """``HH:MM`` (today, local time) or an ISO date-time."""
+    from datetime import datetime
+
+    value = value.strip()
+    if len(value) <= 5 and ":" in value:
+        hour, minute = (int(part) for part in value.split(":"))
+        return datetime.now().replace(hour=hour, minute=minute, second=0, microsecond=0)
+    return datetime.fromisoformat(value)
+
+
 def _batch_printer(total: int):
     """Console progress for the batch engine's events."""
 
@@ -1371,6 +1385,12 @@ def batch(
     poll_timeout: Optional[float] = typer.Option(None, "--poll-timeout", help="Secondi di attesa massima per richiesta"),
     on_error: Optional[str] = typer.Option(None, "--on-error", help="'continue' (default) o 'stop' al primo errore"),
     skip_invalid: bool = typer.Option(False, "--skip-invalid", help="Esegue le righe valide anche se altre non lo sono"),
+    stop_at: Optional[str] = typer.Option(
+        None,
+        "--stop-at",
+        help="Ora (HH:MM, oggi) o data ISO dopo cui non parte nessuna nuova riga: quella in corso finisce e resta nel "
+        "journal, le altre restano da fare (--resume). Usato da `batch run-session` per chiudere prima della sessione",
+    ),
 ):
     """Invia piu' query da un file JSON, Markdown o CSV, con validazione preventiva, retry e ripresa.
 
@@ -1452,6 +1472,12 @@ def batch(
     if journal_path and not resume and journal_path.exists():
         console.print(f"[dim]Appending to existing journal {journal_path} (use --resume to continue it).[/dim]")
 
+    try:
+        stop_time = _parse_stop_at(stop_at) if stop_at else None
+    except ValueError as e:
+        console.print(f"[red]Invalid --stop-at: {e}[/red]")
+        raise typer.Exit(2)
+
     client = VisuraClient()
     runner = batch_engine.BatchRunner(
         client,
@@ -1460,6 +1486,7 @@ def batch(
         resume=resume,
         confirm=(lambda result: _confirm_download_again(result, None)) if options.reuse == "ask" else None,
         emit=_batch_printer(len(plan)),
+        stop_at=stop_time,
     )
 
     async def go():
@@ -1481,6 +1508,14 @@ def batch(
     )
     if output:
         _write_output(report.to_dict(), output)
+    if report.stopped == batch_engine.STOPPED_SESSION_EXPIRED:
+        console.print(
+            "[red]La sessione SISTER e' scaduta: le righe rimaste non sono state inviate.[/red] "
+            "Nuovo login (sister app login), poi rilancia con --resume."
+        )
+        raise typer.Exit(EXIT_SESSION_EXPIRED)
+    if report.stopped == batch_engine.STOPPED_DEADLINE:
+        console.print("[yellow]--stop-at raggiunto: le righe rimaste restano da fare (--resume).[/yellow]")
     if report.failed:
         raise typer.Exit(1)
 

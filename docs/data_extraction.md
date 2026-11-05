@@ -157,3 +157,19 @@ so a subject first met by code (name = code, `/persons` without a name) is named
 that lists several homonyms stores **all** of them, not only the one the flow opens. A company code with a single record names the
 subject; with several records (ANAS-like) the records are stored and the subject keeps its code as name.
 Parsers: `result_parsers.parse_omonimo_value` / `omonimo_details`; storage: `database._persist_listed_subjects`.
+
+
+## Ownership history (`ownership_history`, `property_state_history`)
+
+Every saved answer is also an *observation* of the units it lists. `sister/ownership_history.py` keeps them as periods:
+an identical observation extends the open period (`last_seen_at`, `seen_count`), a different owner, right, share or
+classamento/rendita opens a new one, and a period ends (`ended_at`) only when an answer that lists everything stops showing it
+(the Intestati page of the unit, or a complete national E-catasto subject search, every registry record included). An answer
+identical to the previous one of the same query (`cache_key`, same `request.content_hash`) is not stored again: the request keeps
+its date and `same_as_request_id` points at the request with the content; the readers follow it (`database._content_request_id`).
+`sister db backfill history` rebuilds both tables from every stored answer, oldest first (non-destructive).
+
+The person/company page shows "Variazioni di proprietà" (`catasto/_ownership_history.html`, `database.subject_ownership_history`):
+for each unit that changed hands, the acts of its latest visura storica (`ownership_mutation`: costituzioni, atti, successioni with
+the owners each left; `mutation_date` falls back to the "del GG/MM/AAAA" of the description, `result_parsers.mutation_date_from_source`)
+and the owners the searches saw, with when they stopped being listed.

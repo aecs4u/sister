@@ -10,7 +10,7 @@
 {% macro documents_pager() %}
 {% if page_count > 1 %}
 <nav class="d-flex flex-wrap justify-content-between align-items-center gap-2 my-3" aria-label="Pagine dei documenti">
-    <p class="small text-muted mb-0">Mostrati {{ page_start }}–{{ page_end }} di {{ total }} documenti · {{ page_size }} per pagina. Filtri e ordinamento riguardano la pagina corrente.</p>
+    <p class="small text-muted mb-0">Mostrati {{ page_start }}–{{ page_end }} di {{ total }} documenti · {{ page_size }} per pagina. I filtri nelle tabelle riguardano solo questa pagina: per cercare in tutti i documenti usa la ricerca qui sopra.</p>
     <ul class="pagination pagination-sm mb-0 flex-wrap">
         {% if page > 1 %}
         <li class="page-item"><a class="page-link" href="{{ request.url.include_query_params(page=1) }}" aria-label="Prima pagina">Prima</a></li>
@@ -31,6 +31,8 @@
 </nav>
 {% endif %}
 {% endmacro %}
+
+{% macro view_href(view) %}{% set parts = [] %}{% if view %}{% set _ = parts.append('view=' ~ view) %}{% endif %}{% if search_query %}{% set _ = parts.append('q=' ~ (search_query|urlencode)) %}{% endif %}{% if document_type_filter %}{% set _ = parts.append('type=' ~ (document_type_filter|urlencode)) %}{% endif %}{% if favorites_only %}{% set _ = parts.append('favorites=true') %}{% endif %}/documents{% if parts %}?{{ parts|join('&') }}{% endif %}{% endmacro %}
 
 {% block extra_css %}
 {{ super() }}
@@ -53,7 +55,7 @@
                 <h1 class="display-6 fw-bold mb-2"><i class="fas fa-folder-tree me-3"></i>Documenti</h1>
                 <p class="lead mb-0 opacity-75">
                     <strong>{{ total }}</strong> {% if can_admin(user) %}{{ 'documento indicizzato' if total == 1 else 'documenti indicizzati' }}{% else %}{{ 'documento disponibile' if total == 1 else 'documenti disponibili' }}{% endif %}
-                    {% if document_file_count and document_file_count != total %}<span class="opacity-75">· {{ document_file_count }} file (PDF allegati inclusi)</span>{% endif %}
+                    {% if document_file_count and document_file_count != total and not search_query %}<span class="opacity-75">· {{ document_file_count }} file (PDF allegati inclusi)</span>{% endif %}
                 </p>
             </div>
             <div class="d-flex flex-wrap gap-2 align-items-center">
@@ -101,12 +103,32 @@
 <div id="export-toast-container" style="position:fixed;top:1.2rem;right:1.2rem;z-index:9999;min-width:320px"></div>
 
 <div class="container-fluid documents-hub py-3">
-    <div class="d-flex justify-content-end mb-2 no-print">
+    <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-2 no-print">
+        <form method="get" action="/documents" role="search" class="documents-search flex-grow-1" aria-label="Cerca nei documenti">
+            {% if active_view == 'location' %}<input type="hidden" name="view" value="map">{% elif active_view == 'files' %}<input type="hidden" name="view" value="files">{% endif %}
+            {% if document_type_filter %}<input type="hidden" name="type" value="{{ document_type_filter }}">{% endif %}
+            {% if favorites_only %}<input type="hidden" name="favorites" value="true">{% endif %}
+            <div class="input-group">
+                <span class="input-group-text"><i class="fas fa-magnifying-glass" aria-hidden="true"></i></span>
+                <input type="search" class="form-control" name="q" value="{{ search_query }}" maxlength="80"
+                       placeholder="Cerca in tutti i documenti: comune, foglio, particella, codice fiscale, protocollo…"
+                       aria-label="Cerca in tutti i documenti">
+                <button type="submit" class="btn btn-primary">Cerca</button>
+                {% if search_query %}<a class="btn btn-outline-secondary" href="{{ request.url.remove_query_params(['q', 'page']) }}">Azzera</a>{% endif %}
+            </div>
+        </form>
         <button type="button" class="btn btn-sm {{ 'btn-danger' if favorites_only else 'btn-outline-danger' }}" data-favorites-filter aria-pressed="{{ 'true' if favorites_only else 'false' }}">
             <i class="{{ 'fas' if favorites_only else 'far' }} fa-heart me-1" aria-hidden="true"></i>
             <span data-favorites-filter-label>{{ 'Mostra tutti' if favorites_only else 'Solo preferiti' }}</span>
         </button>
     </div>
+    {% if search_query %}
+    <div class="alert alert-info py-2" role="status">
+        <i class="fas fa-magnifying-glass me-2" aria-hidden="true"></i>
+        {% if total %}<strong>{{ total }}</strong> {{ 'documento' if total == 1 else 'documenti' }} per «{{ search_query }}»{% else %}Nessun documento corrisponde a «{{ search_query }}»{% endif %}
+        · tutte le parole devono comparire (oggetto, nome file, comune, foglio, particella, protocollo, codice fiscale).
+    </div>
+    {% endif %}
     {% if total == 0 and not can_admin(user) %}
     <div class="alert alert-info" role="status"><i class="fas fa-circle-info me-2" aria-hidden="true"></i>Non hai ancora documenti disponibili. Per ottenere l’accesso a un documento <a class="alert-link" href="/contact">contatta l’amministratore</a> indicando le chiavi account del tuo <a class="alert-link" href="/profile">profilo</a> e l’ID o il nome del documento.</div>
     {% endif %}
@@ -121,13 +143,13 @@
        plain links, not an ARIA tablist. #}
     <nav aria-label="Viste documenti">
         <ul class="nav nav-tabs documents-view-tabs mb-3" id="documents-view-tabs">
-            {% for view_key, view_label, view_icon, view_href in [
-                ('categories', 'Per categoria', 'fa-layer-group', '/documents'),
-                ('location', 'Per ubicazione', 'fa-diagram-project', '/documents?view=map'),
-                ('files', 'Per file', 'fa-file-lines', '/documents?view=files')] %}
+            {% for view_key, view_label, view_icon, view_href_value in [
+                ('categories', 'Per categoria', 'fa-layer-group', view_href('')),
+                ('location', 'Per ubicazione', 'fa-diagram-project', view_href('map')),
+                ('files', 'Per file', 'fa-file-lines', view_href('files'))] %}
             <li class="nav-item">
                 <a class="nav-link {{ 'active' if active_view == view_key else '' }}" id="documents-tab-{{ view_key }}"
-                   href="{{ view_href }}{% if favorites_only %}{{ '&' if '?' in view_href else '?' }}favorites=true{% endif %}"
+                   href="{{ view_href_value }}"
                    {% if active_view == view_key %}aria-current="page"{% endif %}>
                     <i class="fas {{ view_icon }} me-1" aria-hidden="true"></i>{{ view_label }}
                 </a>

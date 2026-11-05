@@ -108,11 +108,22 @@ class VisuraService:
         # DB_RETENTION_SECONDS > 0 is set explicitly. 0 (default) = keep forever.
         self.db_retention_seconds = self._parse_retention_env("DB_RETENTION_SECONDS")
         self.response_max_items = self._parse_positive_int_env("RESPONSE_MAX_ITEMS", 5000)
+        # pause between two portal requests; 2 s was hard-coded. Each pause is session time (~30 min per login), so lower it
+        # only after a real run shows the portal does not mind
+        self.request_pause_seconds = self._parse_pause_env("SISTER_REQUEST_PAUSE_SECONDS", 2.0)
         self.processing = False
         self._worker_task: Optional[asyncio.Task] = None
         self._cleanup_task: Optional[asyncio.Task] = None
         self._extraction_tasks: dict[str, asyncio.Task] = {}
         self._cancelled_extractions: set[str] = set()
+
+    @staticmethod
+    def _parse_pause_env(var_name: str, default: float) -> float:
+        try:
+            return max(0.0, float(os.getenv(var_name, default)))
+        except (TypeError, ValueError):
+            logger.warning("%s non valido: uso %s", var_name, default)
+            return default
 
     @staticmethod
     def _parse_positive_int_env(var_name: str, default: int) -> int:
@@ -417,8 +428,8 @@ class VisuraService:
                         self.pending_request_ids.discard(request.request_id)
                     self.request_queue.task_done()
 
-                if should_sleep:
-                    await asyncio.sleep(2)
+                if should_sleep and self.request_pause_seconds:
+                    await asyncio.sleep(self.request_pause_seconds)
         finally:
             self.processing = False
             logger.info("Worker richieste terminato")
@@ -1013,6 +1024,21 @@ class VisuraService:
             self._mark_request_expired(request_id)
             return None
         return response
+
+    async def wait_for_response(self, request_id: str, timeout: float) -> None:
+        """Return when a queued request has its answer in memory, is no longer pending, or after ``timeout`` seconds.
+
+        Lets ``GET /visura/{id}?wait=N`` answer as soon as the result is stored: with fixed 5 s polls a ~7 s search was
+        seen after 10 s. Only the in-memory state is read, so a held poll costs no database query.
+        """
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + max(0.0, timeout)
+        while (
+            request_id in self.pending_request_ids
+            and request_id not in self.response_store
+            and loop.time() < deadline
+        ):
+            await asyncio.sleep(0.2)
 
     def get_request_state(self, request_id: str) -> str:
         self._cleanup_response_store()

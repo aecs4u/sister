@@ -31,6 +31,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from .client import VisuraAPIError, VisuraClient
 from .query_forms import _ALIASES, QUERY_FORMS, get_query_form, param_names, validate_params
+from .search_outcome import SESSION_EXPIRED, classify
 
 BATCH_FORMAT_VERSION = 1
 DEFAULT_COMMAND = "search"
@@ -65,6 +66,9 @@ SKIPPED = "skipped"  # not started because ``on_error`` is ``stop``
 OK_STATUSES = frozenset({COMPLETED, QUEUED})
 NOT_RUN_STATUSES = frozenset({DUPLICATE, DISABLED, SKIPPED})
 TAG_PERSISTENCE_ERROR = "Tag persistence failed:"
+# why a run stopped before its last row (``BatchReport.stopped``); the rows not started stay pending for ``--resume``
+STOPPED_SESSION_EXPIRED = "session_expired"  # the portal ended the session: every further row would fail the same way
+STOPPED_DEADLINE = "stop_at"  # ``stop_at`` passed: no new row is started, the running one finishes
 
 
 # ---------------------------------------------------------------------------
@@ -378,6 +382,7 @@ class BatchReport:
     entries: list[dict] = field(default_factory=list)
     started_at: str = field(default_factory=_now)
     finished_at: str = ""
+    stopped: str | None = None  # STOPPED_SESSION_EXPIRED | STOPPED_DEADLINE | None
 
     @property
     def counts(self) -> dict[str, int]:
@@ -396,6 +401,7 @@ class BatchReport:
             "name": self.name,
             "started_at": self.started_at,
             "finished_at": self.finished_at,
+            "stopped": self.stopped,
             "total": len(self.entries),
             "counts": self.counts,
             "results": self.entries,
@@ -431,8 +437,13 @@ class BatchRunner:
         resume: bool = False,
         confirm: Confirm | None = None,
         emit: Emit | None = None,
+        stop_at: datetime | None = None,
     ):
+        """``stop_at`` (aware or local naive): no row starts after it; the one running finishes and is journaled, so a
+        session can be closed between two rows instead of in the middle of one."""
         self.client = client
+        self.stop_at = stop_at
+        self.stopped: str | None = None
         self.options = options
         self.journal = journal
         self.resume = resume
@@ -451,6 +462,8 @@ class BatchRunner:
             if item.state != "ready":
                 return self._not_run(item, item.state)
             async with gate:
+                if not self._stop and self._past_stop_at():
+                    self._stop, self.stopped = True, self.stopped or STOPPED_DEADLINE
                 if self._stop:
                     return self._not_run(item, SKIPPED)
                 entry = await self._execute(item, total)
@@ -463,7 +476,24 @@ class BatchRunner:
             report.entries = list(await asyncio.gather(*(one(item) for item in plan)))
         finally:
             report.finished_at = _now()
+            report.stopped = self.stopped
         return report
+
+    def _past_stop_at(self) -> bool:
+        if self.stop_at is None:
+            return False
+        now = datetime.now(self.stop_at.tzinfo) if self.stop_at.tzinfo else datetime.now()
+        return now >= self.stop_at
+
+    @staticmethod
+    def _session_expired(entry: dict) -> bool:
+        return classify(entry.get("status"), str(entry.get("error") or "")) == SESSION_EXPIRED
+
+    def _note_session(self, entry: dict) -> dict:
+        """After an expired-session answer no other row is started (each would fail the same way, using session time)."""
+        if self._session_expired(entry):
+            self._stop, self.stopped = True, STOPPED_SESSION_EXPIRED
+        return entry
 
     # -- one row ------------------------------------------------------------------------------------------------
 
@@ -538,6 +568,7 @@ class BatchRunner:
             ):
                 self.emit("start", item, total=total)
                 entry = await self._split(item, total, self._entry(item, ERROR, error=prior.get("error", "")))
+                self._note_session(entry)
                 self._record(entry)
                 self._write_row(item, entry)
                 self.emit("done", item, entry=entry)
@@ -573,6 +604,7 @@ class BatchRunner:
                         omonimo_prossimo=int(prior["omonimo_prossimo"]),
                     ),
                 )
+                self._note_session(entry)
                 self._stamp_records(entry)
                 self._record(entry)
                 self._write_row(item, entry)
@@ -595,7 +627,7 @@ class BatchRunner:
             attempts += 1
             entry = await self._attempt(item, request_ids, force)
             entry["attempts"] = attempts
-            retryable = entry.pop("retryable", True) and not self._final(entry)
+            retryable = entry.pop("retryable", True) and not self._final(entry) and not self._session_expired(entry)
             if not (entry["status"] == ERROR and retryable and attempts <= item.retries):
                 break
             delay = self.options.retry_delay * 2 ** (attempts - 1)
@@ -606,6 +638,7 @@ class BatchRunner:
             entry = await self._continue(item, {**entry, "omonimo_prossimo": following})
         elif entry["status"] == ERROR and TOO_MANY in str(entry.get("error", "")) and self._splittable(item):
             entry = await self._split(item, total, entry)
+        self._note_session(entry)
         self._stamp_records(entry)
         self._record(entry)
         self._write_row(item, entry)
@@ -638,8 +671,6 @@ class BatchRunner:
         corrispondenza", which is final), ``incomplete`` otherwise. A province that still matches more than 400 is listed
         in ``split_too_many``: it needs ``comune_sede`` (or a more precise name).
         """
-        from .search_outcome import SESSION_EXPIRED, classify
-
         entry = self._entry(item, ERROR, error=first.get("error", ""), request_ids=list(first.get("request_ids", [])))
         entry["results"] = dict(first.get("results") or {})
         found, empty, too_many, pending = 0, 0, [], []

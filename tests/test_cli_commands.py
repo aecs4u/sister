@@ -356,6 +356,10 @@ def test_db_backfill_runs_both_projections_and_xml_and_records_activity(monkeypa
     async def fake_holdings():
         return 7
 
+    async def fake_history():
+        return {"answers": 0}
+
+    monkeypatch.setattr(database, "backfill_ownership_history", fake_history)  # the real one wipes and rebuilds the live history
     monkeypatch.setattr(database, "backfill_projections", fake_projections)
     monkeypatch.setattr(xml_ingest, "backfill_documents", fake_xml)
     monkeypatch.setattr(database, "backfill_subject_names", fake_names)
@@ -369,7 +373,7 @@ def test_db_backfill_runs_both_projections_and_xml_and_records_activity(monkeypa
     assert calls["xml"] == (True, 12)
     assert calls["activity"][0] == ("db.backfill",)
     assert calls["activity"][1]["params"] == {"what": "all", "force": True, "limit": 12}
-    assert calls["activity"][1]["result"] == {"projections": 3, "xml": 5, "names": {"nameless": 0}, "holdings": 7}
+    assert calls["activity"][1]["result"] == {"projections": 3, "xml": 5, "names": {"nameless": 0}, "history": {"answers": 0}, "holdings": 7}
 
 
 def test_db_backfill_rejects_unknown_target():

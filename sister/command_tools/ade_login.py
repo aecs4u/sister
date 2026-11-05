@@ -16,7 +16,9 @@ service (or via /web/browser/launch-chrome); if it is not reachable this script 
 
 import argparse
 import asyncio
+import json
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -28,6 +30,26 @@ load_dotenv(ROOT.parent / ".env", override=False)
 from aecs4u_auth.browser import BrowserConfig  # noqa: E402
 from aecs4u_auth.browser import BrowserManager as AuthBrowserManager  # noqa: E402
 from aecs4u_auth.browser.exceptions import SessionLockedError  # noqa: E402
+
+# when the last login succeeded: SISTER ends a session ~30 minutes after it, whatever the activity, so `batch run-session`
+# times its clean stop from here instead of from the moment it is started
+LOGIN_RECORD = ROOT / "logs" / "sister_login.json"
+
+
+def record_login(url: str) -> None:
+    try:
+        LOGIN_RECORD.parent.mkdir(parents=True, exist_ok=True)
+        LOGIN_RECORD.write_text(
+            json.dumps({"logged_in_at": datetime.now(timezone.utc).isoformat(timespec="seconds"), "url": url}),
+            encoding="utf-8",
+        )
+    except OSError as exc:  # the login itself worked: only the timing hint is lost
+        print(f"ora del login non salvata ({exc})", file=sys.stderr)
+
+
+def clear_login_record() -> None:
+    LOGIN_RECORD.unlink(missing_ok=True)
+
 
 _CLOSE_SESSION_URLS = (
     "https://sister3.agenziaentrate.gov.it/Servizi/CloseSessionsSis",
@@ -61,6 +83,7 @@ async def main(close_only: bool) -> int:
     try:
         if close_only:
             await close_stale_session(mgr)
+            clear_login_record()
             return 0
         try:
             session = await mgr.login(service="sister")
@@ -69,6 +92,7 @@ async def main(close_only: bool) -> int:
             await close_stale_session(mgr)
             session = await mgr.login(service="sister")
         print(f"Login SISTER completato: {session.page.url}")
+        record_login(session.page.url)
     finally:
         # Disconnect only: closing the page/browser would drop the session the service attaches to.
         if mgr._playwright:

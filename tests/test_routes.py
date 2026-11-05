@@ -124,3 +124,46 @@ async def test_richiedi_intestati_uses_cached_request_id_and_default_cadastre():
     assert sent_request.cadastre_type == "T"
     assert _body(response)["request_id"] == "cached-original"
     assert _body(response)["status"] == "error"
+
+
+class _GenericService(_Service):
+    async def add_generic_request(self, request, *, force=False):
+        self.single_call = (request, force)
+        return self.single_result
+
+
+def _stale_result(request_id):
+    return SubmitResult(
+        request_id=request_id,
+        cached=True,
+        stale=True,
+        response=VisuraResponse(request_id=request_id, success=True, cadastre_type="E", data={"immobili": []}),
+    )
+
+
+@pytest.mark.asyncio
+async def test_generic_cached_answer_carries_stale_flag_and_timestamp():
+    # soggetto-immobili / soggetto-documento go through the generic route: without "stale" the CLI and the batch never
+    # asked before reusing an answer older than the cache window
+    service = _GenericService(single_result=_stale_result("soggetto_immobili_E_old"))
+
+    response = await routes.richiedi_generic_sister(
+        search_type="soggetto_immobili", provincia="NAZIONALE", service=service, tipo_catasto="E"
+    )
+
+    payload = _body(response)
+    assert payload["status"] == "cached"
+    assert payload["request_id"] == "soggetto_immobili_E_old"
+    assert payload["stale"] is True
+    assert payload["timestamp"]
+
+
+@pytest.mark.asyncio
+async def test_intestati_cached_answer_carries_stale_flag():
+    service = _Service(single_result=_stale_result("intestati_T_old"))
+    request = VisuraIntestatiInput(province="Roma", municipality="ROMA", sheet="1", parcel="2")
+
+    payload = _body(await routes.richiedi_intestati_immobile(request, service))
+
+    assert payload["stale"] is True
+    assert payload["timestamp"]

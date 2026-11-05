@@ -1154,7 +1154,7 @@ def test_results_page_renders_mobile_cards_and_optional_columns(main_module, mon
     assert 'data-result-column="request_type_tags"' in html
     assert 'data-result-column="extracted_results"' in html
     assert "Nessuna corrispondenza" in html
-    assert "/static/css/pages/results.css?v=20261103a" in html
+    assert "/static/css/pages/results.css?v=20261105a" in html
     assert html.count("visible: false") == 11
     columns = html.split("columns: [", 1)[1].split("\n        ],", 1)[0]
     assert re.findall(r'\{title: "([^"]+)"', columns)[:7] == [
@@ -1672,3 +1672,72 @@ async def test_results_offset_past_the_end_redirects_to_the_last_page(monkeypatc
 
     assert response.status_code == 303
     assert response.headers["location"] == "/results?status=failed&offset=100"
+
+
+def _search_rows():
+    return [
+        {"id": 1, "document_type": "visura_fabbricati", "file_format": "P7M", "filename": "vi_sto_RA_FG103_PT730_2026-11-03.p7m",
+         "oggetto": "VISURA FG. 103 PART. 730 DI LUGO", "comune": "LUGO", "provincia": "Ravenna", "foglio": "103",
+         "particella": "730", "created_at": "2026-11-03T10:00:00+01:00"},
+        {"id": 2, "document_type": "visura_fabbricati", "file_format": "PDF", "filename": "vi_sto_RA_FG103_PT730_2026-11-03.pdf",
+         "oggetto": "VISURA FG. 103 PART. 730 DI LUGO", "comune": "LUGO", "provincia": "Ravenna", "foglio": "103",
+         "particella": "730", "created_at": "2026-11-03T10:00:01+01:00"},
+        {"id": 3, "document_type": "visura_fabbricati", "file_format": "P7M", "filename": "vi_sto_MI_FG357_PT262_2026-10-29.p7m",
+         "oggetto": "VISURA FG. 357 PART. 262 DI MILANO", "comune": "MILANO", "provincia": "Milano", "foglio": "357",
+         "particella": "262", "created_at": "2026-10-29T10:00:00+01:00"},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_streamed_document_search_matches_every_word_and_counts_logical_documents():
+    async def _rows():
+        for row in _search_rows():
+            yield dict(row)
+
+    page, page_no, page_count, offset, total, raw_count, _inspections = await web._page_streamed_documents(
+        _rows(), 1, search="lugo 103"
+    )
+    assert raw_count == 3  # the whole catalogue was read
+    assert total == 1  # the P7M and its PDF are one document
+    assert [document["filename"] for document in page][0].startswith("vi_sto_RA_FG103")
+    assert len(page[0]["files"]) == 2
+
+    async def _rows_again():
+        for row in _search_rows():
+            yield dict(row)
+
+    _page, _n, _count, _offset, total_none, _raw, _insp = await web._page_streamed_documents(
+        _rows_again(), 1, search="lugo 999"
+    )
+    assert total_none == 0
+
+    async def _rows_all():
+        for row in _search_rows():
+            yield dict(row)
+
+    _page, _n, _count, _offset, total_all, _raw, _insp = await web._page_streamed_documents(_rows_all(), 1)
+    assert total_all == 2
+
+
+def test_logical_document_search_looks_into_attached_files():
+    document = {"id": 1, "oggetto": "VISURA", "filename": "a.p7m", "files": [{"filename": "scan_rossi.pdf"}]}
+    assert web._logical_document_matches(document, web._search_terms("rossi"))
+    assert not web._logical_document_matches(document, web._search_terms("rossi bianchi"))
+    assert web._logical_document_matches(document, [])
+
+
+def test_mirrored_payload_tables_are_dropped_when_the_master_detail_pair_has_the_same_rows():
+    sections = [
+        {"name": "immobili", "count": 2},
+        {"name": "results", "count": 2},
+        {"name": "results_intestati", "count": 3},
+        {"name": "intestati", "count": 3},
+        {"name": "total_results", "count": 2},
+    ]
+    assert [section["name"] for section in web._drop_mirrored_sections(sections)] == [
+        "results",
+        "results_intestati",
+        "total_results",
+    ]
+    different = [{"name": "immobili", "count": 2}, {"name": "results", "count": 5}]
+    assert web._drop_mirrored_sections(different) == different

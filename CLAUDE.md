@@ -126,8 +126,12 @@ uv run sister build dossier-graph --seed <CF|PIVA>
 - **A SISTER session lasts ~30 minutes from the login, whatever the activity** (measured 2026-10-26: 29.6, 29.8 and 30.4 min;
   the keep-alive does not extend it). Run bulk work with `sister batch run-session --batch <dir> ...` right after the login:
   it checks the browser, starts the service, drops answered rows and wrong codici fiscali from the plans, proves the session with
-  one real search, runs `query batch --resume` until `--minutes` (26) after the login or the first expired-session answer,
-  interrupts cleanly and stops the service. `sister batch progress <dir>...` shows the progress bar.
+  one real search, runs `query batch --resume --stop-at <deadline>` and stops the service. `sister batch progress <dir>...` shows the
+  progress bar. The deadline is `--minutes` (26) after the login time `sister app login` records in `logs/sister_login.json`
+  (or `--logged-in-at`, else now): no row starts after it, a row still running `--grace-seconds` (60) later is interrupted.
+  `query batch` stops by itself at the first expired-session answer (never retried; the other rows stay pending) and exits 75.
+  "Answered" is per kind of query (`sister/answered.py`): a search does not answer a `soggetto-documento`, a stored `vs_`
+  document does not answer a search, Storica rows always stay; the plan is copied to `<dir>/backups/` before pruning.
 - **The service never logs in by itself** (`SISTER_AUTO_RELOGIN=false`, `browser._ensure_authenticated`). aecs4u-auth's keep-alive
   marks a healthy session invalid whenever its province-menu test runs on a result page, and its answer to that was a recovery and then
   a CIE login in the user's tab, waiting for a phone approval nobody expected and blocking the worker. The check now tries the
@@ -145,6 +149,9 @@ uv run sister build dossier-graph --seed <CF|PIVA>
 - Speed: the time of a search is SISTER's own answer (~1.2 s per page, 4-6 pages). Measured 2026-10-26: no gain from blocking/caching
   static files (`SISTER_CACHE_STATIC`, off) nor from waiting for `load` instead of `networkidle` (`SISTER_FAST_NAV`, off: more errors);
   `SISTER_PAGE_LOG_FAST` (on) skips the HTML/screenshot of every step, `SISTER_ACTION_TIMEOUT_SECONDS` (15) shortens a failing row.
+  Waiting: `GET /visura/{id}?wait=N` (≤ 30 s) holds the poll until the answer is stored and the client uses it (`VISURA_LONG_POLL`,
+  25; 0 = fixed `VISURA_POLL_INTERVAL` polls, which made a ~7 s search show after 10 s). The worker pauses
+  `SISTER_REQUEST_PAUSE_SECONDS` (2, was hard-coded) between portal requests: lower it only after a real run.
 - Operational endpoints need `X-API-Key` when `API_KEY` is set (CLI: `VISURA_API_KEY`).
 - Web UI routes (including `/`, `/profile`) **fail closed** (`sister/web.py::_require_auth`): browsers are redirected to `/auth/login?next=…`,
   other clients get 401. Only an explicit `REQUIRE_AUTHENTICATION=false` (dev) lets anonymous requests through; `.env` is `true`

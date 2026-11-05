@@ -8,8 +8,10 @@ SISTER ends a session about 30 minutes after the login, whatever the activity. T
 3. drops from every plan the rows that already have an answer in the database, and the codici fiscali whose check
    character is wrong (SISTER rejects them), so nothing answered is asked twice;
 4. proves the session with one real search;
-5. runs the plans in order (``query batch --resume``) until ``--minutes`` after the login, or until the portal reports an
-   expired session, then interrupts the batch (the journal keeps every state, ``--resume`` continues);
+5. runs the plans in order (``query batch --resume --stop-at``): no row starts after ``--minutes`` from the login (taken from
+   ``sister app login``'s record, ``--logged-in-at`` or now), the batch stops by itself at the first expired-session answer,
+   and only a row still running ``--grace-seconds`` after the deadline is interrupted (the journal keeps every state,
+   ``--resume`` continues);
 6. downloads ready, not-yet-stored documents from SISTER's Richieste page, starting from the earliest request in the batch;
 7. stops the service, which therefore never gets the chance to open a login of its own, and prints progress and next steps.
 
@@ -25,7 +27,7 @@ import argparse
 import asyncio
 import json
 import os
-import re
+import shutil
 import signal
 import subprocess
 import sys
@@ -47,10 +49,13 @@ from batch_progress import Dashboard, render, snapshot  # noqa: E402
 from rich.console import Console  # noqa: E402
 from rich.live import Live  # noqa: E402
 
+from sister.answered import Answered, row_code  # noqa: E402
 from sister.fiscal_code import valid_codice_fiscale  # noqa: E402
 
 console = Console()
-EXPIRED = re.compile(r"sessione_scaduta|lock\.html|Sessione SISTER scaduta")
+EXIT_SESSION_EXPIRED = 75  # sister.cli.EXIT_SESSION_EXPIRED (not imported: the CLI module loads the whole app)
+LOGIN_RECORD = ROOT / "logs" / "sister_login.json"  # written by `sister app login` (ade_login.record_login)
+SESSION_MINUTES = 30
 DEAD_PAGE = ("login.jsp", "sessione_scaduta", "Logout", "lock.html", "about:blank")
 
 
@@ -144,10 +149,12 @@ def stop(process: subprocess.Popen | None, grace: float = 10.0) -> None:
 # -- plans --------------------------------------------------------------------------------------------------------
 
 
-async def answered_codes() -> set[str]:
-    """Codes SISTER already answered for Fabbricati and Terreni (results, or its own "no match"), and those whose visura document is stored.
+async def answered_queries() -> Answered:
+    """What SISTER already answered, per kind of query (rules: ``sister.answered``).
 
-    An answer to a search limited to Terreni or Fabbricati does not count: "no match" there only says the subject has none of that kind.
+    Searches: requests over Fabbricati and Terreni that found something or got "nessuna corrispondenza", and "oltre 400" for a
+    code. Documents: answered ``soggetto-documento`` requests (their view and the provinces requested) and the stored ``vs_``
+    files. An answer limited to Terreni or Fabbricati does not count: "no match" there only says the subject has none of that kind.
     """
     from sqlalchemy import text
 
@@ -157,7 +164,8 @@ async def answered_codes() -> set[str]:
         rows = (
             await session.execute(
                 text(
-                    "SELECT DISTINCT subject_query FROM request WHERE subject_query IS NOT NULL "
+                    "SELECT upper(btrim(subject_query)), request_ref LIKE 'soggetto\\_documento%', success IS TRUE, id "
+                    "FROM request WHERE subject_query IS NOT NULL "
                     "AND (cadastre_type IS NULL OR cadastre_type = 'E') "
                     "AND (success IS TRUE OR error ILIKE '%NESSUNA CORRISPONDENZA%') "
                     # an earlier persona giuridica answer that is only the list of registry records (or nothing at all) says
@@ -167,7 +175,18 @@ async def answered_codes() -> set[str]:
                     "AND p.data NOT LIKE '%omonimi_totale%' AND p.data NOT LIKE '%visImmSel%'))"
                 )
             )
-        ).scalars().all()
+        ).all()
+        document_ids = [row_id for _, is_document, found, row_id in rows if is_document and found]
+        payloads = (
+            (
+                await session.execute(
+                    text("SELECT request_id, data FROM sister_archive.request_payload WHERE request_id = ANY(:ids)"),
+                    {"ids": document_ids},
+                )
+            ).all()
+            if document_ids
+            else []
+        )
         # "Superato il limite massimo di 400 elementi": SISTER's final answer too, whatever the catasto type (the view reads the code
         # from the job payload, the answer carries no subject)
         too_many = (
@@ -176,37 +195,68 @@ async def answered_codes() -> set[str]:
         files = (await session.execute(text("SELECT file_name FROM document WHERE file_name ~* '^vs_'"))).scalars().all()
     # "oltre 400" is final for a code (nothing narrows it) but not for a name: those are split by province of the seat
     too_many = [code for code in too_many if len(str(code).strip()) in (11, 16) and str(code).strip().isalnum()]
-    codes = {str(code).strip().upper() for code in [*rows, *too_many]}
-    for name in files:
-        match = re.match(r"vs_[a-z]+_([A-Z0-9]{11,16})_", name or "", re.I)
-        if match:
-            codes.add(match.group(1).upper())
-    return codes
+    codes = {row_id: code for code, _, _, row_id in rows}
+    documents = []
+    for row_id, data in payloads:
+        try:
+            payload = json.loads(data) if isinstance(data, str) else dict(data or {})
+        except (TypeError, ValueError):
+            payload = {}
+        documents.append((codes[row_id], payload.get("vista"), payload.get("richieste") or []))
+    return Answered.build(
+        searches=[code for code, is_document, _, _ in rows if not is_document] + too_many,
+        no_match=[code for code, _, found, _ in rows if not found],
+        documents=documents,
+        files=files,
+    )
 
 
-def prune_plan(directory: Path, answered: set[str]) -> tuple[int, int, int]:
-    """Rewrite ``batch.json`` without the answered rows and the invalid codici fiscali. Returns (kept, answered, invalid)."""
+def prune_plan(directory: Path, answered: Answered | set[str], *, write: bool = True) -> tuple[int, int, int]:
+    """Rewrite ``batch.json`` without the answered rows and the invalid codici fiscali. Returns (kept, answered, invalid).
+
+    "Answered" depends on the row's command (``sister.answered``): an elenco does not answer a document request. The previous
+    plan is copied to ``backups/`` first; ``write=False`` only counts.
+    """
+    if not isinstance(answered, Answered):
+        answered = Answered.build(searches=answered)
     path = directory / "batch.json"
     plan = json.loads(path.read_text(encoding="utf-8"))
+    defaults = plan.get("defaults") or {}
     kept, done, invalid = [], 0, 0
     for query in plan.get("queries", []):
         params = query.get("params") or {}
-        code = str(params.get("codice_fiscale") or params.get("identificativo") or "").strip().upper()
+        command = query.get("command") or defaults.get("command")
+        code = row_code(params)
         forced = query.get("reuse") == "force"  # repeated on purpose: it stays even though SISTER already answered it
-        if code and code in answered and not forced:
+        if not forced and answered.covers(command, {**(defaults.get("params") or {}), **params}):
             done += 1
         elif len(code) == 16 and not valid_codice_fiscale(code):
             invalid += 1
         else:
-            if (query.get("command") or plan.get("defaults", {}).get("command")) == "soggetto-immobili":
+            if command == "soggetto-immobili":
                 query.setdefault("params", {}).setdefault("tipo_catasto", "E")  # Fabbricati and Terreni
             kept.append(query)
-    plan["queries"] = kept
-    path.write_text(json.dumps(plan, ensure_ascii=False, indent=1), encoding="utf-8")
+    if write and (done or invalid or kept != plan.get("queries", [])):
+        backup = directory / "backups" / f"batch.{datetime.now():%Y%m%d_%H%M%S}.json"
+        backup.parent.mkdir(exist_ok=True)
+        shutil.copy2(path, backup)
+        plan["queries"] = kept
+        path.write_text(json.dumps(plan, ensure_ascii=False, indent=1), encoding="utf-8")
     return len(kept), done, invalid
 
 
 # -- running ------------------------------------------------------------------------------------------------------
+
+
+def recorded_login(path: Path = LOGIN_RECORD, now: datetime | None = None) -> datetime | None:
+    """Local time of the last ``sister app login``, when it can still be the live session (less than 30 minutes ago)."""
+    try:
+        stamp = datetime.fromisoformat(json.loads(path.read_text(encoding="utf-8"))["logged_in_at"])
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    login = stamp.astimezone().replace(tzinfo=None) if stamp.tzinfo else stamp
+    now = now or datetime.now()
+    return login if timedelta(0) <= now - login < timedelta(minutes=SESSION_MINUTES) else None
 
 
 def cli_env(port: int) -> dict:
@@ -266,52 +316,61 @@ def preflight(port: int, code: str, out: Path) -> bool:
         return False
 
 
-def run_batch(directory: Path, port: int, deadline: datetime, tick=None) -> str:
+def run_batch(directory: Path, port: int, deadline: datetime, tick=None, *, grace: float = 60.0) -> str:
     """Run one plan until it ends, the deadline passes or the portal reports an expired session: 'done'|'deadline'|'expired'.
 
-    ``tick`` is called about every second while it runs (the progress bar).
+    The batch itself starts no row after ``deadline`` (``--stop-at``: the running row finishes and is journaled) and stops
+    at the first expired-session answer (exit code ``EXIT_SESSION_EXPIRED``). Only a row still running ``grace`` seconds
+    after the deadline is interrupted. ``tick`` is called about every second while it runs (the progress bar).
     """
     log = directory / "run.log"
-    start = log.stat().st_size if log.exists() else 0
     command = [
         sys.executable, "-m", "sister.cli", "query", "batch", "-I", str(directory / "batch.json"), "--resume",
-        "-o", str(directory / "report.json"),
+        "-o", str(directory / "report.json"), "--stop-at", deadline.isoformat(timespec="seconds"),
     ]
     with open(log, "a") as handle:
         process = subprocess.Popen(command, cwd=ROOT, env=cli_env(port), stdout=handle, stderr=subprocess.STDOUT, start_new_session=True)
-    reason = "done"
+    hard_stop = deadline + timedelta(seconds=grace)
     while process.poll() is None:
-        if datetime.now() >= deadline:
-            reason = "deadline"
-        elif log.exists() and EXPIRED.search(log.read_bytes()[start:].decode("utf-8", "replace")):
-            reason = "expired"
-        if reason != "done":
+        if datetime.now() >= hard_stop:
             os.killpg(process.pid, signal.SIGINT)  # the journal keeps every state; --resume continues
             try:
                 process.wait(timeout=20)
             except subprocess.TimeoutExpired:
                 os.killpg(process.pid, signal.SIGKILL)
             break
-        for _ in range(4):  # the bar moves every half second, the log is read every two
-            if tick:
-                tick()
-            time.sleep(0.5)
+        if tick:
+            tick()
+        time.sleep(0.5)
     if tick:
         tick()
-    return reason
+    if process.returncode == EXIT_SESSION_EXPIRED:
+        return "expired"
+    if datetime.now() >= deadline and _stopped_at_deadline(directory):
+        return "deadline"
+    return "deadline" if datetime.now() >= hard_stop else "done"
+
+
+def _stopped_at_deadline(directory: Path) -> bool:
+    try:
+        return json.loads((directory / "report.json").read_text(encoding="utf-8")).get("stopped") == "stop_at"
+    except (OSError, ValueError):
+        return True  # interrupted before the report was written
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--batch", action="append", required=True, type=Path, help="plan directory (repeat, run in order)")
     parser.add_argument("--minutes", type=float, default=26, help="minutes after the login to stop (SISTER closes at ~30)")
-    parser.add_argument("--logged-in-at", help="HH:MM of the login (default: now)")
+    parser.add_argument("--logged-in-at", help="HH:MM of the login (default: the time `sister app login` recorded, else now)")
+    parser.add_argument("--grace-seconds", type=float, default=60,
+                        help="after the deadline no row starts; one still running this long after it is interrupted")
     parser.add_argument("--port", type=int, default=8027)
     parser.add_argument("--preflight-cf", default=os.getenv("SISTER_PREFLIGHT_CF", ""), help="code for the proof search")
     parser.add_argument("--cdp", default=os.getenv("BROWSER_CDP_ENDPOINT", "http://localhost:9222"))
-    parser.add_argument("--dry-run", action="store_true", help="prune the plans and print the timing, start nothing")
-    parser.add_argument("--keep-answered", action="store_true", help="do not drop the rows that already have an answer (to repeat codes with another "
-                        "'Tipo richiesta': the database does not record it, so an Attualità answer would hide the Storica row)")
+    parser.add_argument("--dry-run", action="store_true", help="count what pruning would drop and print the timing; change and start nothing")
+    parser.add_argument("--keep-answered", action="store_true", help="do not drop the rows that already have an answer (rows asking for the Storica are "
+                        "always kept: the database does not record the 'Tipo richiesta' of an answer)")
     parser.add_argument("--probe", action="store_true", help="also open a scratch tab to test the login first. Off by default: a second tab on the live "
                         "session made SISTER answer lock.html to the search that followed (2026-10-27); the service attach and the proof search are the test")
     args = parser.parse_args()
@@ -320,17 +379,21 @@ def main() -> int:
     if args.logged_in_at:
         hour, minute = map(int, args.logged_in_at.split(":"))
         login = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    elif (recorded := recorded_login()) is not None:
+        login = recorded
+        say(f"ora del login registrata da sister app login: {login:%H:%M}")
     else:
         login = now
+        say("[yellow]nessun login registrato: conto i minuti da adesso (se il login e' di prima, usa --logged-in-at HH:MM)[/yellow]")
     deadline = login + timedelta(minutes=args.minutes)
     say(f"login {login:%H:%M}, chiusura pulita alle {deadline:%H:%M} ({(deadline - now).total_seconds() / 60:.0f} min da ora)")
     if deadline <= now + timedelta(minutes=2):
         say("[red]la sessione e' quasi finita: rifai il login con sister app login e rilancia[/red]")
         return 2
 
-    answered = set() if args.keep_answered else asyncio.run(answered_codes())
+    answered = Answered() if args.keep_answered else asyncio.run(answered_queries())
     for directory in args.batch:
-        kept, done, invalid = prune_plan(directory, answered)
+        kept, done, invalid = prune_plan(directory, answered, write=not args.dry_run)
         say(f"{directory.name}: {kept} righe da fare ({done} gia' risposte tolte, {invalid} codici fiscali non validi tolti)")
     if args.dry_run:
         return 0
@@ -353,6 +416,9 @@ def main() -> int:
                     raise
                 say(f"aggancio non riuscito ({exc}): secondo tentativo")
         say("servizio agganciato alla sessione")
+        if not args.preflight_cf:
+            say("[yellow]nessuna ricerca di verifica (--preflight-cf o SISTER_PREFLIGHT_CF): la sessione e' provata solo "
+                "dall'aggancio del servizio[/yellow]")
         if args.preflight_cf:
             if not preflight(args.port, args.preflight_cf, args.batch[0] / "preflight.json"):
                 say("[red]la ricerca di verifica e' fallita: la sessione non e' utilizzabile[/red]")
@@ -373,7 +439,7 @@ def main() -> int:
 
             for directory in args.batch:
                 say(f"avvio {directory.name}")
-                outcome = run_batch(directory, args.port, deadline, tick)
+                outcome = run_batch(directory, args.port, deadline, tick, grace=args.grace_seconds)
                 say(f"{directory.name}: {outcome}")
                 if outcome != "done":
                     break

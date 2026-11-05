@@ -665,3 +665,37 @@ async def test_restart_browser_stops_then_starts(main_module):
 
     assert browser.closed is True
     assert service.auth_ready is True
+
+
+# --- long poll: GET /visura/{id}?wait=N --------------------------------------------------------------------------
+
+
+async def test_wait_for_response_returns_as_soon_as_the_answer_is_stored(main_module):
+    service = _service(main_module)
+    service.pending_request_ids.add("r1")
+
+    async def answer():
+        await _real_sleep(0.3)
+        service.response_store["r1"] = VisuraResponse(request_id="r1", success=True, cadastre_type="F", data={})
+
+    loop = asyncio.get_running_loop()
+    started = loop.time()
+    task = asyncio.create_task(answer())
+    await service.wait_for_response("r1", 10)
+    await task
+    assert loop.time() - started < 2
+
+
+async def test_wait_for_response_does_not_hold_an_unknown_or_finished_request(main_module):
+    service = _service(main_module)
+    loop = asyncio.get_running_loop()
+    started = loop.time()
+    await service.wait_for_response("not-queued", 10)
+    assert loop.time() - started < 0.5
+
+
+def test_request_pause_is_configurable(main_module, monkeypatch):
+    monkeypatch.setenv("SISTER_REQUEST_PAUSE_SECONDS", "0.5")
+    assert main_module.VisuraService().request_pause_seconds == 0.5
+    monkeypatch.setenv("SISTER_REQUEST_PAUSE_SECONDS", "nonsense")
+    assert main_module.VisuraService().request_pause_seconds == 2.0

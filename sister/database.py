@@ -1224,28 +1224,70 @@ async def _persist_provinces(session: AsyncSession, request_pk: int, data: Optio
 
 
 async def subject_ownership_history(fiscal_code: str, only_changed: bool = True) -> list[dict]:
-    """Ownership periods of every unit the subject holds or held, all owners included, oldest period first.
+    """The ownership story of every unit the subject holds or held, from both sources, newest change first.
 
-    One entry per unit: its location, ``periods`` (owner, right and share, first/last seen, when it stopped being listed)
-    and ``changed`` (more than one period, or one that ended). With ``only_changed`` the units seen always in the same
-    hands are left out: the page lists the variations.
+    * ``acts``: the official chain of the unit's latest stored visura (``ownership_mutation``: costituzione, atti,
+      successioni with their date and the owners each one left), oldest first;
+    * ``periods``: what the searches saw (``ownership_history``: owner, right and share, first/last seen, when one stopped
+      being listed).
+
+    ``changed``: the visura records more than one act, or a search saw an owner leave. With ``only_changed`` the units
+    always in the same hands are left out: the page lists the variations.
     """
     code = fiscal_code_key(fiscal_code)
     if not code:
         return []
     session_factory = _get_session_factory()
     async with session_factory() as session:
-        rows = (
+        params = {"c": code}
+        periods = (
             await session.execute(
                 text(
                     "SELECT v.* FROM v_ownership_history v WHERE v.cadastral_unit_id IN ("
                     " SELECT h.cadastral_unit_id FROM ownership_history h JOIN subject s ON s.id = h.subject_id WHERE s.fiscal_code = :c)"
                     " ORDER BY v.cadastral_unit_id, v.first_seen_at, v.id"
                 ),
-                {"c": code},
+                params,
             )
         ).mappings().all()
-        comuni_ids = {r["comune_id"] for r in rows if r["comune_id"] is not None}
+        acts = (
+            await session.execute(
+                text(
+                    "WITH acts AS ("
+                    " SELECT coalesce(m.reference_cadastral_unit_id, d.cadastral_unit_id) AS unit, d.id AS document_id, d.file_name,"
+                    "  m.id, m.mutation_index, m.mutation_date, m.source_description, m.is_current"
+                    " FROM ownership_mutation m JOIN document d ON d.id = m.document_id),"
+                    " mine AS ("
+                    "  SELECT h.cadastral_unit_id AS unit FROM ownership_history h JOIN subject s ON s.id = h.subject_id WHERE s.fiscal_code = :c"
+                    "  UNION SELECT a.unit FROM acts a JOIN mutation_owner mo ON mo.mutation_id = a.id"
+                    "   JOIN subject s ON s.id = mo.subject_id WHERE s.fiscal_code = :c),"
+                    " latest AS (SELECT a.unit, max(a.document_id) AS document_id FROM acts a JOIN mine USING (unit) GROUP BY a.unit)"
+                    " SELECT a.*, (SELECT string_agg(coalesce(s.name, s.fiscal_code) || coalesce(' ' || nullif(k.description, ''), '')"
+                    "   || coalesce(' ' || o.share_numerator || '/' || o.share_denominator, ''), '; ' ORDER BY mo.position, mo.id)"
+                    "   FROM mutation_owner mo JOIN subject s ON s.id = mo.subject_id LEFT JOIN ownership_right o ON o.id = mo.right_id"
+                    "   LEFT JOIN right_kind k ON k.id = o.right_kind_id WHERE mo.mutation_id = a.id) AS owners,"
+                    "  EXISTS (SELECT 1 FROM mutation_owner mo JOIN subject s ON s.id = mo.subject_id"
+                    "   WHERE mo.mutation_id = a.id AND s.fiscal_code = :c) AS with_subject"
+                    " FROM acts a JOIN latest l ON l.unit = a.unit AND l.document_id = a.document_id"
+                    " WHERE a.unit IS NOT NULL ORDER BY a.unit, a.is_current, a.mutation_index NULLS LAST, a.id"
+                ),
+                params,
+            )
+        ).mappings().all()
+        unit_ids = {r["cadastral_unit_id"] for r in periods} | {r["unit"] for r in acts}
+        locations = {}
+        if unit_ids:
+            locations = {
+                row.id: row
+                for row in (
+                    await session.execute(
+                        select(CadastralUnit.id, CadastralUnit.cadastre_type, CadastralUnit.comune_id, CadastralUnit.section,
+                               CadastralUnit.sheet, CadastralUnit.parcel, CadastralUnit.subunit)
+                        .where(CadastralUnit.id.in_(unit_ids))
+                    )
+                ).all()
+            }
+        comuni_ids = {row.comune_id for row in locations.values() if row.comune_id is not None}
         names = {}
         if comuni_ids:
             names = dict(
@@ -1257,22 +1299,27 @@ async def subject_ownership_history(fiscal_code: str, only_changed: bool = True)
                 ).all()
             )
     units: dict[int, dict] = {}
-    for row in rows:
-        unit = units.setdefault(
-            row["cadastral_unit_id"],
-            {
-                "cadastral_unit_id": row["cadastral_unit_id"],
-                "comune": names.get(row["comune_id"], ""),
-                "catasto": row["cadastre_type"],
-                "sezione": row["section"],
-                "foglio": row["sheet"],
-                "particella": row["parcel"],
-                "subalterno": row["subunit"],
+
+    def unit_entry(unit_id: int) -> dict:
+        if unit_id not in units:
+            loc = locations.get(unit_id)
+            units[unit_id] = {
+                "cadastral_unit_id": unit_id,
+                "comune": names.get(loc.comune_id, "") if loc else "",
+                "catasto": loc.cadastre_type if loc else "",
+                "sezione": loc.section if loc else "",
+                "foglio": loc.sheet if loc else "",
+                "particella": loc.parcel if loc else "",
+                "subalterno": loc.subunit if loc else "",
                 "periods": [],
-            },
-        )
+                "acts": [],
+                "document": None,
+            }
+        return units[unit_id]
+
+    for row in periods:
         share = f"{row['share_numerator']}/{row['share_denominator']}" if row["share_numerator"] and row["share_denominator"] else ""
-        unit["periods"].append(
+        unit_entry(row["cadastral_unit_id"])["periods"].append(
             {
                 "fiscal_code": row["fiscal_code"],
                 "name": row["subject_name"],
@@ -1287,16 +1334,29 @@ async def subject_ownership_history(fiscal_code: str, only_changed: bool = True)
                 "current": row["current"],
             }
         )
+    for row in acts:
+        unit = unit_entry(row["unit"])
+        unit["document"] = {"id": row["document_id"], "file_name": row["file_name"]}
+        unit["acts"].append(
+            {
+                "date": row["mutation_date"],
+                "description": row["source_description"] or ("Intestazione attuale" if row["is_current"] else ""),
+                "owners": row["owners"] or "",
+                "current": row["is_current"],
+                "with_subject": row["with_subject"],
+            }
+        )
     result = []
     for unit in units.values():
-        unit["changed"] = len(unit["periods"]) > 1 and any(not p["current"] for p in unit["periods"])
-        unit["last_change_at"] = max(
-            [p["ended_at"] for p in unit["periods"] if p["ended_at"]] + [p["first_seen_at"] for p in unit["periods"] if p["ended_at"] is None and len(unit["periods"]) > 1],
-            default=None,
-        )
+        acts_only = [a for a in unit["acts"] if not a["current"]]
+        searched_change = len(unit["periods"]) > 1 and any(not p["current"] for p in unit["periods"])
+        unit["changed"] = searched_change or len(acts_only) > 1
+        dates = [a["date"] for a in acts_only if a["date"]]
+        dates += [p["ended_at"].date() for p in unit["periods"] if p["ended_at"]]
+        unit["last_change_at"] = max(dates, default=None)
         if unit["changed"] or not only_changed:
             result.append(unit)
-    result.sort(key=lambda u: (u["last_change_at"] is None, -(u["last_change_at"].timestamp() if u["last_change_at"] else 0)))
+    result.sort(key=lambda u: (u["last_change_at"] is None, -(u["last_change_at"].toordinal() if u["last_change_at"] else 0)))
     return result
 
 

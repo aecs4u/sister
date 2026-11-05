@@ -383,3 +383,85 @@ def test_resume_does_not_resend_a_final_no_match_answer(tmp_path):
     assert second.submits == []  # SISTER's answer does not change: nothing is sent again, not even the "failed" row
     assert [e["status"] for e in report.entries] == ["completed", "error", "completed"]
     assert "NESSUNA CORRISPONDENZA" in report.entries[1]["error"]
+
+
+# --- stopping before the SISTER session does ------------------------------------------------------------------
+
+
+def _runner(client, spec, journal=None, **kwargs):
+    opts = batch.BatchOptions.model_validate({**spec.options.model_dump(), "retry_delay": 0, "wait": True, "retries": 2})
+    runner = batch.BatchRunner(client, opts, journal=batch.BatchJournal(journal) if journal else None, **kwargs)
+    return runner, batch.plan_batch(spec, opts)
+
+
+def test_expired_session_is_not_retried_and_stops_the_run(tmp_path):
+    client = FakeClient(wait=lambda rid: {"status": "error", "error": "Sessione SISTER scaduta o non valida"})
+    runner, plan = _runner(client, three(), journal=tmp_path / "j.jsonl")
+
+    report = asyncio.run(runner.run(plan))
+
+    assert [e["status"] for e in report.entries] == ["error", "skipped", "skipped"]
+    assert len(client.submits) == 1  # no retry, no other row sent into a dead session
+    assert report.stopped == batch.STOPPED_SESSION_EXPIRED and report.to_dict()["stopped"] == "session_expired"
+    journaled = {json.loads(line)["id"] for line in (tmp_path / "j.jsonl").read_text().splitlines()}
+    assert journaled == {"p1"}  # the skipped rows stay pending: --resume runs them
+
+
+def test_no_row_starts_after_stop_at():
+    from datetime import datetime, timedelta
+
+    client = FakeClient()
+    runner, plan = _runner(client, three(), stop_at=datetime.now() - timedelta(seconds=1))
+    report = asyncio.run(runner.run(plan))
+    assert [e["status"] for e in report.entries] == ["skipped"] * 3 and client.submits == []
+    assert report.stopped == batch.STOPPED_DEADLINE and report.failed == 0
+
+    runner, plan = _runner(FakeClient(), three(), stop_at=datetime.now() + timedelta(minutes=5))
+    report = asyncio.run(runner.run(plan))
+    assert [e["status"] for e in report.entries] == ["completed"] * 3 and report.stopped is None
+
+
+def test_cli_batch_exits_75_on_expired_session(monkeypatch, tmp_path):
+    from typer.testing import CliRunner
+
+    from sister import cli
+
+    path = tmp_path / "b.json"
+    path.write_text(json.dumps({"version": 1, "queries": [{"params": SEARCH}, {"params": {**SEARCH, "particella": 9}}]}))
+
+    async def fake_submit(self, command, params, **kwargs):
+        return {"request_id": "r1", "status": "queued"}
+
+    async def fake_wait(self, request_id, **kwargs):
+        return {"request_id": request_id, "status": "error", "error": "sessione_scaduta"}
+
+    monkeypatch.setattr(VisuraClient, "submit", fake_submit)
+    monkeypatch.setattr(VisuraClient, "wait_for_result", fake_wait)
+    result = CliRunner().invoke(cli.app, ["query", "batch", "-I", str(path), "--wait", "--stop-at", "23:59"])
+    assert result.exit_code == cli.EXIT_SESSION_EXPIRED, result.output
+
+
+def test_parse_stop_at():
+    from sister.cli import _parse_stop_at
+
+    assert _parse_stop_at("17:43").strftime("%H:%M") == "17:43"
+    assert _parse_stop_at("2026-11-05T17:43:00").minute == 43
+    with pytest.raises(ValueError):
+        _parse_stop_at("soon")
+
+
+def test_recorded_login_is_used_only_while_it_can_be_the_live_session(tmp_path):
+    import sys
+    from datetime import datetime, timedelta, timezone
+    from pathlib import Path
+
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "sister" / "command_tools"))
+    from sister.command_tools.run_in_session import recorded_login
+
+    record = tmp_path / "sister_login.json"
+    assert recorded_login(record) is None
+    login = datetime.now(timezone.utc) - timedelta(minutes=12)
+    record.write_text(json.dumps({"logged_in_at": login.isoformat()}))
+    assert abs((recorded_login(record) - (datetime.now() - timedelta(minutes=12))).total_seconds()) < 5
+    record.write_text(json.dumps({"logged_in_at": (login - timedelta(minutes=30)).isoformat()}))
+    assert recorded_login(record) is None  # older than a session: not this one

@@ -317,6 +317,19 @@ def parse_intestato_value(value: str) -> dict:
     return owner
 
 
+_SOURCE_DATE = re.compile(r"\bdel\s+(\d{2}/\d{2}/\d{4})")
+
+
+def mutation_date_from_source(source: Any):
+    """The date of an ownership act from its description, when the XML has no ``DataMutazione``.
+
+    ``Atto del 25/06/2013 Pubblico ufficiale …`` → 2013-06-25; ``SUCCESSIONE TESTAMENTARIA di X del 20/10/2019 …`` → 2019-10-20.
+    The first ``del GG/MM/AAAA`` is the act's own date (the later ones are registration dates). None when there is none.
+    """
+    found = _SOURCE_DATE.search(squeeze(source))
+    return parse_it_date(found.group(1)) if found else None
+
+
 def parse_omonimo_value(value: Any) -> dict[str, str]:
     """Decode an ``omonimoSelezionato`` radio value of the *Elenco Omonimi* page (the page after a code search).
 

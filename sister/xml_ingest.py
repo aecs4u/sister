@@ -300,7 +300,7 @@ async def _write_mutations(
     document is always set. ``IntestazioneAttuale`` (index ``current``) becomes ``is_current`` with no index.
     """
     from .reference import get_or_create_right
-    from .result_parsers import parse_it_date
+    from .result_parsers import mutation_date_from_source, parse_it_date
     from .visura_xml_models import MutationOwner, OwnershipMutation
 
     owners = 0
@@ -313,7 +313,7 @@ async def _write_mutations(
             **parent,
             mutation_index=None if is_current else _int(mutation["index"]),
             is_current=is_current,
-            mutation_date=parse_it_date(mutation["date"]),
+            mutation_date=parse_it_date(mutation["date"]) or mutation_date_from_source(mutation["source"]),
             source_description=mutation["source"] or None,
             status=status if status in _MUTATION_STATUS else None,
             reference_cadastral_unit_id=await _unit(session, ref, cadastre_type)

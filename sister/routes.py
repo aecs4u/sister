@@ -84,6 +84,17 @@ def _submit_result_to_response(results: list, tipos_catasto: list, message: str)
     return JSONResponse(resp)
 
 
+def _cached_answer_meta(result: SubmitResult) -> dict:
+    """When a cached answer was given and whether it is stale (older than the cache window, returned only because the
+    client sent ``reuse_previous``): the CLI and the batch engine ask before downloading again only when ``stale`` is set."""
+    resp = result.response
+    return {
+        "error": resp.error,
+        "timestamp": resp.timestamp.isoformat() if resp.timestamp else None,
+        "stale": bool(result.stale),
+    }
+
+
 def _cached_single_response(result, tipo_catasto: str):
     """JSONResponse for a single request answered from the cache, else None.
 
@@ -215,18 +226,8 @@ async def richiedi_intestati_immobile(request: VisuraIntestatiInput, service: Vi
 
         result = await service.add_intestati_request(intestati_request, force=force)
 
-        if hasattr(result, "cached") and result.cached and result.response:
-            resp = result.response
-            return JSONResponse(
-                {
-                    "request_id": result.request_id,
-                    "tipo_catasto": tipo_catasto,
-                    "status": _response_status(resp),
-                    "data": resp.data,
-                    "error": resp.error,
-                    "timestamp": resp.timestamp.isoformat() if resp.timestamp else None,
-                }
-            )
+        if (cached := _cached_single_response(result, tipo_catasto)) is not None:
+            return cached
 
         return JSONResponse(
             {
@@ -546,6 +547,7 @@ async def richiedi_ispezione_ipotecaria(
                     "tipo_ricerca": request.search_type,
                     "status": "cached",
                     "data": result.response.data,
+                    **_cached_answer_meta(result),
                 }
             )
 
@@ -604,6 +606,7 @@ async def richiedi_generic_sister(
                     "search_type": search_type,
                     "status": "cached",
                     "data": submit.response.data,
+                    **_cached_answer_meta(submit),
                 }
             )
 

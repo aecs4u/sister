@@ -5,9 +5,10 @@
 
 Works on every list ``sister batch build-list`` reads (``docs/batch_markdown_format.md``):
 
-* subject rows (``codice_fiscale`` / ``identificativo``): available = a request with ``cadastre_type`` E (or none) that found
-  something or got SISTER's own "nessuna corrispondenza", an outcome "too many results", or a stored subject visura (``vs_*``).
-  An answer for Terreni alone does not count;
+* subject rows (``codice_fiscale`` / ``identificativo``): available per kind of query (``sister/answered.py``): a search is
+  answered by an earlier search over Fabbricati and Terreni (found, "nessuna corrispondenza", "too many results"), a
+  ``soggetto-documento`` by a document of the same view (and province) requested or stored (``vs_*``). An answer for Terreni
+  alone does not count, and a row asking for the Storica always stays;
 * parcel rows (comune, foglio, particella, optional subalterno and ``tipo_catasto``): available = a stored visura
   (``visura``, ``visura_fabbricati``, ``visura_terreni``, ``visura_soggetto``) of that comune/foglio/particella/subalterno
   and catasto. Rows whose ids differ only by a final ``-F``/``-T`` are alternatives for one identifier of unknown type:
@@ -39,8 +40,9 @@ from dotenv import load_dotenv  # noqa: E402
 
 load_dotenv(ROOT / ".env")
 
-from run_in_session import answered_codes  # noqa: E402  (same definition of "answered" as the runner)
+from run_in_session import answered_queries  # noqa: E402  (same definition of "answered" as the runner)
 
+from sister.answered import Answered  # noqa: E402
 from sister.batch_markdown import is_table_markdown, parse_markdown  # noqa: E402
 
 ROW = re.compile(r"^\| (\d+) \| `([A-Z0-9]+)` \|(.*)$")
@@ -92,9 +94,12 @@ def parcel_available(params: dict, stored: set) -> bool | None:
     )
 
 
-def available_lines(text: str, answered: set[str], stored: set) -> tuple[list[int], dict[str, int]]:
+def available_lines(text: str, answered: Answered | set[str], stored: set) -> tuple[list[int], dict[str, int]]:
     """Line numbers of the rows to drop, and how many rows were tested per kind."""
+    if not isinstance(answered, Answered):
+        answered = Answered.build(searches=answered)
     parsed = parse_markdown(text)
+    defaults = parsed.batch.defaults
     verdicts: list[bool | None] = []
     counts = {"subject": 0, "parcel": 0, "other": 0}
     for query in parsed.batch.queries:
@@ -106,7 +111,8 @@ def available_lines(text: str, answered: set[str], stored: set) -> tuple[list[in
             continue
         if code:
             counts["subject"] += 1
-            verdicts.append(code in answered)
+            command = query.command or defaults.command
+            verdicts.append(answered.covers(command, {**{k: v for k, v in defaults.params.items() if v}, **params}))
             continue
         verdict = parcel_available(params, stored)
         counts["other" if verdict is None else "parcel"] += 1
@@ -130,7 +136,7 @@ def main() -> int:
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
 
-    answered = asyncio.run(answered_codes())
+    answered = asyncio.run(answered_queries())
     source = args.list_file.read_text(encoding="utf-8")
     if is_table_markdown(source):
         stored = asyncio.run(stored_parcels())

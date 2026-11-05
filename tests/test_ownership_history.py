@@ -117,3 +117,25 @@ async def test_a_complete_subject_search_closes_what_the_subject_no_longer_owns(
     assert rows == [("1", False), ("2", True)]
     await save("s3", search([]), scope="RA")  # a provincial search proves nothing about the rest
     assert await _rows("SELECT count(*) FROM ownership_history WHERE ended_at IS NULL") == [(1,)]
+
+
+def test_the_act_date_is_read_from_the_description_when_the_xml_has_none():
+    from datetime import date
+
+    from sister.result_parsers import mutation_date_from_source
+
+    assert mutation_date_from_source("Atto del 25/06/2013 Pubblico ufficiale X Repertorio n. 1 - Voltura in atti dal 01/07/2013") == date(2013, 6, 25)
+    assert mutation_date_from_source("SUCCESSIONE TESTAMENTARIA di GUGINO CAROLINA del 20/10/2019 Sede PALERMO") == date(2019, 10, 20)
+    assert mutation_date_from_source("Impianto meccanografico") is None and mutation_date_from_source(None) is None
+
+
+@pytest.mark.usefixtures("fresh_db")
+async def test_the_subject_page_lists_the_units_that_changed_hands():
+    await _save("v1", _visura([_owner(CF)]))
+    await _save("v2", _visura([_owner(CO)]))  # sold to CO
+    units = await database.subject_ownership_history(CF)
+    assert len(units) == 1 and units[0]["changed"] and units[0]["foglio"] == "103"
+    assert [(p["fiscal_code"], p["current"]) for p in units[0]["periods"]] == [(CF, False), (CO, True)]
+    assert units[0]["periods"][0]["is_subject"] and units[0]["last_change_at"] is not None
+    assert await database.subject_ownership_history(CO) == units[:0] + await database.subject_ownership_history(CO)  # stable
+    assert await database.subject_ownership_history("NONEXISTENT0000A") == []
