@@ -9,8 +9,9 @@
     proj4.defs('CUSTOM', PROJ4_STR);
 
     function toWgs84(coord) {
+        // GeoJSON order ([lon, lat]): the result feeds L.geoJSON, which swaps to LatLng itself.
         var pt = proj4('CUSTOM', 'WGS84', [coord[0], coord[1]]);
-        return [pt[1], pt[0]];
+        return [pt[0], pt[1]];
     }
 
     function projectGeometry(geom) {

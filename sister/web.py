@@ -5410,6 +5410,18 @@ async def _geocode_address(query: str) -> dict[str, Any] | None:
         return hit
 
 
+def _building_geocode_queries(query: str) -> list[str]:
+    """Geocoder queries for a free-text ``/3d`` address, the cleaned street-level one first.
+
+    Cadastral addresses (``VIA EL ALAMEIN n. 2 Piano T-3, RAVENNA``, the subject pages' "Vista 3D" links)
+    carry unit details Nominatim cannot resolve. Only the part before the first comma is cleaned: the
+    cleaner drops everything after ``Piano``/``Interno``, which would otherwise take the comune with it.
+    """
+    street, _, rest = query.partition(",")
+    cleaned = _hub_map_geocode_query(street, rest.strip(" ,"), "")
+    return [q for q in dict.fromkeys((cleaned, query)) if q]
+
+
 @router.get("/3d", response_class=HTMLResponse)
 async def web_building_3d(
     request: Request,
@@ -5425,7 +5437,10 @@ async def web_building_3d(
     if lat is not None and lng is not None and -90 <= lat <= 90 and -180 <= lng <= 180:
         place = {"lat": lat, "lng": lng, "label": query or f"{lat:.6f}, {lng:.6f}", "kind": "coordinate"}
     elif query:
-        place = await _geocode_address(query)
+        for candidate in _building_geocode_queries(query):
+            place = await _geocode_address(candidate)
+            if place:
+                break
     api_key = os.getenv("GOOGLE_MAPS_API_KEY", "").strip()
     earth_url = ""
     if place:
@@ -5697,7 +5712,7 @@ async def _render_doc_from_db(
         land_registry_history=land_registry_history,
         subject_fiscal_code=subject_fiscal_code,
         subject_route_prefix=subject_route_prefix,
-        ownership_history=await _ownership_history_for_page(subject_fiscal_code),
+        subject_ownership_history_rows=await _ownership_history_for_page(subject_fiscal_code),
         subject_tags=await _subject_tags_for_page(subject_fiscal_code, subject_route_prefix),
         subject_documents=subject_documents,
         subject_portfolio=subject_portfolio,
@@ -11874,7 +11889,7 @@ async def _render_query_only_subject(
         doc=doc,
         subject_fiscal_code=profile["code"],
         subject_route_prefix=route_prefix,
-        ownership_history=await _ownership_history_for_page(profile["code"]),
+        subject_ownership_history_rows=await _ownership_history_for_page(profile["code"]),
         subject_tags=await _subject_tags_for_page(profile["code"], route_prefix),
         subject_documents=[],
         subject_hub=profile,

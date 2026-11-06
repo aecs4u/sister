@@ -380,7 +380,7 @@ def test_db_backfill_rejects_unknown_target():
     result = runner.invoke(app, ["db", "backfill", "unknown"])
 
     assert result.exit_code == 2
-    assert "usa projections, xml, holdings, names o all" in result.output
+    assert "usa projections, xml, holdings, names, history o all" in result.output
 
 
 def test_floor_plan_validate_passes_inputs_and_writes_report(monkeypatch, tmp_path):

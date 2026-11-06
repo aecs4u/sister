@@ -124,6 +124,11 @@ def _apply_table_migrations(engine, schema: str, istat_schema: str) -> None:
     with engine.begin() as conn:
         with Operations.context(MigrationContext.configure(conn, opts={"sister_schema": schema, "istat_schema": istat_schema})):
             migration.upgrade()
+            # that migration drops comune columns CASCADE, which takes the views on them along; in a real upgrade it runs
+            # before the later revisions, here after: create those views again (every upgrade() is idempotent)
+            for later in migrations:
+                if getattr(later, "revision", "") == "20261126_ownership_history":
+                    later.upgrade()
 
 
 def _apply_flat_schema(engine, schema: str, archive_schema: str, istat_schema: str) -> None:

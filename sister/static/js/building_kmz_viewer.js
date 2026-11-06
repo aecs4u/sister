@@ -195,6 +195,7 @@ if (stage) {
   let realisticOn = stage.dataset.realistic !== '0';
   let sceneExtent = 200;
   const SKY = 0xbfd8ec;
+  const HIGHLIGHT_REAL = '#e8a060'; // untextured volumes of the address building in the realistic look
 
   function applyMode() {
     const on = realisticOn;
@@ -366,6 +367,7 @@ if (stage) {
         geometry.setIndex([0, 1, 2, 0, 2, 3]);
         geometry.computeVertexNormals();
         const map = makeWallTexture({ length, height, floors, facade: item.facade, street, seed: i + Math.round(area) });
+        // Not tinted for the address building: the texture is its verified facade palette (building_overrides.json).
         const wall = new THREE.Mesh(geometry, new THREE.MeshStandardMaterial({ map, roughness: 0.93, side: THREE.DoubleSide }));
         wall.castShadow = wall.receiveShadow = true;
         wall.userData = userData;
@@ -475,7 +477,7 @@ if (stage) {
           reg.schematic.push(mesh);
           realisticWalls(item, mesh.userData);
         } else if (extruded) {
-          reg.recolor.push({ mat: material, base: fill.color, real: '#d6cfc1' });
+          reg.recolor.push({ mat: material, base: fill.color, real: item.highlighted ? HIGHLIGHT_REAL : '#d6cfc1' });
         }
         mesh.castShadow = mesh.receiveShadow = true;
         if (item.highlighted) targetBox.expandByObject(mesh);

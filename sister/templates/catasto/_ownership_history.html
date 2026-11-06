@@ -4,14 +4,14 @@
     <div class="card-header bg-white">
       <h2 id="ownership-history-title" class="h5 mb-0">
         <i class="fas fa-history me-1 text-warning" aria-hidden="true"></i>Variazioni di proprietà
-        <span class="badge bg-warning-subtle text-warning-emphasis border border-warning-subtle ms-1">{{ ownership_history|length }} immobili</span>
+        <span class="badge bg-warning-subtle text-warning-emphasis border border-warning-subtle ms-1">{{ subject_ownership_history_rows|length }} immobili</span>
       </h2>
       <p class="small text-muted mb-0 mt-1">Per ogni immobile: gli atti della visura storica archiviata (costituzioni, compravendite,
         successioni, con i titolari che ne risultano) e i titolari visti dalle ricerche. Un titolare resta tale finché una ricerca completa
         lo elenca; «non più elencato» indica la prima ricerca che non lo riporta più.</p>
     </div>
     <div class="card-body p-0">
-      {% for unit in ownership_history %}
+      {% for unit in subject_ownership_history_rows %}
       <details class="border-top" {% if loop.first %}open{% endif %}>
         <summary class="px-3 py-2">
           <strong>{{ unit.comune or 'Comune n.d.' }}</strong>
