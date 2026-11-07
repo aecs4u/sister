@@ -115,6 +115,8 @@ def health(port: int) -> dict:
 
 
 def start_service(port: int, log: Path) -> subprocess.Popen:
+    if health(port):  # an old service (own state, maybe a dead session) would be mistaken for the one started here
+        raise SystemExit(f"la porta {port} e' gia' occupata da un altro servizio: fermalo (o usa --port) e rilancia")
     handle = open(log, "w")
     process = subprocess.Popen(
         [str(ROOT / "scripts" / "start.sh"), "--port", str(port), "--no-reload"],
