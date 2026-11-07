@@ -7,7 +7,7 @@ SISTER ends a session about 30 minutes after the login, whatever the activity. T
 2. starts the service (no reload) and waits until it is attached to that session;
 3. drops from every plan the rows that already have an answer in the database, and the codici fiscali whose check
    character is wrong (SISTER rejects them), so nothing answered is asked twice;
-4. proves the session with one real search;
+4. optionally proves the session with one real search (``--preflight-cf``) before starting the batch;
 5. runs the plans in order (``query batch --resume --stop-at``): no row starts after ``--minutes`` from the login (taken from
    ``sister app login``'s record, ``--logged-in-at`` or now), the batch stops by itself at the first expired-session answer,
    and only a row still running ``--grace-seconds`` after the deadline is interrupted (the journal keeps every state,
@@ -372,7 +372,7 @@ def main() -> int:
     parser.add_argument("--keep-answered", action="store_true", help="do not drop the rows that already have an answer (rows asking for the Storica are "
                         "always kept: the database does not record the 'Tipo richiesta' of an answer)")
     parser.add_argument("--probe", action="store_true", help="also open a scratch tab to test the login first. Off by default: a second tab on the live "
-                        "session made SISTER answer lock.html to the search that followed (2026-10-27); the service attach and the proof search are the test")
+                        "session made SISTER answer lock.html to the search that followed (2026-10-27); use --preflight-cf for a real proof search")
     args = parser.parse_args()
 
     now = datetime.now()

@@ -47,9 +47,13 @@ NEEDS_HUMAN = "needs_human"  # a CAPTCHA nobody solved: a human action, never re
 TIMEOUT = "timeout"  # still running when polling stopped; resume polls it again
 INCOMPLETE = "incomplete"  # a persona giuridica code with many registry records, read only up to ``omonimo_prossimo``
 MAX_CONTINUATIONS = 200  # follow-up requests of one row (records are read in chunks when a code has hundreds)
-# SISTER's own answer to a search: the subject does not exist. It comes back as an error, but a repeat gets the same
+# SISTER's final answers: no match or a response that needs narrower criteria. Repeating the same query gets the same
 # answer, so ``--resume`` does not send it again (a changed query is still a new request).
-FINAL_ERRORS = ("NESSUNA CORRISPONDENZA", "Superato il limite massimo")
+FINAL_ERRORS = (
+    "NESSUNA CORRISPONDENZA",
+    "Superato il limite massimo",
+    "Il sistema non riesce a produrre la risposta nei limiti di tempo previsti",
+)
 TOO_MANY = "Superato il limite massimo"  # SISTER lists at most 400 subjects for a search
 # the "Provincia della sede" options of the persona giuridica form (EE = estero): a search by name that matches more than
 # 400 subjects is split into one request per province
@@ -647,7 +651,7 @@ class BatchRunner:
 
     @staticmethod
     def _final(entry: dict) -> bool:
-        """SISTER's own answer ("nessuna corrispondenza", "oltre 400"): asking again gets the same one."""
+        """SISTER's final no-match or criteria-refinement answer: asking again gets the same one."""
         return entry.get("status") == ERROR and any(marker in str(entry.get("error", "")) for marker in FINAL_ERRORS)
 
     @staticmethod

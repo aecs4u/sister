@@ -18,22 +18,60 @@ usage() {
   printf '\nBuild a SISTER batch from a supported Markdown list and run it in the current logged-in session.\n'
   printf 'Without BATCH_DIR, resumes the latest saved batch for this list when one exists.\n'
   printf 'After the batch, imports ready, not-yet-stored documents from Richieste.\n'
-  printf '\nOptions:\n  -h, --help  Show this help and exit.\n'
+  printf '\nOptions:\n  --preflight-cf CF  Run one real subject search to verify the session before the batch.\n'
+  printf '  -h, --help        Show this help and exit.\n'
   printf '\nExamples:\n  %s inputs/codici_fiscali.all.md\n  %s inputs/pvp_sales/IS.md outputs/batches/IS_run_01\n' "$0" "$0"
 }
 
-for arg in "$@"; do
-  case "$arg" in
-    -h|--help) usage; exit 0 ;;
+POSITIONAL=()
+PREFLIGHT_CF=""
+while (($#)); do
+  case "$1" in
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    --preflight-cf)
+      if (($# < 2)) || [[ -z "$2" ]]; then
+        printf '%s\n' '--preflight-cf requires a codice fiscale.' >&2
+        usage >&2
+        exit 2
+      fi
+      PREFLIGHT_CF="$2"
+      shift 2
+      ;;
+    --preflight-cf=*)
+      PREFLIGHT_CF="${1#*=}"
+      if [[ -z "$PREFLIGHT_CF" ]]; then
+        printf '%s\n' '--preflight-cf requires a codice fiscale.' >&2
+        usage >&2
+        exit 2
+      fi
+      shift
+      ;;
+    --)
+      shift
+      POSITIONAL+=("$@")
+      break
+      ;;
+    -* )
+      printf 'Unknown option: %s\n' "$1" >&2
+      usage >&2
+      exit 2
+      ;;
+    *)
+      POSITIONAL+=("$1")
+      shift
+      ;;
   esac
 done
 
-if [[ $# -lt 1 || $# -gt 2 ]]; then
+if [[ ${#POSITIONAL[@]} -lt 1 || ${#POSITIONAL[@]} -gt 2 ]]; then
   usage >&2
   exit 2
 fi
 
-SOURCE_LIST="$(realpath -- "$1")"
+SOURCE_LIST="$(realpath -- "${POSITIONAL[0]}")"
 if [[ ! -f "$SOURCE_LIST" ]]; then
   printf 'Source list is not a file: %s\n' "$SOURCE_LIST" >&2
   exit 2
@@ -45,8 +83,8 @@ fi
 
 # Capture this before batch generation, as the script is meant to be started just after login.
 LOGIN_TIME="$(date +%H:%M)"
-if [[ $# -eq 2 ]]; then
-  BATCH_DIR="$(realpath -m -- "$2")"
+if [[ ${#POSITIONAL[@]} -eq 2 ]]; then
+  BATCH_DIR="$(realpath -m -- "${POSITIONAL[1]}")"
 else
   LIST_NAME="$(basename -- "$SOURCE_LIST" .md)"
   BATCH_ROOT="$ROOT/outputs/batches"
@@ -73,4 +111,8 @@ fi
 
 mkdir -p -- "$BATCH_DIR"
 "${PYTHON_CMD[@]}" -m sister.cli batch build-list "$SOURCE_LIST" --output-dir "$BATCH_DIR"
-exec "${PYTHON_CMD[@]}" -m sister.cli batch run-session --batch "$BATCH_DIR" --logged-in-at "$LOGIN_TIME"
+RUN_ARGS=(--batch "$BATCH_DIR" --logged-in-at "$LOGIN_TIME")
+if [[ -n "$PREFLIGHT_CF" ]]; then
+  RUN_ARGS+=(--preflight-cf "$PREFLIGHT_CF")
+fi
+exec "${PYTHON_CMD[@]}" -m sister.cli batch run-session "${RUN_ARGS[@]}"

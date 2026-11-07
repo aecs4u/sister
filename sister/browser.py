@@ -39,6 +39,7 @@ from .utils import (
     run_ispezioni,
     run_ispezioni_cartacee,
     run_ispezioni_ipotecarie_elenchi,
+    run_ispezioni_ipotecarie_riepilogo,
     run_ispezioni_ipotecarie_stato,
     run_originali_impianto,
     run_punti_fiduciali,
@@ -86,6 +87,7 @@ _NOARGS_DISPATCHERS = {
     "richieste": run_consultazione_richieste,
     "ipotecaria_stato": run_ispezioni_ipotecarie_stato,
     "ipotecaria_elenchi": run_ispezioni_ipotecarie_elenchi,
+    "ipotecaria_riepilogo": run_ispezioni_ipotecarie_riepilogo,
 }
 
 

@@ -2,7 +2,7 @@
 
 Every single-step query (`search`, `intestati`, `soggetto`, `azienda`, `elenco`, `indirizzo`, `partita`,
 `nota`, `mappa`, `export-mappa`, `originali`, `fiduciali`, `ispezioni`, `ispezioni-cartacee`,
-`elaborato-planimetrico`, `riepilogo`, plus `richieste-sister`, `ipotecaria-stato/-elenchi`,
+`elaborato-planimetrico`, `riepilogo`, plus `richieste-sister`, `ipotecaria-stato/-elenchi/-riepilogo` (the last lists the ispezioni ipotecarie already run, read only),
 `visura-storica`, `soggetto-documento`, `soggetto-immobili`) is defined once, in
 [`sister/query_forms.py`](../sister/query_forms.py):
 

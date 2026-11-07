@@ -723,6 +723,13 @@ _NO_FORM = (
         (),
     ),
     _extra(
+        "ipotecaria-riepilogo",
+        "List the ispezioni ipotecarie already run (Riepilogo Ispezioni). Read only: nothing is requested or charged.",
+        "/visura/ipotecaria-riepilogo",
+        "ipotecaria-riepilogo",
+        (),
+    ),
+    _extra(
         "visura-storica",
         "Historical visura per immobile (Storica Analitica), without the per-owner step.",
         "/visura/visura-storica",

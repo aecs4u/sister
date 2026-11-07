@@ -16,6 +16,7 @@ from playwright.async_api import Page
 from .models import CaptchaRequired
 from .result_parsers import omonimo_details, parse_intestato_value, parse_soggetto_selezionato
 from .query_forms import get_query_form
+from .search_outcome import search_refinement_error
 
 log = logging.getLogger("sister.utils")
 
@@ -3193,14 +3194,16 @@ async def _search_soggetto(
             "total_results": 0,
             "error": f"{NO_MATCH_ERROR} (codice fiscale non valido secondo SISTER)",
         }
-    if _too_many(page_text):
-        log.warning("Ricerca %s: oltre 400 risultati", codice_fiscale)
+    refinement_error = _criteria_refinement(page_text)
+    if refinement_error:
+        log.warning("Ricerca %s: SISTER chiede criteri più specifici", codice_fiscale)
         return {
             "soggetto": codice_fiscale,
             "immobili": [],
             "total_results": 0,
-            "troppi_risultati": True,
-            "error": TOO_MANY_ERROR,
+            "troppi_risultati": _too_many(page_text),
+            "needs_refinement": True,
+            "error": refinement_error,
         }
     if "NESSUNA CORRISPONDENZA TROVATA" in page_text:
         elapsed = time.time() - time0
@@ -3381,16 +3384,18 @@ async def _search_persona_giuridica(
 
     # STEP 7: Check for errors
     page_text = await page.inner_text("body")
-    if _too_many(page_text):
+    refinement_error = _criteria_refinement(page_text)
+    if refinement_error:
         # more than 400 subjects match: the page is the search form again, not a result. Narrow the search (for a
         # denominazione: provincia_sede / comune_sede; run-list splits it by province on its own)
-        log.warning("Ricerca %s: oltre 400 risultati", identificativo)
+        log.warning("Ricerca %s: SISTER chiede criteri più specifici", identificativo)
         return {
             "soggetto": identificativo,
             "immobili": [],
             "total_results": 0,
-            "troppi_risultati": True,
-            "error": TOO_MANY_ERROR,
+            "troppi_risultati": _too_many(page_text),
+            "needs_refinement": True,
+            "error": refinement_error,
         }
     if "NESSUNA CORRISPONDENZA TROVATA" in page_text:
         elapsed = time.time() - time0
@@ -3629,6 +3634,27 @@ def _on_live_sister_page(url: str) -> bool:
     return "sister3.agenziaentrate.gov.it" in url and not any(marker in url for marker in _DEAD_PAGE_MARKERS)
 
 
+_SEARCH_FORM_SELECT = "select[name='tipoCatasto']"
+
+
+async def _wait_for_search_form(page, menu_link: str) -> None:
+    """After a menu-link click has loaded its page: return when the search form is there, without waiting for one that is not.
+
+    Seen on 2026-11-07 (4 of 9 full-path starts): after "Applica" the portal answers the menu link with SceltaServizio again.
+    ``_click_nav`` has already returned, so that page is final: waiting ``ACTION_TIMEOUT_MS`` (15 s) for the form could only
+    time out, and the row then repeated everything from a fresh SceltaServizio (+20-60 s). The bounce is recognised at once
+    (province menu on SceltaServizio, no form) and the link is pressed one more time; if that does not open the form either,
+    the caller's second attempt from a fresh SceltaServizio runs as before.
+    """
+    form = page.locator(_SEARCH_FORM_SELECT).first
+    if await page.locator(_SEARCH_FORM_SELECT).count() == 0:
+        bounced = "SceltaServizio.do" in page.url and await page.locator("select[name='listacom'] option").count() > 1
+        if bounced:
+            log.info("Menu '%s' riportato a Scelta Servizio: nuovo clic subito, senza attendere il modulo", menu_link)
+            await _click_nav(page, page.get_by_role("link", name=menu_link), ACTION_TIMEOUT_MS)
+    await form.wait_for(state="attached", timeout=ACTION_TIMEOUT_MS)
+
+
 async def _open_search_form(page, page_logger, office, menu_link: str) -> None:
     """Open the search form of a left-menu service (``Persona fisica``, ``Persona giuridica``).
 
@@ -3660,7 +3686,7 @@ async def _open_search_form(page, page_logger, office, menu_link: str) -> None:
         try:
             await _set_office(page, page_logger, office, navigate=not on_scelta)
             await _click_nav(page, page.get_by_role("link", name=menu_link), ACTION_TIMEOUT_MS)
-            await page.locator("select[name='tipoCatasto']").first.wait_for(state="attached", timeout=ACTION_TIMEOUT_MS)
+            await _wait_for_search_form(page, menu_link)
             break
         except Exception as exc:
             # Seen on 1 search in 3 on 2026-10-26: after "Applica" the portal answers with SceltaServizio again and the menu link
@@ -4867,6 +4893,53 @@ async def run_ispezioni_ipotecarie_elenchi(page):
     return {"risultati": results, "total_results": len(results)}
 
 
+def _extract_riepilogo_ispezioni(page_html: str) -> list:
+    """Rows of the Riepilogo Ispezioni table (the ispezioni already run).
+
+    The page's column headers are not known to ``_extract_result_tables``'s keyword filter, so this takes the
+    table with the most data rows among those that have a header row. Layout tables (no ``<th>``) are skipped.
+    """
+    soup = BeautifulSoup(page_html, "html.parser")
+    best: list = []
+    for table in soup.find_all("table"):
+        if table.find("table") or not table.find("th"):
+            continue  # a layout table around other tables, or one without headers
+        rows = _table_rows(table)
+        if len(rows) > len(best):
+            best = rows
+    return best
+
+
+async def run_ispezioni_ipotecarie_riepilogo(page):
+    """List the ispezioni ipotecarie already run (Riepilogo Ispezioni): read only, nothing is requested or charged.
+
+    Reaches the page like the other Ispezioni Ipotecarie pages (Passa a Ispezioni, Conferma Lettura, left menu).
+    The portal link is ``Ispezioni/RiepilogoIspezioni/RiepilogoIsp.do``; the columns are returned as the portal
+    labels them, so the result is verified against a live session rather than assumed (CLAUDE.md: browser flow).
+    """
+    page_logger = PageLogger("ispezioni_riepilogo")
+    log.info("[bold]Riepilogo ispezioni ipotecarie[/bold]")
+
+    await _navigate_to_scelta_servizio(page, page_logger)
+    await page.get_by_role("link", name="Passa a Ispezioni", exact=True).click()
+    await page.wait_for_load_state("networkidle", timeout=30000)
+
+    conferma = page.get_by_role("link", name="Conferma Lettura")
+    if await conferma.count() > 0:
+        await conferma.click()
+        await page.wait_for_load_state("networkidle", timeout=30000)
+
+    riepilogo_link = page.get_by_role("link", name="Riepilogo Ispezioni")
+    if await riepilogo_link.count() == 0:
+        raise RuntimeError("Voce 'Riepilogo Ispezioni' non trovata nel menu Ispezioni ipotecarie")
+    await riepilogo_link.click()
+    await page.wait_for_load_state("networkidle", timeout=30000)
+    await page_logger.log(page, "riepilogo_ispezioni")
+
+    results = _extract_riepilogo_ispezioni(await page.content())
+    return {"risultati": results, "total_results": len(results)}
+
+
 async def extract_all_sezioni(
     page: Page,
     tipo_catasto: str = "T",
@@ -5355,6 +5428,11 @@ TOO_MANY_ERROR = f"{TOO_MANY_MARKER}. Aggiungere altri parametri per la ricerca"
 def _too_many(page_text: str) -> bool:
     """Is this SISTER's refusal of a search that matches more than 400 subjects?"""
     return TOO_MANY_MARKER in (page_text or "")
+
+
+def _criteria_refinement(page_text: str) -> str | None:
+    """Recognize result-size and response-time refusals before parsing an empty page as zero properties."""
+    return search_refinement_error(page_text)
 # why the last search of a tab found no subject (SISTER's own answer, kept to report it as it is)
 _SEARCH_ERROR: "weakref.WeakKeyDictionary[Page, str]" = weakref.WeakKeyDictionary()
 # the subjects the last *Elenco Omonimi* page of a tab listed (persons: cognome, nome, nascita, sesso, codice fiscale; companies:
@@ -5415,8 +5493,9 @@ async def _open_soggetto_province_page(page, identifier, tipo_catasto, provincia
             return True  # no homonym step for this subject: the province table is already shown
         # neither page: say what is there instead of waiting 30 s for a button that never comes
         text = re.sub(r"\s+", " ", await page.inner_text("body"))
-        if _too_many(text):
-            _SEARCH_ERROR[page] = TOO_MANY_ERROR
+        refinement_error = _criteria_refinement(text)
+        if refinement_error:
+            _SEARCH_ERROR[page] = refinement_error
             return False
         text = text.split("Dati della ricerca")[-1].strip()[:1200]
         raise Exception(f"Pagina inattesa dopo la ricerca ({page.url}): {text}")
@@ -5551,7 +5630,14 @@ def _province_elenco(rows: list) -> list[dict]:
 
 
 async def run_soggetto_immobili(
-    page, codice_fiscale, tipo_catasto="E", provincia=None, con_intestati=False, azienda=False, omonimo_index=0
+    page,
+    codice_fiscale,
+    tipo_catasto="E",
+    provincia=None,
+    con_intestati=False,
+    azienda=False,
+    omonimo_index=0,
+    omonimi_totale=None,
 ):
     """Owner → properties: list every immobile of a persona fisica/giuridica in each province.
 
@@ -5573,6 +5659,22 @@ async def run_soggetto_immobili(
     soggetti: list[dict] = []  # the subjects of the Elenco Omonimi page (see _LISTED_SUBJECTS)
     index = 0
     n_province = None
+    record_position = max(int(omonimo_index), 0) + 1
+    record_total = max(int(omonimi_totale or record_position), record_position)
+
+    def office_progress(done, total, label, state):
+        subject = str(codice_fiscale).strip().replace(" ", "_")
+        office = str(label or "-").strip().replace(" ", "_")
+        log.info(
+            "RUN_LIST_OFFICE_PROGRESS subject=%s record=%d/%d offices=%d/%d province=%s state=%s",
+            subject,
+            record_position,
+            record_total,
+            done,
+            max(int(total or 1), 1),
+            office,
+            state,
+        )
 
     async def pick_province(idx):
         """On the "Elenco Province" page: select province ``idx`` and open its Immobili list."""
@@ -5581,9 +5683,15 @@ async def run_soggetto_immobili(
         label, nome = "-", ""
         if count > 0:
             pick = radios_prov.nth(min(idx, count - 1))
-            await pick.check()
             label, _, nome = (await pick.get_attribute("value") or "").partition("#")
-        await _click_nav(page, page.locator("input[name='immobili'][value='Immobili']"))
+        office_progress(idx, max(count, 1), label, "opening")
+        try:
+            if count > 0:
+                await pick.check()
+            await _click_nav(page, page.locator("input[name='immobili'][value='Immobili']"))
+        except Exception:
+            office_progress(idx + 1, max(count, 1), label, "failed")
+            raise
         return (label, nome.strip()), max(count, 1)
 
     async def open_list(idx, from_list=False):
@@ -5622,6 +5730,18 @@ async def run_soggetto_immobili(
         if n_province is None:
             n_province = count
         await page_logger.log(page, f"immobili_{index + 1}")
+        refinement_error = _criteria_refinement(await page.inner_text("body"))
+        if refinement_error:
+            office_progress(index + 1, n_province, label, "failed")
+            return {
+                "soggetto": codice_fiscale,
+                "province": province_elenco,
+                "immobili": immobili,
+                "total_results": len(immobili),
+                "needs_refinement": True,
+                "error": refinement_error,
+                "page_visits": page_logger.page_visits,
+            }
         if index == 0:
             chosen = await _selected_subject(page)
             if chosen and not any(item.get("codice_fiscale") == chosen["codice_fiscale"] for item in soggetti):
@@ -5665,6 +5785,7 @@ async def run_soggetto_immobili(
                     await open_list(index)
 
         immobili.extend(batch)
+        office_progress(index + 1, n_province, label, "completed")
         index += 1
         if index >= n_province:
             break
@@ -5805,9 +5926,16 @@ async def run_visura_persona_giuridica(
                 provincia=provincia,
                 azienda=True,
                 omonimo_index=index if listed else 0,
+                omonimi_totale=total,
             )
             failures = 0
             _append_omonimo(combined, index, record, result)
+            if result.get("needs_refinement"):
+                combined["needs_refinement"] = True
+                combined["error"] = result.get("error") or "Affinare i criteri di ricerca."
+                stopped = str(combined["error"])
+                index += 1
+                break
         except Exception as exc:  # noqa: BLE001 (one record must not lose the others)
             if _session_lost(exc):
                 if not combined["omonimi"]:
@@ -5845,6 +5973,9 @@ async def run_visura_persona_giuridica(
     }
     if stopped:
         out["interrotta"] = stopped
+    if combined.get("needs_refinement"):
+        out["needs_refinement"] = True
+        out["error"] = combined["error"]
     if all_failed:
         out["error"] = combined["omonimi"][0]["errore"]
     return out

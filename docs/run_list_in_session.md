@@ -30,6 +30,17 @@ From the repository root, pass the Markdown file path as the first argument:
 uv run sister batch run-list inputs/codici_fiscali.all.md
 ```
 
+To verify the portal session before starting a large batch, pass a valid codice fiscale for a subject-search probe:
+
+```bash
+uv run sister batch run-list --preflight-cf CF_DI_VERIFICA inputs/codici_fiscali.all.md
+```
+
+This performs one real SISTER search and stops before the batch if the search fails. Use a verification code that is
+not also in the input list, since the preflight is separate from the batch. The same option is available through the
+`SISTER_PREFLIGHT_CF` environment variable. Without either setting, `run-list` only confirms that the service can
+attach to the open browser; it does not prove that SISTER will accept a search.
+
 For a PVP parcel list, for example:
 
 ```bash

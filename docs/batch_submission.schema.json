@@ -16,6 +16,7 @@
             "indirizzo",
             "intestati",
             "ipotecaria-elenchi",
+            "ipotecaria-riepilogo",
             "ipotecaria-stato",
             "ispezioni",
             "ispezioni-cart",
@@ -197,6 +198,7 @@
             "indirizzo",
             "intestati",
             "ipotecaria-elenchi",
+            "ipotecaria-riepilogo",
             "ipotecaria-stato",
             "ispezioni",
             "ispezioni-cart",
@@ -1194,6 +1196,29 @@
               "command": {
                 "enum": [
                   "ipotecaria-elenchi"
+                ]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "params": {
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "command"
+            ],
+            "properties": {
+              "command": {
+                "enum": [
+                  "ipotecaria-riepilogo"
                 ]
               }
             }

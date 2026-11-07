@@ -505,6 +505,183 @@
         });
     }
 
+    // One selector in the "OMI Zone" header sets the zone of every editable row of the group (table) at once.
+    // Typology goes back to "automatica", as when the zone of a single row is changed.
+    function addBulkZoneSelect(zoneHead, groupEstimates) {
+        if (!editable) return;
+        var targets = groupEstimates.filter(function (estimate) {
+            return estimate && estimate.asset_identity && estimate.asset_identity.asset_key && estimate.omi_comune;
+        });
+        if (targets.length < 2) return;
+        var comunes = {};
+        targets.forEach(function (estimate) { comunes[estimate.omi_comune] = true; });
+        var comuneCodes = Object.keys(comunes);
+        if (comuneCodes.length !== 1) return;
+        var options = optionsByComune[comuneCodes[0]] || {};
+        var zones = (options.zones || []).filter(function (item) { return item && item.code; });
+        if (!zones.length) return;
+
+        var select = text(zoneHead, 'select', 'form-select form-select-sm mt-1 fw-normal');
+        select.setAttribute('aria-label', 'Imposta la stessa zona OMI per tutti gli immobili del gruppo');
+        select.title = 'Imposta la stessa zona OMI per tutti gli immobili di questo gruppo (' + targets.length + ')';
+        option(select, '', 'Tutti…');
+        option(select, '__auto__', 'Automatica (tutti)');
+        zones.forEach(function (item) { option(select, String(item.code), item.label || String(item.code)); });
+        select.addEventListener('change', function () {
+            var chosen = select.value;
+            if (!chosen) return;
+            var zone = chosen === '__auto__' ? null : chosen;
+            var label = zone ? select.options[select.selectedIndex].textContent : 'automatica';
+            if (!window.confirm('Impostare la zona OMI «' + label + '» per ' + targets.length + ' immobili di questo gruppo?')) {
+                select.value = '';
+                return;
+            }
+            select.disabled = true;
+            zoneHead.title = '';
+            var chain = Promise.resolve();
+            var failed = 0;
+            targets.forEach(function (estimate) {
+                chain = chain.then(function () {
+                    return fetch('/manual-property-valuations/' + encodeURIComponent(estimate.asset_identity.asset_key) + '/omi-selection', {
+                        method: 'PUT',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({comune_code: estimate.omi_comune, zone_code: zone, typology_code: null})
+                    }).then(function (response) { if (!response.ok) failed += 1; }, function () { failed += 1; });
+                });
+            });
+            chain.then(applySavedChange).then(function () {
+                select.value = '';
+                select.disabled = false;
+                if (failed) {
+                    zoneHead.title = failed + ' immobili non aggiornati (zona non disponibile per il comune?).';
+                    var msg = zoneHead.querySelector('[data-omi-bulk-error]') ||
+                        text(zoneHead, 'small', 'text-danger d-block', '');
+                    msg.dataset.omiBulkError = 'true';
+                    msg.textContent = failed + ' non aggiornati';
+                }
+            });
+        });
+    }
+
+    // Same idea for the "OMI Tipologia" header: one typology for every editable row of the group. Each row keeps
+    // its own zone choice; a row whose zone has no such typology is reported and left as it was, so a mostly
+    // uniform group is set here and the few exceptions are then changed in their own row.
+    // Kind of consistency written in a row ("3,5 vani", "120 m²", "45 m³"), read from the row's cells.
+    function consistencyUnit(row) {
+        var content = Array.from(row.cells).map(function (cell) { return cell.textContent; }).join(' | ');
+        var match = /\d\s*(vani|vano|mq|m²|m2|mc|m³|m3)(?![a-z])/i.exec(content);
+        if (!match) return '';
+        var unit = match[1].toLowerCase();
+        if (unit === 'vano' || unit === 'vani') return 'vani';
+        if (unit === 'mq' || unit === 'm²' || unit === 'm2') return 'm²';
+        return 'm³';
+    }
+
+    // Same idea for the "OMI Tipologia" header: one typology for the rows of the group that match a filter
+    // (consistency in vani / m², or a category; default every row). Each row keeps its own zone choice; a row whose
+    // zone has no such typology is reported and left as it was.
+    function addBulkTypologySelect(typologyHead, groupEstimates, rows) {
+        if (!editable) return;
+        var items = groupEstimates.map(function (estimate, index) {
+            return {estimate: estimate || {}, unit: rows[index] ? consistencyUnit(rows[index]) : ''};
+        }).filter(function (item) {
+            var e = item.estimate;
+            return e.asset_identity && e.asset_identity.asset_key && e.omi_comune;
+        });
+        if (items.length < 2) return;
+        var comuneCodes = Object.keys(items.reduce(function (acc, item) { acc[item.estimate.omi_comune] = true; return acc; }, {}));
+        if (comuneCodes.length !== 1) return;
+        var options = optionsByComune[comuneCodes[0]] || {};
+        var labels = {};
+        Object.keys(options.typologies_by_zone || {}).forEach(function (zone) {
+            (options.typologies_by_zone[zone] || []).forEach(function (item) {
+                labels[String(item.code)] = item.label || ('Tipologia OMI ' + item.code);
+            });
+        });
+        var codes = Object.keys(labels);
+        if (!codes.length) return;
+
+        var filters = [{value: '', label: 'Tutti gli immobili', test: function () { return true; }}];
+        ['vani', 'm²', 'm³'].forEach(function (unit) {
+            if (items.some(function (item) { return item.unit === unit; })) {
+                filters.push({value: 'u:' + unit, label: 'Consistenza in ' + unit, test: function (item) { return item.unit === unit; }});
+            }
+        });
+        var categories = {};
+        items.forEach(function (item) {
+            var category = String(item.estimate.category || '').trim();
+            if (category) categories[category] = true;
+        });
+        Object.keys(categories).sort().forEach(function (category) {
+            filters.push({value: 'c:' + category, label: 'Categoria ' + category, test: function (item) {
+                return String(item.estimate.category || '').trim() === category;
+            }});
+        });
+
+        var filterSelect = null;
+        if (filters.length > 1) {
+            filterSelect = text(typologyHead, 'select', 'form-select form-select-sm mt-1 fw-normal');
+            filterSelect.setAttribute('aria-label', 'Immobili a cui applicare la tipologia');
+            filters.forEach(function (filter) {
+                var count = items.filter(filter.test).length;
+                option(filterSelect, filter.value, filter.label + ' (' + count + ')');
+            });
+        }
+        function matching() {
+            var filter = filters.find(function (f) { return filterSelect && f.value === filterSelect.value; }) || filters[0];
+            return items.filter(filter.test);
+        }
+
+        var select = text(typologyHead, 'select', 'form-select form-select-sm mt-1 fw-normal');
+        select.setAttribute('aria-label', 'Imposta la tipologia OMI per gli immobili selezionati');
+        select.title = 'Imposta la stessa tipologia OMI per gli immobili scelti nel filtro sopra';
+        option(select, '', 'Applica a…');
+        option(select, '__auto__', 'Automatica');
+        codes.forEach(function (code) { option(select, code, labels[code]); });
+        select.addEventListener('change', function () {
+            var chosen = select.value;
+            if (!chosen) return;
+            var targets = matching();
+            var typology = chosen === '__auto__' ? null : chosen;
+            var label = typology ? labels[typology] : 'automatica';
+            if (!targets.length || !window.confirm('Impostare la tipologia OMI «' + label + '» per ' + targets.length + ' immobili?')) {
+                select.value = '';
+                return;
+            }
+            select.disabled = true;
+            if (filterSelect) filterSelect.disabled = true;
+            typologyHead.title = '';
+            var current = estimatesByAssetKey(estimates);
+            var chain = Promise.resolve();
+            var failed = 0;
+            targets.forEach(function (target) {
+                var estimate = current[target.estimate.asset_identity.asset_key] || target.estimate;
+                chain = chain.then(function () {
+                    return fetch('/manual-property-valuations/' + encodeURIComponent(estimate.asset_identity.asset_key) + '/omi-selection', {
+                        method: 'PUT',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({
+                            comune_code: estimate.omi_comune,
+                            zone_code: estimate.omi_zone_selected && estimate.omi_zona ? estimate.omi_zona : null,
+                            typology_code: typology
+                        })
+                    }).then(function (response) { if (!response.ok) failed += 1; }, function () { failed += 1; });
+                });
+            });
+            chain.then(applySavedChange).then(function () {
+                select.value = '';
+                select.disabled = false;
+                if (filterSelect) filterSelect.disabled = false;
+                if (failed) {
+                    var msg = typologyHead.querySelector('[data-omi-bulk-error]') ||
+                        text(typologyHead, 'small', 'text-danger d-block', '');
+                    msg.dataset.omiBulkError = 'true';
+                    msg.textContent = failed + ' non aggiornati (tipologia assente nella loro zona)';
+                }
+            });
+        });
+    }
+
     function addSelections() {
         document.querySelectorAll('.document-land-map-content .imm-tables').forEach(function (wrapper, groupIndex) {
             var group = estimates[groupIndex] || {};
@@ -551,6 +728,9 @@
             } else {
                 header.append(sizeHead, zoneHead, typologyHead, priceHead);
             }
+
+            addBulkZoneSelect(zoneHead, rowEstimates);
+            addBulkTypologySelect(typologyHead, rowEstimates, rows);
 
             rows.forEach(function (row, rowIndex) {
                 var estimate = rowEstimates[rowIndex] || {};

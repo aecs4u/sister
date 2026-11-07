@@ -45,6 +45,7 @@ from .models import (
     VisuraResponse,
     VisuraSoggettoRequest,
 )
+from .search_outcome import search_refinement_error
 
 # Set per request by ``main._reuse_previous`` (``?reuse_previous=true``): see ``VisuraService._check_cache``.
 reuse_previous_var: contextvars.ContextVar[bool] = contextvars.ContextVar("sister_reuse_previous", default=False)
@@ -65,8 +66,32 @@ def _no_match_message(response: VisuraResponse) -> str | None:
     return None
 
 
+def _search_refinement_message(response: VisuraResponse) -> str | None:
+    """Promote a portal criteria-refinement refusal nested in a successful browser payload."""
+    data = response.data if isinstance(response.data, dict) else {}
+    if data.get("needs_refinement"):
+        return search_refinement_error(response.error or data.get("error")) or str(
+            response.error or data.get("error") or "Affinare i criteri di ricerca."
+        )
+    message = search_refinement_error(response.error)
+    if message:
+        return message
+    for candidate in (data.get("error"), data.get("message"), data.get("page_state")):
+        message = search_refinement_error(candidate if isinstance(candidate, str) else None)
+        if message:
+            return message
+    for match in data.get("omonimi") or []:
+        if isinstance(match, dict):
+            message = search_refinement_error(match.get("errore"))
+            if message:
+                return message
+    return None
+
+
 def _request_job_outcome(response: VisuraResponse) -> tuple[str, str | None]:
     """Map a response to a stable persisted request status and error category."""
+    if _search_refinement_message(response):
+        return "failed", "criteria_refinement"
     if _no_match_message(response):
         return "no_match", "no_match"
     if response.success:
@@ -528,8 +553,12 @@ class VisuraService:
     async def _store_response(self, response: VisuraResponse):
         from .database import is_db_writable
 
-        no_match = _no_match_message(response)
-        if no_match:
+        refinement = _search_refinement_message(response)
+        no_match = _no_match_message(response) if not refinement else None
+        if refinement:
+            response.success = False
+            response.error = refinement
+        elif no_match:
             response.success = False
             response.error = no_match
         self.response_store[response.request_id] = response
@@ -774,7 +803,7 @@ class VisuraService:
         if not isinstance(data, dict):
             data = None
 
-        return VisuraResponse(
+        response = VisuraResponse(
             request_id=record["request_id"],
             success=bool(record["success"]),
             cadastre_type=record["tipo_catasto"],
@@ -782,6 +811,11 @@ class VisuraService:
             error=record.get("error"),
             timestamp=timestamp,
         )
+        refinement = _search_refinement_message(response)
+        if refinement:
+            response.success = False
+            response.error = refinement
+        return response
 
     @staticmethod
     def _request_cache_params(request_type: str, request) -> dict:

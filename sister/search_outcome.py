@@ -6,8 +6,8 @@ Learned on the bulk runs of 2026-10-26 (about 1,300 searches):
   It is final: asking again gets the same answer, so it is neither retried nor counted as an error.
 * ``invalid_code`` is a ``no_match`` whose code has a wrong check character (see ``fiscal_code``): SISTER asks for a
   confirmation page and finds nobody anyway.
-* ``too_many`` is SISTER's "Superato il limite massimo di 400 elementi": the search matches more than 400 entities (seen for
-  the placeholder VAT codes). Also final: more parameters would be needed, not another attempt.
+* ``too_many`` is SISTER's refusal to return a result that is too large, either the 400-row limit or its time-limit
+  message asking for narrower criteria. It is final: more parameters would be needed, not another attempt.
 * ``session_expired`` is the portal ending the session (about 30 minutes after the login): the run has to stop and wait for a new
   login, every further row would fail the same way.
 * ``portal_error`` is an HTTP 500 answer of the portal for one subject: a repeat usually gets it again.
@@ -26,15 +26,32 @@ OTHER_ERROR = "error"
 FOUND = "found"
 PENDING = "pending"
 
+TOO_MANY_MARKER = "Superato il limite massimo di 400 elementi"
+TOO_MANY_ERROR = f"{TOO_MANY_MARKER}. Aggiungere altri parametri per la ricerca"
+CRITERIA_TIMEOUT_MARKER = "Il sistema non riesce a produrre la risposta nei limiti di tempo previsti"
+CRITERIA_TIMEOUT_ERROR = f"{CRITERIA_TIMEOUT_MARKER}. Affinare i criteri di ricerca."
+
 # outcomes that will not change if the search is repeated
 FINAL = {FOUND, NO_MATCH, INVALID_CODE, TOO_MANY}
 
 _SESSION_MARKERS = ("sessione_scaduta", "lock.html", "Sessione SISTER scaduta", "Sessione scaduta")
 
 
+def search_refinement_error(error: str | None) -> str | None:
+    """Normalize SISTER's final responses that require narrower search criteria."""
+    normalized = " ".join((error or "").split()).casefold()
+    if TOO_MANY_MARKER.casefold() in normalized:
+        return TOO_MANY_ERROR
+    if CRITERIA_TIMEOUT_MARKER.casefold() in normalized:
+        return CRITERIA_TIMEOUT_ERROR
+    return None
+
+
 def classify(status: str | None, error: str | None = None) -> str:
     """The outcome of a request/journal row from its ``status`` and ``error`` text."""
     error = error or ""
+    if search_refinement_error(error):
+        return TOO_MANY
     if status == "completed":
         return FOUND
     if "NESSUNA CORRISPONDENZA" in error:

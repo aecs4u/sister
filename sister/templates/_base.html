@@ -73,6 +73,18 @@
                 <span>Documenti</span>
             </a>
         </div>
+        <div class="nav-item">
+            <a class="nav-link{% if request.url.path.startswith('/persons') %} active{% endif %}" href="/persons"{% if request.url.path == '/persons' %} aria-current="page"{% endif %}>
+                <i class="fas fa-user"></i>
+                <span>Persone</span>
+            </a>
+        </div>
+        <div class="nav-item">
+            <a class="nav-link{% if request.url.path.startswith('/companies') %} active{% endif %}" href="/companies"{% if request.url.path == '/companies' %} aria-current="page"{% endif %}>
+                <i class="fas fa-building"></i>
+                <span>Società</span>
+            </a>
+        </div>
         {% if user and (user.id or user.username or user.email) %}
         <div class="nav-item">
             <a class="nav-link{% if request.url.path == '/favorites' %} active{% endif %}" href="/favorites">

@@ -261,6 +261,10 @@ saved portal forms in `tests/fixtures/portal_forms/`. `QueryForm.documents` (`op
   repeating the whole search. A `no match` answer costs two loads. The per-request session check of `aecs4u-auth` opens SceltaServizio,
   so `browser._ensure_authenticated` trusts a good check for `SISTER_SESSION_RECHECK_SECONDS` (120, 0 = every request) while the tab is on a
   live SISTER page. Measured 2026-10-26: 4-7 s for a no-match, ~7 s with properties (was 11 s / 13-22 s). Verify changes with a real run.
+  **Batch runs: set `SISTER_SESSION_RECHECK_SECONDS=1500`** (in `.env` since 2026-11-07). At 120 s the package check opened SceltaServizio about
+  every two minutes and the next row took the full path (Cambia Ufficio → Applica → menu link), which failed in 4 of 9 starts on 2026-11-07
+  (15 s timeout, then a retry: +20-60 s; normal rows take ~8 s, that run did ~4 rows/min). When the menu link bounces back to SceltaServizio,
+  `_wait_for_search_form` now presses it once more at once instead of waiting 15 s (unit-tested with a fake page, **not yet seen on a live run**).
 - `save_response` projects the JSON into the tables via `database._project_response`: owners are tied to *their* property
   through `result_id` (the owner↔property views join on it), composite cells are split with `result_parsers`, terreni use the
   portal's `ha/are/ca` and `Reddito dominicale/agrario` columns, each row keeps its own catasto. Downloaded XML also fills the
