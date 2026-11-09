@@ -27,6 +27,7 @@ import argparse
 import asyncio
 import json
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -114,9 +115,24 @@ def health(port: int) -> dict:
         return {}
 
 
+def port_owner(port: int) -> str:
+    """Who listens on ``port`` ('pid 123 (uvicorn), started 09:07'), or '' when it cannot be told."""
+    try:
+        out = subprocess.run(["ss", "-ltnpH", f"sport = :{port}"], capture_output=True, text=True, timeout=5).stdout
+        pids = sorted({int(m) for m in re.findall(r"pid=(\d+)", out)})
+        if not pids:
+            return ""
+        started = subprocess.run(["ps", "-o", "lstart=", "-p", str(pids[0])], capture_output=True, text=True, timeout=5).stdout.strip()
+        return f"pid {', '.join(map(str, pids))}" + (f", avviato {started}" if started else "")
+    except Exception:  # noqa: BLE001 (diagnostics only)
+        return ""
+
+
 def start_service(port: int, log: Path) -> subprocess.Popen:
     if health(port):  # an old service (own state, maybe a dead session) would be mistaken for the one started here
-        raise SystemExit(f"la porta {port} e' gia' occupata da un altro servizio: fermalo (o usa --port) e rilancia")
+        owner = port_owner(port)
+        hint = f" ({owner}; se non c'e' un batch in corso: kill {' '.join(re.findall(r'pid ([\d, ]+)', owner)[0].replace(',', '').split())})" if owner else ""
+        raise SystemExit(f"la porta {port} e' gia' occupata da un altro servizio{hint}: fermalo (o usa --port) e rilancia")
     handle = open(log, "w")
     process = subprocess.Popen(
         [str(ROOT / "scripts" / "start.sh"), "--port", str(port), "--no-reload"],
@@ -364,6 +380,91 @@ def _stopped_at_deadline(directory: Path) -> bool:
         return True  # interrupted before the report was written
 
 
+def progress_email_content(
+    snaps: list[dict],
+    initial_snaps: list[dict],
+    outcome: str,
+    login: datetime,
+    deadline: datetime,
+) -> tuple[str, str, str]:
+    """Build a plain-text and HTML summary of this run's final batch progress."""
+    from html import escape
+
+    total = sum(s["total"] for s in snaps)
+    done = sum(s["done"] for s in snaps)
+    initial_done = sum(s["done"] for s in initial_snaps)
+    subject = f"SISTER run-list: {done}/{total} risposte ({outcome})"
+    lines = [
+        "SISTER run-list session summary",
+        f"Esito sessione: {outcome}",
+        f"Login: {login:%Y-%m-%d %H:%M}",
+        f"Chiusura prevista: {deadline:%Y-%m-%d %H:%M}",
+        f"Totale: {done}/{total} risposte finali ({max(0, done - initial_done)} nuove in questa sessione)",
+        "",
+    ]
+    batch_rows = []
+    for snap, initial in zip(snaps, initial_snaps):
+        new_done = max(0, snap["done"] - initial["done"])
+        lines.extend(
+            [
+                f"{snap['name']} ({snap['dir']}): {snap['done']}/{snap['total']} risposte finali; "
+                f"{new_done} nuove in questa sessione",
+                f"  Trovate: {snap['found']} | nessuna corrispondenza: {snap['no_match']} | "
+                f"criteri da affinare: {snap['refine']} | errori: {snap['failed']} | "
+                f"sessione scaduta: {snap['session']} | in attesa: {snap['pending']}",
+            ]
+        )
+        batch_rows.append(
+            "<tr>"
+            f"<td>{escape(str(snap['name']))} ({escape(str(snap['dir']))})</td>"
+            f"<td>{snap['done']}/{snap['total']}</td>"
+            f"<td>{new_done}</td>"
+            f"<td>{snap['found']}</td><td>{snap['no_match']}</td><td>{snap['refine']}</td>"
+            f"<td>{snap['failed']}</td><td>{snap['session']}</td><td>{snap['pending']}</td>"
+            "</tr>"
+        )
+    html = (
+        "<h2>SISTER run-list session summary</h2>"
+        f"<p>Esito: {escape(outcome)}<br>Login: {login:%Y-%m-%d %H:%M}"
+        f"<br>Chiusura prevista: {deadline:%Y-%m-%d %H:%M}</p>"
+        f"<p>Totale: {done}/{total} risposte finali; {max(0, done - initial_done)} nuove in questa sessione.</p>"
+        "<table border='1' cellpadding='5' cellspacing='0'><thead><tr>"
+        "<th>Lotto</th><th>Risposte</th><th>Nuove in sessione</th><th>Trovate</th>"
+        "<th>Nessuna corrispondenza</th><th>Criteri da affinare</th><th>Errori</th>"
+        "<th>Sessione scaduta</th><th>In attesa</th></tr></thead><tbody>"
+        + "".join(batch_rows)
+        + "</tbody></table>"
+    )
+    return subject, "\n".join(lines), html
+
+
+def send_progress_email(
+    recipient: str,
+    snaps: list[dict],
+    initial_snaps: list[dict],
+    outcome: str,
+    login: datetime,
+    deadline: datetime,
+) -> tuple[bool, str]:
+    """Send the final session summary through the configured aecs4u-email provider."""
+    subject, text_body, html_body = progress_email_content(snaps, initial_snaps, outcome, login, deadline)
+
+    async def send() -> tuple[bool, str]:
+        from aecs4u_email import send_email
+
+        result = await send_email(
+            to=recipient,
+            subject=subject,
+            html=html_body,
+            text=text_body,
+            tags=["sister-run-list-progress"],
+            metadata={"outcome": outcome, "batch_count": len(snaps)},
+        )
+        return bool(result.success), str(result.provider)
+
+    return asyncio.run(send())
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--batch", action="append", required=True, type=Path, help="plan directory (repeat, run in order)")
@@ -374,6 +475,8 @@ def main() -> int:
     parser.add_argument("--port", type=int, default=8027)
     parser.add_argument("--preflight-cf", default=os.getenv("SISTER_PREFLIGHT_CF", ""), help="code for the proof search")
     parser.add_argument("--cdp", default=os.getenv("BROWSER_CDP_ENDPOINT", "http://localhost:9222"))
+    parser.add_argument("--email-progress", action="store_true", help="email the final progress summary when this session run closes")
+    parser.add_argument("--email-to", default="demo@aecs4u.com", help="progress summary recipient (default: demo@aecs4u.com)")
     parser.add_argument("--dry-run", action="store_true", help="count what pruning would drop and print the timing; change and start nothing")
     parser.add_argument("--keep-answered", action="store_true", help="do not drop the rows that already have an answer (rows asking for the Storica are "
                         "always kept: the database does not record the 'Tipo richiesta' of an answer)")
@@ -411,6 +514,8 @@ def main() -> int:
         say("la sessione e' valida (prova con una scheda a parte)")
     service = None
     outcome = "not_started"
+    session_started = False
+    initial_snaps: list[dict] = []
 
     def _terminate(signum, _frame):  # a closed terminal (SIGHUP) or a kill (SIGTERM) must still stop the service below
         raise KeyboardInterrupt
@@ -436,6 +541,9 @@ def main() -> int:
                 say("[red]la ricerca di verifica e' fallita: la sessione non e' utilizzabile[/red]")
                 return 3
             say("verifica reale della sessione: ok")
+        session_started = True
+        outcome = "running"
+        initial_snaps = [snapshot(directory) for directory in args.batch]
         dashboard = Dashboard(args.batch, login, deadline)
         quiet = {"last": 0.0}
 
@@ -468,6 +576,20 @@ def main() -> int:
                 say(f"[yellow]download Richieste non completato: {exc}[/yellow]")
         stop(service)
         say("servizio fermo: nessun login automatico possibile")
+        if args.email_progress and session_started:
+            try:
+                final_snaps = [snapshot(directory) for directory in args.batch]
+                sent, provider = send_progress_email(args.email_to, final_snaps, initial_snaps, outcome, login, deadline)
+                if sent and provider == "console":
+                    say("[yellow]email elaborata dal provider console, ma non consegnata[/yellow]")
+                elif sent and provider == "disabled":
+                    say("[yellow]invio email disabilitato dalla configurazione aecs4u-email[/yellow]")
+                elif sent:
+                    say(f"email di riepilogo inviata a {args.email_to}")
+                else:
+                    say("[yellow]email di riepilogo non inviata: il provider ha segnalato un errore[/yellow]")
+            except Exception as exc:  # Email failure must not change the batch outcome.
+                say(f"[yellow]email di riepilogo non inviata ({type(exc).__name__})[/yellow]")
 
     console.print(render([snapshot(directory) for directory in args.batch]))  # final state, after the service stopped
     if outcome == "done":

@@ -18,6 +18,7 @@ import argparse
 import asyncio
 import json
 import sys
+from contextlib import suppress
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -30,6 +31,7 @@ load_dotenv(ROOT.parent / ".env", override=False)
 from aecs4u_auth.browser import BrowserConfig  # noqa: E402
 from aecs4u_auth.browser import BrowserManager as AuthBrowserManager  # noqa: E402
 from aecs4u_auth.browser.exceptions import SessionLockedError  # noqa: E402
+from aecs4u_auth.browser.services import get_service  # noqa: E402
 
 # when the last login succeeded: SISTER ends a session ~30 minutes after it, whatever the activity, so `batch run-session`
 # times its clean stop from here instead of from the moment it is started
@@ -55,21 +57,49 @@ _CLOSE_SESSION_URLS = (
     "https://sister3.agenziaentrate.gov.it/Servizi/CloseSessionsSis",
     "https://sister3.agenziaentrate.gov.it/Servizi/CloseSessions",
 )
+_SISTER_VISURE_URL = "https://sister3.agenziaentrate.gov.it/Visure/SceltaServizio.do?tipo=/T/TM/VCVC_"
 
 
-async def close_stale_session(mgr: AuthBrowserManager) -> None:
-    """Ask SISTER to drop the session it still holds for this user (same URLs the service uses)."""
+async def close_stale_session(mgr: AuthBrowserManager) -> bool:
+    """Close the SISTER session and verify that Visure redirects to login."""
     page = await mgr._context.new_page()
     try:
         for url in _CLOSE_SESSION_URLS:
             try:
                 await page.goto(url, timeout=15000)
                 await page.wait_for_load_state("networkidle", timeout=10000)
-                print(f"Sessione SISTER chiusa via {url}")
             except Exception as e:
                 print(f"{url}: {e}", file=sys.stderr)
+
+        try:
+            await page.goto(_SISTER_VISURE_URL, timeout=30000)
+            await page.wait_for_load_state("networkidle", timeout=15000)
+            if await get_service("sister").check_session(page):
+                print("La sessione SISTER risulta ancora attiva.", file=sys.stderr)
+                return False
+
+            current_url = page.url.lower()
+            title = (await page.title()).lower()
+            is_login_page = (
+                "login" in current_url
+                or "login" in title
+                or "iampe.agenziaentrate.gov.it" in current_url
+            )
+            if not is_login_page:
+                print(
+                    f"Impossibile verificare la chiusura della sessione SISTER (pagina: {page.url}).",
+                    file=sys.stderr,
+                )
+                return False
+
+            print("Sessione SISTER chiusa o già assente; reindirizzamento al login verificato.")
+            return True
+        except Exception as e:
+            print(f"Verifica della sessione SISTER non riuscita: {e}", file=sys.stderr)
+            return False
     finally:
-        await page.close()
+        with suppress(Exception):
+            await page.close()
 
 
 async def main(close_only: bool) -> int:
@@ -82,15 +112,27 @@ async def main(close_only: bool) -> int:
     await mgr.initialize()
     try:
         if close_only:
-            await close_stale_session(mgr)
+            if not await close_stale_session(mgr):
+                return 1
             clear_login_record()
             return 0
         try:
             session = await mgr.login(service="sister")
         except SessionLockedError:
             print("Utente gia' in sessione: chiudo la sessione precedente e riprovo")
-            await close_stale_session(mgr)
+            if not await close_stale_session(mgr):
+                print(
+                    "Login interrotto: impossibile verificare la chiusura della sessione precedente.",
+                    file=sys.stderr,
+                )
+                return 1
             session = await mgr.login(service="sister")
+
+        if not await get_service("sister").check_session(session.page):
+            print(f"Login SISTER non verificato (pagina: {session.page.url}).", file=sys.stderr)
+            clear_login_record()
+            return 1
+
         print(f"Login SISTER completato: {session.page.url}")
         record_login(session.page.url)
     finally:

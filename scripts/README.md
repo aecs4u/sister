@@ -34,7 +34,8 @@ Both commands are read-only by default. Add `--execute` to submit missing reques
 
 `start.sh`, `run_list_in_session.sh`, `run_pdf_parseable_batch.sh`, `run_pvp_sales_is.sh`, and
 `sister_fixture_payload_commands.sh` remain shell wrappers in this folder and call the unified CLI where applicable.
-`kill_app.sh [PORT]` stops the listener on the selected port (default 8025).
+`sister app stop [PORT]` uses the shared `../bin/kill_app.sh` helper, relative to the SISTER repository root, to stop the
+listener on the selected port (default 8025).
 
 ## One-off scripts
 

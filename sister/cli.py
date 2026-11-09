@@ -128,7 +128,7 @@ _tool_commands = {
     app_tool: {
         "login": ("sister.command_tools.ade_login", "Log in to SISTER or close a stale session."),
         "start": ("scripts/start.sh", "Start the SISTER app.", True),
-        "stop": ("scripts/kill_app.sh", "Stop the local app on a port (default 8025).", True),
+        "stop": ("../bin/kill_app.sh", "Stop the local app on a port (default 8025).", True),
         "hash-password": ("sister.command_tools.hash_local_password", "Generate a local user password hash."),
     },
     batch_tool: {

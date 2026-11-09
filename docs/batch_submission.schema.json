@@ -442,6 +442,14 @@
                       "boolean",
                       "null"
                     ]
+                  },
+                  "con_intestati": {
+                    "type": [
+                      "string",
+                      "number",
+                      "boolean",
+                      "null"
+                    ]
                   }
                 },
                 "additionalProperties": false
@@ -1174,6 +1182,14 @@
                     ]
                   },
                   "richiedi_documenti": {
+                    "type": [
+                      "string",
+                      "number",
+                      "boolean",
+                      "null"
+                    ]
+                  },
+                  "immobili_intestatari": {
                     "type": [
                       "string",
                       "number",
@@ -2240,6 +2256,14 @@
                     ]
                   },
                   "richiedi_documenti": {
+                    "type": [
+                      "string",
+                      "number",
+                      "boolean",
+                      "null"
+                    ]
+                  },
+                  "immobili_intestatari": {
                     "type": [
                       "string",
                       "number",

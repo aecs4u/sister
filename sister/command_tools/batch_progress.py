@@ -5,7 +5,8 @@
 
 Each ``output_dir`` holds ``batch.json`` (the plan), ``batch_journal.jsonl`` (one line per row state change), and, during
 ``run-list``, ``service.log``. The main bar counts finished rows. The office bar reads structured progress markers from
-the service log while a fiscal-code match is being opened across multiple provincial offices. This tool only reads files:
+the service log while a fiscal-code match is being opened across multiple provincial offices. The intestati bar appears
+only while the owners of a record's properties are being read (``con_intestati``): properties done out of the list size. This tool only reads files:
 it never talks to the service or to SISTER.
 """
 
@@ -66,6 +67,30 @@ def _last_office_progress(directory: Path) -> dict | None:
     return None
 
 
+_OWNER_PROGRESS = re.compile(r"Intestati (?P<done>\d+)/(?P<total>\d+) \((?P<province>[^)]*)\): (?P<owners>\d+)")
+# lines that end an owner-reading phase: the record is closed, a new request starts or a new record is opened
+_OWNERS_ENDED = re.compile(r"record \d+/\d+: \d+ immobili finora|aggiunta alla coda|RUN_LIST_OFFICE_PROGRESS .* state=(opening|completed|failed)")
+
+
+def _last_owner_progress(directory: Path) -> dict | None:
+    """The owners (Intestati) being read for the properties of the current record, or None when that phase is over."""
+    try:
+        with (directory / "service.log").open("rb") as stream:
+            stream.seek(0, 2)
+            size = stream.tell()
+            stream.seek(max(0, size - 262_144))
+            lines = stream.read().decode("utf-8", "replace").splitlines()
+    except OSError:
+        return None
+    for line in reversed(lines):
+        match = _OWNER_PROGRESS.search(line)
+        if match:
+            return {key: (int(value) if value.isdigit() else value) for key, value in match.groupdict().items()}
+        if _OWNERS_ENDED.search(line):
+            return None  # the latest event closed the owner phase (or has not reached it yet)
+    return None
+
+
 def _file_marks(directory: Path) -> tuple[int, int]:
     """Nanosecond mtimes for the row journal and live browser log."""
     marks = []
@@ -122,6 +147,7 @@ def snapshot(directory: Path) -> dict:
     office_progress = _last_office_progress(directory)
     if office_progress and office_progress["subject"] not in active_subjects:
         office_progress = None
+    owner_progress = _last_owner_progress(directory) if office_progress or active_subjects else None
     rate = None
     if len(stamps) >= 2 and max(stamps) > min(stamps):
         recent = sorted(stamps)[-60:]
@@ -139,6 +165,7 @@ def snapshot(directory: Path) -> dict:
         "session": session,
         "pending": pending,
         "office_progress": office_progress,
+        "owner_progress": owner_progress,
         "rate": rate,
         "last": max(stamps) if stamps else 0,
     }
@@ -159,7 +186,7 @@ def is_finished(directory: Path) -> bool:
 
 
 def eta(snap: dict) -> str:
-    left = snap["total"] - snap.get("processed", snap["done"])
+    left = snap["total"] - snap["done"]
     if left <= 0:
         return "finito"
     if not snap["rate"]:
@@ -177,12 +204,12 @@ def render(snaps: list[dict]):
     parts = []
     for snap in snaps:
         total = max(snap["total"], 1)
-        processed = snap.get("processed", snap["done"])
+        processed = snap["done"]  # answered rows only: failed rows are shown below and are still to do
         bar = _bar(processed / total)
         percent = 100 * processed / total
         head = Text.assemble((f"{snap['name']}", "bold"), f"  ({snap['dir']})")
         line = Table.grid(padding=(0, 1))
-        line.add_row(bar, Text(f"{processed}/{snap['total']} processate  {percent:5.1f}%  restano {eta(snap)}"))
+        line.add_row(bar, Text(f"{processed}/{snap['total']} risposte  {percent:5.1f}%  restano {eta(snap)}"))
         detail = Text.assemble(
             ("con immobili ", "dim"), (str(snap["found"]), "green"),
             ("  nessuna corrispondenza ", "dim"), (str(snap["no_match"]), "yellow"),
@@ -209,7 +236,7 @@ def render(snaps: list[dict]):
                 ),
             )
             parts.append(match_line)
-        if office and office["total"] > 1:
+        if office:  # also a single office: every fiscal-code query shows the step it is on
             office_total = max(office["total"], 1)
             if office["state"] == "failed":
                 status = f"{office['done']}/{office_total} tentati  errore {office['province']}"
@@ -229,6 +256,15 @@ def render(snaps: list[dict]):
                 Text(status),
             )
             parts.append(office_line)
+        owners = snap.get("owner_progress")
+        if owners and owners["total"] > 0:  # shown only while the owners of a record's properties are being read
+            owner_line = Table.grid(padding=(0, 1))
+            owner_line.add_row(
+                Text("intestati" + (f" · {office['subject']}" if office else ""), style="dim"),
+                _bar(owners["done"] / owners["total"], "magenta"),
+                Text(f"{owners['done']}/{owners['total']} immobili  ({owners['province']}, ultimo: {owners['owners']} intestati)"),
+            )
+            parts.append(owner_line)
         parts.append(Text(""))
     return Group(*parts)
 
@@ -237,7 +273,7 @@ def render_session(snaps: list[dict], login: datetime, deadline: datetime, now: 
     """Whole-run view for ``run_in_session``: all plans together, the time left in the SISTER session, then each plan."""
     now = now or datetime.now()
     total = sum(s["total"] for s in snaps)
-    processed = sum(s.get("processed", s["done"]) for s in snaps)
+    processed = sum(s["done"] for s in snaps)  # answered rows (found, no match, criteria to refine)
     left = max((deadline - now).total_seconds(), 0)
     span = max((deadline - login).total_seconds(), 1)
     active = max(snaps, key=lambda s: s["last"]) if snaps else None
@@ -247,7 +283,7 @@ def render_session(snaps: list[dict], login: datetime, deadline: datetime, now: 
     overall.add_row(
         Text("totale   ", style="bold"),
         _bar(processed / max(total, 1), "green"),
-        Text(f"{processed}/{total} processate  {100 * processed / max(total, 1):5.1f}%"),
+        Text(f"{processed}/{total} risposte  {100 * processed / max(total, 1):5.1f}%"),
     )
     overall.add_row(
         Text("sessione ", style="bold"),

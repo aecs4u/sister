@@ -870,6 +870,105 @@ async def _restore_immobili_list(
     return page.locator(IMMOBILI_RADIOS)
 
 
+INTESTATO_RADIOS = (
+    "input[type='radio'][property='intestatoSelezionato'], input[type='radio'][name='intestatoSelezionato']"
+)
+
+
+def _flag(value) -> bool:
+    return str(value if value is not None else "").strip().lower() not in _FALSE_VALUES | {""}
+
+
+async def _owner_immobili_rows(page, label: str = "", nome: str = "") -> list[dict]:
+    """The rows of an Immobili list opened from an owner (``visImmSel`` radios), tagged with their province."""
+    rows = _extract_result_tables(await page.content()) or []
+    values = await _radio_values(page, IMMOBILI_RADIOS)
+    out = []
+    for i, value in enumerate(values):
+        row = dict(rows[i]) if i < len(rows) and isinstance(rows[i], dict) else {}
+        if label:
+            row["provincia"], row["provincia_nome"] = label, nome
+        row["visImmSel"] = value
+        out.append(row)
+    return out
+
+
+async def _back_to_intestati(page) -> None:
+    """Press *Indietro* until the Intestati page (owner radios) is shown again; raise when it never is."""
+    for _ in range(3):
+        if await page.locator(INTESTATO_RADIOS).count() > 0:
+            return
+        back = page.locator("input[type='submit'][name='indietro']")
+        if await back.count() == 0:
+            break
+        await _click_nav(page, back.first)
+    if await page.locator(INTESTATO_RADIOS).count() == 0:
+        raise RuntimeError(f"pagina Intestati non ritrovata dopo Indietro (pagina: {page.url})")
+
+
+async def _read_owner_immobili(page, page_logger, tag: str, seen: set[str]) -> list[dict]:
+    """On an Intestati page: for each owner select it, press *Immobili* and read the list of the owner's properties.
+
+    Plain HTML, no CAPTCHA. The owner list is the one SISTER shows for the office set by the search (a province
+    office gives that province's properties; the "Elenco Province" table is walked when the portal shows it).
+    An owner already read in this run (same codice fiscale) is skipped. Ends on the Intestati page again.
+    """
+    owners = await _extract_owners(page)
+    radios = page.locator(INTESTATO_RADIOS)
+    total = await radios.count()
+    out: list[dict] = []
+    for i in range(total):
+        owner = owners[i] if i < len(owners) else {}
+        code = (owner.get("codice_fiscale") or "").strip().upper()
+        if code and code in seen:
+            continue
+        entry = {"intestato": owner, "province": [], "immobili": []}
+        out.append(entry)
+        try:
+            await page.locator(INTESTATO_RADIOS).nth(i).check()
+            button = page.locator("input[name='immobili'][value='Immobili']")
+            if await button.count() == 0:
+                entry["error"] = "pulsante Immobili assente"
+                continue
+            await _click_nav(page, button.first)
+            if await page.locator("input[name='inCaptchaChars']").count() > 0:
+                entry["error"] = "CAPTCHA richiesto"
+                await _back_to_intestati(page)
+                continue
+            if await page.locator(_PROVINCE_RADIOS).count() > 0:
+                entry["province"] = _province_elenco(_extract_result_tables(await page.content()))
+                n_prov = await page.locator(_PROVINCE_RADIOS).count()
+                for j in range(n_prov):
+                    if await page.locator(_PROVINCE_RADIOS).count() == 0:
+                        back = page.locator("input[type='submit'][name='indietro']")
+                        if await back.count() == 0:
+                            break
+                        await _click_nav(page, back.first)
+                    pick = page.locator(_PROVINCE_RADIOS).nth(j)
+                    label, _, nome = (await pick.get_attribute("value") or "").partition("#")
+                    await pick.check()
+                    await _click_nav(page, page.locator("input[name='immobili'][value='Immobili']").first)
+                    await page_logger.log(page, f"immobili_intestatario_{tag}_{i + 1}_{j + 1}")
+                    entry["immobili"].extend(await _owner_immobili_rows(page, label, nome.strip()))
+                    back = page.locator("input[type='submit'][name='indietro']")
+                    if await back.count() > 0:
+                        await _click_nav(page, back.first)
+            else:
+                await page_logger.log(page, f"immobili_intestatario_{tag}_{i + 1}")
+                entry["immobili"] = await _owner_immobili_rows(page)
+            if code:
+                seen.add(code)
+            log.info(
+                "[green]%d immobili[/green] dell'intestatario %s (%d/%d)",
+                len(entry["immobili"]), code or owner.get("nome") or "?", i + 1, total,
+            )
+        except Exception as e:
+            entry["error"] = str(e)[:200]
+            log.warning("Immobili dell'intestatario %d/%d non letti: %s", i + 1, total, e)
+        await _back_to_intestati(page)
+    return out
+
+
 async def _read_immobili_intestati(page, page_logger, immobili: list[dict], search: tuple):
     """Phase 1 of ``run_visura``: one pass over the immobili list, reading the Intestati page of each immobile.
 
@@ -883,6 +982,8 @@ async def _read_immobili_intestati(page, page_logger, immobili: list[dict], sear
     all_intestati: list[dict] = []
     results_list: list[dict] = []
     sezione_urbana = search[7]
+    expand_owners = _flag(current_form_fields().get("immobili_intestatari"))
+    owners_seen: set[str] = set()
 
     # Re-fill richiedente/motivo/sezUrb on results page (SISTER clears them after submit)
     await _fill_richiedente_motivo(page, sezione_urbana=sezione_urbana)
@@ -922,6 +1023,10 @@ async def _read_immobili_intestati(page, page_logger, immobili: list[dict], sear
             log.info("[green]%d intestati[/green] per immobile (radio %d)", len(step_intestati), radio_idx + 1)
             all_intestati.extend(step_intestati)
             step_result["intestati"] = step_intestati
+            if expand_owners and step_intestati:
+                step_result["immobili_intestatari"] = await _read_owner_immobili(
+                    page, page_logger, str(radio_idx + 1), owners_seen
+                )
             await _navigate_back_to_immobili_list(page)
             await _fill_richiedente_motivo(page, sezione_urbana=sezione_urbana)
         except Exception as e:
@@ -1453,6 +1558,11 @@ async def run_visura(
         "skipped_soppresso": skipped_soppresso,
         "downloaded_pdfs": downloaded_pdfs,
         "page_visits": page_logger.page_visits,
+        **(
+            {"immobili_intestatari": [e for r in results_list for e in r.get("immobili_intestatari", [])]}
+            if any("immobili_intestatari" in r for r in results_list)
+            else {}
+        ),
         **({"documents_pending": documents_pending} if documents_pending else {}),
         **({"documents_unconfirmed": documents_unconfirmed} if documents_unconfirmed else {}),
         **({"needs_human": needs_human} if needs_human else {}),
@@ -5461,6 +5571,23 @@ async def _selected_subject(page) -> dict:
         return {}
 
 
+def _match_omonimo(rows: list[dict], record: dict) -> int | None:
+    """Index of the Elenco Omonimi row that is ``record`` (denominazione + sede, case and spacing ignored)."""
+    def norm(value) -> str:
+        return " ".join(str(value or "").split()).casefold()
+
+    for i, row in enumerate(rows):
+        if norm(row.get("Denominazione")) == norm(record.get("denominazione")) and norm(row.get("Sede")) == norm(record.get("sede")):
+            return i
+    return None
+
+
+def _seat_province(record: dict) -> str | None:
+    """The province sigla of a record's seat (``PARMA (PR)`` -> ``PR``)."""
+    found = re.search(r"\(([A-Za-z]{2})\)\s*$", str(record.get("sede") or ""))
+    return found.group(1).upper() if found else None
+
+
 _SEARCH_REUSED: set = set()
 
 
@@ -5501,7 +5628,9 @@ async def _open_record_by_search(page, identifier, tipo_catasto, provincia, omon
     return True
 
 
-async def _open_soggetto_province_page(page, identifier, tipo_catasto, provincia, azienda=False, omonimo_index=0) -> bool:
+async def _open_soggetto_province_page(
+    page, identifier, tipo_catasto, provincia, azienda=False, omonimo_index=0, omonimo_match=None
+) -> bool:
     """Search a persona fisica (codice fiscale) or giuridica (partita IVA) and stop on the page offering
     Immobili / Visura per Soggetto.
 
@@ -5529,6 +5658,10 @@ async def _open_soggetto_province_page(page, identifier, tipo_catasto, provincia
             raise Exception(f"Omonimo {omonimo_index + 1} non trovato: la pagina ne elenca {available}")
         # keep everything the page says about the listed subjects before clicking through it
         rows = _omonimi_table_rows(await page.content())
+        if omonimo_match:  # a narrower search lists the records again, possibly in another order: find ours by name and seat
+            omonimo_index = _match_omonimo(rows, omonimo_match)
+            if omonimo_index is None:
+                raise Exception(f"Record {omonimo_match.get('denominazione', '')!r} non trovato nella ricerca ristretta")
         _LISTED_SUBJECTS[page] = [omonimo_details(row, i + 1, i == omonimo_index) for i, row in enumerate(rows)]
         await omonimo.nth(omonimo_index).check()
     ricerca = page.locator("input[name='visura'][value='Ricerca']")
@@ -5689,6 +5822,8 @@ async def run_soggetto_immobili(
     azienda=False,
     omonimo_index=0,
     omonimi_totale=None,
+    omonimo_match=None,
+    intestati_deadline=None,
 ):
     """Owner → properties: list every immobile of a persona fisica/giuridica in each province.
 
@@ -5696,6 +5831,8 @@ async def run_soggetto_immobili(
     both directions of the ownership graph. No document is requested and no CAPTCHA is involved.
     azienda: ``codice_fiscale`` is a partita IVA (persona giuridica).
     omonimo_index: the record of the homonym page to open (0 = the first).
+    intestati_deadline: ``time.monotonic()`` value after which no more owners are read (rows left without ``intestati``
+    are counted in ``intestati_non_letti``); a CAPTCHA on the way ends the owner reading too (it is never solved here).
     """
     if isinstance(con_intestati, str):
         con_intestati = con_intestati.lower() in ("1", "true", "yes", "si")
@@ -5710,6 +5847,8 @@ async def run_soggetto_immobili(
     soggetti: list[dict] = []  # the subjects of the Elenco Omonimi page (see _LISTED_SUBJECTS)
     index = 0
     n_province = None
+    owners_stop = ""
+    owners_unread = 0
     record_position = max(int(omonimo_index), 0) + 1
     record_total = max(int(omonimi_totale or record_position), record_position)
 
@@ -5758,13 +5897,37 @@ async def run_soggetto_immobili(
                 if await page.locator(_PROVINCE_RADIOS).count() > 0:
                     return await pick_province(idx)
         if not await _open_soggetto_province_page(
-            page, codice_fiscale, tipo_catasto, provincia, azienda=azienda, omonimo_index=omonimo_index
+            page, codice_fiscale, tipo_catasto, provincia, azienda=azienda, omonimo_index=omonimo_index,
+            omonimo_match=omonimo_match,
         ):
             return None
         if not province_elenco:
             province_elenco.extend(_province_elenco(_extract_result_tables(await page.content())))
         soggetti.extend(item for item in _LISTED_SUBJECTS.pop(page, []) if item not in soggetti)
         return await pick_province(idx)
+
+    async def back_to_list(idx, force=False):
+        """Back on the Immobili list of province ``idx`` after an Intestati page, with as few page loads as possible.
+
+        The list is still valid after *Indietro* (only a submitted request makes SISTER forget it). Cheapest first: already
+        on the list; on the province table (one click on *Immobili*); *Indietro* again (at most twice). The whole search
+        runs again only when none of these works, and says which page it found.
+        """
+        for _ in range(3):
+            if await page.locator(list_radios).count() > 0:
+                return
+            if await page.locator(_PROVINCE_RADIOS).count() > 0:
+                await pick_province(idx)
+                continue
+            back = page.locator("form[action*='IndietroVisImmSogg'] input[type='submit'], input[type='submit'][name='indietro']")
+            if force and await back.count() == 0:
+                break
+            if await back.count() == 0:
+                break
+            await _click_nav(page, back.first)
+        if await page.locator(list_radios).count() == 0:
+            log.warning("Lista immobili non ritrovata dopo Indietro (pagina: %s): ripeto la ricerca", page.url)
+            await open_list(idx)
 
     while True:
         opened = await open_list(index, from_list=index > 0)
@@ -5813,6 +5976,11 @@ async def run_soggetto_immobili(
 
         if con_intestati:
             for i, row in enumerate(batch):
+                if owners_stop:
+                    break  # no "intestati" key: not read, as opposed to a property with no owners
+                if intestati_deadline is not None and time.monotonic() > intestati_deadline:
+                    owners_stop = "tempo massimo raggiunto"
+                    break
                 row["intestati"] = []
                 try:
                     radios = page.locator(list_radios)
@@ -5824,17 +5992,25 @@ async def run_soggetto_immobili(
                     if await button.count() == 0:
                         continue  # e.g. bene comune non censibile
                     await _click_nav(page, button)
+                    if await page.locator("input[name='inCaptchaChars']").count() > 0:
+                        row.pop("intestati", None)
+                        owners_stop = "CAPTCHA richiesto"
+                        log.warning("CAPTCHA sulla pagina Intestati: letture degli intestati interrotte")
+                        break
                     row["intestati"] = await _extract_owners(page)
-                    back = page.locator("input[type='submit'][name='indietro']")
-                    if await back.count() > 0:
-                        await _click_nav(page, back.first)
-                    if await page.locator(list_radios).count() == 0:
-                        await open_list(index)
+                    log.info("Intestati %d/%d (%s): %d", i + 1, len(batch), label, len(row["intestati"]))
+                    await back_to_list(index)
                 except Exception as e:
                     row["intestati_error"] = str(e)[:200]
                     log.warning("Intestati non letti per immobile %d: %s", i + 1, e)
-                    await open_list(index)
+                    await back_to_list(index, force=True)
 
+        if owners_stop:
+            owners_unread += sum(1 for row in batch if "intestati" not in row)
+            if owners_stop == "CAPTCHA richiesto":  # back to the list so the flow can go on without owners
+                back = page.locator("input[type='submit'][name='indietro']")
+                if await back.count() > 0:
+                    await _click_nav(page, back.first)
         immobili.extend(batch)
         office_progress(index + 1, n_province, label, "completed")
         index += 1
@@ -5850,6 +6026,7 @@ async def run_soggetto_immobili(
         "immobili": immobili,
         "total_results": len(immobili),
         "page_visits": page_logger.page_visits,
+        **({"intestati_interrotti": owners_stop, "intestati_non_letti": owners_unread} if owners_stop else {}),
     }
 
 
@@ -5914,6 +6091,9 @@ def _append_omonimo(combined: dict, index: int, record: dict, result: dict | Non
         "immobili": len(rows),
         "province": [e.get("provincia") for e in result.get("province") or []],
     }
+    if result.get("intestati_interrotti"):
+        summary["intestati_interrotti"] = result["intestati_interrotti"]
+        summary["intestati_non_letti"] = result.get("intestati_non_letti", 0)
     if error or result.get("error"):
         summary["errore"] = str(error or result.get("error"))[:300]
     combined["omonimi"].append(summary)
@@ -5948,6 +6128,14 @@ async def run_visura_persona_giuridica(
     cap = max(_int_field(fields.get("max_omonimi"), 0), 0)
     budget = float(os.getenv("SISTER_OMONIMI_MAX_SECONDS", "150") or 0)
     started = time.monotonic()
+    # owners of every property (Intestati page, no CAPTCHA): one page per property, so they get their own time budget
+    with_owners = str(fields.get("con_intestati") or "").strip().lower() in ("1", "true", "yes", "si", "on")
+    owners_deadline = None
+    if with_owners:
+        owners_budget = float(os.getenv("SISTER_INTESTATI_MAX_SECONDS", "420") or 0)
+        if owners_budget:
+            owners_deadline = started + owners_budget
+            budget = max(budget, owners_budget)
 
     found = await _search_persona_giuridica(
         page, identificativo, tipo_catasto=tipo_catasto, provincia=provincia, motivo=motivo, per_conto_di=per_conto_di
@@ -5978,9 +6166,45 @@ async def run_visura_persona_giuridica(
                 azienda=True,
                 omonimo_index=index if listed else 0,
                 omonimi_totale=total,
+                con_intestati=with_owners and not combined.get("owners_stop"),
+                intestati_deadline=owners_deadline,
             )
+            if result.get("intestati_interrotti") == "CAPTCHA richiesto":
+                combined["owners_stop"] = True  # the other records are read without owners
             failures = 0
             _append_omonimo(combined, index, record, result)
+            if result.get("needs_refinement") and provincia is None and _seat_province(record):
+                # narrower scope: the same record searched from the office of its seat's province (SISTER's limit is per query)
+                narrow = _seat_province(record)
+                log.info("Record %d/%d di %s rifiutato da SISTER: riprovo dall'ufficio %s", index + 1, total, identificativo, narrow)
+                try:
+                    retry = await run_soggetto_immobili(
+                        page,
+                        identificativo,
+                        tipo_catasto=tipo_catasto,
+                        provincia=narrow,
+                        azienda=True,
+                        omonimo_index=0,
+                        omonimi_totale=total,
+                        omonimo_match=record,
+                        con_intestati=with_owners and not combined.get("owners_stop"),
+                        intestati_deadline=owners_deadline,
+                    )
+                except Exception as exc:  # noqa: BLE001 (keep the first refusal as the answer for this record)
+                    if _session_lost(exc):
+                        raise
+                    log.warning("Ripetizione ristretta di %s (%s) non riuscita: %s", identificativo, narrow, exc)
+                else:
+                    if not retry.get("needs_refinement") and not retry.get("error"):
+                        retry["ristretto_a"] = narrow
+                        combined["immobili"] = [r for r in combined["immobili"] if r.get("omonimo") != index + 1]  # drop partial rows
+                        combined["omonimi"].pop()  # the refused attempt's summary line
+                        result = retry
+                        _append_omonimo(combined, index, record, result)
+                        combined["omonimi"][-1].pop("errore", None)
+                        combined["omonimi"][-1]["ristretto_a"] = narrow
+                        index += 1
+                        continue
             if result.get("needs_refinement"):
                 # SISTER refused this one record (too many rows or its time limit). Records are independent subjects:
                 # note it (its summary line carries the message) and read the others instead of ending the whole code.

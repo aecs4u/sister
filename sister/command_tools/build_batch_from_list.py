@@ -20,6 +20,39 @@ sys.path.insert(0, str(ROOT))
 from sister.batch_markdown import load_markdown  # noqa: E402
 
 
+def _norm(value) -> str:
+    return " ".join(str(value).split()).casefold() if value is not None else ""
+
+
+def drop_duplicate_queries(queries: list[dict], defaults: dict | None = None) -> tuple[list[dict], list[tuple[str, str]]]:
+    """Keep the first of the rows that ask the same thing (same command and parameters, e.g. one codice fiscale or one
+    parcel listed twice); return ``(kept, [(dropped id, kept id), ...])``.
+
+    A row with ``reuse: force`` is repeated on purpose and a disabled row does not run: both always stay. Rows that
+    differ in any parameter (``tipo_catasto``, ``subalterno``, ``provincia``...) are different questions and stay.
+    """
+    base_command = (defaults or {}).get("command")
+    base_params = (defaults or {}).get("params") or {}
+    first: dict[tuple, str] = {}
+    kept: list[dict] = []
+    dropped: list[tuple[str, str]] = []
+    for query in queries:
+        if query.get("reuse") == "force" or query.get("enabled") is False:
+            kept.append(query)
+            continue
+        params = {**base_params, **(query.get("params") or {})}
+        key = (
+            _norm(query.get("command") or base_command),
+            tuple(sorted((name, _norm(value)) for name, value in params.items() if value is not None)),
+        )
+        if key in first:
+            dropped.append((str(query.get("id")), first[key]))
+            continue
+        first[key] = str(query.get("id"))
+        kept.append(query)
+    return kept, dropped
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("list_file", type=Path)
@@ -38,6 +71,9 @@ def main() -> int:
     if batch.name and batch.name.startswith("PVP sales parcels"):
         for query in queries:
             query.setdefault("metadata", {})["tags"] = list(dict.fromkeys([*query.get("metadata", {}).get("tags", []), "PVP"]))
+
+    defaults = batch.defaults.model_dump(mode="json", exclude_defaults=True)
+    queries, duplicates = drop_duplicate_queries(queries, defaults)
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
     plan = {
@@ -59,6 +95,9 @@ def main() -> int:
     if batch.defaults.command or batch.defaults.params:
         plan["defaults"] = batch.defaults.model_dump(mode="json", exclude_defaults=True)
     (args.output_dir / "batch.json").write_text(json.dumps(plan, ensure_ascii=False, indent=1), encoding="utf-8")
+    if duplicates:
+        print(f"{len(duplicates)} righe duplicate tolte (stesso comando e parametri; resta la prima): "
+              + ", ".join(f"{gone}={kept}" for gone, kept in duplicates[:5]) + (" ..." if len(duplicates) > 5 else ""))
     if skipped:
         print(f"{len(queries)} righe in {args.output_dir / 'batch.json'}; saltati (formato o controllo errato): {skipped}")
     else:

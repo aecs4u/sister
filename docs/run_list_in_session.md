@@ -41,6 +41,16 @@ not also in the input list, since the preflight is separate from the batch. The 
 `SISTER_PREFLIGHT_CF` environment variable. Without either setting, `run-list` only confirms that the service can
 attach to the open browser; it does not prove that SISTER will accept a search.
 
+To receive a progress summary when the session run ends, enable email delivery:
+
+```bash
+uv run sister batch run-list --email-progress inputs/codici_fiscali.all.md
+```
+
+The message is sent through `aecs4u-email` after the runner stops its service. It includes final batch totals and the
+number of additional responses completed during that run. The default recipient is `demo@aecs4u.com`; override it with
+`--email-to ADDRESS`. Email provider settings come from the repository's normal `aecs4u-email` environment config.
+
 For a PVP parcel list, for example:
 
 ```bash
@@ -90,6 +100,7 @@ PYTHON_RUNNER="uv run --no-project python" uv run sister batch run-list inputs/c
 - The batch runs sequentially in the active SISTER session and stops at its configured deadline, before the portal's
   approximate session expiry.
 - The terminal shows batch progress. The final summary reports completed, pending, and failed rows.
+- `--email-progress` sends the final session progress by email after the run ends; this is opt-in.
 - Generated files and logs remain in the selected batch directory under `outputs/batches/` by default.
 - To continue after a stop or interrupted run, log in again and rerun the same command (or pass the same batch
   directory explicitly).

@@ -106,6 +106,10 @@ async def ensure_lookup(session: AsyncSession, table: str, code: Any, descriptio
     value = clean(code)
     if value is None:
         return None
+    seen = session.info.setdefault("_lookup_seen", set())  # already written in this session (rows are never removed)
+    if (table, value, clean(description)) in seen:
+        return value
+    seen.add((table, value, clean(description)))
     if table == "request_type":
         info = request_type_info(value)
         await session.execute(
@@ -155,6 +159,15 @@ async def get_or_create_comune(
     must resolve uniquely, with a province sigla used when supplied. When the province is absent, homonyms remain
     unresolved.
     """
+    cache = session.info.setdefault("_comune_cache", {})  # the ISTAT table is static: one lookup per distinct place per save
+    cache_key = (name, province, cadastral_code)
+    if cache_key in cache:
+        return cache[cache_key]
+    cache[cache_key] = result = await _resolve_comune(session, name, province, cadastral_code)
+    return result
+
+
+async def _resolve_comune(session: AsyncSession, name: Any, province: Any, cadastral_code: Any) -> Optional[int]:
     place = place_name(name)
     prov = province_code(province)
     code = belfiore_code(cadastral_code)
@@ -209,6 +222,10 @@ async def get_or_create_cadastral_unit(
         "pa": clean(parcel),
         "su": clean(subunit),
     }
+    cache = session.info.setdefault("_unit_cache", {})
+    unit_key = tuple(key.values())
+    if unit_key in cache:
+        return cache[unit_key]
     row = await _one(
         session,
         "INSERT INTO cadastral_unit (cadastre_type, comune_id, section, sheet, parcel, subunit) "
@@ -223,6 +240,7 @@ async def get_or_create_cadastral_unit(
             "AND subunit IS NOT DISTINCT FROM :su",
             **key,
         )
+    cache[unit_key] = row.id
     return row.id
 
 
@@ -266,6 +284,10 @@ async def get_or_create_subject(
     if kind not in {"person", "legal_entity"}:
         kind = None
 
+    cache = session.info.setdefault("_subject_cache", {})
+    subject_key = (code, name, last, first, sex, born, birth_comune_id, birth_municipality_text, birth_province_code, kind)
+    if subject_key in cache:  # the same owner on every property of a result: the update only fills blanks, so once is enough
+        return cache[subject_key]
     existing = None
     if code:
         existing = await _one(session, "SELECT id FROM subject WHERE fiscal_code = :c", c=code)
@@ -306,6 +328,7 @@ async def get_or_create_subject(
                 "i": existing.id,
             },
         )
+        cache[subject_key] = existing.id
         return existing.id
 
     params = {
@@ -330,6 +353,7 @@ async def get_or_create_subject(
     )
     if row is None:  # a concurrent writer inserted the same fiscal code
         row = await _one(session, "SELECT id FROM subject WHERE fiscal_code = :c", c=code)
+    cache[subject_key] = row.id
     return row.id
 
 

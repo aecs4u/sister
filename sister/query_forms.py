@@ -125,8 +125,12 @@ _IMMOBILE = (
 )
 
 _BASE_FORMS: dict[str, QueryForm] = {
-    "search": QueryForm("search", "immobile", _IMMOBILE, extra_params=("provincia", "richiedi_documenti")),
-    "intestati": QueryForm("intestati", "immobile", _IMMOBILE, extra_params=("provincia", "richiedi_documenti")),
+    "search": QueryForm(
+        "search", "immobile", _IMMOBILE, extra_params=("provincia", "richiedi_documenti", "immobili_intestatari")
+    ),
+    "intestati": QueryForm(
+        "intestati", "immobile", _IMMOBILE, extra_params=("provincia", "richiedi_documenti", "immobili_intestatari")
+    ),
     "soggetto": QueryForm(
         "soggetto",
         "soggetto",
@@ -187,7 +191,7 @@ _BASE_FORMS: dict[str, QueryForm] = {
             _RICHIEDENTE,
             _MOTIVO,
         ),
-        extra_params=("provincia", "omonimo_da", "max_omonimi"),
+        extra_params=("provincia", "omonimo_da", "max_omonimi", "con_intestati"),
     ),
     "elenco": QueryForm(
         "elenco",
@@ -477,6 +481,10 @@ _EXTRA_HELP = {
     "particella": "Numero di particella (non è un campo di questa maschera)",
     "richiedi_documenti": (
         "Sì: richiedi e scarica anche i documenti. No: leggi solo i dati delle pagine web, senza scaricare documenti."
+    ),
+    "immobili_intestatari": (
+        "Sì: per ogni intestatario della pagina Intestati premi «Immobili» e leggi l'elenco dei suoi altri immobili "
+        "(solo pagine HTML, nessun CAPTCHA). Default: no."
     ),
 }
 
