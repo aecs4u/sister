@@ -85,6 +85,14 @@
         node(disclosure, 'summary', 'fw-semibold', summary);
         var card = node(disclosure, 'div', 'pt-3');
 
+        // The body (selects, three forms) is built when the item is opened: a subject with 1500 properties built
+        // ~1500 forms at load and froze the browser. Items with an affrancation amount stay eager: other parts of
+        // the page link to their input by id.
+        var built = false;
+        function buildBody() {
+            if (built) return;
+            built = true;
+
         var choiceLabel = node(card, 'label', 'form-label small fw-semibold mb-1', 'Fonte preferita per questo bene');
         var select = node(card, 'select', 'form-select form-select-sm mb-2');
         choiceLabel.htmlFor = 'preferred-source-' + item.asset_key;
@@ -320,6 +328,9 @@
                 showError(error.message);
             });
         });
+        }
+        if (item.affrancation) buildBody();
+        else disclosure.addEventListener('toggle', function () { if (disclosure.open) buildBody(); });
     }
 
     entries.forEach(renderItem);

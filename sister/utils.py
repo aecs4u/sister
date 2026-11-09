@@ -5461,6 +5461,46 @@ async def _selected_subject(page) -> dict:
         return {}
 
 
+_SEARCH_REUSED: set = set()
+
+
+def _reuse_omonimi() -> bool:
+    """Opt-in (SISTER_REUSE_OMONIMI=1): next record via Indietro instead of a new search; untested on the live portal."""
+    return os.getenv("SISTER_REUSE_OMONIMI", "0").strip().lower() in ("1", "true", "yes", "on")
+
+
+async def _back_to_omonimi(page, wanted: int) -> bool:
+    """From a record's Immobili/province page press *Indietro* until the Elenco Omonimi radios show (max 3 clicks)."""
+    try:
+        for _ in range(3):
+            count = await page.locator(_OMONIMO_RADIOS).count()
+            if count > wanted:
+                return True
+            if count > 0:
+                return False
+            back = page.locator("input[type='submit'][name='indietro']")
+            if await back.count() == 0:
+                return False
+            await _click_nav(page, back.first)
+        return await page.locator(_OMONIMO_RADIOS).count() > wanted
+    except Exception as exc:  # noqa: BLE001 (fall back to the full search)
+        log.debug("Indietro verso Elenco Omonimi non riuscito: %s", exc)
+        return False
+
+
+async def _open_record_by_search(page, identifier, tipo_catasto, provincia, omonimo_index) -> bool:
+    """Full path (search, pick the record, Ricerca), used when the shortcut did not land on the province table."""
+    found = await _search_persona_giuridica(page, identifier, tipo_catasto=tipo_catasto, provincia=provincia)
+    if found.get("error"):
+        _SEARCH_ERROR[page] = found["error"]
+        return False
+    omonimo = page.locator(_OMONIMO_RADIOS)
+    if await omonimo.count() > omonimo_index:
+        await omonimo.nth(omonimo_index).check()
+        await _click_nav(page, page.locator("input[name='visura'][value='Ricerca']"))
+    return True
+
+
 async def _open_soggetto_province_page(page, identifier, tipo_catasto, provincia, azienda=False, omonimo_index=0) -> bool:
     """Search a persona fisica (codice fiscale) or giuridica (partita IVA) and stop on the page offering
     Immobili / Visura per Soggetto.
@@ -5469,7 +5509,11 @@ async def _open_soggetto_province_page(page, identifier, tipo_catasto, provincia
 
     Returns False when SISTER finds no match.
     """
-    if azienda:
+    if azienda and omonimo_index > 0 and _reuse_omonimi() and await _back_to_omonimi(page, omonimo_index):
+        # next registry record of the same code: the Elenco Omonimi page is shown again, no new search (~3 s saved)
+        found = {}
+        _SEARCH_REUSED.add(page)
+    elif azienda:
         found = await _search_persona_giuridica(page, identifier, tipo_catasto=tipo_catasto, provincia=provincia)
     else:
         found = await _search_soggetto(page, identifier, tipo_catasto=tipo_catasto, provincia=provincia)
@@ -5500,6 +5544,13 @@ async def _open_soggetto_province_page(page, identifier, tipo_catasto, provincia
         text = text.split("Dati della ricerca")[-1].strip()[:1200]
         raise Exception(f"Pagina inattesa dopo la ricerca ({page.url}): {text}")
     await _click_nav(page, ricerca)
+    if page in _SEARCH_REUSED:
+        _SEARCH_REUSED.discard(page)
+        if await page.locator(_PROVINCE_RADIOS).count() == 0 and (
+            await page.locator("input[name='immobili'][value='Immobili']").count() == 0
+        ):
+            log.info("Elenco Omonimi riusato ma la pagina non e' quella attesa: ripeto la ricerca")
+            return await _open_record_by_search(page, identifier, tipo_catasto, provincia, omonimo_index)
     return True
 
 
@@ -5931,11 +5982,10 @@ async def run_visura_persona_giuridica(
             failures = 0
             _append_omonimo(combined, index, record, result)
             if result.get("needs_refinement"):
-                combined["needs_refinement"] = True
+                # SISTER refused this one record (too many rows or its time limit). Records are independent subjects:
+                # note it (its summary line carries the message) and read the others instead of ending the whole code.
+                combined.setdefault("da_affinare", []).append(index + 1)
                 combined["error"] = result.get("error") or "Affinare i criteri di ricerca."
-                stopped = str(combined["error"])
-                index += 1
-                break
         except Exception as exc:  # noqa: BLE001 (one record must not lose the others)
             if _session_lost(exc):
                 if not combined["omonimi"]:
@@ -5973,9 +6023,11 @@ async def run_visura_persona_giuridica(
     }
     if stopped:
         out["interrotta"] = stopped
-    if combined.get("needs_refinement"):
-        out["needs_refinement"] = True
-        out["error"] = combined["error"]
-    if all_failed:
+    if combined.get("da_affinare"):
+        out["omonimi_da_affinare"] = combined["da_affinare"]
+        if len(combined["da_affinare"]) >= done:  # every record opened was refused: nothing to show but the refusal
+            out["needs_refinement"] = True
+            out["error"] = combined["error"]
+    if all_failed and not out.get("error"):
         out["error"] = combined["omonimi"][0]["errore"]
     return out

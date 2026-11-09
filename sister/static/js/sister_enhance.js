@@ -177,7 +177,14 @@
     enhanceForms(document);
     var pending = false;
     new MutationObserver(function (mutations) {
-      if (pending || !mutations.some(function (m) { return m.addedNodes.length; })) return;
+      // Ignore the parcel map's own nodes (see sister_a11y.js): a page-wide rescan per marker froze big pages.
+      if (pending || !mutations.some(function (m) {
+        if (!m.addedNodes.length) return false;
+        if (m.target.closest && m.target.closest('.leaflet-container, .document-parcel-map-card')) return false;
+        return Array.prototype.some.call(m.addedNodes, function (n) {
+          return n.nodeType === 1 && !(n.classList && n.classList.contains('document-map-row-action'));
+        });
+      })) return;
       pending = true;
       setTimeout(function () { pending = false; enhanceCookieBanner(); enhanceForms(document); nameControls(document); }, 200);
     }).observe(document.body, { childList: true, subtree: true });

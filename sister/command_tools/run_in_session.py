@@ -319,7 +319,7 @@ def preflight(port: int, code: str, out: Path) -> bool:
 
 
 def run_batch(directory: Path, port: int, deadline: datetime, tick=None, *, grace: float = 60.0) -> str:
-    """Run one plan until it ends, the deadline passes or the portal reports an expired session: 'done'|'deadline'|'expired'.
+    """Run one plan until it ends, the deadline passes or the portal reports an expired session: 'done'|'deadline'|'expired'|'failed'.
 
     The batch itself starts no row after ``deadline`` (``--stop-at``: the running row finishes and is journaled) and stops
     at the first expired-session answer (exit code ``EXIT_SESSION_EXPIRED``). Only a row still running ``grace`` seconds
@@ -330,6 +330,7 @@ def run_batch(directory: Path, port: int, deadline: datetime, tick=None, *, grac
         sys.executable, "-m", "sister.cli", "query", "batch", "-I", str(directory / "batch.json"), "--resume",
         "-o", str(directory / "report.json"), "--stop-at", deadline.isoformat(timespec="seconds"),
     ]
+    started_at = time.time()
     with open(log, "a") as handle:
         process = subprocess.Popen(command, cwd=ROOT, env=cli_env(port), stdout=handle, stderr=subprocess.STDOUT, start_new_session=True)
     hard_stop = deadline + timedelta(seconds=grace)
@@ -348,6 +349,9 @@ def run_batch(directory: Path, port: int, deadline: datetime, tick=None, *, grac
         tick()
     if process.returncode == EXIT_SESSION_EXPIRED:
         return "expired"
+    report = directory / "report.json"
+    if process.returncode not in (0, None) and not (report.exists() and report.stat().st_mtime >= started_at - 1):
+        return "failed"  # the batch crashed before writing its report (see run.log): nothing was processed
     if datetime.now() >= deadline and _stopped_at_deadline(directory):
         return "deadline"
     return "deadline" if datetime.now() >= hard_stop else "done"
@@ -407,6 +411,12 @@ def main() -> int:
         say("la sessione e' valida (prova con una scheda a parte)")
     service = None
     outcome = "not_started"
+
+    def _terminate(signum, _frame):  # a closed terminal (SIGHUP) or a kill (SIGTERM) must still stop the service below
+        raise KeyboardInterrupt
+
+    for _sig in (signal.SIGTERM, signal.SIGHUP):
+        signal.signal(_sig, _terminate)
     try:
         for attempt in (1, 2):
             try:

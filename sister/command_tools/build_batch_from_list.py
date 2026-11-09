@@ -50,7 +50,7 @@ def main() -> int:
             "max_in_flight": 1,
             "retries": 0,
             "on_error": "continue",
-            "poll_timeout": 300,
+            "poll_timeout": 600,  # above the service budget (SISTER_OMONIMI_MAX_SECONDS 150 + one record): no false timeouts
             **batch.options.model_dump(mode="json", exclude_defaults=True),
             "output_dir": str(args.output_dir.resolve()),
         },

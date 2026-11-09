@@ -114,7 +114,15 @@
     // Tabulator and lazily rendered panels add controls after load.
     var pending = false;
     new MutationObserver(function (mutations) {
-      if (pending || !mutations.some(function (m) { return m.addedNodes.length; })) return;
+      // The parcel map adds hundreds of nodes (markers, labels, row buttons) as it fills: they need no relabelling,
+      // and rescanning a multi-thousand-row page for each of them froze the browser.
+      if (pending || !mutations.some(function (m) {
+        if (!m.addedNodes.length) return false;
+        if (m.target.closest && m.target.closest('.leaflet-container, .document-parcel-map-card')) return false;
+        return Array.prototype.some.call(m.addedNodes, function (n) {
+          return n.nodeType === 1 && !(n.classList && n.classList.contains('document-map-row-action'));
+        });
+      })) return;
       pending = true;
       setTimeout(function () { pending = false; labelControls(document); normalizeHeadings(); }, 250);
     }).observe(document.body, { childList: true, subtree: true });

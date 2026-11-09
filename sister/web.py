@@ -6923,6 +6923,8 @@ async def _google_maps_context_uncached(doc: dict, *, refresh_only: bool = False
                                         reference_candidates.add((
                                             f"{code_prefix}{sheet_suffix}.{parcel_value}".upper(), section_rank,
                                         ))
+                    if _exact_lookup_recently_timed_out(item["municipality_code"]):
+                        reference_candidates = set()  # straight to the fallback: the exact query would time out again
                     exact_reference_wanted.extend(
                         (index, reference, section_rank)
                         for reference, section_rank in sorted(reference_candidates)
@@ -6945,6 +6947,7 @@ async def _google_maps_context_uncached(doc: dict, *, refresh_only: bool = False
                             marker_rows.extend(exact_marker_rows)
                             exact_indices = {int(row[0]) for row in exact_marker_rows}
                     except Exception as exc:
+                        _remember_exact_lookup_timeout({item["municipality_code"] for item in parcel_identifiers})
                         logger.warning("Exact cadastral parcel lookup unavailable: %s: %s", type(exc).__name__, exc)
 
                 # Fall back to municipality/sheet/parcel fields only for rows
@@ -7315,6 +7318,27 @@ def _land_map_layout(kind: str, theme=None) -> dict[str, str]:
             # Let a missing fallback raise with the actual template name.
             theme.templates.env.get_template(parent)
     return {"land_map_parent": parent, "land_map_slot": slot}
+
+
+_EXACT_LOOKUP_TIMEOUTS: dict[str, float] = {}  # municipality code -> monotonic time of its last exact-lookup timeout
+_EXACT_LOOKUP_RETRY_SECONDS = 600.0
+
+
+def _exact_lookup_recently_timed_out(municipality_code: str) -> bool:
+    """True when the exact parcel query for this comune timed out lately (regions without data, huge comuni).
+
+    The query joins a computed id over the UNION ALL view of all regions and costs the whole statement timeout
+    every time; a hub of hundreds of parcels paid it once per chunk.
+    """
+    stamp = _EXACT_LOOKUP_TIMEOUTS.get(str(municipality_code or "").upper())
+    return stamp is not None and time.monotonic() - stamp < _EXACT_LOOKUP_RETRY_SECONDS
+
+
+def _remember_exact_lookup_timeout(municipality_codes: set[str]) -> None:
+    now = time.monotonic()
+    for code in municipality_codes:
+        _EXACT_LOOKUP_TIMEOUTS[str(code or "").upper()] = now
+
 
 
 async def _land_registry_map_context(lookup: dict[str, Any] | None) -> dict[str, Any] | None:
@@ -11588,7 +11612,8 @@ async def _build_hub_map(map_key: str, parcels: list[dict], data_url: str) -> di
     return parcel_map
 
 
-_HUB_MAP_CHUNKS_PER_ANSWER = 4  # keeps one draw step of the browser short, also when everything is already looked up
+_HUB_MAP_CHUNKS_PER_ANSWER = 60  # one draw step of the browser per answer; markers placed by address come one chunk each
+_HUB_MAP_SETTLE_SECONDS = float(os.getenv("SISTER_HUB_MAP_SETTLE_SECONDS", "4"))  # wait for more chunks before answering
 
 
 async def _hub_map_increment(map_key: str, after: int, wait_seconds: float = 25.0) -> dict:
@@ -11603,6 +11628,13 @@ async def _hub_map_increment(map_key: str, after: int, wait_seconds: float = 25.
         if progress is None or len(progress["chunks"]) > after or progress["done"] or loop.time() >= deadline:
             break
         await asyncio.sleep(0.4)
+    # Address-placed markers arrive one by one (~1 per second): let a few pile up so the browser redraws per batch,
+    # not per marker (each redraw re-lays out labels and clusters). The first answer (after=0) is never held back.
+    progress = _HUB_MAP_DATA.get(map_key)
+    if after > 0 and progress is not None and not progress["done"] and len(progress["chunks"]) > after:
+        settle_until = min(loop.time() + _HUB_MAP_SETTLE_SECONDS, deadline)
+        while loop.time() < settle_until and not progress["done"]:
+            await asyncio.sleep(0.4)
     progress = _HUB_MAP_DATA.get(map_key) or {"chunks": [], "done": True, "total": 0}
     chunks = progress["chunks"]
     fresh = chunks[after : after + _HUB_MAP_CHUNKS_PER_ANSWER]

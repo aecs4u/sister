@@ -409,6 +409,11 @@ async def get_or_create_right(
 
     The share is stored as a fraction in lowest terms (``500/1000`` is ``1/2``), so equal shares are one right.
     """
+    # One result repeats a few rights/shares thousands of times: remember them for this session (4 round-trips each)
+    cache = session.info.setdefault("_right_cache", {})
+    cache_key = (right_type, right_code, right_description, ownership_share, str(start_date), str(end_date))
+    if cache_key in cache:
+        return cache[cache_key]
     kind = {"t": clean(right_type), "c": clean(right_code), "d": clean(right_description)}
     row = await _one(
         session,
@@ -448,6 +453,7 @@ async def get_or_create_right(
             "AND share_denominator IS NOT DISTINCT FROM :d AND start_date IS NOT DISTINCT FROM :s AND end_date IS NOT DISTINCT FROM :e",
             **key,
         )
+    cache[cache_key] = row.id
     return row.id
 
 

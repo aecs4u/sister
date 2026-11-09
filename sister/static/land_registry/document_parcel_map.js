@@ -414,6 +414,7 @@
             var omiZoneOverviewMarkers = window.L.layerGroup();
             var overviewOmiZoneKeys = new Set();
             var updateOverviewMarkers = null;
+            var permanentLabelLimit = 150;
             var overviewLayoutFrame = null;
             var markerBounds = [];
             var foundParcelKeys = new Set();
@@ -1126,8 +1127,10 @@
                 }
                 marker.bindPopup(popup);
                 if (listedOnly) {
+                    // An always-open label per marker costs ~13 ms each in Leaflet (_setPosition): 1500 address-placed
+                    // parcels froze the page for over a minute. Past a few hundred markers the labels open on hover only.
                     marker.bindTooltip(listedParcelLabel(item, container), {
-                        permanent: true,
+                        permanent: parcelPositionMarkers.length < permanentLabelLimit,
                         direction: markerLabelDirection,
                         offset: markerLabelOffset,
                         className: 'document-map-parcel-marker-label',
@@ -1137,6 +1140,7 @@
                     marker.on('add', function () {
                         if (instance.map.getZoom() <= 14) marker.closeTooltip();
                     });
+                    marker.options.permanentLabel = parcelPositionMarkers.length < permanentLabelLimit;
                     parcelPositionMarkers.push(marker);
                 }
                 var row = resolveRow(records, item);
@@ -1181,12 +1185,21 @@
                     clusterEntries.forEach(function (_entries, group) { renderClusters(group); });
                     var visible = instance.map.getZoom() <= overviewMaxZoom;
                     container.classList.toggle('document-map-polygons-labeled', !visible);
+                    var labelBounds = instance.map.getBounds();
+                    var labelsOpened = 0;
                     parcelPositionMarkers.forEach(function (marker) {
-                        if (!listedLayers.parcels || !listedLayers.parcels.hasLayer(marker) || visible) {
+                        if (!listedLayers.parcels || !listedLayers.parcels.hasLayer(marker) || visible
+                            || !marker.options.permanentLabel) {
                             marker.closeTooltip();
                             return;
                         }
-                        marker.openTooltip();
+                        // only the labels in view, and never more than the limit at once
+                        if (labelsOpened < permanentLabelLimit && labelBounds.contains(marker.getLatLng())) {
+                            labelsOpened += 1;
+                            marker.openTooltip();
+                        } else {
+                            marker.closeTooltip();
+                        }
                     });
                     [
                         [listedLayers.parcels, parcelOverviewMarkers],
