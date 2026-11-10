@@ -16,7 +16,10 @@
             <h1 class="h2 mb-1"><i class="fas fa-terminal me-2" aria-hidden="true"></i>Comandi CLI</h1>
             <p class="text-muted mb-0">Avvia gli strumenti operativi registrati e consulta qui l’output. Alcuni possono inviare richieste o modificare dati.</p>
         </div>
-        <a class="btn btn-outline-secondary" href="/admin">Torna all’amministrazione</a>
+        <div class="d-flex flex-wrap gap-2">
+            <a class="btn btn-outline-primary" href="/admin/inputs">Gestisci input Markdown</a>
+            <a class="btn btn-outline-secondary" href="/admin">Torna all’amministrazione</a>
+        </div>
     </div>
 
     {% if error_message %}<div class="alert alert-warning" role="alert">{{ error_message }}</div>{% endif %}

@@ -1,7 +1,6 @@
 {% extends "legal/privacy.html" %}
-{# The theme's privacy policy with SISTER fixes: remove its language selector, contain wide tables, and normalize
+{# The theme's privacy policy with SISTER fixes: contain wide tables, and normalize
    heading levels (sister_a11y.js). #}
-{% block language_switcher %}{% endblock %}
 {% block extra_head %}
 {{ super() }}
 {% include "components/sister_meta_links.html" %}

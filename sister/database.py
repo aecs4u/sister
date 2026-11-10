@@ -921,6 +921,55 @@ def _subject_query_owner(data: dict, item: dict) -> Optional[dict[str, Any]]:
     return {"codice_fiscale": identifier, "Titolarità": item["Titolarità"]}
 
 
+_OWNER_IDENTITY_KEYS = ("codice_fiscale", "nome", "sesso", "luogo_nascita", "data_nascita", "sede")
+
+
+def _project_owner_immobili(
+    data: dict, tipo_catasto: str, response_id: str, properties: list[ProjectedProperty], results: list[dict[str, Any]]
+) -> None:
+    """Add the properties found through an owner's *Immobili* button (``results[].immobili_intestatari``) to ``properties``.
+
+    Each listed immobile is stored like a row of a subject search: the owner is its owner, with the ``Titolarità`` the
+    list shows. Only the owner's identity is used: ``titolarita`` / ``quota`` of the source Intestati row belong to
+    the immobile the owner was read from, not to these. Rows get positions after every ``immobili`` row and result
+    index, so they never tie to a ``visura_results`` row of the searched immobile; a property already listed
+    (same unit and owner) is not added twice.
+    """
+    entries = [
+        entry
+        for result in data.get("results") or []
+        if isinstance(result, dict)
+        for entry in result.get("immobili_intestatari") or []
+        if isinstance(entry, dict)
+    ]
+    if not entries:
+        return
+    position = max([len(data.get("immobili") or []), *(row["result_index"] for row in results), 0])
+    seen: set[tuple] = set()
+    for entry in entries:
+        owner = entry.get("intestato") if isinstance(entry.get("intestato"), dict) else {}
+        identity = {key: owner[key] for key in _OWNER_IDENTITY_KEYS if owner.get(key)}
+        for item in entry.get("immobili") or []:
+            if not isinstance(item, dict):
+                continue
+            prop, loc, subject = _property_row(response_id, tipo_catasto, item)
+            if not loc.get("province"):
+                # "MENFI(AG) CONTRADA ...": without it the searched immobile's province would be filled in later
+                found = re.match(r"\s*[^()]+\((\w{2})\)", str(item.get("Ubicazione") or ""))
+                loc["province"] = found.group(1).upper() if found else ""
+            key = (identity.get("codice_fiscale"), tuple(sorted(loc.items())), item.get("Titolarità"))
+            if key in seen:
+                continue
+            seen.add(key)
+            position += 1
+            projected = ProjectedProperty(position, prop, loc, subject)
+            owner_row = {**identity, **({"Titolarità": item["Titolarità"]} if item.get("Titolarità") else {})}
+            if identity:
+                projected.owners = _owner_pairs([owner_row])
+                projected.owners_complete = False
+            properties.append(projected)
+
+
 def _project_response(
     response_id: str, tipo_catasto: str, data: Optional[dict]
 ) -> tuple[list[ProjectedProperty], list[tuple[dict[str, Any], dict[str, Any]]], list[dict[str, Any]]]:
@@ -957,6 +1006,8 @@ def _project_response(
             raw_owners.append(queried)
         projected.owners = _owner_pairs(raw_owners)
         properties.append(projected)
+
+    _project_owner_immobili(data, tipo_catasto, response_id, properties, results)
 
     top_level = _owner_pairs(data.get("intestati")) if not result_items else []
     unlinked: list[tuple[dict[str, Any], dict[str, Any]]] = []
@@ -1254,14 +1305,19 @@ async def subject_ownership_history(fiscal_code: str, only_changed: bool = True)
             await session.execute(
                 text(
                     "WITH acts AS ("
-                    " SELECT coalesce(m.reference_cadastral_unit_id, d.cadastral_unit_id) AS unit, d.id AS document_id, d.file_name,"
+                    " SELECT CASE WHEN m.status = 'predecessore' THEN coalesce((SELECT x.reference_cadastral_unit_id FROM ownership_mutation x"
+                    "   WHERE x.document_id = m.document_id AND x.status = 'attuale' AND x.reference_cadastral_unit_id IS NOT NULL"
+                    "   AND x.property_group_id IS NOT DISTINCT FROM m.property_group_id ORDER BY x.id LIMIT 1), d.cadastral_unit_id)"
+                    "  ELSE coalesce(m.reference_cadastral_unit_id, d.cadastral_unit_id) END AS unit, d.id AS document_id, d.file_name,"
                     "  m.id, m.mutation_index, m.mutation_date, m.source_description, m.is_current"
                     " FROM ownership_mutation m JOIN document d ON d.id = m.document_id),"
                     " mine AS ("
                     "  SELECT h.cadastral_unit_id AS unit FROM ownership_history h JOIN subject s ON s.id = h.subject_id WHERE s.fiscal_code = :c"
                     "  UNION SELECT a.unit FROM acts a JOIN mutation_owner mo ON mo.mutation_id = a.id"
                     "   JOIN subject s ON s.id = mo.subject_id WHERE s.fiscal_code = :c),"
-                    " latest AS (SELECT a.unit, max(a.document_id) AS document_id FROM acts a JOIN mine USING (unit) GROUP BY a.unit)"
+                    " latest AS (SELECT DISTINCT ON (c.unit) c.unit, c.document_id FROM ("
+                    "  SELECT a.unit, a.document_id, count(*) AS n FROM acts a JOIN mine USING (unit) GROUP BY a.unit, a.document_id) c"
+                    "  ORDER BY c.unit, c.n DESC, c.document_id DESC)"
                     " SELECT a.*, (SELECT string_agg(coalesce(s.name, s.fiscal_code) || coalesce(' ' || nullif(k.description, ''), '')"
                     "   || coalesce(' ' || o.share_numerator || '/' || o.share_denominator, ''), '; ' ORDER BY mo.position, mo.id)"
                     "   FROM mutation_owner mo JOIN subject s ON s.id = mo.subject_id LEFT JOIN ownership_right o ON o.id = mo.right_id"
@@ -1412,11 +1468,14 @@ async def backfill_ownership_history() -> dict[str, int]:
     return stats
 
 
-async def backfill_projections(limit: Optional[int] = None, batch: int = 50) -> dict[str, int]:
+async def backfill_projections(
+    limit: Optional[int] = None, batch: int = 50, contains: Optional[str] = None
+) -> dict[str, int]:
     """Re-project every stored response with the current parsers (idempotent; the archived JSON is the source).
 
     Fills ``result_id`` / ``owner_index`` on existing properties and owners, splits the composite portal cells and
-    ties downloaded documents to their response.
+    ties downloaded documents to their response. ``contains``: only the responses whose archived JSON has this text
+    (e.g. ``immobili_intestatari``), so a new projection does not rebuild every response.
     """
     session_factory = _get_session_factory()
     stats = {"responses": 0, "properties": 0, "owners": 0}
@@ -1426,6 +1485,8 @@ async def backfill_projections(limit: Optional[int] = None, batch: int = 50) -> 
             .join(RequestPayload, RequestPayload.request_id == Request.id)
             .order_by(Request.responded_at)
         )
+        if contains:
+            stmt = stmt.where(RequestPayload.data.contains(contains, autoescape=True))
         if limit:
             stmt = stmt.limit(limit)
         todo = (await session.execute(stmt)).all()
@@ -2621,7 +2682,7 @@ def _subject_profile_ctes(istat: str) -> str:
         "    AND (CAST(:code AS text) IS NULL OR upper(btrim(r.fiscal_code)) = CAST(:code AS text))"
         "  ) x WHERE clean IS NOT NULL GROUP BY code"
         f"), p AS ("
-        f"  SELECT c.code, coalesce({_OWN_NAME_SQL}, rec.rec_name) AS name,"
+        f"  SELECT c.code, coalesce({_OWN_NAME_SQL}, rec.rec_name) AS name, subj.last_name, subj.first_name,"
         f"    coalesce(rec.name_records, 0) AS name_records,"
         f"    ({_OWN_NAME_SQL} IS NULL AND rec.rec_name IS NOT NULL) AS name_inferred,"
         "    upper(left(coalesce(subj.gender, ''), 1)) AS gender, subj.birth_date, subj.birth_place,"
@@ -2689,6 +2750,8 @@ def _profile_from_row(row: Any, kind: str) -> dict[str, Any]:
     }
     if kind == "person":
         profile.update(
+            last_name=row["last_name"] or "",
+            first_name=row["first_name"] or "",
             gender=row["gender"] or "",
             birth_date=row["birth_date"].isoformat() if row["birth_date"] else "",
             age=row["age"],

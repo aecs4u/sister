@@ -1,0 +1,383 @@
+{% extends "_base.html" %}
+
+{% block page_title %}Input Markdown · Amministrazione{% endblock %}
+
+{% block content %}
+{% macro render_input_tree(node, show_subfolders, selected_file) %}
+<ul class="list-unstyled mb-0">
+    {% for input_file in node.files %}
+    <li>
+        <a class="d-block rounded px-2 py-1{% if input_file.path == selected_file %} active bg-primary text-white{% endif %}"
+           href="/admin/inputs?file={{ input_file.path|urlencode }}&amp;show_subfolders={{ 'true' if show_subfolders else 'false' }}"
+           {% if input_file.path == selected_file %}aria-current="page"{% endif %}>
+            <i class="fas fa-file-lines me-2" aria-hidden="true"></i><span class="font-monospace">{{ input_file.name }}</span>
+        </a>
+    </li>
+    {% endfor %}
+    {% if show_subfolders %}
+    {% for directory in node.directories %}
+    <li class="mt-1">
+        <details class="input-tree-directory"{% if selected_file == directory.path or selected_file.startswith(directory.path ~ '/') %} open{% endif %}>
+            <summary class="rounded px-2 py-1">
+                <i class="fas fa-folder me-2" aria-hidden="true"></i>{{ directory.name }}
+            </summary>
+            <div class="border-start ms-3 ps-2">
+                {{ render_input_tree(directory, show_subfolders, selected_file) }}
+            </div>
+        </details>
+    </li>
+    {% endfor %}
+    {% endif %}
+</ul>
+{% endmacro %}
+<div class="container-fluid py-4" id="admin-inputs-page">
+    <nav aria-label="breadcrumb" class="mb-3">
+        <ol class="breadcrumb">
+            <li class="breadcrumb-item"><a href="/admin">Amministrazione</a></li>
+            <li class="breadcrumb-item active" aria-current="page">Input Markdown</li>
+        </ol>
+    </nav>
+
+    <div class="d-flex flex-wrap justify-content-between align-items-center gap-3 mb-4">
+        <div>
+            <h1 class="h2 mb-1"><i class="fas fa-list-check me-2" aria-hidden="true"></i>Input Markdown</h1>
+            <p class="text-muted mb-0">Modifica i file Markdown in <code>inputs/</code> e nelle sue sottocartelle, rimuovi le righe già disponibili e riordina le righe delle tabelle batch.</p>
+        </div>
+        <a class="btn btn-outline-secondary" href="/admin">Torna all’amministrazione</a>
+    </div>
+
+    {% if success_message %}<div class="alert alert-success" role="status">{{ success_message }}{% if success_detail %}<div class="small mt-1">{{ success_detail }}</div>{% endif %}</div>{% endif %}
+    {% if error_message %}<div class="alert alert-warning" role="alert">{{ error_message }}</div>{% endif %}
+
+    <section class="card mb-4" aria-labelledby="input-file-heading">
+        <div class="card-body">
+            <h2 class="h5" id="input-file-heading">Seleziona un file</h2>
+            <div class="form-check form-switch mb-3">
+                <input class="form-check-input" type="checkbox" role="switch" id="input-show-subfolders"{% if show_subfolders %} checked{% endif %} aria-controls="input-file-tree">
+                <label class="form-check-label" for="input-show-subfolders">Mostra i file nelle sottocartelle</label>
+            </div>
+            {% if all_files %}
+            <nav id="input-file-tree" aria-label="File Markdown in inputs">
+                <div class="border rounded p-2 overflow-auto">
+                    {{ render_input_tree(input_tree, show_subfolders, selected_file) }}
+                </div>
+            </nav>
+            {% if not show_subfolders and not files %}
+            <p class="small text-muted mt-2 mb-0">Attiva l’opzione per visualizzare i file che si trovano solo nelle sottocartelle.</p>
+            {% endif %}
+            {% else %}
+            <p class="text-muted mb-0">Non ci sono file Markdown modificabili in inputs/ o nelle sue sottocartelle.</p>
+            {% endif %}
+        </div>
+    </section>
+
+    {% if selected_file and not error_message %}
+    {% if file_kpis and not file_kpis.parse_error %}
+    <section class="mb-4" aria-labelledby="input-kpis-heading">
+        <h2 class="h5 mb-3" id="input-kpis-heading">Statistiche del file</h2>
+        <div class="row row-cols-2 row-cols-md-3 row-cols-xl-5 g-3">
+            <div class="col">
+                <article class="card h-100"><div class="card-body">
+                    <div class="small text-muted">Query totali</div>
+                    <div class="display-6 fw-semibold">{{ file_kpis.total }}</div>
+                </div></article>
+            </div>
+            <div class="col">
+                <article class="card h-100"><div class="card-body">
+                    <div class="small text-muted">Pronte</div>
+                    <div class="display-6 fw-semibold text-success">{{ file_kpis.counts.get('ready', 0) }}</div>
+                </div></article>
+            </div>
+            <div class="col">
+                <article class="card h-100"><div class="card-body">
+                    <div class="small text-muted">Non valide</div>
+                    <div class="display-6 fw-semibold text-danger">{{ file_kpis.counts.get('invalid', 0) }}</div>
+                </div></article>
+            </div>
+            <div class="col">
+                <article class="card h-100"><div class="card-body">
+                    <div class="small text-muted">Duplicate</div>
+                    <div class="display-6 fw-semibold text-warning">{{ file_kpis.counts.get('duplicate', 0) }}</div>
+                </div></article>
+            </div>
+            <div class="col">
+                <article class="card h-100"><div class="card-body">
+                    <div class="small text-muted">Disattivate</div>
+                    <div class="display-6 fw-semibold text-secondary">{{ file_kpis.counts.get('disabled', 0) }}</div>
+                </div></article>
+            </div>
+        </div>
+        {% if file_kpis.row_errors_total %}
+        <div class="alert alert-warning mt-3 mb-0" role="status">
+            {% if file_kpis.row_errors_total == 1 %}
+            È stata rilevata 1 riga non valida; le altre statistiche includono le righe leggibili.
+            {% else %}
+            Sono state rilevate {{ file_kpis.row_errors_total }} righe non valide; le altre statistiche includono le righe leggibili.
+            {% endif %}
+            <ul class="small mb-0 mt-2">
+                {% for issue in file_kpis.row_errors[:3] %}<li>Riga {{ issue.line }}: {{ issue.message }}</li>{% endfor %}
+            </ul>
+            {% if file_kpis.row_errors_total > file_kpis.row_errors|length %}
+            <div class="small mt-1">… e altre {{ file_kpis.row_errors_total - file_kpis.row_errors|length }} righe non valide.</div>
+            {% endif %}
+        </div>
+        {% endif %}
+    </section>
+    {% elif file_kpis and file_kpis.parse_error %}
+    <div class="alert alert-info" role="status">
+        Le statistiche non sono disponibili: il file selezionato non è leggibile come batch. {{ file_kpis.parse_error }}
+    </div>
+    {% endif %}
+
+    <form method="post" action="/admin/inputs/edit" id="admin-input-editor-form">
+        {{ csrf_input() }}
+        <input type="hidden" name="file" value="{{ selected_file }}">
+        <input type="hidden" name="show_subfolders" value="{{ 'true' if show_subfolders else 'false' }}">
+        <input type="hidden" name="content_hash" value="{{ content_hash }}">
+        <input type="hidden" name="row_order" id="input-row-order" value="">
+
+        <section class="card mb-4" aria-labelledby="input-editor-heading">
+            <div class="card-header d-flex flex-wrap align-items-center gap-2">
+                <h2 class="h5 mb-0" id="input-editor-heading"><code>{{ selected_file }}</code></h2>
+                <span class="small text-muted ms-auto">Una copia precedente viene salvata nella sottocartella <code>backups/</code> del file quando il contenuto cambia.</span>
+            </div>
+            <div class="card-body">
+                <label class="form-label" for="input-content">Contenuto Markdown</label>
+                <textarea class="form-control font-monospace" id="input-content" name="content" rows="26" maxlength="5000000" spellcheck="false">{{ content }}</textarea>
+                <div class="d-flex flex-wrap gap-2 mt-3">
+                    <button class="btn btn-primary" type="submit" name="action" value="save">
+                        <i class="fas fa-floppy-disk me-2" aria-hidden="true"></i>Salva modifiche
+                    </button>
+                    <button class="btn btn-outline-danger" type="submit" name="action" value="prune"
+                            data-confirm="Rimuovere dal file le righe già disponibili? Prima verrà salvata una copia di sicurezza.">
+                        <i class="fas fa-filter-circle-xmark me-2" aria-hidden="true"></i>Applica prune
+                    </button>
+                    <button class="btn btn-outline-success" type="button" id="input-validate-btn"
+                            data-validate-url="/admin/inputs/validate">
+                        <i class="fas fa-clipboard-check me-2" aria-hidden="true"></i>Valida righe
+                    </button>
+                    {% if reorder_tables %}
+                    <button class="btn btn-outline-primary" type="submit" name="action" value="reorder" id="input-reorder-submit">
+                        <i class="fas fa-arrow-down-wide-short me-2" aria-hidden="true"></i>Salva ordine righe
+                    </button>
+                    {% endif %}
+                </div>
+                <div id="input-validate-result" class="mt-3" role="status" aria-live="polite" hidden></div>
+                <p class="form-text mb-0 mt-2" id="input-reorder-help">
+                    {% if reorder_tables %}Riordina le righe trascinandole o usando i pulsanti Su/Giù. Salva prima le modifiche al testo per riattivare il riordino.{% else %}Il riordino trascinabile è disponibile per le righe sotto un marcatore <code>sister-batch-table</code>. Puoi comunque riordinare il testo nell’editor.{% endif %}
+                </p>
+            </div>
+        </section>
+
+        {% if reorder_tables %}
+        <section class="card mb-4" aria-labelledby="input-reorder-heading">
+            <div class="card-header"><h2 class="h5 mb-0" id="input-reorder-heading">Riordina righe batch</h2></div>
+            <div class="card-body">
+                <p class="small text-muted">Le righe restano nella propria tabella; intestazioni, note e parametri condivisi non cambiano.</p>
+                {% for table in reorder_tables %}
+                <section class="mb-4 last-child-mb-0" aria-labelledby="input-table-heading-{{ loop.index }}">
+                    <h3 class="h6" id="input-table-heading-{{ loop.index }}">{{ table.label }}</h3>
+                    <ol class="list-group input-reorder-list" data-table-index="{{ loop.index0 }}">
+                        {% for row in table.rows %}
+                        <li class="list-group-item d-flex align-items-center gap-2" draggable="true" data-row-index="{{ loop.index0 }}">
+                            <span class="text-muted" aria-hidden="true"><i class="fas fa-grip-vertical"></i></span>
+                            <code class="text-truncate flex-grow-1" title="{{ row }}">{{ row }}</code>
+                            <button class="btn btn-sm btn-outline-secondary" type="button" data-move-row="up" aria-label="Sposta riga {{ loop.index }} in alto"{% if loop.first %} disabled{% endif %}>Su</button>
+                            <button class="btn btn-sm btn-outline-secondary" type="button" data-move-row="down" aria-label="Sposta riga {{ loop.index }} in basso"{% if loop.last %} disabled{% endif %}>Giù</button>
+                        </li>
+                        {% endfor %}
+                    </ol>
+                </section>
+                {% endfor %}
+            </div>
+        </section>
+        {% endif %}
+    </form>
+    {% endif %}
+</div>
+{% endblock %}
+
+{% block extra_js %}
+{{ super() }}
+<script nonce="{{ csp_nonce }}">
+(function () {
+    const toggle = document.getElementById('input-show-subfolders');
+    if (!toggle) return;
+    toggle.addEventListener('change', () => {
+        const url = new URL(window.location.href);
+        url.searchParams.set('show_subfolders', toggle.checked ? 'true' : 'false');
+        if (!toggle.checked && (url.searchParams.get('file') || '').includes('/')) {
+            url.searchParams.delete('file');
+        }
+        window.location.assign(url.toString());
+    });
+})();
+</script>
+{% if selected_file and not error_message %}
+<script nonce="{{ csp_nonce }}">
+(function () {
+    const button = document.getElementById('input-validate-btn');
+    const editor = document.getElementById('input-content');
+    const box = document.getElementById('input-validate-result');
+    if (!button || !editor || !box) return;
+    const labels = {
+        ready: ['pronta', 'pronte'],
+        invalid: ['non valida', 'non valide'],
+        duplicate: ['duplicata', 'duplicate'],
+        disabled: ['disattivata', 'disattivate']
+    };
+
+    function show(kind, build) {
+        box.hidden = false;
+        box.className = 'mt-3 alert alert-' + kind;
+        box.replaceChildren();
+        build(box);
+    }
+    function text(tag, value, cls) {
+        const el = document.createElement(tag);
+        el.textContent = value;
+        if (cls) el.className = cls;
+        return el;
+    }
+
+    button.addEventListener('click', async () => {
+        button.disabled = true;
+        const original = button.innerHTML;
+        button.textContent = 'Validazione…';
+        try {
+            const csrfToken = document.querySelector('meta[name="csrf-token"]')?.content;
+            const headers = {'Content-Type': 'text/plain;charset=UTF-8'};
+            if (csrfToken) headers['X-CSRF-Token'] = csrfToken;
+            const response = await fetch(button.dataset.validateUrl, {
+                method: 'POST',
+                headers,
+                body: editor.value,
+                credentials: 'same-origin'
+            });
+            const data = await response.json().catch(() => ({}));
+            if (!response.ok) throw new Error(data.error || 'Errore ' + response.status);
+            if (data.parse_error) {
+                show('danger', (el) => {
+                    el.append(text('strong', 'Il file non è leggibile come batch: '), document.createTextNode(data.parse_error));
+                });
+                return;
+            }
+            const counts = Object.entries(data.counts || {}).map(([k, v]) => {
+                const label = labels[k];
+                return v + ' ' + (label ? label[v === 1 ? 0 : 1] : k);
+            }).join(' · ');
+            const hasErrors = (data.issues || []).some((i) => i.level === 'error');
+            const kind = hasErrors ? 'danger' : (data.issues_total ? 'warning' : 'success');
+            show(kind, (el) => {
+                const totalLabel = data.total === 1 ? '1 riga letta' : data.total + ' righe lette';
+                el.append(text('strong', totalLabel), document.createTextNode(counts ? ' — ' + counts : ''));
+                if (editor.value !== editor.defaultValue) {
+                    el.append(text('div', 'Controllate le modifiche non ancora salvate.', 'small mt-1'));
+                }
+                if (!data.issues_total) {
+                    el.append(text('div', 'Nessun problema trovato.', 'mt-1'));
+                    return;
+                }
+                const list = document.createElement('ul');
+                list.className = 'mb-0 mt-2 small';
+                data.issues.forEach((issue) => {
+                    const item = document.createElement('li');
+                    item.append(text('span', issue.level === 'error' ? 'Errore' : 'Avviso', 'fw-semibold'));
+                    item.append(document.createTextNode(' '));
+                    item.append(document.createTextNode((issue.line ? 'riga ' + issue.line + ': ' : '') + issue.message));
+                    list.append(item);
+                });
+                el.append(list);
+                if (data.issues_total > data.issues.length) {
+                    const remaining = data.issues_total - data.issues.length;
+                    el.append(text('div', '… e altri ' + remaining + (remaining === 1 ? ' problema.' : ' problemi.'), 'small mt-1'));
+                }
+            });
+        } catch (error) {
+            show('danger', (el) => el.append(document.createTextNode('Validazione non riuscita: ' + error.message)));
+        } finally {
+            button.disabled = false;
+            button.innerHTML = original;
+        }
+    });
+})();
+</script>
+{% endif %}
+{% if selected_file and not error_message and reorder_tables %}
+<script nonce="{{ csp_nonce }}">
+(function () {
+    const form = document.getElementById('admin-input-editor-form');
+    const editor = document.getElementById('input-content');
+    const originalContent = editor.value;
+    const reorderButton = document.getElementById('input-reorder-submit');
+    const orderField = document.getElementById('input-row-order');
+    const lists = Array.from(form.querySelectorAll('.input-reorder-list'));
+    let draggedItem = null;
+
+    function updateControls() {
+        const hasUnsavedText = editor.value !== originalContent;
+        reorderButton.disabled = hasUnsavedText;
+        lists.forEach((list) => {
+            const rows = Array.from(list.children);
+            rows.forEach((row, index) => {
+                row.querySelector('[data-move-row="up"]').disabled = index === 0;
+                row.querySelector('[data-move-row="down"]').disabled = index === rows.length - 1;
+            });
+        });
+    }
+
+    lists.forEach((list) => {
+        list.addEventListener('dragstart', (event) => {
+            const item = event.target.closest('[data-row-index]');
+            if (!item || editor.value !== originalContent) {
+                event.preventDefault();
+                return;
+            }
+            draggedItem = item;
+            item.classList.add('opacity-50');
+            event.dataTransfer.effectAllowed = 'move';
+            event.dataTransfer.setData('text/plain', item.dataset.rowIndex);
+        });
+        list.addEventListener('dragend', () => {
+            if (draggedItem) draggedItem.classList.remove('opacity-50');
+            draggedItem = null;
+            updateControls();
+        });
+        list.addEventListener('dragover', (event) => {
+            if (!draggedItem || editor.value !== originalContent) return;
+            event.preventDefault();
+            const target = event.target.closest('[data-row-index]');
+            if (!target || target === draggedItem || target.parentElement !== list) return;
+            const bounds = target.getBoundingClientRect();
+            list.insertBefore(draggedItem, event.clientY < bounds.top + bounds.height / 2 ? target : target.nextSibling);
+        });
+        list.addEventListener('click', (event) => {
+            const button = event.target.closest('[data-move-row]');
+            if (!button || editor.value !== originalContent) return;
+            const row = button.closest('[data-row-index]');
+            if (button.dataset.moveRow === 'up' && row.previousElementSibling) {
+                list.insertBefore(row, row.previousElementSibling);
+            } else if (button.dataset.moveRow === 'down' && row.nextElementSibling) {
+                list.insertBefore(row.nextElementSibling, row);
+            }
+            updateControls();
+        });
+    });
+
+    editor.addEventListener('input', updateControls);
+    form.addEventListener('submit', (event) => {
+        if (event.submitter && event.submitter.value === 'reorder') {
+            if (editor.value !== originalContent) {
+                event.preventDefault();
+                return;
+            }
+            orderField.value = JSON.stringify(lists.map((list) =>
+                Array.from(list.children, (row) => Number(row.dataset.rowIndex))
+            ));
+        }
+    });
+    updateControls();
+})();
+</script>
+{% endif %}
+{% endblock %}

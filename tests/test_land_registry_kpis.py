@@ -591,3 +591,20 @@ async def test_a_placeholder_map_neither_reads_nor_writes_the_calculation_snapsh
     assert touched == []  # nothing remembered about a valuation made without parcel positions
     await web._subject_land_registry_calculation({"x": 1}, real, None, scope_type="document", scope_id=7)
     assert touched == ["get", "set"]
+
+
+async def test_omi_breakdown_is_also_grouped_by_province_right_quota_and_percentage(one_zone_range):
+    xml = visura_with_owners([
+        owner("CIMMINO Giovanni", "16/10/1949", "CMMGNN49R16F839I", "Usufrutto", "08", "1/2"),
+        owner("CIMMINO Lorenzo", "17/01/1977", SUBJECT_CF, "Nuda proprieta'", "02", "1/1"),
+    ])
+
+    assessment = (await subject_land_registry_kpis(xml, {"parcel_markers": []}))["owner_assessment"]
+
+    views = {view["key"]: view for view in assessment["omi_breakdown_views"]}
+    assert list(views) == ["province", "right_type", "quote", "ownership_percentage"]
+    assert assessment["show_omi_breakdown"]
+    for view in views.values():
+        assert view["rows"], view["key"]
+        assert sum(row["valued_assets"] for row in view["rows"]) >= 1
+    assert any(row["label"] == "Nuda proprietà" and row["valued_assets"] == 1 for row in views["right_type"]["rows"])

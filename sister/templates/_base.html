@@ -16,8 +16,6 @@
 <script nonce="{{ csp_nonce }}">try{if(window.innerWidth>=992&&JSON.parse(localStorage.getItem('sidebarHidden'))===true){document.documentElement.classList.add('sidebar-pref-hidden');}}catch(e){}</script>
 {% endblock %}
 
-{# SISTER is Italian-only (docs/ui_audit_2026-10-09.md G7): no language switcher that changes only the menu. #}
-{% block language_switcher %}{% endblock %}
 
 {% block navbar_center %}
 {% if user and not can_admin(user) %}
@@ -101,7 +99,7 @@
         </div>
         {% if can_admin(user) %}
         <div class="nav-item">
-            <a class="nav-link{% if request.url.path.startswith('/admin') and not request.url.path.startswith('/admin/commands') %} active{% endif %}" href="/admin">
+            <a class="nav-link{% if request.url.path.startswith('/admin') and not request.url.path.startswith('/admin/commands') and not request.url.path.startswith('/admin/inputs') and not request.url.path.startswith('/admin/list-runs') %} active{% endif %}" href="/admin">
                 <i class="fas fa-shield-halved"></i>
                 <span>Amministrazione</span>
             </a>
@@ -110,6 +108,18 @@
             <a class="nav-link{% if request.url.path.startswith('/admin/commands') %} active{% endif %}" href="/admin/commands">
                 <i class="fas fa-terminal"></i>
                 <span>Comandi CLI</span>
+            </a>
+        </div>
+        <div class="nav-item">
+            <a class="nav-link{% if request.url.path.startswith('/admin/inputs') %} active{% endif %}" href="/admin/inputs">
+                <i class="fas fa-list-check"></i>
+                <span>Input Markdown</span>
+            </a>
+        </div>
+        <div class="nav-item">
+            <a class="nav-link{% if request.url.path.startswith('/admin/list-runs') %} active{% endif %}" href="/admin/list-runs">
+                <i class="fas fa-clock-rotate-left"></i>
+                <span>Monitor run-list</span>
             </a>
         </div>
         <div class="nav-item">

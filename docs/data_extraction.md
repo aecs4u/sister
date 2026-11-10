@@ -173,3 +173,17 @@ The person/company page shows "Variazioni di proprietà" (`catasto/_ownership_hi
 for each unit that changed hands, the acts of its latest visura storica (`ownership_mutation`: costituzioni, atti, successioni with
 the owners each left; `mutation_date` falls back to the "del GG/MM/AAAA" of the description, `result_parsers.mutation_date_from_source`)
 and the owners the searches saw, with when they stopped being listed.
+
+## Immobili degli intestatari (`immobili_intestatari=true`)
+
+`search` / `intestati` with `immobili_intestatari=true` press *Immobili* for each owner of the Intestati page and keep the
+owner's other properties in `results[].immobili_intestatari` (`intestato`, `province`, `immobili`, `error`). The raw JSON is
+archived with the response; `database._project_owner_immobili` also writes each listed immobile to `property` (with its
+cadastral unit) and ties the owner to it in `result_owner` with the `Titolarità` of that list. The quota of the source
+Intestati row is not carried over. Duplicate rows of one owner are stored once.
+
+Responses saved before the projection existed are filled with
+`uv run sister db backfill projections --contains immobili_intestatari` (idempotent; only the responses whose archived JSON
+has that key are rebuilt). The province of each stored immobile comes from its own `Ubicazione` (`MENFI(AG) …`), not from the
+searched immobile. These lists do **not** feed `subject_holding`: that table is the summary of a complete subject search
+(Elenco Province + all offices), while an owner's list from the Intestati page covers one office only.

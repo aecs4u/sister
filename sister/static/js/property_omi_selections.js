@@ -467,6 +467,10 @@
                 });
                 replaceFromFresh(fresh, '#central-omi-heading', 'section');
                 replaceFromFresh(fresh, '#adjusted-omi-heading', 'section');
+                var liveBreakdownSlot = document.querySelector('[data-owner-omi-breakdown-slot]');
+                var freshBreakdownSlot = fresh.querySelector('[data-owner-omi-breakdown-slot]');
+                if (!liveBreakdownSlot || !freshBreakdownSlot) throw new Error('Page structure changed: OMI breakdown');
+                liveBreakdownSlot.replaceWith(document.importNode(freshBreakdownSlot, true));
 
                 var byKey = estimatesByAssetKey(nextEstimates);
                 document.querySelectorAll('tr[data-omi-asset-key]').forEach(function (row) {

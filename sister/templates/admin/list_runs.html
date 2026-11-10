@@ -1,0 +1,206 @@
+{% extends "_base.html" %}
+
+{% block page_title %}Monitor run-list · Amministrazione{% endblock %}
+
+{% block content %}
+<div class="container-fluid py-4" id="admin-list-runs" data-status-url="/admin/list-runs/state">
+    <nav aria-label="breadcrumb" class="mb-3">
+        <ol class="breadcrumb">
+            <li class="breadcrumb-item"><a href="/admin">Amministrazione</a></li>
+            <li class="breadcrumb-item active" aria-current="page">Monitor run-list</li>
+        </ol>
+    </nav>
+
+    <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-4">
+        <div>
+            <h1 class="h2 mb-1"><i class="fas fa-list-check me-2" aria-hidden="true"></i>Monitor run-list</h1>
+            <p class="text-muted mb-0">Stato dei lotti, avanzamento delle righe e cronologia delle sessioni.</p>
+        </div>
+        <div class="small text-muted" aria-live="polite">Aggiornato <span id="list-runs-updated">—</span></div>
+    </div>
+
+    <div class="row g-3 mb-4" aria-label="Riepilogo run-list">
+        <div class="col-6 col-xl-3"><section class="card h-100"><div class="card-body"><div class="fs-2 fw-semibold" id="list-runs-active">—</div><div class="text-muted"><i class="fas fa-play-circle me-1" aria-hidden="true"></i>Sessioni attive</div></div></section></div>
+        <div class="col-6 col-xl-3"><section class="card h-100"><div class="card-body"><div class="fs-2 fw-semibold" id="list-runs-resume">—</div><div class="text-muted"><i class="fas fa-rotate me-1" aria-hidden="true"></i>Lotti da riprendere</div></div></section></div>
+        <div class="col-6 col-xl-3"><section class="card h-100"><div class="card-body"><div class="fs-2 fw-semibold" id="list-runs-completed">—</div><div class="text-muted"><i class="fas fa-circle-check me-1" aria-hidden="true"></i>Lotti completati</div></div></section></div>
+        <div class="col-6 col-xl-3"><section class="card h-100"><div class="card-body"><div class="fs-2 fw-semibold"><span id="list-runs-done">—</span><span class="fs-5 text-muted"> / <span id="list-runs-total">—</span></span></div><div class="text-muted"><i class="fas fa-bars-progress me-1" aria-hidden="true"></i>Risposte finali</div></div></section></div>
+    </div>
+
+    <div class="row g-4">
+        <div class="col-12 col-xl-8">
+            <section class="card" aria-labelledby="list-runs-batches-heading">
+                <div class="card-header d-flex justify-content-between align-items-center gap-2">
+                    <h2 class="h5 mb-0" id="list-runs-batches-heading"><i class="fas fa-layer-group me-2" aria-hidden="true"></i>Lotti monitorati</h2>
+                    <span class="small text-muted" id="list-runs-batch-count">—</span>
+                </div>
+                <div class="card-body" id="list-runs-batches" aria-live="polite">
+                    <p class="text-muted mb-0">Caricamento dello stato…</p>
+                </div>
+            </section>
+        </div>
+        <div class="col-12 col-xl-4">
+            <section class="card" aria-labelledby="list-runs-history-heading">
+                <div class="card-header"><h2 class="h5 mb-0" id="list-runs-history-heading"><i class="fas fa-clock-rotate-left me-2" aria-hidden="true"></i>Attività recente</h2></div>
+                <div class="card-body p-0">
+                    <ol class="list-group list-group-flush" id="list-runs-history" aria-live="polite">
+                        <li class="list-group-item text-muted">Caricamento della cronologia…</li>
+                    </ol>
+                </div>
+                <div class="card-footer small text-muted">La cronologia registra ogni sessione run-list e i cambi di fase.</div>
+            </section>
+        </div>
+    </div>
+</div>
+<script type="application/json" id="list-runs-initial-state" nonce="{{ csp_nonce }}">{{ initial_state|tojson }}</script>
+{% endblock %}
+
+{% block extra_js %}
+{{ super() }}
+<script nonce="{{ csp_nonce }}">
+(function () {
+    const root = document.getElementById('admin-list-runs');
+    const labels = {
+        running: ['In corso', 'text-bg-primary'],
+        interrupted: ['Interrotta', 'text-bg-warning'],
+        needs_resume: ['Da riprendere', 'text-bg-warning'],
+        failed: ['Errore', 'text-bg-danger'],
+        completed: ['Completato', 'text-bg-success'],
+        unknown: ['Sconosciuto', 'text-bg-secondary']
+    };
+    const phaseLabels = {
+        starting: 'Avvio', pruning_plan: 'Preparazione lotto', checking_session: 'Verifica sessione', starting_service: 'Avvio servizio',
+        preflight: 'Verifica accesso', running: 'Pronto', running_batch: 'Elaborazione lotto',
+        downloading_documents: 'Download documenti', stopping_service: 'Chiusura servizio',
+        finished: 'Terminata', report: 'Report precedente'
+    };
+    const eventLabels = {
+        started: 'Sessione avviata', phase: 'Cambio fase', finished: 'Sessione terminata',
+        runner_missing: 'Processo non più attivo', report: 'Report batch registrato'
+    };
+    const outcomeLabels = {
+        done: 'Completato', expired: 'Sessione scaduta', deadline: 'Tempo terminato',
+        interrupted: 'Interrotto', failed: 'Errore', start_failed: 'Avvio non riuscito',
+        session_unavailable: 'Sessione non disponibile', preflight_failed: 'Verifica accesso non riuscita'
+    };
+
+    function text(tag, value, className) {
+        const element = document.createElement(tag);
+        if (className) element.className = className;
+        element.textContent = value == null ? '' : String(value);
+        return element;
+    }
+    function timeLabel(value) {
+        if (!value) return '—';
+        const date = new Date(value);
+        return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleString('it-IT');
+    }
+    function number(value) { return (Number(value) || 0).toLocaleString('it-IT'); }
+    function badge(state) {
+        const info = labels[state] || labels.unknown;
+        return text('span', info[0], 'badge ' + info[1]);
+    }
+    function renderBatches(batches) {
+        const list = document.getElementById('list-runs-batches');
+        list.replaceChildren();
+        document.getElementById('list-runs-batch-count').textContent = number(batches.length) + ' lotti';
+        if (!batches.length) {
+            list.append(text('p', 'Nessun lotto run-list trovato in outputs/batches.', 'text-muted mb-0'));
+            return;
+        }
+        batches.forEach(function (batch, index) {
+            const progress = batch.progress || {};
+            const total = Number(progress.total) || 0;
+            const done = Number(progress.done) || 0;
+            const percent = total ? Math.min(100, Math.round(done * 100 / total)) : 0;
+            const item = document.createElement('article');
+            item.className = 'pb-3 mb-3' + (index + 1 < batches.length ? ' border-bottom' : '');
+
+            const heading = document.createElement('div');
+            heading.className = 'd-flex flex-wrap justify-content-between align-items-start gap-2 mb-2';
+            const identity = document.createElement('div');
+            identity.append(text('h3', batch.name || batch.dir, 'h6 mb-1'));
+            identity.append(text('code', batch.dir || '', 'small text-muted'));
+            heading.append(identity);
+            heading.append(badge(batch.state));
+            item.append(heading);
+
+            if (batch.phase) {
+                const phase = phaseLabels[batch.phase] || batch.phase;
+                const current = batch.phase === 'running_batch' && batch.current_batch ? ' · ' + batch.current_batch : '';
+                item.append(text('p', phase + current, 'small text-muted mb-2'));
+            }
+
+            const barLabel = text('div', number(done) + ' / ' + number(total) + ' risposte finali · ' + percent + '%', 'small d-flex justify-content-between mb-1');
+            item.append(barLabel);
+            const bar = document.createElement('div');
+            bar.className = 'progress mb-2';
+            bar.setAttribute('role', 'progressbar');
+            bar.setAttribute('aria-label', 'Avanzamento ' + (batch.name || batch.dir || 'lotto'));
+            bar.setAttribute('aria-valuemin', '0');
+            bar.setAttribute('aria-valuemax', '100');
+            bar.setAttribute('aria-valuenow', String(percent));
+            const fill = document.createElement('div');
+            fill.className = 'progress-bar' + (batch.state === 'failed' ? ' bg-danger' : '');
+            fill.style.width = percent + '%';
+            bar.append(fill);
+            item.append(bar);
+
+            const detail = 'Trovate ' + number(progress.found) + ' · Nessuna corrispondenza ' + number(progress.no_match)
+                + ' · Da affinare ' + number(progress.refine) + ' · Errori ' + number(progress.failed)
+                + ' · Sessione scaduta ' + number(progress.session) + ' · In attesa ' + number(progress.pending);
+            item.append(text('p', detail, 'small text-muted mb-1'));
+            item.append(text('div', 'Ultimo aggiornamento: ' + timeLabel(batch.updated_at), 'small text-muted'));
+            list.append(item);
+        });
+    }
+    function renderHistory(events) {
+        const list = document.getElementById('list-runs-history');
+        list.replaceChildren();
+        if (!events.length) {
+            list.append(text('li', 'Nessuna cronologia disponibile.', 'list-group-item text-muted'));
+            return;
+        }
+        events.forEach(function (event) {
+            const item = document.createElement('li');
+            item.className = 'list-group-item';
+            const head = document.createElement('div');
+            head.className = 'd-flex justify-content-between align-items-start gap-2';
+            head.append(text('strong', eventLabels[event.event] || event.event || 'Attività', 'small'));
+            head.append(text('time', timeLabel(event.updated_at), 'small text-muted text-end'));
+            item.append(head);
+            const batchNames = event.current_batch || (event.batch_dirs || []).join(', ');
+            if (batchNames) item.append(text('div', batchNames, 'small text-body-secondary mt-1'));
+            const details = [];
+            if (event.phase) details.push(phaseLabels[event.phase] || event.phase);
+            if (event.outcome && event.event !== 'phase') details.push('Esito: ' + (outcomeLabels[event.outcome] || event.outcome));
+            if (details.length) item.append(text('div', details.join(' · '), 'small text-muted mt-1'));
+            list.append(item);
+        });
+    }
+    function renderState(state) {
+        const summary = state.summary || {};
+        document.getElementById('list-runs-active').textContent = number(summary.active);
+        document.getElementById('list-runs-resume').textContent = number(summary.needs_resume);
+        document.getElementById('list-runs-completed').textContent = number(summary.completed);
+        document.getElementById('list-runs-done').textContent = number(summary.done);
+        document.getElementById('list-runs-total').textContent = number(summary.total);
+        document.getElementById('list-runs-updated').textContent = timeLabel(state.updated_at);
+        renderBatches(state.batches || []);
+        renderHistory(state.history || []);
+    }
+    async function refresh() {
+        try {
+            const response = await fetch(root.dataset.statusUrl, { headers: { 'Accept': 'application/json' }, cache: 'no-store' });
+            if (!response.ok) return;
+            renderState(await response.json());
+        } catch (_) {}
+    }
+
+    try {
+        renderState(JSON.parse(document.getElementById('list-runs-initial-state').textContent));
+    } catch (_) {}
+    refresh();
+    window.setInterval(refresh, 10000);
+})();
+</script>
+{% endblock %}

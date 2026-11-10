@@ -34,6 +34,15 @@ class ParsedBatch:
     skipped: list[str] = field(default_factory=list)
 
 
+@dataclass
+class PartiallyParsedBatch:
+    """Valid rows from a Markdown batch plus row-level parse errors."""
+
+    batch: BatchFile | None
+    lines: list[int] = field(default_factory=list)
+    issues: list[dict[str, Any]] = field(default_factory=list)
+
+
 def is_table_markdown(text: str) -> bool:
     return TABLE_MARKER.search(text) is not None
 
@@ -90,6 +99,19 @@ def _tags(metadata: dict[str, Any]) -> None:
 
 def parse_markdown(text: str) -> ParsedBatch:
     """Read a Markdown batch file. Raises ``ValueError`` with the line number of the first bad row."""
+    parsed = _parse_markdown(text, tolerate_row_errors=False)
+    assert isinstance(parsed, ParsedBatch)
+    return parsed
+
+
+def parse_markdown_partial(text: str) -> PartiallyParsedBatch:
+    """Read all parseable rows and collect row errors instead of stopping at the first one."""
+    parsed = _parse_markdown(text, tolerate_row_errors=True)
+    assert isinstance(parsed, PartiallyParsedBatch)
+    return parsed
+
+
+def _parse_markdown(text: str, *, tolerate_row_errors: bool) -> ParsedBatch | PartiallyParsedBatch:
     lines = text.splitlines()
     document: dict[str, Any] = {}
     title: str | None = None
@@ -100,6 +122,7 @@ def parse_markdown(text: str) -> ParsedBatch:
     headers: list[str] | None = None
     seen_table = False
     intro_done = False
+    issues: list[dict[str, Any]] = []
     for number, line in enumerate(lines, 1):
         marker = TABLE_MARKER.search(line)
         if marker:
@@ -120,8 +143,20 @@ def parse_markdown(text: str) -> ParsedBatch:
             if _is_separator(row):
                 continue
             if len(row) != len(headers):
-                raise ValueError(f"riga {number}: {len(row)} celle, attese {len(headers)}")
-            queries.append(_row_query(dict(zip(headers, row)), table, document, number))
+                message = f"{len(row)} celle, attese {len(headers)}"
+                if not tolerate_row_errors:
+                    raise ValueError(f"riga {number}: {message}")
+                issues.append({"line": number, "id": None, "level": "error", "message": message})
+                continue
+            try:
+                query = _row_query(dict(zip(headers, row)), table, document, number)
+            except ValueError as exc:
+                if not tolerate_row_errors:
+                    raise
+                message = str(exc).removeprefix(f"riga {number}: ")
+                issues.append({"line": number, "id": None, "level": "error", "message": message[:300]})
+                continue
+            queries.append(query)
             where.append(number)
             continue
         if table is not None and headers is not None:
@@ -133,13 +168,40 @@ def parse_markdown(text: str) -> ParsedBatch:
                 intro.append(line.strip())
             elif intro:
                 intro_done = True  # the description is the first paragraph after the title
-    if not queries:
+    if not queries and not (tolerate_row_errors and issues):
         raise ValueError("nessuna riga di query: manca una tabella dopo <!-- sister-batch-table -->")
+    if tolerate_row_errors:
+        # BatchFile enforces unique explicit IDs. In tolerant mode, report later occurrences as row errors
+        # so they do not prevent the other valid rows from contributing to the summary.
+        unique_queries: list[BatchQuery] = []
+        unique_lines: list[int] = []
+        seen_ids: set[str] = set()
+        for query, number in zip(queries, where):
+            if query.id and query.id in seen_ids:
+                issues.append(
+                    {
+                        "line": number,
+                        "id": query.id,
+                        "level": "error",
+                        "message": f"id duplicato: {query.id}",
+                    }
+                )
+                continue
+            if query.id:
+                seen_ids.add(query.id)
+            unique_queries.append(query)
+            unique_lines.append(number)
+        queries, where = unique_queries, unique_lines
+        if not queries:
+            return PartiallyParsedBatch(None, [], issues)
     payload: dict[str, Any] = {k: v for k, v in document.items() if k in DOCUMENT_KEYS}
     payload.setdefault("name", title[:200] if title else None)
     payload.setdefault("description", " ".join(intro)[:1000] or None)
     payload["queries"] = queries
-    return ParsedBatch(BatchFile.model_validate({k: v for k, v in payload.items() if v is not None}), where)
+    batch = BatchFile.model_validate({k: v for k, v in payload.items() if v is not None})
+    if tolerate_row_errors:
+        return PartiallyParsedBatch(batch, where, issues)
+    return ParsedBatch(batch, where)
 
 
 def _row_query(row: dict[str, str], table: dict[str, Any], document: dict[str, Any], number: int) -> BatchQuery:

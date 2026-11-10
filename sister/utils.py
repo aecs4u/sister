@@ -5674,6 +5674,13 @@ async def _open_soggetto_province_page(
         if refinement_error:
             _SEARCH_ERROR[page] = refinement_error
             return False
+        if "deserialize retrieved object" in text:
+            # SISTER's own server error (Error 500 / EJBException): the server-side state of this login is broken and
+            # every further search answers the same, so it is treated like an expired session (the batch stops, exit 75)
+            raise Exception(
+                "Sessione SISTER scaduta o non valida: il portale risponde \"An unexpected error occurred while attempting "
+                "to deserialize retrieved object\" (Error 500, EJBException): chiudi e rifai il login (sister app login --close)"
+            )
         text = text.split("Dati della ricerca")[-1].strip()[:1200]
         raise Exception(f"Pagina inattesa dopo la ricerca ({page.url}): {text}")
     await _click_nav(page, ricerca)
@@ -5919,7 +5926,10 @@ async def run_soggetto_immobili(
             if await page.locator(_PROVINCE_RADIOS).count() > 0:
                 await pick_province(idx)
                 continue
-            back = page.locator("form[action*='IndietroVisImmSogg'] input[type='submit'], input[type='submit'][name='indietro']")
+            back = page.locator(
+                "form[action*='IndietroVisImmSogg'] input[type='submit'], input[type='submit'][name='indietro'], "
+                "input[type='submit'][value='Indietro'], input[type='button'][value='Indietro']"
+            )
             if force and await back.count() == 0:
                 break
             if await back.count() == 0:
@@ -5927,6 +5937,14 @@ async def run_soggetto_immobili(
             await _click_nav(page, back.first)
         if await page.locator(list_radios).count() == 0:
             log.warning("Lista immobili non ritrovata dopo Indietro (pagina: %s): ripeto la ricerca", page.url)
+            try:  # which controls the page offers, to find the right "back" control (the page itself is not saved)
+                controls = await page.eval_on_selector_all(
+                    "input[type='submit'],input[type='button'],input[type='radio'],a",
+                    "els => els.slice(0, 25).map(e => (e.tagName + ':' + (e.name || '') + '=' + (e.value || e.textContent || '').trim().slice(0, 20)))",
+                )
+                log.warning("Controlli della pagina %s: %s", page.url.rsplit("/", 1)[-1], "; ".join(controls))
+            except Exception:  # noqa: BLE001 (diagnostics only)
+                pass
             await open_list(idx)
 
     while True:
@@ -6003,7 +6021,14 @@ async def run_soggetto_immobili(
                 except Exception as e:
                     row["intestati_error"] = str(e)[:200]
                     log.warning("Intestati non letti per immobile %d: %s", i + 1, e)
-                    await back_to_list(index, force=True)
+                    try:
+                        await back_to_list(index, force=True)
+                    except Exception as back_error:  # noqa: BLE001
+                        # the list is lost: keep the properties already read (with their owners) instead of failing the
+                        # whole record; the rest has no "intestati" key (not read)
+                        owners_stop = f"lista immobili persa: {str(back_error)[:80]}"
+                        log.warning("Lista immobili non recuperata (%s): tengo i %d immobili letti", back_error, len(batch))
+                        break
 
         if owners_stop:
             owners_unread += sum(1 for row in batch if "intestati" not in row)

@@ -53,11 +53,53 @@ def drop_duplicate_queries(queries: list[dict], defaults: dict | None = None) ->
     return kept, dropped
 
 
+EXTRA_CHOICES = ("none", "immobili", "intestati", "all")
+
+
+def apply_extra(queries: list[dict], extra: str, defaults: dict | None = None) -> int:
+    """Set, on every row, which extra data the run reads (``--extra``); returns the number of rows changed.
+
+    * ``immobili`` — parcel rows (``search`` / ``intestati``): press *Immobili* for each owner of the Intestati page and
+      read the owner's other properties (``immobili_intestatari``).
+    * ``intestati`` — subject rows (``soggetto`` / ``soggetto-immobili`` / ``azienda``): also read the owners (co-owners)
+      of each property (``con_intestati``); a ``soggetto`` row becomes ``soggetto-immobili``.
+    * ``all`` both, ``none`` neither. The owners of a parcel row's own immobili are always read in phase 1.
+    """
+    base_command = (defaults or {}).get("command")
+    want_immobili = extra in ("immobili", "all")
+    want_intestati = extra in ("intestati", "all")
+    changed = 0
+    for query in queries:
+        command = query.get("command") or base_command
+        params = dict(query.get("params") or {})
+        before = (command, dict(params))
+        if command in ("search", "intestati"):
+            params["immobili_intestatari"] = want_immobili
+        elif command in ("soggetto", "soggetto-immobili", "azienda"):
+            if command == "soggetto" and want_intestati:
+                command = "soggetto-immobili"
+            if command != "soggetto":
+                params["con_intestati"] = want_intestati
+        else:
+            continue
+        if (command, params) != before:
+            changed += 1
+        query["command"] = command
+        query["params"] = params
+    return changed
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("list_file", type=Path)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--tipo-richiesta", choices=("attualita", "storica"), help="'Tipo richiesta' for person searches")
+    parser.add_argument(
+        "--extra",
+        choices=EXTRA_CHOICES,
+        help="extra data to read besides the list itself: immobili (other properties of each owner of a parcel), "
+        "intestati (co-owners of each property of a subject), all or none; default: as written in the list",
+    )
     parser.add_argument("--name")
     args = parser.parse_args()
 
@@ -73,6 +115,8 @@ def main() -> int:
             query.setdefault("metadata", {})["tags"] = list(dict.fromkeys([*query.get("metadata", {}).get("tags", []), "PVP"]))
 
     defaults = batch.defaults.model_dump(mode="json", exclude_defaults=True)
+    if args.extra:
+        print(f"--extra {args.extra}: {apply_extra(queries, args.extra, defaults)} righe aggiornate")
     queries, duplicates = drop_duplicate_queries(queries, defaults)
 
     args.output_dir.mkdir(parents=True, exist_ok=True)

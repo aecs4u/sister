@@ -13,6 +13,7 @@ import hmac
 import secrets
 from typing import Callable, Iterable
 
+from starlette.exceptions import HTTPException
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
@@ -20,6 +21,8 @@ HEADER_NAME = "X-CSRF-Token"
 FORM_FIELD = "csrf_token"
 UNSAFE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 DEFAULT_EXEMPT = ("/auth/", "/api/", "/webhooks/", "/static/")
+LARGE_FORM_PART_PATHS = frozenset({"/admin/inputs/edit", "/admin/inputs/validate"})
+LARGE_FORM_PART_MAX_BYTES = 30_000_000  # url-encoding inflates the 5 MB text limit (newlines, "|", accents)
 
 
 def make_token(secret: str, cookie_value: str) -> str:
@@ -74,7 +77,11 @@ class CookieCSRFMiddleware:
             ("application/x-www-form-urlencoded", "multipart/form-data")
         ):
             body = await request.body()  # cached on the request; replayed below for the route
-            submitted = str((await request.form()).get(FORM_FIELD, ""))
+            max_part_size = LARGE_FORM_PART_MAX_BYTES if path in LARGE_FORM_PART_PATHS else 1024 * 1024
+            try:
+                submitted = str((await request.form(max_part_size=max_part_size)).get(FORM_FIELD, ""))
+            except HTTPException:
+                return await self._reject(request)(scope, receive, send)
 
             async def replay():  # noqa: F811 - hand the already-read body to the downstream app
                 return {"type": "http.request", "body": body, "more_body": False}

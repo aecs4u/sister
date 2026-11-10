@@ -32,9 +32,12 @@
   text(fill: if c.at("m", default: false) { muted } else { ink }, size: if c.at("m", default: false) { 6.8pt } else { 8pt })[#c.t]
 } else { c }
 
+// the section titles are real headings: PDF bookmarks and the contents list; drawn by `section`, not by the heading itself
+#show heading: it => none
 #let section(s) = {
   v(5pt)
   block(sticky: true, below: 3pt, {
+    if s.at("toc", default: true) { place(hide(heading(level: 1)[#s.title])) }
     text(10pt, weight: "bold", fill: accent)[#s.title]
     for b in s.badges {
       h(4pt)
@@ -61,13 +64,15 @@
   if it.at("title", default: "") != "" {
     block(sticky: true, below: 2pt, text(8pt, weight: "semibold")[#it.title])
   }
-  table(
+  let grid-table = table(
     columns: it.widths.map(w => eval(w)),
     align: it.align.map(a => if a == "right" { right } else { left }) ,
     fill: (_, y) => if y == 0 { wash } else { none },
     table.header(..it.header.map(h => caption(h))),
     ..it.rows.flatten().map(cell),
   )
+  // a short table stays on one page; long ones flow across pages
+  if it.rows.len() <= 12 { block(breakable: false, width: 100%, grid-table) } else { grid-table }
   v(4pt)
 }
 
@@ -102,10 +107,22 @@
     gutter: 6pt,
     ..it.panels.map(p => block(breakable: false, width: 100%, stroke: 0.5pt + rule, radius: 2pt, inset: 4pt)[
       #text(7.5pt, weight: "semibold")[#p.title] \
-      #box(width: 100%, height: p.h * 1mm, fill: luma(252), {
+      #box(width: 100%, height: p.h * 1mm, fill: luma(252), clip: true, {
+        if p.at("bg", default: none) != none {
+          place(top + left, image(p.bg, width: 100%, height: 100%, fit: "stretch"))
+        }
+        for z in p.zones {
+          place(top + left, polygon(
+            fill: luma(40%).transparentize(78%), stroke: (paint: luma(150), thickness: 0.4pt, dash: "dashed"),
+            ..z.points.map(pt => (pt.at(0) * 1mm, pt.at(1) * 1mm)),
+          ))
+        }
+        for z in p.zones {
+          place(top + left, dx: z.lx * 1mm, dy: z.ly * 1mm, text(7pt, fill: luma(120), weight: "bold")[#z.label])
+        }
         for poly in p.polygons {
           place(top + left, polygon(
-            fill: if poly.selected { accent.lighten(55%) } else { luma(225) },
+            fill: if poly.selected { accent.transparentize(65%) } else { luma(225) },
             stroke: 0.5pt + (if poly.selected { accent } else { muted }),
             ..poly.points.map(pt => (pt.at(0) * 1mm, pt.at(1) * 1mm)),
           ))
@@ -136,6 +153,15 @@
   ..d.meta.map(m => [#caption(m.at(0)) \ #text(8.5pt)[#m.at(1)]]),
 )
 
+#if d.at("toc", default: false) {
+  v(2pt)
+  block(width: 100%, inset: (y: 3pt), stroke: (top: 0.4pt + rule, bottom: 0.4pt + rule))[
+    #caption("Indice") \
+    #set text(7.5pt)
+    #columns(2, gutter: 14pt, outline(title: none, depth: 1, indent: 0pt))
+  ]
+}
+
 // ── body ─────────────────────────────────────────────────────────────────────────────────────────────────
 #for s in d.sections {
   section(s)
@@ -156,7 +182,11 @@
       block(sticky: true, below: 2pt, text(8pt, weight: "semibold")[#it.title])
       for m in it.items { mutation(m) }
     } else if it.kind == "map" {
-      parcel-map(it)
+      block(breakable: false, width: 100%)[
+        #parcel-map(it)
+        #if it.at("note", default: "") != "" { text(6.8pt, fill: muted)[#it.note] }
+      ]
+      parbreak()
     } else if it.kind == "note" {
       text(6.8pt, fill: muted)[#it.text]
       parbreak()

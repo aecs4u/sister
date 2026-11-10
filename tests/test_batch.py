@@ -465,3 +465,27 @@ def test_recorded_login_is_used_only_while_it_can_be_the_live_session(tmp_path):
     assert abs((recorded_login(record) - (datetime.now() - timedelta(minutes=12))).total_seconds()) < 5
     record.write_text(json.dumps({"logged_in_at": (login - timedelta(minutes=30)).isoformat()}))
     assert recorded_login(record) is None  # older than a session: not this one
+
+
+def test_build_list_extra_sets_immobili_and_intestati():
+    from sister.command_tools.build_batch_from_list import apply_extra
+
+    def rows():
+        return [
+            {"id": "a", "command": "search", "params": {"foglio": "1"}},
+            {"id": "b", "command": "soggetto", "params": {"codice_fiscale": "X"}},
+            {"id": "c", "command": "soggetto-immobili", "params": {"con_intestati": True}},
+            {"id": "d", "command": "ispezioni"},
+        ]
+
+    q = rows()
+    assert apply_extra(q, "immobili") == 2
+    assert q[0]["params"]["immobili_intestatari"] is True
+    assert q[1]["command"] == "soggetto" and q[2]["params"]["con_intestati"] is False and "params" not in q[3]
+    q = rows()
+    apply_extra(q, "intestati")
+    assert q[0]["params"]["immobili_intestatari"] is False
+    assert q[1]["command"] == "soggetto-immobili" and q[1]["params"]["con_intestati"] is True
+    q = rows()
+    apply_extra(q, "all")
+    assert q[0]["params"]["immobili_intestatari"] is True and q[1]["params"]["con_intestati"] is True

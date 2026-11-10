@@ -212,3 +212,47 @@ def test_each_row_of_a_mixed_response_keeps_its_own_catasto():
 
     assert [(p.prop["property_type"], p.location["cadastre_type"]) for p in props] == [
         ("building", "F"), ("land", "T"), ("building", "F")]
+
+
+def test_project_response_stores_the_immobili_of_each_owner():
+    data = _two_property_visura()
+    data["results"][0]["immobili_intestatari"] = [
+        {
+            "intestato": {"codice_fiscale": "RSSMRA80A01H501U", "nome": "ROSSI MARIO", "titolarita": "Proprieta'", "quota": "1/2"},
+            "immobili": [
+                {"Foglio": "7", "Particella": "9", "Sub": "3", "Titolarità": "Proprieta' per 1/1", "provincia": "RA"},
+                {"Foglio": "7", "Particella": "9", "Sub": "3", "Titolarità": "Proprieta' per 1/1", "provincia": "RA"},
+            ],
+        }
+    ]
+    base, _, base_results = database._project_response("r1", "F", _two_property_visura())
+    properties, _, results = database._project_response("r1", "F", data)
+    assert len(properties) == len(base) + 1  # the duplicate row is stored once
+    extra = properties[-1]
+    assert extra.index > max(row["result_index"] for row in base_results)
+    assert [fields["fiscal_code"] for fields, _ in extra.owners] == ["RSSMRA80A01H501U"]
+    assert extra.owners[0][1].get("ownership_share") != "1/2"  # the quota of the source immobile is not carried over
+    assert any(row["result_index"] == extra.index for row in results)
+    assert [p.owners for p in properties[: len(base)]] == [p.owners for p in base]
+
+
+@pytest.mark.usefixtures("fresh_db")
+async def test_owner_immobili_reach_the_tables_with_their_own_province_and_owner():
+    data = _two_property_visura()
+    data["results"][0]["immobili_intestatari"] = [
+        {
+            "intestato": {"codice_fiscale": "RSSMRA70A01H501Z", "nome": "ROSSI MARIO", "quota": "1/2"},
+            "immobili": [
+                {"Catasto": "F", "Titolarità": "Proprieta' per 1/3", "Ubicazione": "MENFI(AG) CONTRADA GURRA n. SNC Piano T",
+                 "Foglio": "59", "Particella": "627", "Sub": "", "Rendita": "Euro: 93,07"},
+            ],
+        }
+    ]
+    await _save("v1", data)
+
+    properties = await database.get_db_properties_for_response("v1")
+    owners = await database.get_db_owners_for_response("v1")
+    extra = next(p for p in properties if p["parcel"] == "627")
+    owner = next(o for o in owners if o["result_id"] == extra["result_id"])
+    assert owner["fiscal_code"] == "RSSMRA70A01H501Z"
+    assert owner["ownership_share"] == "1/3"

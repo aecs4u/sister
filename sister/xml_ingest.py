@@ -563,6 +563,12 @@ async def ingest_visura_xml(session, document_id: int, content: str | bytes | No
                 else:
                     await _write_land(session, document_id, unit, "T")
                     counts["parcels"] += 1
+            # the acts of a group carry no reference of their own: they belong to the group's property, not to the document's
+            # first one (a subject visura lists several properties; without this every act landed on the first)
+            if group["units"]:
+                for mutation in group["mutations"]:
+                    if not (mutation["reference"].get("sheet") or mutation["reference"].get("parcel")):
+                        mutation["reference"] = {**group["units"][0]["identifier"], "status": mutation["reference"].get("status", "")}
             counts["mutations"] += len(group["mutations"])
             counts["owners"] += await _write_mutations(
                 session, document_id, group["mutations"], {"property_group_id": row.id},

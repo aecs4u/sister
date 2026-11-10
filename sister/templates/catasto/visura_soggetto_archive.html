@@ -365,6 +365,23 @@ Visura soggetto {{ _variant_label|lower }}
     <p class="small mb-4"><i class="fas fa-user-check me-1 text-info" aria-hidden="true"></i><strong>Titolarità dalla ricerca:</strong>
         {{ g.TitolaritaElenco.Diritto or 'diritto non indicato' }}{% if g.TitolaritaElenco.Quota %} · quota {{ g.TitolaritaElenco.Quota }}{% endif %}</p>
     {% endif %}
+    {# the whole chain of each property that has a stored visura storica (costituzione, atti, successioni) #}
+    {% for imm in _imm_list if imm.StoriaTitolarita %}
+    {% set _sid = (imm.DatiIdentificativi or {}).IdentificativoDefinitivo or {} %}
+    {% set _storia = imm.StoriaTitolarita if imm.StoriaTitolarita is sequence and imm.StoriaTitolarita is not mapping else [imm.StoriaTitolarita] %}
+    <div class="card border-0 shadow-sm mb-4">
+        <div class="card-header bg-transparent border-bottom py-2 px-3">
+            <h3 class="h6 mb-0 text-muted">
+                <i class="fas fa-history me-2"></i>Titolarità · Fg {{ _sid.Foglio }} · Part. {{ _sid.ParticellaNum }}{% if _sid.Subalterno %} · Sub. {{ _sid.Subalterno }}{% endif %}
+                <span class="badge bg-info ms-2" style="font-size:.65rem">{{ _storia|length }} mutazioni</span>
+                <span class="badge bg-light text-dark border ms-1" style="font-size:.65rem" title="Dalla visura storica archiviata dell'immobile">visura storica</span>
+            </h3>
+        </div>
+        <div class="card-body py-3 px-3">
+            {{ render_timeline(_storia, situazione_al='', color='#17a2b8', badge_class='bg-info') }}
+        </div>
+    </div>
+    {% endfor %}
     {% elif _ig_mutazioni %}
     <div class="card border-0 shadow-sm mb-4">
         <div class="card-header bg-transparent border-bottom py-2 px-3">

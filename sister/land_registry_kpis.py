@@ -768,6 +768,78 @@ def _short_reason(note: Any) -> str:
     return "Stima OMI non disponibile"
 
 
+_RESIDENTIAL_CATEGORIES = {f"A{number}" for number in (1, 2, 3, 4, 5, 6, 7, 8, 11)}
+
+
+async def _market_valuation(buildings: list[dict[str, Any]], mapped_buildings: list[tuple]) -> list[dict[str, Any]]:
+    """Residential buildings valued on the asking €/m² of Immobiliare.it and idealista (``market_quotes``).
+
+    One entry per source: the sum over the units that source covers, with how many it covers. Area × €/m², on the same
+    surface the OMI estimate uses; asking prices, not transactions, and only where the databases hold the comune.
+    """
+    from . import market_quotes
+    from .provinces import province_code, province_name
+
+    positions: dict[Any, tuple[float, float]] = {}
+    for building, marker, _feature in mapped_buildings:
+        try:
+            positions[id(building)] = (float(marker["latitude"]), float(marker["longitude"]))
+        except (KeyError, TypeError, ValueError):
+            continue
+    units = [
+        b for b in buildings
+        if not b.get("duplicate") and b.get("omi_area") and normalize_category(b.get("category")) in _RESIDENTIAL_CATEGORIES
+    ]
+    if not units:
+        return []
+
+    async def quotes_for(building: dict[str, Any]):
+        sigla = province_code(building.get("province")) or str(building.get("province") or "")
+        latitude, longitude = positions.get(id(building), (None, None))
+        return await asyncio.gather(
+            market_quotes.immobiliare_quote(building["municipality"], province_name(sigla) or ""),
+            market_quotes.idealista_quote(building["municipality"], latitude, longitude),
+        )
+
+    try:
+        results = await asyncio.wait_for(asyncio.gather(*(quotes_for(b) for b in units)), timeout=12)
+    except Exception as exc:  # noqa: BLE001 - optional reference figures
+        logger.warning("market valuation unavailable: %s", type(exc).__name__)
+        return []
+    totals: dict[str, dict[str, Any]] = {}
+    for building, quotes in zip(units, results):
+        area = float(building["omi_area"])
+        for quote in quotes:
+            if not quote:
+                continue
+            entry = totals.setdefault(quote["source"], {
+                "source": quote["source"], "label": quote["label"], "units": 0, "low": 0.0, "mid": 0.0, "high": 0.0,
+                "scopes": set(), "as_of": quote["as_of"], "sqm_low": None, "sqm_high": None,
+            })
+            entry["units"] += 1
+            entry["low"] += area * quote["low"]
+            entry["mid"] += area * quote["mid"]
+            entry["high"] += area * quote["high"]
+            entry["scopes"].add(quote["scope"] + (f" ({quote['n']} annunci)" if quote.get("n") else ""))
+            entry["as_of"] = min(entry["as_of"], quote["as_of"])
+            entry["sqm_low"] = quote["low"] if entry["sqm_low"] is None else min(entry["sqm_low"], quote["low"])
+            entry["sqm_high"] = quote["high"] if entry["sqm_high"] is None else max(entry["sqm_high"], quote["high"])
+    out = []
+    for entry in totals.values():
+        out.append({
+            "source": entry["source"], "label": entry["label"], "units": entry["units"], "of_units": len(units),
+            "range": _format_value_range(Decimal(round(entry["low"])), Decimal(round(entry["high"]))),
+            "central": _format_currency_it(round(entry["mid"])),
+            "per_sqm": f"€ {_format_number_it(entry['sqm_low'])}–{_format_number_it(entry['sqm_high'])}/m²",
+            "scope": "; ".join(sorted(entry["scopes"])), "as_of": entry["as_of"],
+            "note": (
+                f"{entry['label']}: prezzi richiesti (non di compravendita) × superficie stimata, su {entry['units']} di "
+                f"{len(units)} abitazioni; {'; '.join(sorted(entry['scopes']))}; dati al {entry['as_of']}."
+            ),
+        })
+    return sorted(out, key=lambda item: item["label"])
+
+
 def _label_missing_estimates(table_estimates: list[dict[str, Any]]) -> None:
     """Give every cell without a value a short, visible reason (`missing` / `cadastral_missing`)."""
     for group in table_estimates:
@@ -873,6 +945,7 @@ def _owner_assessment(
     has_lands = any(asset["table_kind"] == "lands" for asset in assets)
     omi_missing_reasons: dict[tuple[int, str, int], str] = {}
     omi_missing_affrancation_asset_keys: set[str] = set()
+    omi_breakdown_accumulators: dict[tuple[str, str, str, str], dict[str, Any]] = {}
 
     for asset in assets:
         asset_key = (asset["group_index"], asset["table_kind"], asset["row_index"])
@@ -881,7 +954,8 @@ def _owner_assessment(
             unmatched_assets.add(asset_key)
             continue
         estimate = table_estimates[asset["group_index"]][asset["table_kind"]][asset["row_index"]]
-        asset_anchor_key = (estimate.get("asset_identity") or {}).get("asset_key")
+        asset_identity = estimate.get("asset_identity") or {}
+        asset_anchor_key = asset_identity.get("asset_key")
         estimate_low = _assessment_decimal(estimate.get("value_min"))
         estimate_high = _assessment_decimal(estimate.get("value_max"))
         cadastral_value = _assessment_decimal(asset.get("cadastral_value"))
@@ -890,11 +964,37 @@ def _owner_assessment(
         for right in rights:
             kind = right["kind"]
             bucket_key = kind if kind != "other" else f"other:{right['label'].casefold()}"
+            right_label = {
+                "full": "Piena proprietà",
+                "usufruct": "Usufrutto",
+                "bare": "Nuda proprietà",
+                "enfiteusi": "Enfiteusi",
+            }.get(kind, clean_right_description(right["label"]))
+            share = right.get("share")
+            quote_label = str(right.get("quota") or _quota_label(right))
+            ownership_percentage = (
+                f"{_format_number_it(float(share * 100), decimals=2)}%" if share is not None else "Non indicata"
+            )
+            breakdown_key = (
+                str(asset_identity.get("province") or "Provincia non indicata"),
+                right_label,
+                quote_label,
+                ownership_percentage,
+            )
+            breakdown_bucket = omi_breakdown_accumulators.setdefault(breakdown_key, {
+                "province": breakdown_key[0],
+                "right_type": right_label,
+                "quote": quote_label,
+                "ownership_percentage": ownership_percentage,
+                "valued_assets": set(),
+                "missing_assets": set(),
+                "missing_reasons": {},
+                "value_low": Decimal(0),
+                "value_high": Decimal(0),
+            })
             bucket = accumulators.setdefault(bucket_key, {
                 "kind": kind,
-                "label": {"full": "Piena proprietà", "usufruct": "Usufrutto", "bare": "Nuda proprietà",
-                          "enfiteusi": "Enfiteusi"}.get(
-                    kind, clean_right_description(right["label"])),
+                "label": right_label,
                 "assets": set(),
                 "shares": set(),
                 "value_low": Decimal(0),
@@ -906,9 +1006,10 @@ def _owner_assessment(
             })
             bucket["assets"].add(asset_key)
             bucket["shares"].add(_quota_label(right))
-            share = right.get("share")
             if share is None:
                 unknown_quota_assets.add(asset_key)
+                breakdown_bucket["missing_assets"].add(asset_key)
+                breakdown_bucket["missing_reasons"][asset_key] = "Quota non interpretabile"
                 continue
             if cadastral_value is not None:
                 cadastral_share += cadastral_value * share
@@ -979,6 +1080,8 @@ def _owner_assessment(
                 if not reasons:
                     reasons.append(factor_reason or "Coefficiente non disponibile")
                 reason = "; ".join(reasons)
+                breakdown_bucket["missing_assets"].add(asset_key)
+                breakdown_bucket["missing_reasons"][asset_key] = reason
                 if kind == "enfiteusi" and asset["table_kind"] == "buildings":
                     omi_missing_reasons[asset_key] = reason
                     if "Importo di affrancazione non disponibile" in reason and asset_anchor_key:
@@ -998,9 +1101,68 @@ def _owner_assessment(
             bucket["value_low"] += attributed_low
             bucket["value_high"] += attributed_high
             bucket["valued_assets"].add(asset_key)
+            breakdown_bucket["value_low"] += attributed_low
+            breakdown_bucket["value_high"] += attributed_high
+            breakdown_bucket["valued_assets"].add(asset_key)
             omi_total_low += attributed_low
             omi_total_high += attributed_high
             omi_total_seen = True
+
+    omi_breakdown = []
+    for breakdown_bucket in omi_breakdown_accumulators.values():
+        omi_breakdown.append({
+            "province": breakdown_bucket["province"],
+            "right_type": breakdown_bucket["right_type"],
+            "quote": breakdown_bucket["quote"],
+            "ownership_percentage": breakdown_bucket["ownership_percentage"],
+            "value": (
+                _format_value_range(breakdown_bucket["value_low"], breakdown_bucket["value_high"])
+                if breakdown_bucket["valued_assets"] else "Non stimabile"
+            ),
+            "valued_assets": len(breakdown_bucket["valued_assets"]),
+            "unvalued_assets": len(breakdown_bucket["missing_assets"]),
+            "unvalued_reasons": _reason_summary(breakdown_bucket["missing_reasons"]),
+        })
+    omi_breakdown.sort(key=lambda item: (
+        item["province"].casefold(), item["right_type"].casefold(), item["quote"].casefold(),
+        item["ownership_percentage"].casefold(),
+    ))
+
+    # The same figures grouped by one dimension at a time (province, right type, quota, ownership percentage).
+    omi_breakdown_views = []
+    for view_key, view_label in (
+        ("province", "Provincia"), ("right_type", "Tipo di diritto"), ("quote", "Quota"),
+        ("ownership_percentage", "Percentuale di proprietà"),
+    ):
+        grouped: dict[str, dict[str, Any]] = {}
+        for bucket in omi_breakdown_accumulators.values():
+            group = grouped.setdefault(bucket[view_key], {
+                "valued": set(), "missing": set(), "reasons": {}, "low": Decimal(0), "high": Decimal(0),
+            })
+            group["valued"] |= bucket["valued_assets"]
+            group["missing"] |= bucket["missing_assets"]
+            group["reasons"].update(bucket["missing_reasons"])
+            group["low"] += bucket["value_low"]
+            group["high"] += bucket["value_high"]
+        view_rows = [{
+            "label": label,
+            "value": _format_value_range(group["low"], group["high"]) if group["valued"] else "Non stimabile",
+            "valued_assets": len(group["valued"]),
+            "unvalued_assets": len(group["missing"]),
+            "unvalued_reasons": _reason_summary(group["reasons"]),
+            "_low": group["low"],
+        } for label, group in grouped.items()]
+        # numeric order for the percentage ("100,00%" before "50,00%"), alphabetical otherwise
+        if view_key == "ownership_percentage":
+            def percentage_order(row: dict[str, Any]) -> tuple[int, float]:
+                match = re.match(r"[\d.,]+", row["label"])
+                return (0, -float(match.group(0).replace(".", "").replace(",", "."))) if match else (1, 0.0)
+            view_rows.sort(key=percentage_order)
+        else:
+            view_rows.sort(key=lambda row: row["label"].casefold())
+        for row in view_rows:
+            row.pop("_low")
+        omi_breakdown_views.append({"key": view_key, "label": view_label, "rows": view_rows})
 
     rights_summary = []
     order = {"full": 0, "usufruct": 1, "bare": 2, "enfiteusi": 3, "other": 4}
@@ -1064,6 +1226,9 @@ def _owner_assessment(
         "has_rights": bool(rights_summary),
         "rights": rights_summary,
         "omi_total": omi_total,
+        "omi_breakdown": omi_breakdown,
+        "omi_breakdown_views": omi_breakdown_views,
+        "show_omi_breakdown": any(row["valued_assets"] for row in omi_breakdown),
         "omi_missing_affrancation_asset_keys": sorted(omi_missing_affrancation_asset_keys),
         "cadastral_share": (
             _format_currency_it(float(cadastral_share)) if cadastral_share_seen
@@ -2231,6 +2396,7 @@ async def subject_land_registry_kpis(
             "effettive delle zone comunali. "
             "La fascia OMI complessiva resta nel riquadro Valore OMI fabbricati."
         )
+    kpis["market_valuation"] = await _market_valuation(buildings, mapped_buildings)
     _label_missing_estimates(table_estimates)
     unvalued_reasons = _reason_summary({
         (group_index, row_index): estimate["missing"]

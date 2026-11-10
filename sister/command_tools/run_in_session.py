@@ -47,6 +47,7 @@ from dotenv import load_dotenv  # noqa: E402
 load_dotenv(ROOT / ".env")
 
 from batch_progress import Dashboard, render, snapshot  # noqa: E402
+from run_list_status import RunListStatus  # noqa: E402
 from rich.console import Console  # noqa: E402
 from rich.live import Live  # noqa: E402
 
@@ -128,11 +129,65 @@ def port_owner(port: int) -> str:
         return ""
 
 
-def start_service(port: int, log: Path) -> subprocess.Popen:
+def _cmdline(pid: int) -> str:
+    try:
+        return Path(f"/proc/{pid}/cmdline").read_bytes().replace(b"\0", b" ").decode("utf-8", "replace")
+    except OSError:
+        return ""
+
+
+def stop_stale_service(port: int, wait: float = 15.0) -> str:
+    """Stop the SISTER service left on ``port`` by an earlier run; return '' when done or the reason it was not stopped.
+
+    Only a ``sister.main:app`` uvicorn is touched, and only when no other batch run is going (a ``run_in_session`` or
+    ``query batch`` process of someone else would lose its service). Chrome and the SISTER login are not affected.
+    """
+    out = subprocess.run(["ss", "-ltnpH", f"sport = :{port}"], capture_output=True, text=True, timeout=5).stdout
+    pids = sorted({int(m) for m in re.findall(r"pid=(\d+)", out)})
+    if not pids:
+        return f"nessun processo in ascolto sulla porta {port}"
+    for pid in pids:
+        if "sister.main:app" not in _cmdline(pid):
+            return f"il pid {pid} non e' un servizio SISTER ({_cmdline(pid)[:60]}): non lo fermo"
+    mine = {os.getpid(), os.getppid()}
+    for entry in Path("/proc").iterdir():
+        if entry.name.isdigit() and int(entry.name) not in mine:
+            cmd = _cmdline(int(entry.name))
+            if ("sister.command_tools.run_in_session" in cmd or "sister.cli query batch" in cmd) and "--dry-run" not in cmd:
+                return f"c'e' un batch in corso (pid {entry.name}): fermalo prima"
+    targets = set(pids)
+    for pid in pids:  # the `uv run` wrapper is the parent: leaving it would restart nothing, but leave a zombie shell
+        try:
+            parent = int(Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[1])
+            if "uvicorn" in _cmdline(parent) and "sister.main:app" in _cmdline(parent):
+                targets.add(parent)
+        except (OSError, ValueError, IndexError):
+            pass
+    for sig in (signal.SIGTERM, signal.SIGKILL):
+        for pid in targets:
+            try:
+                os.kill(pid, sig)
+            except ProcessLookupError:
+                pass
+        deadline = time.time() + wait
+        while time.time() < deadline:
+            if not health(port):
+                return ""
+            time.sleep(0.5)
+    return f"il servizio sulla porta {port} non si e' fermato"
+
+
+def start_service(port: int, log: Path, stop_stale: bool = False) -> subprocess.Popen:
+    if health(port) and stop_stale:
+        owner = port_owner(port)
+        reason = stop_stale_service(port)
+        if reason:
+            raise SystemExit(f"servizio sulla porta {port} non fermato: {reason}")
+        print(f"servizio rimasto sulla porta {port} fermato ({owner})")
     if health(port):  # an old service (own state, maybe a dead session) would be mistaken for the one started here
         owner = port_owner(port)
         hint = f" ({owner}; se non c'e' un batch in corso: kill {' '.join(re.findall(r'pid ([\d, ]+)', owner)[0].replace(',', '').split())})" if owner else ""
-        raise SystemExit(f"la porta {port} e' gia' occupata da un altro servizio{hint}: fermalo (o usa --port) e rilancia")
+        raise SystemExit(f"la porta {port} e' gia' occupata da un altro servizio{hint}: fermalo (o usa --port, o --stop-stale-service) e rilancia")
     handle = open(log, "w")
     process = subprocess.Popen(
         [str(ROOT / "scripts" / "start.sh"), "--port", str(port), "--no-reload"],
@@ -474,6 +529,8 @@ def main() -> int:
                         help="after the deadline no row starts; one still running this long after it is interrupted")
     parser.add_argument("--port", type=int, default=8027)
     parser.add_argument("--preflight-cf", default=os.getenv("SISTER_PREFLIGHT_CF", ""), help="code for the proof search")
+    parser.add_argument("--stop-stale-service", action="store_true", help="if the port is held by a SISTER service left by an earlier run "
+                        "(and no batch is running), stop it and start a fresh one; Chrome and the login are not touched")
     parser.add_argument("--cdp", default=os.getenv("BROWSER_CDP_ENDPOINT", "http://localhost:9222"))
     parser.add_argument("--email-progress", action="store_true", help="email the final progress summary when this session run closes")
     parser.add_argument("--email-to", default="demo@aecs4u.com", help="progress summary recipient (default: demo@aecs4u.com)")
@@ -497,21 +554,31 @@ def main() -> int:
     deadline = login + timedelta(minutes=args.minutes)
     say(f"login {login:%H:%M}, chiusura pulita alle {deadline:%H:%M} ({(deadline - now).total_seconds() / 60:.0f} min da ora)")
     if deadline <= now + timedelta(minutes=2):
+        if not args.dry_run:
+            tracker = RunListStatus(args.batch)
+            tracker.start()
+            tracker.set_phase("checking_session")
+            tracker.finish("session_unavailable")
         say("[red]la sessione e' quasi finita: rifai il login con sister app login e rilancia[/red]")
         return 2
 
-    answered = Answered() if args.keep_answered else asyncio.run(answered_queries())
-    for directory in args.batch:
-        kept, done, invalid = prune_plan(directory, answered, write=not args.dry_run)
-        say(f"{directory.name}: {kept} righe da fare ({done} gia' risposte tolte, {invalid} codici fiscali non validi tolti)")
+    tracker = None if args.dry_run else RunListStatus(args.batch)
+    if tracker is not None:
+        tracker.start()
+        tracker.set_phase("pruning_plan")
+    try:
+        answered = Answered() if args.keep_answered else asyncio.run(answered_queries())
+        for directory in args.batch:
+            kept, done, invalid = prune_plan(directory, answered, write=not args.dry_run)
+            say(f"{directory.name}: {kept} righe da fare ({done} gia' risposte tolte, {invalid} codici fiscali non validi tolti)")
+    except Exception:
+        if tracker is not None:
+            tracker.finish("failed")
+        raise
     if args.dry_run:
         return 0
 
-    if not live_session(args.cdp) or (args.probe and not session_is_alive(args.cdp)):
-        say("[red]nessuna sessione SISTER utilizzabile: fai il login con sister app login (prima --close) e rilancia[/red]")
-        return 2
-    if args.probe:
-        say("la sessione e' valida (prova con una scheda a parte)")
+    assert tracker is not None
     service = None
     outcome = "not_started"
     session_started = False
@@ -523,9 +590,18 @@ def main() -> int:
     for _sig in (signal.SIGTERM, signal.SIGHUP):
         signal.signal(_sig, _terminate)
     try:
+        tracker.set_phase("checking_session")
+        if not live_session(args.cdp) or (args.probe and not session_is_alive(args.cdp)):
+            outcome = "session_unavailable"
+            say("[red]nessuna sessione SISTER utilizzabile: fai il login con sister app login (prima --close) e rilancia[/red]")
+            return 2
+        if args.probe:
+            say("la sessione e' valida (prova con una scheda a parte)")
+
+        tracker.set_phase("starting_service")
         for attempt in (1, 2):
             try:
-                service = start_service(args.port, args.batch[0] / "service.log")
+                service = start_service(args.port, args.batch[0] / "service.log", args.stop_stale_service)
                 break
             except SystemExit as exc:
                 # right after a login the first page is not the Visure one: the first start only brings the tab there
@@ -537,19 +613,26 @@ def main() -> int:
             say("[yellow]nessuna ricerca di verifica (--preflight-cf o SISTER_PREFLIGHT_CF): la sessione e' provata solo "
                 "dall'aggancio del servizio[/yellow]")
         if args.preflight_cf:
+            tracker.set_phase("preflight")
             if not preflight(args.port, args.preflight_cf, args.batch[0] / "preflight.json"):
+                outcome = "preflight_failed"
                 say("[red]la ricerca di verifica e' fallita: la sessione non e' utilizzabile[/red]")
                 return 3
             say("verifica reale della sessione: ok")
         session_started = True
         outcome = "running"
+        tracker.set_phase("running")
         initial_snaps = [snapshot(directory) for directory in args.batch]
         dashboard = Dashboard(args.batch, login, deadline)
         quiet = {"last": 0.0}
+        last_status = {"heartbeat": time.monotonic()}
 
         with Live(dashboard.view(), console=console, refresh_per_second=4, transient=False) as live:
 
             def tick() -> None:
+                if time.monotonic() - last_status["heartbeat"] >= 15:
+                    tracker.heartbeat()
+                    last_status["heartbeat"] = time.monotonic()
                 if console.is_terminal:
                     live.update(dashboard.view())
                 elif time.time() - quiet["last"] > 60:  # no terminal (log file): one summary line a minute
@@ -559,21 +642,31 @@ def main() -> int:
 
             for directory in args.batch:
                 say(f"avvio {directory.name}")
+                tracker.set_phase("running_batch", directory.name)
                 outcome = run_batch(directory, args.port, deadline, tick, grace=args.grace_seconds)
                 say(f"{directory.name}: {outcome}")
                 if outcome != "done":
                     break
     except KeyboardInterrupt:
         outcome = "interrupted"
+    except SystemExit:
+        if outcome == "not_started":
+            outcome = "start_failed"
+        raise
+    except Exception:
+        outcome = "failed"
+        raise
     finally:
         since = batch_requests_since(args.batch)
         if service is not None and outcome in {"done", "deadline", "interrupted"} and since:
+            tracker.set_phase("downloading_documents")
             say(f"controllo i documenti pronti in Richieste dal {since}")
             try:
                 count = download_ready_documents(args.port, since)
                 say(f"Richieste: scaricati {count} documenti nuovi (quelli gia' salvati sono stati saltati)")
             except Exception as exc:  # Keep the extraction result even if the portal document pass fails.
                 say(f"[yellow]download Richieste non completato: {exc}[/yellow]")
+        tracker.set_phase("stopping_service")
         stop(service)
         say("servizio fermo: nessun login automatico possibile")
         if args.email_progress and session_started:
@@ -590,6 +683,7 @@ def main() -> int:
                     say("[yellow]email di riepilogo non inviata: il provider ha segnalato un errore[/yellow]")
             except Exception as exc:  # Email failure must not change the batch outcome.
                 say(f"[yellow]email di riepilogo non inviata ({type(exc).__name__})[/yellow]")
+        tracker.finish(outcome)
 
     console.print(render([snapshot(directory) for directory in args.batch]))  # final state, after the service stopped
     if outcome == "done":

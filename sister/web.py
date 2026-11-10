@@ -14,7 +14,9 @@ import logging
 import os
 import re
 import shlex
+import shutil
 import sys
+import tempfile
 import time
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
@@ -2398,6 +2400,238 @@ def _get_theme(request: Request):
     return request.app.state.theme_setup
 
 
+_ADMIN_INPUT_FILENAME = re.compile(
+    r"^[A-Za-z0-9][A-Za-z0-9_.-]*(?:/[A-Za-z0-9][A-Za-z0-9_.-]*)*\.md$",
+    re.IGNORECASE,
+)
+_ADMIN_INPUT_TABLE_MARKER = re.compile(r"<!--\s*sister-batch-table(?::v\d+)?(?:\s+\{.*\})?\s*-->")
+_ADMIN_INPUT_TABLE_ROW = re.compile(r"^\s*\|.*\|\s*$")
+_ADMIN_INPUT_LEGACY_ROW = re.compile(r"^\| (\d+) \| `([A-Z0-9]+)` \|(.*)$")
+_ADMIN_INPUT_MAX_BYTES = 5_000_000
+
+
+def _admin_inputs_root() -> Path:
+    """Resolve the configured repository inputs directory (which may be a data-root symlink)."""
+    return (Path(__file__).resolve().parents[1] / "inputs").resolve()
+
+
+def _admin_input_path(filename: str) -> Path:
+    """Resolve a Markdown input without allowing traversal or symlinked path components."""
+    if not _ADMIN_INPUT_FILENAME.fullmatch(filename):
+        raise ValueError("Nome file non valido.")
+    if "backups" in Path(filename).parts:
+        raise ValueError("Le copie di sicurezza non sono modificabili come input.")
+    root = _admin_inputs_root()
+    path = root / filename
+    current = root
+    for part in Path(filename).parts:
+        current = current / part
+        if current.is_symlink():
+            raise ValueError("Il file selezionato non è disponibile tra gli input Markdown.")
+    try:
+        resolved = path.resolve(strict=True)
+        resolved.relative_to(root)
+    except (OSError, RuntimeError, ValueError):
+        raise ValueError("Il file selezionato non è disponibile tra gli input Markdown.") from None
+    if not path.is_file():
+        raise ValueError("Il file selezionato non è disponibile tra gli input Markdown.")
+    return path
+
+
+def _admin_input_files() -> list[str]:
+    """List editable, regular Markdown files in inputs/ and its subdirectories."""
+    root = _admin_inputs_root()
+    if not root.is_dir():
+        return []
+    files = []
+    for path in root.rglob("*.md"):
+        relative = path.relative_to(root).as_posix()
+        if (
+            not _ADMIN_INPUT_FILENAME.fullmatch(relative)
+            or "backups" in path.relative_to(root).parts
+            or not path.is_file()
+        ):
+            continue
+        current = path
+        has_symlink = False
+        while current != root:
+            if current.is_symlink():
+                has_symlink = True
+                break
+            current = current.parent
+        if has_symlink:
+            continue
+        try:
+            path.resolve(strict=True).relative_to(root)
+        except (OSError, RuntimeError, ValueError):
+            continue
+        files.append(relative)
+    return sorted(files)
+
+
+def _admin_input_tree(filenames: list[str]) -> dict[str, Any]:
+    """Build a sorted directory tree from validated relative input paths."""
+    root: dict[str, Any] = {"files": [], "directories": {}}
+    for filename in filenames:
+        parts = Path(filename).parts
+        node = root
+        directory_parts: list[str] = []
+        for part in parts[:-1]:
+            directory_parts.append(part)
+            directories = node["directories"]
+            if part not in directories:
+                directories[part] = {
+                    "name": part,
+                    "path": "/".join(directory_parts),
+                    "files": [],
+                    "directories": {},
+                }
+            node = directories[part]
+        node["files"].append({"name": parts[-1], "path": filename})
+
+    def sort_node(node: dict[str, Any]) -> None:
+        node["files"].sort(key=lambda entry: entry["name"].casefold())
+        node["directories"] = sorted(node["directories"].values(), key=lambda entry: entry["name"].casefold())
+        for directory in node["directories"]:
+            sort_node(directory)
+
+    sort_node(root)
+    return root
+
+
+def _admin_input_reorder_tables(source: str) -> list[dict[str, Any]]:
+    """Find data rows in explicitly marked batch tables for the admin drag-and-drop editor."""
+    lines = source.splitlines()
+    tables: list[dict[str, Any]] = []
+    for marker_index, line in enumerate(lines):
+        if not _ADMIN_INPUT_TABLE_MARKER.search(line):
+            continue
+        index = marker_index + 1
+        while index < len(lines) and not lines[index].strip():
+            index += 1
+        if index >= len(lines) or not _ADMIN_INPUT_TABLE_ROW.fullmatch(lines[index]):
+            continue
+        index += 1  # header
+        if index < len(lines) and _ADMIN_INPUT_TABLE_ROW.fullmatch(lines[index]) and re.fullmatch(
+            r"\s*\|\s*:?-{3,}:?(?:\s*\|\s*:?-{3,}:?)*\s*\|\s*", lines[index]
+        ):
+            index += 1  # separator
+        row_indexes: list[int] = []
+        while index < len(lines) and _ADMIN_INPUT_TABLE_ROW.fullmatch(lines[index]):
+            row_indexes.append(index)
+            index += 1
+        if not row_indexes:
+            continue
+        heading = next(
+            (lines[previous][3:].strip() for previous in range(marker_index - 1, -1, -1)
+             if lines[previous].startswith("## ")),
+            f"Tabella {len(tables) + 1}",
+        )
+        tables.append(
+            {
+                "label": heading,
+                "line_indexes": row_indexes,
+                "rows": [lines[row_index].strip() for row_index in row_indexes],
+                "legacy": False,
+            }
+        )
+    if tables:
+        return tables
+
+    # Older codici lists use numbered rows under section headings rather than marked batch tables.
+    legacy_indexes: list[int] = []
+    legacy_label = "Lista legacy"
+    legacy_section = 0
+
+    def add_legacy_group() -> None:
+        if legacy_indexes:
+            tables.append(
+                {
+                    "label": legacy_label,
+                    "line_indexes": list(legacy_indexes),
+                    "rows": [lines[row_index].strip() for row_index in legacy_indexes],
+                    "legacy": True,
+                    "section": legacy_section,
+                }
+            )
+            legacy_indexes.clear()
+
+    for index, line in enumerate(lines):
+        if line.startswith("## "):
+            add_legacy_group()
+            legacy_section += 1
+            legacy_label = line[3:].strip()
+        elif _ADMIN_INPUT_LEGACY_ROW.fullmatch(line):
+            legacy_indexes.append(index)
+        else:
+            add_legacy_group()
+    add_legacy_group()
+    return tables
+
+
+def _reorder_admin_input(source: str, requested_order: str) -> str:
+    """Reorder rows within their existing marked tables, validating each posted permutation."""
+    try:
+        order = json.loads(requested_order)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Ordine delle righe non valido.") from exc
+    lines = source.splitlines()
+    tables = _admin_input_reorder_tables(source)
+    if not tables:
+        raise ValueError("Il file non contiene righe in tabelle batch riordinabili.")
+    if not isinstance(order, list) or len(order) != len(tables):
+        raise ValueError("La struttura delle righe è cambiata: ricarica il file e riprova.")
+    legacy_offsets: dict[int, int] = {}
+    for table, table_order in zip(tables, order):
+        size = len(table["line_indexes"])
+        if (
+            not isinstance(table_order, list)
+            or any(isinstance(value, bool) or not isinstance(value, int) for value in table_order)
+            or sorted(table_order) != list(range(size))
+        ):
+            raise ValueError("Ordine delle righe non valido.")
+        original_rows = [lines[index] for index in table["line_indexes"]]
+        ordered_rows = [original_rows[row_index] for row_index in table_order]
+        if table.get("legacy"):
+            section = table["section"]
+            offset = legacy_offsets.get(section, 0)
+            ordered_rows = [
+                re.sub(r"^(\| )\d+( \|)", rf"\g<1>{offset + position}\g<2>", row)
+                for position, row in enumerate(ordered_rows, start=1)
+            ]
+            legacy_offsets[section] = offset + len(ordered_rows)
+        for line_index, row in zip(table["line_indexes"], ordered_rows):
+            lines[line_index] = row
+    return "\n".join(lines) + ("\n" if source.endswith("\n") else "")
+
+
+def _write_admin_input(path: Path, content: str) -> Path | None:
+    """Back up and atomically replace an edited Markdown input."""
+    if path.read_text(encoding="utf-8") == content:
+        return None
+    backups = path.parent / "backups"
+    backups.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+    backup = backups / f"{path.stem}.{stamp}.md"
+    shutil.copy2(path, backup)
+    temporary_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8", newline="", dir=path.parent,
+            prefix=f".{path.name}.", suffix=".tmp", delete=False,
+        ) as temporary:
+            temporary.write(content)
+            temporary_path = Path(temporary.name)
+        shutil.copystat(path, temporary_path)
+        os.utime(temporary_path, None)
+        os.replace(temporary_path, path)
+    except Exception:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
+        raise
+    return backup
+
+
 def _cli_command_catalog() -> list[dict[str, Any]]:
     """Return the registered operational CLI commands for the admin launcher."""
     from .cli import _tool_commands
@@ -2817,7 +3051,7 @@ def _map_is_placeholder(map_lookup: dict | None) -> bool:
 
 
 _LAND_REGISTRY_CALCULATION_TYPE = "subject_land_registry_kpis"
-_LAND_REGISTRY_CALCULATION_VERSION = "12"  # 12: units counted once, zone fallback + descriptions
+_LAND_REGISTRY_CALCULATION_VERSION = "13"  # 13: OMI breakdown views + market (Immobiliare/idealista) valuation; 12: units counted once, zone fallback + descriptions
 _LAND_REGISTRY_CALCULATION_MAX_AGE_SECONDS = 12 * 60 * 60
 
 
@@ -4475,6 +4709,7 @@ async def web_settings(request: Request, user=Depends(_require_auth)):
                             "icon": "fa-file-invoice",
                         },
                         {"label": "Comandi CLI", "url": "/admin/commands", "icon": "fa-terminal"},
+                        {"label": "Monitor run-list", "url": "/admin/list-runs", "icon": "fa-clock-rotate-left"},
                         {"label": "Browser", "url": "/browser", "icon": "fa-window-maximize"},
                     ],
                 }
@@ -4489,6 +4724,543 @@ async def web_settings(request: Request, user=Depends(_require_auth)):
 async def web_admin(request: Request, user=Depends(_require_admin)):
     """Admin landing page for managing document ownership."""
     return _get_theme(request).render("admin/index.html", request, user=user)
+
+
+def _admin_list_run_json(path: Path) -> dict[str, Any]:
+    """Read one trusted batch metadata JSON file, returning an empty mapping if absent or malformed."""
+    try:
+        if path.is_symlink() or not path.is_file() or path.stat().st_size > 5_000_000:
+            return {}
+        value = json.loads(path.read_text(encoding="utf-8"))
+        return value if isinstance(value, dict) else {}
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return {}
+
+
+def _admin_list_run_history(path: Path) -> list[dict[str, Any]]:
+    """Read the most recent durable run events without opening the batch logs or row contents."""
+    try:
+        if path.is_symlink() or not path.is_file():
+            return []
+        with path.open("rb") as stream:
+            stream.seek(0, os.SEEK_END)
+            size = stream.tell()
+            stream.seek(max(0, size - 1_000_000))
+            lines = stream.read().decode("utf-8", "replace").splitlines()[-250:]
+    except OSError:
+        return []
+    events = []
+    for line in lines:
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(event, dict) and event.get("task_id") and event.get("event"):
+            events.append(event)
+    return events
+
+
+def _admin_list_run_process_alive(pid_value: Any, updated_at: str | None, batch_dir: str) -> bool:
+    """Check whether a status marked running still belongs to a run-session process."""
+    try:
+        pid = int(pid_value)
+        if pid <= 1:
+            return False
+        os.kill(pid, 0)
+    except (TypeError, ValueError, ProcessLookupError, OverflowError):
+        return False
+    except PermissionError:
+        pass
+    try:
+        arguments = Path(f"/proc/{pid}/cmdline").read_bytes().decode("utf-8", "replace").split("\x00")
+    except OSError:
+        try:
+            updated = datetime.fromisoformat(str(updated_at or "").replace("Z", "+00:00"))
+            return (datetime.now(timezone.utc) - updated.astimezone(timezone.utc)).total_seconds() < 90
+        except ValueError:
+            return False
+    command = " ".join(arguments)
+    runner = "run-session" in command or "run_in_session.py" in command
+    has_batch = any(Path(argument).name == batch_dir for argument in arguments if argument)
+    return runner and has_batch
+
+
+def _admin_list_run_batch_state(outcome: str | None, progress: dict[str, Any], running: bool, stale: bool) -> str:
+    if running:
+        return "running"
+    if stale:
+        return "interrupted"
+    total = int(progress.get("total") or 0)
+    done = int(progress.get("done") or 0)
+    if total > 0 and done >= total:
+        return "completed"
+    if outcome in {"failed", "start_failed", "session_unavailable", "preflight_failed"}:
+        return "failed"
+    return "needs_resume"
+
+
+def _admin_list_runs_snapshot() -> dict[str, Any]:
+    """Summarize output batches, lifecycle history, and journal counters for the admin dashboard."""
+    from .command_tools.batch_progress import snapshot
+
+    batch_root = Path(__file__).resolve().parents[1] / "outputs" / "batches"
+    if not batch_root.is_dir():
+        return {
+            "updated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "summary": {"active": 0, "needs_resume": 0, "completed": 0, "batches": 0, "done": 0, "total": 0},
+            "batches": [], "history": [],
+        }
+
+    directories = []
+    try:
+        with os.scandir(batch_root) as entries:
+            for entry in entries:
+                if entry.is_dir(follow_symlinks=False) and not entry.name.startswith("."):
+                    directory = batch_root / entry.name
+                    if (directory / "batch.json").is_file() and not (directory / "batch.json").is_symlink():
+                        directories.append(directory)
+    except OSError:
+        directories = []
+    directories.sort(key=lambda path: path.name, reverse=True)
+
+    process_state: dict[str, bool] = {}
+    batch_rows: list[dict[str, Any]] = []
+    history_by_key: dict[tuple[str, ...], dict[str, Any]] = {}
+    live_tasks: set[str] = set()
+    for directory in directories:
+        try:
+            snap = snapshot(directory)
+        except (OSError, UnicodeError, ValueError, TypeError, json.JSONDecodeError):
+            continue
+        progress = {
+            key: snap.get(key)
+            for key in ("total", "done", "processed", "found", "no_match", "refine", "failed", "session", "pending", "rate", "last")
+        }
+        status = _admin_list_run_json(directory / "run_list_status.json")
+        report = _admin_list_run_json(directory / "report.json")
+        task_id = str(status.get("task_id") or "")
+        outcome = str(status.get("outcome") or "") or None
+        is_running = status.get("state") == "running"
+        stale = False
+        if task_id and is_running:
+            if task_id not in process_state:
+                process_state[task_id] = _admin_list_run_process_alive(
+                    status.get("pid"), status.get("updated_at"), directory.name
+                )
+            is_running = process_state[task_id]
+            stale = not is_running
+            if is_running:
+                live_tasks.add(task_id)
+        if task_id:
+            state = _admin_list_run_batch_state(outcome, progress, is_running, stale)
+            updated_at = str(status.get("updated_at") or status.get("started_at") or "")
+            phase = str(status.get("phase") or "")
+            for event in _admin_list_run_history(directory / "run_list_history.jsonl"):
+                event_task_id = str(event.get("task_id") or "")
+                key = (
+                    event_task_id,
+                    str(event.get("event") or ""),
+                    str(event.get("phase") or ""),
+                    str(event.get("current_batch") or ""),
+                    str(event.get("updated_at") or ""),
+                )
+                aggregated = history_by_key.setdefault(key, {
+                    "task_id": event_task_id,
+                    "event": str(event.get("event") or ""),
+                    "phase": str(event.get("phase") or ""),
+                    "outcome": str(event.get("outcome") or ""),
+                    "updated_at": str(event.get("updated_at") or ""),
+                    "current_batch": str(event.get("current_batch") or ""),
+                    "batch_dirs": [],
+                })
+                if directory.name not in aggregated["batch_dirs"]:
+                    aggregated["batch_dirs"].append(directory.name)
+        else:
+            status = {}
+            updated_at = str(report.get("finished_at") or report.get("started_at") or "")
+            outcome = "report" if report else None
+            phase = ""
+            state = _admin_list_run_batch_state(outcome, progress, False, False)
+            if report:
+                key = (f"legacy:{directory.name}", "report", "report", "", updated_at)
+                history_by_key[key] = {
+                    "task_id": "",
+                    "event": "report",
+                    "phase": "report",
+                    "outcome": state,
+                    "updated_at": updated_at,
+                    "batch_dirs": [directory.name],
+                }
+
+        if stale and task_id:
+            key = (task_id, "runner_missing", "", "", updated_at)
+            history_by_key[key] = {
+                "task_id": task_id,
+                "event": "runner_missing",
+                "phase": "",
+                "outcome": "interrupted",
+                "updated_at": updated_at,
+                "batch_dirs": [directory.name],
+            }
+
+        batch_rows.append({
+            "name": str(snap.get("name") or directory.name)[:200],
+            "dir": directory.name,
+            "state": state,
+            "phase": phase,
+            "outcome": outcome,
+            "task_id": task_id,
+            "current_batch": str(status.get("current_batch") or ""),
+            "started_at": str(status.get("started_at") or report.get("started_at") or ""),
+            "updated_at": updated_at,
+            "progress": progress,
+        })
+
+    batch_rows.sort(key=lambda row: row["updated_at"], reverse=True)
+    history = sorted(history_by_key.values(), key=lambda event: str(event.get("updated_at") or ""), reverse=True)[:100]
+    counts = {state: sum(row["state"] == state for row in batch_rows) for state in ("needs_resume", "interrupted", "failed", "completed")}
+    summary = {
+        "active": len(live_tasks),
+        "needs_resume": counts["needs_resume"] + counts["interrupted"] + counts["failed"],
+        "completed": counts["completed"],
+        "batches": len(batch_rows),
+        "done": sum(int(row["progress"].get("done") or 0) for row in batch_rows),
+        "total": sum(int(row["progress"].get("total") or 0) for row in batch_rows),
+    }
+    return {
+        "updated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "summary": summary,
+        "batches": batch_rows[:100],
+        "history": history,
+    }
+
+
+@router.get("/admin/list-runs", response_class=HTMLResponse)
+async def web_admin_list_runs(request: Request, user=Depends(_require_admin)):
+    """Live status and durable history for run-list batch sessions."""
+    initial_state = await asyncio.to_thread(_admin_list_runs_snapshot)
+    return _get_theme(request).render(
+        "admin/list_runs.html", request, user=user, initial_state=initial_state
+    )
+
+
+@router.get("/admin/list-runs/state", response_class=JSONResponse)
+async def web_admin_list_runs_state(user=Depends(_require_admin)):
+    """Return sanitized batch counters and run lifecycle events for the polling dashboard."""
+    state = await asyncio.to_thread(_admin_list_runs_snapshot)
+    return JSONResponse(state, headers={"Cache-Control": "no-store"})
+
+
+@router.get("/admin/inputs", response_class=HTMLResponse)
+async def web_admin_inputs(
+    request: Request,
+    file: str = "",
+    show_subfolders: bool = True,
+    status: str = "",
+    detail: str = "",
+    error: str = "",
+    user=Depends(_require_admin),
+):
+    """Edit, prune, and manually reorder Markdown batch inputs, including subdirectories."""
+    all_files = _admin_input_files()
+    files = all_files if show_subfolders else [filename for filename in all_files if "/" not in filename]
+    selected_file = file if file in files else (files[0] if files else "")
+    content = ""
+    content_hash = ""
+    reorder_tables: list[dict[str, Any]] = []
+    file_kpis: dict[str, Any] | None = None
+    page_error = None
+    if selected_file:
+        try:
+            path = _admin_input_path(selected_file)
+            if path.stat().st_size > _ADMIN_INPUT_MAX_BYTES:
+                page_error = "Il file supera la dimensione massima di modifica (5 MB)."
+            else:
+                content_bytes = path.read_bytes()
+                content_hash = hashlib.sha256(content_bytes).hexdigest()
+                content = content_bytes.decode("utf-8")
+                reorder_tables = _admin_input_reorder_tables(content)
+                file_kpis = await asyncio.to_thread(_admin_input_kpis, content)
+        except (OSError, UnicodeError, ValueError):
+            page_error = "Impossibile leggere il file selezionato."
+    messages = {
+        "saved": "Modifiche salvate.",
+        "unchanged": "Il file non aveva modifiche da salvare.",
+        "pruned": "Prune applicato. Le righe già disponibili sono state rimosse.",
+        "reordered": "Nuovo ordine salvato.",
+    }
+    errors = {
+        "invalid_file": "Seleziona un file Markdown disponibile in inputs/.",
+        "invalid_action": "Operazione non riconosciuta.",
+        "too_large": "Il file supera la dimensione massima di modifica (5 MB).",
+        "stale": "Il file è stato modificato dopo l’apertura. Ricaricalo prima di salvare.",
+        "prune_failed": "Prune non riuscito; il file originale è rimasto invariato.",
+        "reorder_failed": "Riordino non riuscito; ricarica il file e riprova.",
+        "save_failed": "Salvataggio non riuscito; il file originale è rimasto invariato.",
+    }
+    return _get_theme(request).render(
+        "admin/inputs.html",
+        request,
+        user=user,
+        all_files=all_files,
+        files=files,
+        input_tree=_admin_input_tree(all_files),
+        show_subfolders=show_subfolders,
+        selected_file=selected_file,
+        content=content,
+        content_hash=content_hash,
+        reorder_tables=reorder_tables,
+        file_kpis=file_kpis,
+        success_message=messages.get(status),
+        success_detail=detail[:200],
+        error_message=page_error or errors.get(error),
+    )
+
+
+_ADMIN_INPUT_MAX_ISSUES = 200
+
+
+def _admin_input_parse_error(exc: ValueError) -> str:
+    errors = exc.errors() if hasattr(exc, "errors") else None
+    message = "; ".join(str(error.get("msg", "")).removeprefix("Value error, ") for error in errors[:3]) if errors else str(exc)
+    return message[:500]
+
+
+def _summarize_admin_input_batch(
+    batch: Any, lines: list[int], row_errors: list[dict[str, Any]] | None = None
+) -> dict[str, Any]:
+    from .batch import plan_batch
+    from .fiscal_code import valid_codice_fiscale, valid_partita_iva
+
+    row_errors = list(row_errors or [])
+    plan = plan_batch(batch)
+    counts: dict[str, int] = {}
+    issues: list[dict[str, Any]] = list(row_errors)
+    for position, item in enumerate(plan):
+        counts[item.state] = counts.get(item.state, 0) + 1
+        line = lines[position] if position < len(lines) else None
+        message, level = "", ""
+        if item.state == "invalid":
+            message, level = item.error, "error"
+        elif item.state == "duplicate":
+            message, level = f"query duplicata di «{item.duplicate_of}»", "warning"
+        else:
+            code = (item.params.get("codice_fiscale") or item.params.get("identificativo") or "").strip().upper()
+            if len(code) == 16 and code.isalnum() and not valid_codice_fiscale(code):
+                message, level = f"codice fiscale {code}: carattere di controllo errato", "warning"
+            elif len(code) == 11 and code.isdigit() and not (valid_partita_iva(code) or code.startswith("00000000")):
+                message, level = f"partita IVA {code}: cifra di controllo errata", "warning"
+        if message:
+            issues.append({"line": line, "id": item.id, "level": level, "message": message[:300]})
+    issues.sort(key=lambda issue: (issue["level"] != "error", issue["line"] or 0))
+    if row_errors:
+        counts["invalid"] = counts.get("invalid", 0) + len(row_errors)
+    return {
+        "ok": not any(issue["level"] == "error" for issue in issues),
+        "parse_error": "",
+        "counts": counts,
+        "issues": issues[:_ADMIN_INPUT_MAX_ISSUES],
+        "issues_total": len(issues),
+        "row_errors": row_errors[:_ADMIN_INPUT_MAX_ISSUES],
+        "row_errors_total": len(row_errors),
+        "total": len(plan) + len(row_errors),
+    }
+
+
+def _validate_admin_input(content: str) -> dict[str, Any]:
+    """Check a batch Markdown text the way ``query batch`` would read it, without saving or sending anything."""
+    from .batch_markdown import load_markdown
+
+    try:
+        parsed = load_markdown(content)
+    except ValueError as exc:  # includes pydantic.ValidationError; the message carries the line number
+        return {
+            "ok": False,
+            "parse_error": _admin_input_parse_error(exc),
+            "counts": {},
+            "issues": [],
+            "issues_total": 0,
+            "total": 0,
+        }
+    return _summarize_admin_input_batch(parsed.batch, parsed.lines)
+
+
+def _admin_input_kpis(content: str) -> dict[str, Any]:
+    """Count parseable rows and include malformed table rows in the invalid KPI."""
+    from .batch_markdown import is_table_markdown, load_markdown, parse_markdown_partial
+
+    try:
+        if is_table_markdown(content):
+            parsed = parse_markdown_partial(content)
+            if parsed.batch is None:
+                return {
+                    "ok": False,
+                    "parse_error": "",
+                    "counts": {"invalid": len(parsed.issues)},
+                    "issues": parsed.issues[:_ADMIN_INPUT_MAX_ISSUES],
+                    "issues_total": len(parsed.issues),
+                    "row_errors": parsed.issues[:_ADMIN_INPUT_MAX_ISSUES],
+                    "row_errors_total": len(parsed.issues),
+                    "total": len(parsed.issues),
+                }
+            return _summarize_admin_input_batch(parsed.batch, parsed.lines, parsed.issues)
+        parsed = load_markdown(content)
+    except ValueError as exc:
+        return {
+            "ok": False,
+            "parse_error": _admin_input_parse_error(exc),
+            "counts": {},
+            "issues": [],
+            "issues_total": 0,
+            "total": 0,
+        }
+    return _summarize_admin_input_batch(parsed.batch, parsed.lines)
+
+
+@router.post("/admin/inputs/validate")
+async def web_admin_inputs_validate(request: Request, user=Depends(_require_admin)):
+    """Validate editor text, including row-level errors, without saving or submitting anything."""
+    if request.headers.get("content-type", "").lower().startswith("text/plain"):
+        raw_content = await request.body()
+        if len(raw_content) > _ADMIN_INPUT_MAX_BYTES:
+            return JSONResponse({"error": "Il contenuto supera la dimensione massima (5 MB)."}, status_code=413)
+        try:
+            content = raw_content.decode("utf-8")
+        except UnicodeDecodeError:
+            return JSONResponse({"error": "Il contenuto non è codificato in UTF-8."}, status_code=400)
+    else:
+        form = await request.form(max_part_size=_ADMIN_INPUT_MAX_BYTES * 6)
+        content = str(form.get("content") or "")
+        if len(content.encode("utf-8")) > _ADMIN_INPUT_MAX_BYTES:
+            return JSONResponse({"error": "Il contenuto supera la dimensione massima (5 MB)."}, status_code=413)
+    result = await asyncio.to_thread(_admin_input_kpis, content)
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
+@router.post("/admin/inputs/edit", response_class=HTMLResponse)
+@_audited("admin.input_file.update")
+async def web_admin_inputs_edit(request: Request, user=Depends(_require_admin)):
+    """Save a Markdown input, apply the existing prune command, or reorder its marked query rows."""
+    form = await request.form(max_part_size=_ADMIN_INPUT_MAX_BYTES * 6)
+    filename = str(form.get("file") or "").strip()
+    action = str(form.get("action") or "").strip()
+    show_subfolders = str(form.get("show_subfolders") or "true").strip().lower() in {"1", "true", "yes", "on"}
+    show_subfolders_query = f"&show_subfolders={'true' if show_subfolders else 'false'}"
+    request.state.audit_params = {"file": filename[:200], "operation": action[:40]}
+    try:
+        path = _admin_input_path(filename)
+    except ValueError:
+        return RedirectResponse(
+            url=f"/admin/inputs?error=invalid_file{show_subfolders_query}", status_code=303
+        )
+
+    if action not in {"save", "prune", "reorder"}:
+        return RedirectResponse(
+            url=f"/admin/inputs?file={quote(filename)}&error=invalid_action{show_subfolders_query}",
+            status_code=303,
+        )
+    try:
+        if path.stat().st_size > _ADMIN_INPUT_MAX_BYTES:
+            return RedirectResponse(
+                url=f"/admin/inputs?file={quote(filename)}&error=too_large{show_subfolders_query}",
+                status_code=303,
+            )
+        current_hash = hashlib.sha256(path.read_bytes()).hexdigest()
+    except OSError:
+        return RedirectResponse(
+            url=f"/admin/inputs?file={quote(filename)}&error=save_failed{show_subfolders_query}",
+            status_code=303,
+        )
+    submitted_hash = str(form.get("content_hash") or "")
+    if not re.fullmatch(r"[0-9a-f]{64}", submitted_hash) or current_hash != submitted_hash:
+        return RedirectResponse(
+            url=f"/admin/inputs?file={quote(filename)}&error=stale{show_subfolders_query}", status_code=303
+        )
+    content = str(form.get("content") or "")
+    if len(content.encode("utf-8")) > _ADMIN_INPUT_MAX_BYTES:
+        return RedirectResponse(
+            url=f"/admin/inputs?file={quote(filename)}&error=too_large{show_subfolders_query}",
+            status_code=303,
+        )
+
+    if action == "save":
+        try:
+            backup = _write_admin_input(path, content)
+        except (OSError, UnicodeError):
+            return RedirectResponse(
+                url=f"/admin/inputs?file={quote(filename)}&error=save_failed{show_subfolders_query}",
+                status_code=303,
+            )
+        status = "saved" if backup else "unchanged"
+    elif action == "reorder":
+        try:
+            reordered = _reorder_admin_input(content, str(form.get("row_order") or ""))
+            _write_admin_input(path, reordered)
+        except (OSError, UnicodeError, ValueError):
+            return RedirectResponse(
+                url=f"/admin/inputs?file={quote(filename)}&error=reorder_failed{show_subfolders_query}",
+                status_code=303,
+            )
+        status = "reordered"
+    else:
+        staged_directory = tempfile.TemporaryDirectory(prefix="sister-admin-input-prune-")
+        try:
+            staged_path = Path(staged_directory.name) / filename
+            staged_path.parent.mkdir(parents=True, exist_ok=True)
+            staged_path.write_text(content, encoding="utf-8")
+            process = await asyncio.create_subprocess_exec(
+                sys.executable,
+                "-m",
+                "sister.cli",
+                "batch",
+                "prune-list",
+                str(staged_path),
+                cwd=Path(__file__).resolve().parents[1],
+                stdin=asyncio.subprocess.DEVNULL,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+                start_new_session=True,
+            )
+            try:
+                output, _ = await asyncio.wait_for(process.communicate(), timeout=180)
+            except asyncio.TimeoutError:
+                process.kill()
+                await process.wait()
+                return RedirectResponse(
+                    url=f"/admin/inputs?file={quote(filename)}&error=prune_failed{show_subfolders_query}", status_code=303
+                )
+            if process.returncode != 0:
+                logger.warning("Admin prune failed for %s with exit code %s", filename, process.returncode)
+                return RedirectResponse(
+                    url=f"/admin/inputs?file={quote(filename)}&error=prune_failed{show_subfolders_query}", status_code=303
+                )
+            pruned_content = staged_path.read_text(encoding="utf-8")
+            try:
+                backup = _write_admin_input(path, pruned_content)
+            except (OSError, UnicodeError):
+                return RedirectResponse(
+                    url=f"/admin/inputs?file={quote(filename)}&error=save_failed{show_subfolders_query}", status_code=303
+                )
+            status = "pruned" if backup else "unchanged"
+            if status == "unchanged":
+                status = "pruned"
+            prune_summary = next(
+                (line.strip() for line in output.decode("utf-8", errors="replace").splitlines() if line.strip()),
+                "",
+            )[:200]
+        except (OSError, UnicodeError):
+            return RedirectResponse(
+                url=f"/admin/inputs?file={quote(filename)}&error=prune_failed{show_subfolders_query}",
+                status_code=303,
+            )
+        finally:
+            staged_directory.cleanup()
+
+    detail = f"&detail={quote(prune_summary)}" if action == "prune" and prune_summary else ""
+    return RedirectResponse(
+        url=f"/admin/inputs?file={quote(filename)}&status={status}{detail}{show_subfolders_query}",
+        status_code=303,
+    )
 
 
 @router.get("/admin/commands", response_class=HTMLResponse)
@@ -5516,6 +6288,100 @@ async def _load_document_favorite_state(doc: dict, user, *, as_pdf: bool = False
     return enabled
 
 
+async def _full_group_titolarita(xml_parsed: dict) -> None:
+    """Give the groups of a subject page the whole ownership chain of their properties.
+
+    A subject visura lists only the act the subject holds the property from; a group "da elenco" (saved search) has no act
+    at all. When a *visura storica* of the property is stored, its ``StoriaIntestazione`` (costituzione, atti, successioni,
+    the owners each one left) is used:
+
+    * visura group: it replaces the group's single act in the "Titolarità" timeline (the group's own last act stays: it
+      carries the subject's period of right);
+    * elenco group: each unit gets ``StoriaTitolarita`` (the chain), which the template shows under the group.
+
+    Properties without a stored storica are left as they are; any failure leaves the page untouched.
+    """
+    body = next((v for k, v in (xml_parsed or {}).items() if k in ("VisuraSoggettoAttuale", "VisuraSoggetto") and isinstance(v, dict)), None)
+    if not isinstance(body, dict):
+        return
+    groups = body.get("GruppoUnitaImmobiliari")
+    groups = groups if isinstance(groups, list) else ([groups] if isinstance(groups, dict) else [])
+    if not groups:
+        return
+    from sqlalchemy import text
+
+    from .database import _get_session_factory, get_document_by_id
+    from .reference import _resolve_comune
+
+    def as_list(value):
+        return value if isinstance(value, list) else ([value] if value else [])
+
+    def clean(value) -> str:
+        return " ".join(str(value or "").split())
+
+    cache: dict[tuple, list] = {}
+
+    async def history_of(session, ident: dict, group_code: str) -> list:
+        """The longest stored ``StoriaIntestazione`` of the property (oldest act first), or []."""
+        if not isinstance(ident, dict) or not ident.get("Foglio"):
+            return []
+        key = (ident.get("CodiceComune") or group_code, ident.get("Foglio"), ident.get("ParticellaNum") or ident.get("Particella"),
+               ident.get("Subalterno") or "")
+        if key in cache:
+            return cache[key]
+        cache[key] = []
+        comune_id = await _resolve_comune(session, None, None, key[0])
+        if comune_id is None:
+            return []
+        ids = (
+            await session.execute(
+                text(
+                    "SELECT d.id FROM document d JOIN cadastral_unit u ON u.id = d.cadastral_unit_id"
+                    " WHERE d.view_subtype = 'storica' AND d.document_type IN ('visura_fabbricati', 'visura_terreni')"
+                    " AND u.comune_id = :c AND u.sheet = :f AND u.parcel = :p AND coalesce(u.subunit, '') = :s ORDER BY d.id DESC"
+                ),
+                {"c": comune_id, "f": key[1], "p": key[2] or "", "s": key[3]},
+            )
+        ).scalars().all()
+        best: list = []
+        for doc_id in ids:
+            stored = await get_document_by_id(int(doc_id))
+            parsed = _parse_xml_to_dict((stored or {}).get("xml_content", "")) if stored else {}
+            body_s = next((v for v in (parsed or {}).values() if isinstance(v, dict)), {})
+            history = as_list(((body_s.get("VisuraFabbricatiStorica") or body_s.get("VisuraTerreniStorica") or body_s)
+                               .get("StoriaIntestazione") or {}).get("MutazioneSoggettiva"))
+            if len(history) > len(best):
+                best = history
+        cache[key] = best
+        return best
+
+    async with _get_session_factory()() as session:
+        for group in groups:
+            if not isinstance(group, dict):
+                continue
+            units = as_list(group.get("ImmobileFabbricatiS")) + as_list(group.get("ImmobileTerreniS"))
+            if group.get("FonteElenco"):
+                for unit in units:
+                    if isinstance(unit, dict):
+                        ident = next(iter(as_list((unit.get("DatiIdentificativi") or {}).get("IdentificativoDefinitivo"))), None)
+                        history = await history_of(session, ident, group.get("CodiceComune") or "")
+                        if history:
+                            unit["StoriaTitolarita"] = history
+                continue
+            holder = group.get("IntestazioneGruppo")
+            unit = next(iter(units), None)
+            if not isinstance(unit, dict) or not isinstance(holder, dict):
+                continue
+            ident = next(iter(as_list((unit.get("DatiIdentificativi") or {}).get("IdentificativoDefinitivo"))), None)
+            best = await history_of(session, ident, group.get("CodiceComune") or "")
+            mine = as_list(holder.get("MutazioneSoggettiva"))
+            if len(best) <= len(mine) or not mine or not isinstance(best[-1], dict):
+                continue
+            last = mine[-1]
+            same = clean(best[-1].get("DatiDerivantiDaMutazSogg")) == clean(last.get("DatiDerivantiDaMutazSogg"))
+            holder["MutazioneSoggettiva"] = [*best[:-1], last] if same else [*best, *mine]
+
+
 async def _render_doc_from_db(
     doc: dict,
     request,
@@ -5551,6 +6417,10 @@ async def _render_doc_from_db(
                 *(_parse_xml_to_dict(source.get("xml_content", "")) for source in subject_asset_documents),
             ]
         )
+    try:
+        await _full_group_titolarita(doc["xml_parsed"])
+    except Exception:  # noqa: BLE001 - an addition to the timeline: the page opens without it
+        logger.warning("Titolarita' completa non disponibile", exc_info=True)
     doc["view"] = build_visura_view(doc.get("xml_content", ""))
     doc.pop("xml_content", None)
     doc["intestati_rows"] = [
@@ -5649,6 +6519,10 @@ async def _render_doc_from_db(
 
         # the groups only the elenco lists carry its ownership, so the valuation covers them too
         xml_shown = _subject_tree_with_elenco(xml_p, subject_hub)
+        try:  # the groups added from the saved search get the whole chain of their properties too
+            await _full_group_titolarita(xml_shown)
+        except Exception:  # noqa: BLE001 - an addition to the timeline: the page opens without it
+            logger.warning("Titolarita' completa non disponibile", exc_info=True)
 
         async def _no_hub_map():
             return None
@@ -8872,8 +9746,13 @@ def _omi_zone_features_for_properties(
     parcel_markers: list[dict[str, Any]],
     parcel_features: list[dict[str, Any]],
     unmapped_parcels: list[dict[str, Any]],
+    sheet_features: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
-    """All OMI zones in owned-property municipalities, marking zones overlapping owned parcels."""
+    """All OMI zones in owned-property municipalities, marking the zone of each owned parcel.
+
+    A parcel with a geometry is placed by its largest overlap; one without is placed by its geocoded marker or, failing
+    that, by the centre of its cadastral sheet (the same positions the valuation uses).
+    """
     try:
         from .provinces import province_code, province_name
     except ImportError:
@@ -8920,6 +9799,44 @@ def _omi_zone_features_for_properties(
     if not municipalities:
         return []
 
+    # parcels without a geometry: a point (geocoded marker, else the centre of their sheet) decides their zone
+    with_geometry = {
+        tuple(str((f.get("properties") or {}).get(k) or "").strip().upper()
+              for k in ("municipality_code", "section", "sheet", "parcel"))
+        for f in parcel_features if isinstance(f, dict)
+    }
+    points_by_municipality: dict[tuple[str, str], list[tuple[float, float]]] = {}
+
+    def parcel_identity(item: dict[str, Any]) -> tuple[str, ...]:
+        return tuple(str(item.get(k) or "").strip().upper() for k in ("municipality_code", "section", "sheet", "parcel"))
+
+    sheet_centres: dict[tuple[str, str, str], tuple[float, float]] = {}
+    try:
+        from shapely.geometry import shape as _shape
+
+        for sheet in sheet_features or []:
+            sheet_properties = (sheet or {}).get("properties") or {}
+            centre = _shape(sheet["geometry"]).centroid
+            sheet_centres[tuple(
+                str(sheet_properties.get(k) or "").strip().upper() for k in ("municipality_code", "section", "sheet")
+            )] = (centre.x, centre.y)
+    except Exception:  # noqa: BLE001 - sheet centres are an optional refinement
+        sheet_centres = {}
+    for item in (*parcel_markers, *unmapped_parcels):
+        if not isinstance(item, dict) or parcel_identity(item) in with_geometry:
+            continue
+        key = register_municipality(item)
+        if key is None:
+            continue
+        try:
+            point = (float(item["longitude"]), float(item["latitude"]))
+        except (KeyError, TypeError, ValueError):
+            point = sheet_centres.get(tuple(
+                str(item.get(k) or "").strip().upper() for k in ("municipality_code", "section", "sheet")
+            ))
+        if point:
+            points_by_municipality.setdefault(key, []).append(point)
+
     municipalities_by_province: dict[str, list[tuple[tuple[str, str], dict[str, Any]]]] = {}
     for key, municipality in municipalities.items():
         municipalities_by_province.setdefault(municipality["province"], []).append((key, municipality))
@@ -8944,6 +9861,12 @@ def _omi_zone_features_for_properties(
                 if not zone:
                     continue
                 matches_owned_parcel = zone in matched_zones.get(municipality_key, set())
+                if not matches_owned_parcel and points_by_municipality.get(municipality_key):
+                    from shapely.geometry import Point
+
+                    matches_owned_parcel = any(
+                        zone_geometry.covers(Point(lon, lat)) for lon, lat in points_by_municipality[municipality_key]
+                    )
 
                 geometry_json = json.dumps(zone_feature["geometry"], sort_keys=True, separators=(",", ":"))
                 feature_key = hashlib.sha1(
@@ -9001,6 +9924,7 @@ async def _parcel_map_payload(lookup: dict[str, Any]) -> dict[str, Any]:
             parcel_markers,
             parcel_features,
             lookup.get("unmapped_parcel_items") or [],
+            sheet_features,
         )
         if lookup.get("listed_only") else []
     )
@@ -11726,10 +12650,33 @@ async def _hub_parcel_map_for_pdf(profile: dict) -> dict | None:
     if task is None:
         return parcel_map
     try:
-        return await asyncio.shield(task) or parcel_map
+        result = await asyncio.shield(task) or parcel_map
     except Exception as exc:  # noqa: BLE001 - map failure must not block the report's tables and archive.
         logger.warning("Complete hub map unavailable for PDF: %s", type(exc).__name__)
-        return parcel_map
+        result = parcel_map
+    if _map_is_placeholder(result):
+        # the lookup finished (or stopped) without a merged context: use what its finished chunks published
+        merged = _lookup_from_hub_chunks(_hub_map_key(parcels), result)
+        if merged:
+            return merged
+    return result
+
+
+def _lookup_from_hub_chunks(map_key: str, base: dict | None) -> dict | None:
+    """A map lookup made of the chunks ``_build_hub_map`` has published so far, or None when there are none."""
+    chunks = (_HUB_MAP_DATA.get(map_key) or {}).get("chunks") or []
+    merged = {**(base or {}), "parcel_markers": [], "parcel_features": [], "sheet_features": [],
+              "unmapped_parcel_items": [], "omi_zone_features": {"type": "FeatureCollection", "features": []}}
+    for chunk in chunks:
+        merged["parcel_markers"].extend(chunk.get("parcel_markers") or [])
+        merged["parcel_features"].extend((chunk.get("parcel_features") or {}).get("features") or [])
+        merged["sheet_features"].extend((chunk.get("sheet_features") or {}).get("features") or [])
+        merged["unmapped_parcel_items"].extend(chunk.get("unmapped_parcels") or [])
+        merged["omi_zone_features"]["features"].extend((chunk.get("omi_zone_features") or {}).get("features") or [])
+    if not (merged["parcel_markers"] or merged["parcel_features"] or merged["unmapped_parcel_items"]):
+        return None
+    merged["listed_only"] = True
+    return merged
 
 
 async def _subject_pdf_response(
@@ -11887,6 +12834,10 @@ async def _render_query_only_subject(
     carries the subject's name and code and the archive hub (the saved query) is the content.
     """
     doc = _query_only_subject_doc(profile)
+    try:
+        await _full_group_titolarita(doc["xml_parsed"])
+    except Exception:  # noqa: BLE001 - an addition to the timeline: the page opens without it
+        logger.warning("Titolarita' completa non disponibile", exc_info=True)
 
     try:
         land_registry_map = await (
@@ -12189,6 +13140,48 @@ async def web_company_pdf(request: Request, fiscal_code: str, document: int | No
     return await _web_subject_profile(
         request, fiscal_code, document, user=user, route_prefix="/companies", code_pattern=r"\d{11}", as_pdf=True
     )
+
+
+async def _share_subject_report(
+    request: Request, fiscal_code: str, document: int | None, user, route_prefix: str, code_pattern: str,
+):
+    """Render the subject report, save it to the company Drive and share it with the posted recipient only."""
+    from fastapi import HTTPException
+
+    from .drive_share import DriveShareError, drive_configured, share_report, valid_recipient
+
+    if not drive_configured():
+        raise HTTPException(status_code=503, detail="Google Drive non configurato")
+    try:
+        body = await request.json()
+        recipient = valid_recipient(str(body.get("recipient") or ""))
+    except DriveShareError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001 - malformed JSON
+        raise HTTPException(status_code=422, detail="Richiesta non valida") from exc
+    response = await _web_subject_profile(
+        request, fiscal_code, document, user=user, route_prefix=route_prefix, code_pattern=code_pattern, as_pdf=True
+    )
+    pdf = bytes(getattr(response, "body", b"") or b"")
+    if not pdf.startswith(b"%PDF"):
+        raise HTTPException(status_code=422, detail="Report non disponibile")
+    match = re.search(r'filename="([^"]+)"', response.headers.get("content-disposition", ""))
+    filename = match.group(1) if match else f"report_soggetto_{fiscal_code}.pdf"
+    try:
+        link = await share_report(pdf, filename, recipient, requested_by=str(getattr(user, "email", "") or ""))
+    except DriveShareError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return {"url": link, "filename": filename}
+
+
+@router.post("/persons/{fiscal_code}/pdf/share")
+async def web_person_pdf_share(request: Request, fiscal_code: str, document: int | None = None, user=Depends(_require_auth)):
+    return await _share_subject_report(request, fiscal_code, document, user, "/persons", r"[A-Z0-9]{16}")
+
+
+@router.post("/companies/{fiscal_code}/pdf/share")
+async def web_company_pdf_share(request: Request, fiscal_code: str, document: int | None = None, user=Depends(_require_auth)):
+    return await _share_subject_report(request, fiscal_code, document, user, "/companies", r"\d{11}")
 
 
 _SUBJECT_KINDS = {

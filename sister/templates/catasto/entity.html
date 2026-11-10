@@ -10,6 +10,7 @@
 {% from "_doc_macros.html" import document_favorite_action, documents_favorites_js, optional_data_notice %}
 {% from "components/subject_notes.html" import subject_note_panel, subject_notes_js %}
 {% from "land_registry/components/document_parcel_map.html" import document_parcel_map_assets, document_parcel_map_scripts, document_parcel_map %}
+
 {% set subject_documents = subject_documents|default([], true) %}
 {% set subject_fiscal_code = subject_fiscal_code|default('', true) %}
 {% set subject_route_prefix = subject_route_prefix|default('/persons') %}
@@ -120,6 +121,33 @@
 {% endif %}
 {%- endmacro %}
 
+{% macro market_valuation_summary(kpis) -%}
+{% if kpis and kpis.market_valuation %}
+<section class="card border-0 shadow-sm mt-3" aria-labelledby="market-valuation-heading" data-market-valuation>
+    <div class="card-body py-3">
+        <h2 class="h6 mb-1" id="market-valuation-heading">Riferimento di mercato · prezzi al m² da annunci</h2>
+        <div class="table-responsive">
+            <table class="table table-sm align-middle mb-1">
+                <caption class="visually-hidden">Valore delle abitazioni stimato con i prezzi al metro quadro di Immobiliare.it e idealista</caption>
+                <thead><tr><th scope="col">Fonte</th><th scope="col">€/m²</th><th scope="col" class="text-end">Beni</th><th scope="col" class="text-end">Valore</th></tr></thead>
+                <tbody>
+                {% for item in kpis.market_valuation %}
+                <tr>
+                    <th scope="row" class="fw-semibold">{{ item.label }}<small class="d-block text-muted fw-normal">{{ item.scope }} · al {{ item.as_of }}</small></th>
+                    <td class="text-nowrap">{{ item.per_sqm }}</td>
+                    <td class="text-end">{{ item.units }}/{{ item.of_units }}</td>
+                    <td class="text-end text-nowrap">{{ item.range }}<small class="d-block text-muted">centrale {{ item.central }}</small></td>
+                </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        <p class="small text-muted mb-0">Prezzi richiesti negli annunci (non di compravendita) per la superficie stimata delle abitazioni; solo i comuni raccolti. Confrontali con la stima OMI: non la sostituiscono.</p>
+    </div>
+</section>
+{% endif %}
+{%- endmacro %}
+
 {% macro adjusted_omi_summary(kpis) -%}
 {% if manual_valuation_enabled and kpis and kpis.asset_value_adjusted %}
 <section class="card border-0 shadow-sm mt-3" aria-labelledby="adjusted-omi-heading">
@@ -144,12 +172,109 @@
 </div>
 {% include "catasto/_subject_tags.html" %}
 {% endif %}
+{% set owner_assessment_data = land_registry_kpis.owner_assessment|default({}, true) if land_registry_kpis else {} %}
+<div data-owner-omi-breakdown-slot>
+{% if kpis_in_main and owner_assessment_data.show_omi_breakdown|default(false) and owner_assessment_data.omi_breakdown %}
+<section class="card border-0 shadow-sm mb-4" aria-labelledby="owner-omi-breakdown-heading" data-owner-omi-breakdown>
+    <div class="card-body py-3">
+        <h2 class="h6 mb-1" id="owner-omi-breakdown-heading">
+            <i class="fas fa-scale-balanced text-info me-2" aria-hidden="true"></i>Ripartizione della stima attribuibile
+        </h2>
+        <p class="small text-muted mb-2">Scegli il raggruppamento: per provincia, tipo di diritto, quota dichiarata o percentuale di proprietà; il dettaglio completo li combina. La stima tiene conto anche del tipo di diritto e dei relativi coefficienti.</p>
+        {% set value_heading = 'Stima attribuibile · fonte preferita' if owner_assessment_data.preferred_source_used else 'Stima OMI attribuibile' %}
+        <ul class="nav nav-tabs nav-tabs-sm mb-2 no-print" role="tablist" aria-label="Raggruppamento della stima attribuibile">
+            {% for view in owner_assessment_data.omi_breakdown_views|default([]) %}
+            <li class="nav-item" role="presentation">
+                <button class="nav-link py-1 px-2 small{% if loop.first %} active{% endif %}" type="button" role="tab" id="omi-breakdown-tab-{{ view.key }}"
+                        data-bs-toggle="tab" data-bs-target="#omi-breakdown-pane-{{ view.key }}"
+                        aria-controls="omi-breakdown-pane-{{ view.key }}" aria-selected="{{ 'true' if loop.first else 'false' }}">Per {{ view.label|lower }}</button>
+            </li>
+            {% endfor %}
+            <li class="nav-item" role="presentation">
+                <button class="nav-link py-1 px-2 small{% if not owner_assessment_data.omi_breakdown_views %} active{% endif %}" type="button" role="tab" id="omi-breakdown-tab-detail"
+                        data-bs-toggle="tab" data-bs-target="#omi-breakdown-pane-detail"
+                        aria-controls="omi-breakdown-pane-detail" aria-selected="false">Dettaglio completo</button>
+            </li>
+        </ul>
+        <div class="tab-content">
+            {% for view in owner_assessment_data.omi_breakdown_views|default([]) %}
+            <div class="tab-pane fade{% if loop.first %} show active{% endif %}" id="omi-breakdown-pane-{{ view.key }}" role="tabpanel" aria-labelledby="omi-breakdown-tab-{{ view.key }}" tabindex="0">
+                <div class="table-responsive">
+                    <table class="table table-sm align-middle mb-0">
+                        <caption class="visually-hidden">Stima OMI attribuibile raggruppata per {{ view.label|lower }}</caption>
+                        <thead>
+                            <tr>
+                                <th scope="col">{{ view.label }}</th>
+                                <th scope="col" class="text-end">Beni stimati</th>
+                                <th scope="col" class="text-end">{{ value_heading }}</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for row in view.rows %}
+                            <tr>
+                                <td>{{ row.label }}</td>
+                                <td class="text-end">{{ row.valued_assets }}</td>
+                                <td class="text-end">
+                                    <span class="{% if row.valued_assets %}text-nowrap{% else %}small text-muted{% endif %}">{{ row.value }}</span>
+                                    {% if row.unvalued_assets %}
+                                    <small class="d-block text-muted">
+                                        {% if row.valued_assets %}{{ row.unvalued_assets }} elementi senza stima: {{ row.unvalued_reasons }}{% else %}{{ row.unvalued_reasons }}{% endif %}
+                                    </small>
+                                    {% endif %}
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+            {% endfor %}
+            <div class="tab-pane fade{% if not owner_assessment_data.omi_breakdown_views %} show active{% endif %}" id="omi-breakdown-pane-detail" role="tabpanel" aria-labelledby="omi-breakdown-tab-detail" tabindex="0">
+        <div class="table-responsive">
+                <table class="table table-sm align-middle mb-0">
+                    <caption class="visually-hidden">Ripartizione della stima OMI attribuibile per provincia, diritto, quota e percentuale di proprietà</caption>
+                    <thead>
+                        <tr>
+                            <th scope="col">Provincia</th>
+                            <th scope="col">Tipo di diritto</th>
+                            <th scope="col">Quota</th>
+                            <th scope="col">Percentuale di proprietà</th>
+                            <th scope="col" class="text-end">{{ 'Stima attribuibile · fonte preferita' if owner_assessment_data.preferred_source_used else 'Stima OMI attribuibile' }}</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for row in owner_assessment_data.omi_breakdown %}
+                        <tr>
+                            <td>{{ row.province }}</td>
+                            <td>{{ row.right_type }}</td>
+                            <td class="text-nowrap">{{ row.quote }}</td>
+                            <td class="text-nowrap">{{ row.ownership_percentage }}</td>
+                            <td class="text-end">
+                                <span class="{% if row.valued_assets %}text-nowrap{% else %}small text-muted{% endif %}">{{ row.value }}</span>
+                                {% if row.unvalued_assets %}
+                                <small class="d-block text-muted">
+                                    {% if row.valued_assets %}{{ row.unvalued_assets }} elementi senza stima: {{ row.unvalued_reasons }}{% else %}{{ row.unvalued_reasons }}{% endif %}
+                                </small>
+                                {% endif %}
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            </div>
+        </div>
+    </div>
+</section>
+{% endif %}
+</div>
 {% if kpis_in_main and land_registry_kpis %}
 <div class="document-land-map-kpis-main mb-4">
     {{ cadastral_asset_kpis(land_registry_kpis_display,
         omi_valuation_url='/valuation#stima-omi',
         cadastral_valuation_url='/valuation#valore-catastale') }}
     {{ central_omi_summary(land_registry_kpis) }}
+    {{ market_valuation_summary(land_registry_kpis) }}
     {{ adjusted_omi_summary(land_registry_kpis) }}
 </div>
 {% endif %}
@@ -197,6 +322,7 @@
             omi_valuation_url='/valuation#stima-omi',
             cadastral_valuation_url='/valuation#valore-catastale') }}
         {{ central_omi_summary(land_registry_kpis) }}
+        {{ market_valuation_summary(land_registry_kpis) }}
         {{ adjusted_omi_summary(land_registry_kpis) }}
         {% endif %}
         {{ document_parcel_map(land_registry_map, labels=subject_map_labels) }}
@@ -268,7 +394,7 @@
 {% set pdf_url = '' %}
 {% endif %}
 {% if pdf_url %}
-<script src="/static/js/document_share.js?v=20261030b" nonce="{{ csp_nonce }}" defer></script>
+<script src="/static/js/document_share.js?v=20261109a" nonce="{{ csp_nonce }}" defer></script>
 <script nonce="{{ csp_nonce }}">
 (function () {
     if (document.querySelector('[data-document-pdf]')) return;
@@ -296,7 +422,10 @@
     emailButton.className = link.className;
     emailButton.dataset.documentEmail = 'true';
     emailButton.dataset.aecs4uShare = 'email';
-    emailButton.title = 'Invia il link del report via email';
+    emailButton.title = completeSubjectReport
+      ? 'Salva il report su Google Drive, condividilo con il destinatario e invia il link da Gmail'
+      : 'Invia il link del report via email';
+    {% if subject_fiscal_code %}emailButton.dataset.driveShareUrl = {{ (subject_route_prefix ~ '/' ~ subject_fiscal_code ~ '/pdf/share' ~ (('?document=' ~ subject_document_id) if subject_document_id else ''))|tojson }};{% endif %}
     emailButton.innerHTML = '<i class="fas fa-envelope me-2" aria-hidden="true"></i>Invia email';
     var emailHeading = document.querySelector('.page-hero h1, .page-hero .display-6');
     var emailTitle = emailHeading ? emailHeading.textContent.trim() : document.title;
@@ -321,6 +450,6 @@
 {% if manual_valuation_enabled %}
 <script src="/static/js/manual_property_valuations.js?v=20261109c" defer></script>
 {% endif %}
-{% if land_registry_kpis %}<script src="/static/js/property_omi_selections.js?v=20261107c" defer></script>{% endif %}
+{% if land_registry_kpis %}<script src="/static/js/property_omi_selections.js?v=20261109a" defer></script>{% endif %}
 {% endif %}
 {% endblock %}

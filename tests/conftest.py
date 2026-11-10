@@ -14,6 +14,7 @@ from .pg_isolation import fresh_db, pg_test_schema  # noqa: F401  (isolated Post
 # documented dev switch explicitly instead of depending on whatever the developer's .env says; tests that check the
 # enforcement itself (tests/test_web_auth.py) override it per test. Must be set before ``sister.main`` is imported.
 os.environ.setdefault("REQUIRE_AUTHENTICATION", "false")
+os.environ.setdefault("SISTER_PDF_BASEMAP", "off")  # no tile requests from the suite
 
 @pytest.fixture(autouse=True)
 def _isolated_outputs_dir(tmp_path_factory, monkeypatch):

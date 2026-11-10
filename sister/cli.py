@@ -2003,6 +2003,9 @@ def db_backfill(
     ),
     force: bool = typer.Option(False, "--force", help="Rielabora anche i documenti gia' popolati"),
     limit: int = typer.Option(0, "--limit", help="Massimo di righe da elaborare (0 = tutte)"),
+    contains: str = typer.Option(
+        "", "--contains", help="projections: solo le risposte il cui JSON contiene questo testo (es. immobili_intestatari)"
+    ),
 ):
     """Riempie le tabelle strutturate dai dati gia' salvati (JSON delle risposte e XML dei documenti)."""
     import asyncio
@@ -2020,7 +2023,7 @@ def db_backfill(
         result: dict = {}
         try:
             if what in {"all", "projections"}:
-                result["projections"] = await database.backfill_projections(limit=limit or None)
+                result["projections"] = await database.backfill_projections(limit=limit or None, contains=contains or None)
                 console.print(f"Risposte: {result['projections']}")
             if what in {"all", "xml"}:
                 result["xml"] = await xml_ingest.backfill_documents(force=force, limit=limit or None)

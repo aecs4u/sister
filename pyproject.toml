@@ -28,6 +28,7 @@ dependencies = [
     "aecs4u-auth[browser]>=1.19.0",
     "aecs4u-domain>=0.12.0",
     "aecs4u-email>=1.0.0",
+    "aecs4u-storage>=0.2.0",  # company Google Drive for the shared reports (drive_share.py)
     "aecs4u-crypto>=0.2.0",
     "aecs4u-workflow>=0.1.0",
     "fastapi>=0.115.0",
@@ -43,6 +44,7 @@ dependencies = [
     "alembic>=1.13.0",
     "typer>=0.9.0",
     "httpx>=0.27.0,<1",  # 1.0 pre-releases drop AsyncClient (breaks VisuraClient); uv.lock pins 0.28.1
+    "pillow>=10",  # PDF report: OpenStreetMap basemap of the parcel sketches
     "jinja2>=3.1.0",
     "land_registry>=0.1.4",
     "aecs4u-theme>=1.6.0",
@@ -82,6 +84,7 @@ sister-mcp = "sister.mcp_server:run"
 [tool.uv.sources]
 aecs4u-auth = { git = "https://github.com/aecs4u/aecs4u-auth.git", branch = "main" }
 aecs4u-domain = { git = "https://github.com/aecs4u/aecs4u-domain.git", branch = "main" }
+aecs4u-storage = { git = "https://github.com/aecs4u/aecs4u-storage.git", branch = "main" }
 aecs4u-email = { git = "https://github.com/aecs4u/aecs4u-email.git", branch = "main" }
 aecs4u-crypto = { git = "https://github.com/aecs4u/aecs4u-crypto.git", branch = "main" }
 aecs4u-theme = { git = "https://github.com/aecs4u/aecs4u-theme.git", branch = "main" }

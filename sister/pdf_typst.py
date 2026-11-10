@@ -2,8 +2,8 @@
 
 The page data is turned into a plain JSON structure (``build_context``) and handed to the template in
 ``sister/typst/visura.typ``, which only reads ``data.json``: no visura text is ever pasted into Typst source, so a name or
-address containing ``#``, ``$`` or ``*`` cannot change the layout or run code. No browser is involved, nothing is fetched
-over HTTP and the output does not depend on the caller's session or theme.
+address containing ``#``, ``$`` or ``*`` cannot change the layout or run code. No browser is involved and the output does not depend on the caller's session or theme. The only network
+access is the optional OpenStreetMap basemap of the parcel sketches (``_basemap_png``, cached, ``SISTER_PDF_BASEMAP=off``).
 """
 
 from __future__ import annotations
@@ -20,6 +20,7 @@ from typing import Any
 
 from .display import merge_identifiers, owner_details
 from .land_registry_kpis import (
+    is_missing_value,
     _SUBJECT_KEYS,
     _first,
     _format_currency_it,
@@ -71,6 +72,12 @@ def pdf_filename(stem: str | None, document_id: int) -> str:
     """ASCII-safe download name: the document's file stem, else ``sister_documento_<id>``."""
     base = re.sub(r"[^A-Za-z0-9._-]+", "_", str(stem or "")).strip("._") or f"sister_documento_{document_id}"
     return f"{base}.pdf"
+
+
+def _breakable(value: str, every: int = 12) -> str:
+    """Let a long unbroken id wrap inside its cell (zero-width space = a line-break opportunity)."""
+    value = _s(value)
+    return "\u200b".join(value[i:i + every] for i in range(0, len(value), every)) if len(value) > every * 2 else value
 
 
 def _table(title: str, header: list[str], widths: list[str], align: list[str], rows: list[list[Any]]) -> dict[str, Any]:
@@ -256,6 +263,24 @@ def _assessment_items(assessment: dict[str, Any]) -> list[dict[str, Any]]:
             rows,
         )
     )
+    # the same estimate grouped by province, right type, quota and ownership percentage (as the page's tabs)
+    views = [v for v in assessment.get("omi_breakdown_views") or [] if isinstance(v, dict) and v.get("rows")]
+    if assessment.get("show_omi_breakdown") and any(len(v["rows"]) > 1 for v in views):
+        breakdown_rows = []
+        for view in views:
+            for index, row in enumerate(view["rows"]):
+                value = row.get("value") or "Non disponibile"
+                if row.get("unvalued_assets"):
+                    value += f" · {row['unvalued_assets']} senza stima"
+                breakdown_rows.append([
+                    view.get("label", "") if index == 0 else "", row.get("label", ""),
+                    str(row.get("valued_assets", 0)), _missing(value) if _is_missing(value) else value,
+                ])
+        items.append(_table(
+            "Ripartizione della stima attribuibile",
+            ["Raggruppamento", "Voce", "Beni stimati", valuation_label],
+            ["1.2fr", "2.4fr", "auto", "2.2fr"], ["left", "left", "right", "right"], breakdown_rows,
+        ))
     notes = [assessment.get("coefficient_note"), assessment.get("method_note")]
     items.append({"kind": "note", "text": " ".join(n for n in notes if n)})
     if assessment.get("preferred_source_used"):
@@ -319,8 +344,75 @@ def _kpi_items(kpis: dict[str, Any]) -> list[dict[str, Any]]:
     ]
 
 
-def _parcel_items(lookup: dict[str, Any] | None) -> list[dict[str, Any]]:
-    """Parcel list and a vector sketch per comune from the local cadastral geometries (no map tiles needed)."""
+def _used_omi_zones(groups: list[Any], estimates: list[dict[str, Any]]) -> dict[tuple[str, str], dict[str, Any]]:
+    """The OMI zones the valuation actually used, per (cadastral comune code, zone), with the categories and unit count.
+
+    A building counts when it has an OMI estimate; the zone is the one whose quotation was applied
+    (``omi_zona_used`` when a neighbouring zone stood in, else ``omi_zona``).
+    """
+    from .omi_quotes import OMI_TYPOLOGY_LABELS
+
+    used: dict[tuple[str, str], dict[str, Any]] = {}
+    for group, group_estimate in zip(groups, estimates):
+        if not isinstance(group, dict):
+            continue
+        rows = group_estimate.get("buildings") or []
+        for index, unit in enumerate(_items(group.get("ImmobileFabbricatiS"))):
+            estimate = rows[index] if index < len(rows) else {}
+            zone = _s(estimate.get("omi_zona_used") or estimate.get("omi_zona")).upper()
+            if not (zone and estimate.get("range")):
+                continue
+            ident = _first(_first(unit.get("DatiIdentificativi")).get("IdentificativoDefinitivo"))
+            code = _s(ident.get("CodiceComune")).upper()
+            category = _s(_first(unit.get("DatiClassamentoF")).get("Categoria")).partition(":")[0].strip() or "—"
+            entry = used.setdefault((code, zone), {
+                "comune": _s(group.get("Descrizione") or ident.get("Comune")),
+                "province": _s(ident.get("Provincia") or group.get("Provincia")),
+                "categories": {},
+            })
+            typology = _s(estimate.get("omi_tipologia"))
+            label = OMI_TYPOLOGY_LABELS.get(int(typology)) if typology.isdigit() else ""
+            item = entry["categories"].setdefault(category, {"units": 0, "typologies": set(), "low": None, "high": None})
+            item["units"] += 1
+            for field, pick in (("omi_price_min", min), ("omi_price_max", max)):
+                value = _number(estimate.get(field))
+                if value is not None:
+                    key = "low" if field == "omi_price_min" else "high"
+                    item[key] = value if item[key] is None else pick(item[key], value)
+            if label:
+                item["typologies"].add(label)
+    return used
+
+
+def _summary_items(kpis: dict[str, Any]) -> list[dict[str, Any]]:
+    """Four headline figures and the limits that matter, from figures the report shows further on."""
+    assessment = kpis.get("owner_assessment") or {}
+    total = next((t for t in assessment.get("tiles") or [] if "Totale" in _s(t.get("label"))), None)
+    buildings, lands = kpis.get("building_units") or 0, kpis.get("land_rows") or 0
+    if not (total or buildings or lands):
+        return []
+    valued = (kpis.get("asset_value_coverage") or {}).get("valued_units")
+    tiles = [
+        {"label": "Stima OMI attribuibile", "value": (total or {}).get("value") or "Non disponibile",
+         "missing": bool(total is None or total.get("missing")), "note": ""},
+        {"label": "Valore catastale (base IMU)", "value": _s(kpis.get("cadastral_value")) or "Non disponibile",
+         "missing": is_missing_value(kpis.get("cadastral_value")), "note": ""},
+        {"label": "Patrimonio in visura", "value": f"{buildings} fabbricati · {lands} classamenti terreni", "missing": False,
+         "note": f"in {kpis.get('distinct_comuni') or 0} comuni"},
+        {"label": "Copertura della stima OMI", "value": f"{valued} di {buildings} fabbricati" if valued is not None and buildings else "—",
+         "missing": False, "note": ""},
+    ]
+    items: list[dict[str, Any]] = [{"kind": "tiles", "columns": 4, "tiles": tiles}]
+    limits = _s(kpis.get("asset_value_coverage_note"))
+    if limits:
+        items.append({"kind": "note", "text": f"Limiti della stima: {limits}"})
+    return items
+
+
+def _parcel_items(
+    lookup: dict[str, Any] | None, used_zones: dict[tuple[str, str], dict[str, Any]] | None = None
+) -> list[dict[str, Any]]:
+    """Parcel list and a vector sketch per comune from the local cadastral geometries (the basemap is added at render time)."""
     if not lookup:
         return []
     markers = [m for m in lookup.get("parcel_markers") or [] if isinstance(m, dict)]
@@ -382,35 +474,50 @@ def _parcel_items(lookup: dict[str, Any] | None) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = [_table("Particelle elencate nella visura",
                                         ["Provincia", "Comune", "Cod. comune", "Sez.", "Foglio", "Particella", "Subalterni", "Cartografia / posizione"],
                                         ["0.7fr", "1.1fr", "auto", "auto", "auto", "auto", "auto", "2.3fr"], ["left"] * 8, rows)]
-    omi_features = lookup.get("omi_zone_features") or {}
-    omi_rows = []
-    seen_omi = set()
-    for feature in omi_features.get("features") or []:
+    omi_features = [f for f in (lookup.get("omi_zone_features") or {}).get("features") or [] if isinstance(f, dict)]
+    used_zones = used_zones or {}
+    vintages: dict[tuple[str, str], str] = {}
+    zone_features: list[dict[str, Any]] = []
+    seen_features = set()
+    for feature in omi_features:
         properties = feature.get("properties") or {}
-        key = _s(properties.get("omi_feature_key") or properties.get("reference"))
-        if key in seen_omi:
+        zone_key = (_s(properties.get("municipality_code")).upper(), _s(properties.get("omi_zone")).upper())
+        if zone_key not in used_zones:
             continue
-        seen_omi.add(key)
-        omi_rows.append([
-            _s(properties.get("province")) or "—",
-            _joined([properties.get("municipality"), f"({_s(properties.get('municipality_code'))})" if properties.get("municipality_code") else ""]) or "—",
-            _s(properties.get("omi_zone")) or "—",
-            _s(properties.get("boundary_vintage")) or "—",
-            "Maggiore sovrapposizione con una particella posseduta" if properties.get("matches_owned_parcel")
-            else "Zona OMI in un comune con immobili del soggetto",
-        ])
+        vintages.setdefault(zone_key, _s(properties.get("boundary_vintage")))
+        feature_key = _s(properties.get("omi_feature_key") or properties.get("reference"))
+        if feature_key not in seen_features:
+            seen_features.add(feature_key)
+            zone_features.append(feature)
+    omi_rows = []
+    for (code, zone), entry in sorted(used_zones.items(), key=lambda kv: (kv[1]["comune"], kv[0][1])):
+        for category, detail in sorted(entry["categories"].items()):
+            omi_rows.append([
+                entry["province"] or "—",
+                _joined([entry["comune"], f"({code})" if code else ""]) or "—",
+                zone,
+                category,
+                _joined(sorted(detail["typologies"])) or "—",
+                (f"€ {_format_number_it(detail['low'])} – {_format_number_it(detail['high'])}/m²"
+                 if detail.get("low") is not None and detail.get("high") is not None else "—"),
+                str(detail["units"]),
+                vintages.get((code, zone)) or "—",
+            ])
     if omi_rows:
         out.append(_table(
-            "Zone OMI associate alle particelle del soggetto",
-            ["Provincia", "Comune", "Zona OMI", "Edizione confini", "Associazione cartografica"],
-            ["0.7fr", "1.5fr", "auto", "auto", "2.5fr"], ["left"] * 5, omi_rows,
+            "Zone OMI usate per la stima",
+            ["Provincia", "Comune", "Zona OMI", "Categoria catastale", "Tipologia OMI", "Vendita OMI €/m²",
+             "Immobili", "Edizione confini"],
+            ["0.7fr", "1.5fr", "auto", "auto", "2fr", "1.4fr", "auto", "auto"],
+            ["left"] * 5 + ["right", "right", "left"], omi_rows,
         ))
-    panels = _map_panels(markers, features, unmapped, [f for f in lookup.get("sheet_features") or [] if isinstance(f, dict)])
+    panels = _map_panels(markers, features, unmapped, [f for f in lookup.get("sheet_features") or [] if isinstance(f, dict)],
+                         zone_features=zone_features)
     if panels:
-        out.append({"kind": "map", "panels": panels})
-        out.append({"kind": "note", "text": "Schizzo vettoriale dalle geometrie catastali locali, senza cartografia di "
-                                            "sfondo: non in scala tra un riquadro e l'altro. I punti indicano una "
-                                            "posizione approssimata e non il confine o la posizione certa della particella."})
+        out.append({"kind": "map", "panels": panels, "note": (
+            "Schizzo vettoriale dalle geometrie catastali locali, con sfondo © OpenStreetMap contributors (se disponibile); "
+            "le aree grigie sono le zone OMI usate per la stima. Non in scala tra un riquadro e l'altro. I punti indicano una "
+            "posizione approssimata e non il confine o la posizione certa della particella.")})
     return out
 
 
@@ -575,7 +682,7 @@ def _subject_hub_report_items(
     items: list[dict[str, Any]] = []
     totals = profile.get("totals") or {}
     query_rows = [
-        ["Ricerca principale ID", _s(profile.get("request_id")) or "—"],
+        ["Ricerca principale ID", _breakable(profile.get("request_id")) or "—"],
         ["Tipo catasto", _TIPO_CATASTO.get(_s(profile.get("tipo_catasto")), _s(profile.get("tipo_catasto")) or "—")],
         ["Richiesta", _s(profile.get("requested_at_display")) or "—"],
         ["Risposta", _s(profile.get("responded_at_display")) or "—"],
@@ -621,7 +728,7 @@ def _subject_hub_report_items(
     for query in queries:
         success = query.get("success")
         query_history.append([
-            _s(query.get("request_id")) or "—",
+            _breakable(query.get("request_id")) or "—",
             _s(query.get("label") or query.get("type") or query.get("request_type") or query.get("tipo_catasto")) or "—",
             _s(query.get("responded_at_display") or query.get("date") or query.get("responded_at") or query.get("requested_at")) or "—",
             "Sì" if success is True else ("No" if success is False else "—"),
@@ -634,42 +741,45 @@ def _subject_hub_report_items(
             ["1.1fr", "2fr", "1.4fr", "auto", "auto"], ["left"] * 5, query_history,
         ))
 
+    # one row per unit; the parcel's archive coverage sits on its first unit (the unit's own cadastral data is in the
+    # per-comune tables above, so it is not repeated here)
     unit_rows = []
     for parcel in profile.get("map_parcels") or []:
-        units = parcel.get("units") or [{}]
-        for unit in units:
+        documents, requests = parcel.get("documents") or {}, parcel.get("requests") or {}
+        coverage_parts = [
+            f"{label}: {len(documents.get(kind) or [])}"
+            for kind, label in (
+                ("visure", "Visure"), ("planimetrie", "Planimetrie/elaborati"), ("mappe", "Mappe"),
+                ("ispezioni", "Ispezioni ipotecarie"), ("altri", "Altri documenti"),
+            ) if documents.get(kind)
+        ]
+        for label, count in (
+            ("Richieste catastali", len(requests.get("ispezioni_catastali") or [])),
+            ("Richieste mappe", len(requests.get("mappe") or [])),
+            ("Visure con titolarità completa", len(parcel.get("ownership") or [])),
+            ("Documenti di altre unità della particella", parcel.get("other_units_documents", 0)),
+        ):
+            if count:
+                coverage_parts.append(f"{label}: {count}")
+        if parcel.get("has_map"):
+            coverage_parts.append("geometria locale disponibile")
+        coverage_text = _joined(coverage_parts) or "Nessun documento archiviato"
+        for position, unit in enumerate(parcel.get("units") or [{}]):
             is_building = unit.get("property_type") == "building"
-            reference = _parcel_reference(parcel, unit.get("subunit"))
-            designation = "Fabbricato" if is_building else "Terreno"
-            details = []
-            for label, value in (
-                ("Indirizzo", unit.get("address")),
-                ("Zona censuaria", unit.get("census_zone")),
-                ("Categoria", unit.get("category")),
-                ("Classe", unit.get("cadastral_class")),
-                ("Consistenza", unit.get("consistency_sqm") or unit.get("consistency_rooms") or unit.get("consistency_other") or unit.get("consistency")),
-                ("Superficie", unit.get("area")),
-                ("Qualità", unit.get("quality")),
-                ("Rendita", unit.get("income")),
-                ("Reddito dominicale", unit.get("dominical_income")),
-                ("Reddito agrario", unit.get("agricultural_income")),
-                ("Partita", unit.get("partita")),
-            ):
-                if value:
-                    details.append(f"{label}: {_s(value)}")
-            enriched = f"Completato dalla visura #{unit.get('enriched_from')} ({_joined(unit.get('enriched_fields') or [])})" if unit.get("enriched_from") else ""
+            enriched = (f"Dati completati dalla visura #{unit.get('enriched_from')} ({_joined(unit.get('enriched_fields') or [])})"
+                        if unit.get("enriched_from") else "")
             unit_rows.append([
                 _joined([parcel.get("province"), parcel.get("municipality")]) or "—",
-                reference,
-                _joined([designation, f"Sub. {unit.get('subunit')}" if unit.get("subunit") else ""]),
+                _parcel_reference(parcel, unit.get("subunit")),
+                "Fabbricato" if is_building else "Terreno",
                 _joined([unit.get("right_type"), f"Quota {unit.get('ownership_share')}" if unit.get("ownership_share") else ""]) or "—",
-                _joined([*details, enriched]) or "Dati di dettaglio non disponibili",
+                _joined([coverage_text if position == 0 else "", enriched], " · ") or "come sopra",
             ])
     if unit_rows:
         items.append(_table(
-            "Inventario completo delle unità del risultato salvato",
-            ["Provincia e comune", "Identificativo catastale", "Tipo", "Diritto e quota", "Dati catastali e provenienza"],
-            ["1fr", "1.4fr", "0.8fr", "1.1fr", "2.5fr"], ["left"] * 5, unit_rows,
+            "Unità del risultato salvato e copertura documentale",
+            ["Provincia e comune", "Identificativo catastale", "Tipo", "Diritto e quota", "Documenti e cartografia archiviati"],
+            ["1fr", "1.5fr", "0.8fr", "1.1fr", "2.6fr"], ["left"] * 5, unit_rows,
         ))
 
     coverage_rows = []
@@ -774,12 +884,6 @@ def _subject_hub_report_items(
                             _s(derived) or "—",
                         ])
 
-    if coverage_rows:
-        items.append(_table(
-            "Copertura documentale e cartografica di ogni particella",
-            ["Identificativo catastale", "Tipo", "Unità", "Documenti, richieste e cartografia archiviati"],
-            ["1.7fr", "0.7fr", "0.5fr", "3.1fr"], ["left"] * 4, coverage_rows,
-        ))
     if linked_rows:
         items.append(_table(
             "Documenti e richieste collegati a ciascuna particella",
@@ -807,17 +911,27 @@ def _subject_hub_report_items(
             ["1.4fr", "1.8fr", "4.2fr"], ["left"] * 3, inspection_rows,
         ))
 
+    def grouped(rows: list[list[Any]]) -> list[list[Any]]:
+        """Particella and source (the first two columns) are said once per run of rows, not on every row."""
+        out, previous = [], None
+        for row in rows:
+            key = (row[0], row[1])
+            head = f"{row[0]} · {row[1]}" if key != previous else ""
+            out.append([head, *row[2:]])
+            previous = key
+        return out
+
     if ownership_rows:
         items.append(_table(
             "Titolarità e atti dalle visure per immobile archiviate",
-            ["Particella", "Fonte", "Atto / intestazione", "Titolari e identificativi", "Diritto e periodo"],
-            ["1.5fr", "1.2fr", "1.7fr", "2fr", "1.4fr"], ["left"] * 5, ownership_rows,
+            ["Particella e fonte", "Atto / intestazione", "Titolari e identificativi", "Diritto e periodo"],
+            ["2fr", "1.7fr", "2.2fr", "1.4fr"], ["left"] * 4, grouped(ownership_rows),
         ))
     if property_history_rows:
         items.append(_table(
             "Variazioni catastali dalle visure per immobile archiviate",
-            ["Bene", "Fonte", "Periodo", "Dato", "Valori", "Derivazione"],
-            ["1.1fr", "1.2fr", "1fr", "0.9fr", "2.3fr", "1.5fr"], ["left"] * 6, property_history_rows,
+            ["Bene e fonte", "Periodo", "Dato", "Valori", "Derivazione"],
+            ["2fr", "1fr", "0.9fr", "2.4fr", "1.5fr"], ["left"] * 5, grouped(property_history_rows),
         ))
     return items
 
@@ -840,7 +954,8 @@ def _centre(feature: dict[str, Any]) -> tuple[float, float] | None:
 
 def _map_panels(markers: list[dict[str, Any]], features: list[dict[str, Any]], unmapped: list[dict[str, Any]],
                 sheets: list[dict[str, Any]], width_mm: float | None = None,
-                max_height_mm: float | None = None) -> list[dict[str, Any]]:
+                max_height_mm: float | None = None,
+                zone_features: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
     by_comune: dict[str, dict[str, Any]] = {}
     for feature in features:
         props = feature.get("properties") or {}
@@ -871,6 +986,15 @@ def _map_panels(markers: list[dict[str, Any]], features: list[dict[str, Any]], u
                 panel["dots"].append((centre[0], centre[1], f"{_s(item.get('sheet'))}/{_s(item.get('parcel'))}"))
                 break
 
+    # the OMI zones used by the valuation are drawn behind the parcels of their comune
+    for feature in zone_features or []:
+        props = feature.get("properties") or {}
+        panel = by_comune.get(_s(props.get("municipality_code")))
+        if panel is None:
+            continue
+        for ring in _rings(feature.get("geometry") or {}):
+            panel.setdefault("zones", []).append((ring, _s(props.get("omi_zone"))))
+
     # The Typst page is A4 landscape with 10 mm margins; its map grid uses a
     # 6 pt gutter and up to three columns. Scale each sketch to that actual
     # column width. A single municipality should use the full map area instead
@@ -883,7 +1007,9 @@ def _map_panels(markers: list[dict[str, Any]], features: list[dict[str, Any]], u
 
     panels = []
     for panel in by_comune.values():
-        points = [(x, y) for ring, _l in panel["rings"] for x, y in ring] + [(x, y) for x, y, _l in panel["dots"]]
+        zone_rings = panel.get("zones", [])
+        points = ([(x, y) for ring, _l in panel["rings"] for x, y in ring] + [(x, y) for x, y, _l in panel["dots"]]
+                  + [(x, y) for ring, _l in zone_rings for x, y in ring])
         if not points:
             continue
         lon0, lon1 = min(p[0] for p in points), max(p[0] for p in points)
@@ -893,11 +1019,15 @@ def _map_panels(markers: list[dict[str, Any]], features: list[dict[str, Any]], u
         span_y = max(lat1 - lat0, 1e-9)
         pad = 4.0
         if len(set(points)) == 1:  # a single dot: centre it in a small panel
-            scale, height = 1.0, 24.0
-            lon0, lat0 = lon0 - (width_mm / 2 - pad) / math.cos(math.radians(lat_mid)), lat0 - (height / 2 - pad)
+            scale, height = 12500.0, min(max_height_mm, 60.0)  # ~ 0.00008 degrees per mm: a few hundred metres across
+            lon0 = lon0 - (width_mm / 2 - pad) / (math.cos(math.radians(lat_mid)) * scale)
+            lat0 = lat0 - (height / 2 - pad) / scale
         else:
             scale = min((width_mm - 2 * pad) / span_x, (max_height_mm - 2 * pad) / span_y)
             height = min(max_height_mm, span_y * scale + 2 * pad)
+            spare = width_mm - (span_x * scale + 2 * pad)  # height-limited sketch: centre it in the frame
+            if spare > 0:
+                lon0 -= (spare / 2) / (math.cos(math.radians(lat_mid)) * scale)
 
         def project(x: float, y: float) -> tuple[float, float]:
             return (round(pad + (x - lon0) * math.cos(math.radians(lat_mid)) * scale, 2),
@@ -912,8 +1042,32 @@ def _map_panels(markers: list[dict[str, Any]], features: list[dict[str, Any]], u
                 "lx": round(sum(p[0] for p in pts) / len(pts) - 3, 2), "ly": round(sum(p[1] for p in pts) / len(pts) - 2, 2),
             })
         dots = [{"x": project(x, y)[0], "y": project(x, y)[1], "label": label} for x, y, label in panel["dots"]]
+        zones = []
+        def ring_area(ring: list[list[float]]) -> float:
+            return abs(sum(a[0] * b[1] - b[0] * a[1] for a, b in zip(ring, ring[1:] + ring[:1]))) / 2
+
+        biggest: dict[str, float] = {}
+        for ring, label in zone_rings:
+            biggest[label] = max(biggest.get(label, 0.0), ring_area(ring))
+        labelled: set[str] = set()
+        for ring, label in zone_rings:
+            step = max(1, len(ring) // 300)
+            pts = [project(x, y) for x, y in ring[::step]]
+            show_label = label not in labelled and ring_area(ring) >= biggest[label]
+            labelled.add(label) if show_label else None
+            zones.append({
+                "points": pts, "label": label if show_label else "",
+                "lx": round(sum(p[0] for p in pts) / len(pts) - 3, 2), "ly": round(sum(p[1] for p in pts) / len(pts) - 2, 2),
+            })
+        cos_mid = math.cos(math.radians(lat_mid))
+        view = {  # the geographic window of the sketch, for the basemap
+            "west": lon0 - pad / (cos_mid * scale), "east": lon0 + (width_mm - pad) / (cos_mid * scale),
+            "south": lat0 - pad / scale, "north": lat0 + (height - pad) / scale,
+            "w": width_mm, "h": height,
+        }
         panels.append({
-            "title": panel["name"], "h": round(height, 1), "polygons": polygons, "dots": dots,
+            "title": panel["name"], "h": round(height, 1), "polygons": polygons, "dots": dots, "zones": zones,
+            "view": view,
             "note": f"{len(polygons)} con geometria · {len(dots)} senza (punto)",
         })
     return panels
@@ -946,26 +1100,59 @@ def subject_context(
     if re.fullmatch(r"\d{2}/\d{2}/\d{4}", as_of):
         as_of_date = date(int(as_of[6:]), int(as_of[3:5]), int(as_of[:2]))
 
-    meta = [["Tipo catasto", _TIPO_CATASTO.get(tipo, tipo or "—")], ["Provincia", province or "—"],
-            ["Situazione al", as_of or "—"], ["Protocollo", protocol]]
+    # fields the source does not have (a search without a stored visura) are left out, not printed as "—"
+    meta = [["Tipo catasto", _TIPO_CATASTO.get(tipo, tipo or "—")]]
+    if province:
+        meta.append(["Provincia", province])
+    if as_of:
+        meta.append(["Situazione al", as_of])
+    if _s(request.get("Protocollo")) or _s(request.get("Anno")):
+        meta.append(["Protocollo", protocol])
     if doc.get("id"):
         meta.append(["ID documento", str(doc["id"])])
     if subject.get("Denominazione") and not subject.get("Cognome"):  # persona giuridica
         subject_rows = [["Denominazione", name, _s(subject.get("CodiceFiscale"))],
                         ["Sede", _s(subject.get("Sede")) or "—", _s(subject.get("CodiceSede"))]]
     else:
-        subject_rows = [
-            ["Nominativo", name, _s(subject.get("CodiceFiscale"))],
-            ["Nascita", _s(subject.get("DataNascita")) or "—",
-             " ".join(x for x in (_s(subject.get("ComuneNascita")), f"({_s(subject.get('Provincia'))})" if subject.get("Provincia") else "") if x)],
-            ["Sesso", _s(subject.get("Sesso")) or "—"],
-        ]
-    subject_rows.append(["Visura del", f"{_it_date(title_block.get('Data'))} {_s(title_block.get('Ora'))[:2]}:{_s(title_block.get('Ora'))[2:4]}".strip(" :")])
+        subject_rows = [["Nominativo", name, _s(subject.get("CodiceFiscale"))]]
+        from .fiscal_code import decode_codice_fiscale
+
+        derived = decode_codice_fiscale(_s(subject.get("CodiceFiscale"))) or {}
+        birth_place = " ".join(x for x in (
+            _s(subject.get("ComuneNascita")), f"({_s(subject.get('Provincia'))})" if subject.get("Provincia") else "") if x)
+        birth_date = _s(subject.get("DataNascita"))
+        sex = _s(subject.get("Sesso"))
+        # what the visura does not carry is read from the codice fiscale, and said so
+        subject_rows.append(["Nascita", birth_date or derived.get("birth_date") or "—",
+                             birth_place or ("dedotta dal codice fiscale" if not birth_date and derived else "")
+                             + (f" · codice luogo {derived['birth_place_code']}" if not birth_place and derived else "")])
+        subject_rows.append(["Sesso", sex or derived.get("sex") or "—",
+                             "dedotto dal codice fiscale" if not sex and derived else ""])
+    visura_date = f"{_it_date(title_block.get('Data'))} {_s(title_block.get('Ora'))[:2]}:{_s(title_block.get('Ora'))[2:4]}".strip(" :")
+    if visura_date:
+        subject_rows.append(["Visura del", visura_date])
     sections: list[dict[str, Any]] = [{"title": "Soggetto individuato", "badges": [], "items": [_kv(subject_rows)]}]
+    summary = _summary_items(kpis) if kpis else []
+    if summary:
+        sections.append({"title": "In sintesi", "badges": [], "items": summary, "toc": False})
     if kpis:
         assessment = kpis.get("owner_assessment") or {}
         sections.append({"title": "Valutazione patrimoniale per quota e diritto", "badges": [], "items": _assessment_items(assessment)})
-        sections.append({"title": "Indicatori del patrimonio catastale", "badges": [], "items": _kpi_items(kpis)})
+        kpi_items = _kpi_items(kpis)
+        market = [m for m in kpis.get("market_valuation") or [] if isinstance(m, dict)]
+        if market:
+            kpi_items.append(_table(
+                "Riferimento di mercato · prezzi al m² da annunci",
+                ["Fonte", "Ambito e data", "€/m²", "Beni", "Valore", "Centrale"],
+                ["auto", "3fr", "auto", "auto", "auto", "auto"], ["left", "left", "left", "right", "right", "right"],
+                [[m.get("label", ""), f"{m.get('scope', '')} · al {m.get('as_of', '')}", m.get("per_sqm", ""),
+                  f"{m.get('units')}/{m.get('of_units')}", m.get("range", ""), m.get("central", "")] for m in market],
+            ))
+            kpi_items.append({"kind": "note", "text": (
+                "Prezzi richiesti negli annunci di Immobiliare.it e idealista (non di compravendita) per la superficie "
+                "stimata delle abitazioni; solo i comuni presenti nei database raccolti. Riferimento di confronto con OMI, "
+                "non una stima sostitutiva.")})
+        sections.append({"title": "Indicatori del patrimonio catastale", "badges": [], "items": kpi_items})
         manual_lines = []
         for item in kpis.get("manual_valuation_assets") or []:
             identity = item.get("identity") or {}
@@ -1048,8 +1235,9 @@ def subject_context(
         if mutations:
             items.append({"kind": "mutations", "title": f"Titolarità · {len(mutations)} {'mutazione' if len(mutations) == 1 else 'mutazioni'}", "items": mutations})
         sections.append({"title": _s(group.get("Descrizione")) or _s(group.get("CodiceComune")) or f"Gruppo {index + 1}",
-                         "badges": badges, "items": items})
+                         "badges": badges, "items": items, "toc": False})
 
+    appendix_section = None
     history = subject_report.get("land_registry_history") or []
     history_rows = []
     omitted_history_events = 0
@@ -1101,20 +1289,32 @@ def subject_context(
             history_items.append({"kind": "note", "text": f"Eventi storici non riportati: {omitted_history_events}."})
         else:
             history_items.append({"kind": "note", "text": "Sono inclusi tutti gli eventi contenuti nei documenti sorgente selezionati per ciascuna unità."})
-        sections.append({"title": "Storia catastale e titolarità documentale", "badges": [], "items": history_items})
+        # the long ownership/mutation tables go to an appendix after the archive, so the report's body stays short
+        appendix_section = {"title": "Appendice · Storia catastale e titolarità documentale", "badges": [], "items": history_items}
 
-    parcel_items = _parcel_items(lookup)
+    parcel_items = _parcel_items(lookup, _used_omi_zones(groups, estimates))
     if parcel_items:
         sections.append({"title": "Mappa catastale", "badges": [], "items": parcel_items})
     visura_items = _subject_visura_items(subject_report.get("subject_documents"), subject_report.get("subject_hub"))
     if visura_items:
         sections.append({"title": "Altre visure per soggetto", "badges": [], "items": visura_items})
     hub_items = _subject_hub_report_items(subject_report.get("subject_hub"), portfolio=subject_report.get("subject_portfolio"))
+    # the per-property ownership and variation tables are the bulk of a large report: they go to the appendix
+    appendix_titles = ("Titolarità e atti dalle visure per immobile archiviate", "Variazioni catastali dalle visure per immobile archiviate")
+    moved = [item for item in hub_items if item.get("title") in appendix_titles]
+    hub_items = [item for item in hub_items if item.get("title") not in appendix_titles]
+    if moved:
+        if appendix_section is None:
+            appendix_section = {"title": "Appendice · Storia catastale e titolarità documentale", "badges": [], "items": []}
+        appendix_section["items"].extend(moved)
     if hub_items:
         sections.append({"title": "Risultato completo, copertura e dati per particella", "badges": [], "items": hub_items})
     archive_items = _archive_report_items(subject_report.get("archive"))
-    if archive_items:
+    archive = subject_report.get("archive") or {}
+    if archive_items and (archive.get("document_count") or archive.get("file_count")):
         sections.append({"title": "Archivio storico completo dei documenti", "badges": [], "items": archive_items})
+    if appendix_section:
+        sections.append(appendix_section)
     sections.append({"title": "Avvertenze", "badges": [], "items": [{"kind": "note", "text": (
         "Documento generato da SISTER a partire dalla visura catastale. Le stime OMI e i valori catastali sono indicativi "
         "e non costituiscono perizia; i terreni non hanno quotazioni OMI. I dati personali qui riportati sono soggetti "
@@ -1128,6 +1328,7 @@ def subject_context(
         "footer": f"SISTER · {name} · generato il {today.strftime('%d/%m/%Y')}",
         "meta": meta,
         "sections": sections,
+        "toc": len([sec for sec in sections if sec.get("toc", True)]) >= 5,  # contents on page 1 of a full report
     }
 
 
@@ -1257,6 +1458,97 @@ def build_context(
 # ── typesetting ─────────────────────────────────────────────────────────────────────────────────────────
 
 
+_TILE_URL = "https://tile.openstreetmap.org/{z}/{x}/{y}.png"
+_TILE_USER_AGENT = "sister/1 (info@aecs4u.com)"
+_MAX_TILES = 20
+
+
+def _basemap_png(view: dict[str, float]) -> bytes | None:
+    """OpenStreetMap tiles covering ``view`` stitched into one faded PNG, or None (switched off, offline, no PIL).
+
+    Tiles are cached on disk (``SISTER_TILE_CACHE``) so a repeated report does not hit the tile server again.
+    """
+    import os
+
+    if os.getenv("SISTER_PDF_BASEMAP", "on").strip().lower() in {"0", "off", "false", "no"}:
+        return None
+    try:
+        import io
+
+        import httpx
+        from PIL import Image
+    except ImportError:
+        return None
+
+    def merc(lon: float, lat: float, zoom: int) -> tuple[float, float]:
+        lat = max(min(lat, 85.0511), -85.0511)
+        n = 256 * 2 ** zoom
+        rad = math.radians(lat)
+        return ((lon + 180.0) / 360.0 * n, (1 - math.asinh(math.tan(rad)) / math.pi) / 2 * n)
+
+    target_px = view["w"] / 25.4 * 150  # 150 dpi
+    zoom = 1
+    for candidate in range(1, 19):
+        x0, y0 = merc(view["west"], view["north"], candidate)
+        x1, y1 = merc(view["east"], view["south"], candidate)
+        count = (int(x1 // 256) - int(x0 // 256) + 1) * (int(y1 // 256) - int(y0 // 256) + 1)
+        if count > _MAX_TILES:
+            break
+        zoom = candidate
+        if x1 - x0 >= target_px:
+            break
+    x0, y0 = merc(view["west"], view["north"], zoom)
+    x1, y1 = merc(view["east"], view["south"], zoom)
+    tx0, tx1, ty0, ty1 = int(x0 // 256), int(x1 // 256), int(y0 // 256), int(y1 // 256)
+    cache_dir = Path(os.getenv("SISTER_TILE_CACHE", "data/tile_cache"))
+    canvas = Image.new("RGB", ((tx1 - tx0 + 1) * 256, (ty1 - ty0 + 1) * 256), (240, 240, 240))
+    try:
+        with httpx.Client(timeout=6.0, headers={"User-Agent": _TILE_USER_AGENT}) as client:
+            for tx in range(tx0, tx1 + 1):
+                for ty in range(ty0, ty1 + 1):
+                    if not 0 <= tx < 2 ** zoom or not 0 <= ty < 2 ** zoom:
+                        continue
+                    path = cache_dir / str(zoom) / str(tx) / f"{ty}.png"
+                    if path.is_file():
+                        data = path.read_bytes()
+                    else:
+                        response = client.get(_TILE_URL.format(z=zoom, x=tx, y=ty))
+                        response.raise_for_status()
+                        data = response.content
+                        try:
+                            path.parent.mkdir(parents=True, exist_ok=True)
+                            path.write_bytes(data)
+                        except OSError:
+                            pass
+                    canvas.paste(Image.open(io.BytesIO(data)).convert("RGB"), ((tx - tx0) * 256, (ty - ty0) * 256))
+        box = (x0 - tx0 * 256, y0 - ty0 * 256, x1 - tx0 * 256, y1 - ty0 * 256)
+        out_w = max(int(target_px), 64)
+        image = canvas.crop(tuple(int(round(v)) for v in box)).resize((out_w, max(int(out_w * view["h"] / view["w"]), 32)))
+        image = Image.blend(image, Image.new("RGB", image.size, (255, 255, 255)), 0.35)  # fade: the overlays stay legible
+        buffer = io.BytesIO()
+        image.save(buffer, format="PNG", optimize=True)
+        return buffer.getvalue()
+    except Exception as exc:  # noqa: BLE001 - the report is still useful without the background
+        logger.warning("PDF basemap unavailable: %s", type(exc).__name__)
+        return None
+
+
+def _attach_basemaps(context: dict[str, Any], workdir: Path) -> None:
+    number = 0
+    for section in context.get("sections") or []:
+        for item in section.get("items") or []:
+            if item.get("kind") != "map":
+                continue
+            for panel in item.get("panels") or []:
+                view = panel.pop("view", None)
+                png = _basemap_png(view) if view else None
+                if png:
+                    name = f"basemap{number}.png"
+                    number += 1
+                    (workdir / name).write_bytes(png)
+                    panel["bg"] = name
+
+
 def render_pdf(context: dict[str, Any]) -> bytes:
     """Typeset ``context`` (see the header of ``visura.typ``) and return the PDF bytes."""
     try:
@@ -1266,6 +1558,7 @@ def render_pdf(context: dict[str, Any]) -> bytes:
     workdir = Path(tempfile.mkdtemp(prefix="sister-pdf-"))
     try:
         shutil.copyfile(_TEMPLATE, workdir / "visura.typ")
+        _attach_basemaps(context, workdir)
         (workdir / "data.json").write_text(json.dumps(context, ensure_ascii=False), encoding="utf-8")
         return typst.compile(str(workdir / "visura.typ"), root=str(workdir), format="pdf")
     except Exception as exc:  # typst raises a plain RuntimeError with the diagnostics

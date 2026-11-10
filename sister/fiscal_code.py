@@ -8,6 +8,7 @@ those 15, so they need no special case).
 from __future__ import annotations
 
 import re
+from datetime import date
 
 _SHAPE = re.compile(r"^[A-Z0-9]{16}$")
 
@@ -45,3 +46,37 @@ def valid_partita_iva(code: str) -> bool:
             digit = digit * 2 - 9 if digit > 4 else digit * 2
         total += digit
     return (10 - total % 10) % 10 == int(code[10])
+
+
+_MONTHS = "ABCDEHLMPRST"
+_OMOCODE = {letter: str(digit) for digit, letter in enumerate("LMNPQRSTUV")}
+
+
+def decode_codice_fiscale(code: str, today: date | None = None) -> dict[str, str] | None:
+    """Birth date (``dd/mm/yyyy``), sex (``M``/``F``) and birthplace code of a persona fisica's codice fiscale.
+
+    Homocode letters (omocodia) are mapped back to digits. The two-digit year takes the century that does not put the
+    birth in the future, so someone born before 1926 reads as 20xx: the result is *derived* and must be shown as such.
+    ``None`` when the code is not a well-formed persona fisica code.
+    """
+    value = (code or "").strip().upper()
+    if not valid_codice_fiscale(value):
+        return None
+    chars = list(value)
+    for position in (6, 7, 9, 10, 12, 13, 14):
+        chars[position] = _OMOCODE.get(chars[position], chars[position])
+    year_text, month_letter, day_text = "".join(chars[6:8]), chars[8], "".join(chars[9:11])
+    if not (year_text.isdigit() and day_text.isdigit() and month_letter in _MONTHS):
+        return None
+    day = int(day_text)
+    sex = "F" if day > 40 else "M"
+    day = day - 40 if day > 40 else day
+    today = today or date.today()
+    year = 2000 + int(year_text)
+    if year > today.year:
+        year -= 100
+    try:
+        born = date(year, _MONTHS.index(month_letter) + 1, day)
+    except ValueError:
+        return None
+    return {"birth_date": born.strftime("%d/%m/%Y"), "sex": sex, "birth_place_code": "".join(chars[11:15])}

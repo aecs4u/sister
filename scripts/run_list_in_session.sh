@@ -31,9 +31,12 @@ Options (the default is shown in brackets):
   --preflight-cf CF       Prove the session with one real subject search of this codice fiscale before the batch.
                           Use a code that SISTER finds: "nessuna corrispondenza" counts as a failed proof.
                           [none; environment SISTER_PREFLIGHT_CF]
-  --email-progress        Send a final progress summary through aecs4u-email when the session run closes.
-                          [off; recipient demo@aecs4u.com]
+  --email-progress [ADDRESS]
+                          Send a final progress summary through aecs4u-email when the session run closes.
+                          An address after it is the same as --email-to. [off; recipient demo@aecs4u.com]
   --email-to ADDRESS      Recipient for --email-progress. [demo@aecs4u.com]
+  --stop-stale-service    If the service port is held by a SISTER service left by an earlier run and no batch is
+                          running, stop that service and start a fresh one (Chrome and the login stay). [off]
   --minutes N             Minutes after the login at which no new row starts (SISTER itself ends the session after
                           about 30). [26]
   --logged-in-at HH:MM    Time of the login the minutes are counted from. [the time this command is started]
@@ -43,6 +46,12 @@ Options (the default is shown in brackets):
   --cdp URL               Chrome with the SISTER login (remote debugging address). [environment BROWSER_CDP_ENDPOINT, else http://localhost:9222]
   --tipo-richiesta T      "Tipo richiesta" of the person searches when the list does not say: attualita | storica.
                           [attualita, the portal's own default]
+  --extra X               Extra data to read, whatever the list says (all phase 1: HTML only, no CAPTCHA):
+                          immobili  = parcel rows (search/intestati): press "Immobili" for each owner and read the
+                                      owner's other properties;
+                          intestati = subject rows (soggetto, soggetto-immobili, azienda): also read the co-owners of
+                                      each property (a soggetto row becomes soggetto-immobili);
+                          all | none. [not set: as written in the list]
   --keep-answered         Do not drop the rows that already have an answer. Rows asking for storica are always kept.
                           [off: answered rows are dropped]
   --dry-run               Preview the source plan and pruning in a temporary folder; do not change BATCH_DIR or start the service. [off]
@@ -103,6 +112,7 @@ POSITIONAL=()
 PREFLIGHT_CF=""
 LOGIN_AT=""
 TIPO_RICHIESTA=""
+EXTRA=""
 DRY_RUN=false
 PASS_ARGS=()   # forwarded as they are to "batch run-session"
 need_value() {
@@ -118,27 +128,41 @@ while (($#)); do
       usage
       exit 0
       ;;
-    --preflight-cf|--logged-in-at|--tipo-richiesta|--minutes|--grace-seconds|--port|--cdp|--email-to)
+    --preflight-cf|--logged-in-at|--tipo-richiesta|--extra|--minutes|--grace-seconds|--port|--cdp|--email-to)
       need_value "$@"
       case "$1" in
         --preflight-cf) PREFLIGHT_CF="$2" ;;
         --logged-in-at) LOGIN_AT="$2" ;;
         --tipo-richiesta) TIPO_RICHIESTA="$2" ;;
+        --extra) EXTRA="$2" ;;
         *) PASS_ARGS+=("$1" "$2") ;;
       esac
       shift 2
       ;;
-    --preflight-cf=*|--logged-in-at=*|--tipo-richiesta=*|--minutes=*|--grace-seconds=*|--port=*|--cdp=*|--email-to=*)
+    --preflight-cf=*|--logged-in-at=*|--tipo-richiesta=*|--extra=*|--minutes=*|--grace-seconds=*|--port=*|--cdp=*|--email-to=*)
       need_value "${1%%=*}" "${1#*=}"
       case "${1%%=*}" in
         --preflight-cf) PREFLIGHT_CF="${1#*=}" ;;
         --logged-in-at) LOGIN_AT="${1#*=}" ;;
         --tipo-richiesta) TIPO_RICHIESTA="${1#*=}" ;;
+        --extra) EXTRA="${1#*=}" ;;
         *) PASS_ARGS+=("${1%%=*}" "${1#*=}") ;;
       esac
       shift
       ;;
-    --dry-run|--keep-answered|--probe|--email-progress)
+    --email-progress)
+      PASS_ARGS+=("$1")
+      # `--email-progress ADDRESS` is accepted as a shorthand for `--email-progress --email-to ADDRESS`
+      if [[ $# -gt 1 && "$2" == *@* && "$2" != -* ]]; then
+        PASS_ARGS+=(--email-to "$2")
+        shift
+      fi
+      shift
+      ;;
+    --resume)  # accepted for habit: run-list always resumes the saved batch of the list and never re-sends a submitted row
+      shift
+      ;;
+    --dry-run|--keep-answered|--probe|--stop-stale-service)
       PASS_ARGS+=("$1")
       if [[ "$1" == "--dry-run" ]]; then
         DRY_RUN=true
@@ -215,6 +239,9 @@ mkdir -p -- "$BATCH_DIR"
 BUILD_ARGS=()
 if [[ -n "$TIPO_RICHIESTA" ]]; then
   BUILD_ARGS+=(--tipo-richiesta "$TIPO_RICHIESTA")
+fi
+if [[ -n "$EXTRA" ]]; then
+  BUILD_ARGS+=(--extra "$EXTRA")
 fi
 "${PYTHON_CMD[@]}" -m sister.cli batch build-list "$SOURCE_LIST" --output-dir "$BATCH_DIR" "${BUILD_ARGS[@]}"
 RUN_ARGS=(--batch "$BATCH_DIR" --logged-in-at "$LOGIN_TIME")

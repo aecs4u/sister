@@ -51,6 +51,18 @@
     function numText(v) { return v === null || v === undefined ? "–" : intFmt.format(v); }
     function eurText(v) { return v === null || v === undefined ? "–" : eurFmt.format(v); }
     function dateLabel(iso) { return iso ? iso.slice(0, 10).split("-").reverse().join("/") : ""; }
+    function displayName(d) {
+        if (IS_PERSON) {
+            var surname = String(d.last_name || "").trim().toLocaleUpperCase("it-IT");
+            var given = String(d.first_name || "").trim().toLocaleLowerCase("it-IT")
+                .replace(/(^|[\s'-])([^\s'-])/gu, function (_match, separator, initial) {
+                    return separator + initial.toLocaleUpperCase("it-IT");
+                });
+            var parts = [surname, given].filter(Boolean);
+            if (parts.length) return parts.join(" ");
+        }
+        return d.name || "";
+    }
 
     // The value columns say how far to trust the figure: properties without a computable value, and properties
     // counted in full because no quota is recorded (pro quota only).
@@ -116,19 +128,20 @@
             button.className = "btn btn-link p-0 subject-fav";
             button.setAttribute("data-code", d.fiscal_code);
             button.setAttribute("aria-pressed", d.favorite ? "true" : "false");
-            button.setAttribute("aria-label", (d.favorite ? "Rimuovi dai preferiti: " : "Aggiungi ai preferiti: ") + (d.name || d.fiscal_code));
+            button.setAttribute("aria-label", (d.favorite ? "Rimuovi dai preferiti: " : "Aggiungi ai preferiti: ") + (displayName(d) || d.fiscal_code));
             button.innerHTML = d.favorite ? '<i class="fas fa-star text-warning" aria-hidden="true"></i>' : '<i class="far fa-star text-muted" aria-hidden="true"></i>';
             return button;
         }}});
-    textCol("Nome", "name", true, {frozen: true, tooltip: function (e, cell) { return cell.getRow().getData().name || ""; },
+    textCol("Nome", "name", true, {frozen: true, tooltip: function (e, cell) { return displayName(cell.getRow().getData()); },
         formatter: function (cell) {
             var d = cell.getRow().getData();
             var wrap = document.createElement("span");
             var a = document.createElement("a");
             a.href = profileUrl(d);
             a.className = "fw-semibold";
-            a.textContent = d.name || "(nome non disponibile)";
-            if (!d.name) a.classList.add("text-muted", "fst-italic", "fw-normal");
+            var name = displayName(d);
+            a.textContent = name || "(nome non disponibile)";
+            if (!name) a.classList.add("text-muted", "fst-italic", "fw-normal");
             wrap.appendChild(a);
             if (d.name_inferred) {
                 // no name of its own: the first registry record of the code. Several records = several entities sharing it.
@@ -740,8 +753,9 @@
             head.className = "d-flex justify-content-between gap-2";
             var title = document.createElement("a");
             title.href = profileUrl(d);
-            title.className = "fw-semibold text-break" + (d.name ? "" : " text-muted fst-italic");
-            title.textContent = d.name || "(nome non disponibile)";
+            var name = displayName(d);
+            title.className = "fw-semibold text-break" + (name ? "" : " text-muted fst-italic");
+            title.textContent = name || "(nome non disponibile)";
             head.appendChild(title);
             if (d.favorite) {
                 var star = document.createElement("i");
