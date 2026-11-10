@@ -52,6 +52,9 @@ Options (the default is shown in brackets):
                           intestati = subject rows (soggetto, soggetto-immobili, azienda): also read the co-owners of
                                       each property (a soggetto row becomes soggetto-immobili);
                           all | none. [not set: as written in the list]
+  --captcha-free          Read only the pages without a CAPTCHA: rows that request documents become HTML-only
+                          (visura-storica -> search, soggetto-documento -> soggetto-immobili, richiedi_documenti=false).
+                          The list file is not changed. [off: as written in the list]
   --keep-answered         Do not drop the rows that already have an answer. Rows asking for storica are always kept.
                           [off: answered rows are dropped]
   --dry-run               Preview the source plan and pruning in a temporary folder; do not change BATCH_DIR or start the service. [off]
@@ -113,6 +116,7 @@ PREFLIGHT_CF=""
 LOGIN_AT=""
 TIPO_RICHIESTA=""
 EXTRA=""
+CAPTCHA_FREE=false
 DRY_RUN=false
 PASS_ARGS=()   # forwarded as they are to "batch run-session"
 need_value() {
@@ -162,8 +166,12 @@ while (($#)); do
     --resume)  # accepted for habit: run-list always resumes the saved batch of the list and never re-sends a submitted row
       shift
       ;;
-    --dry-run|--keep-answered|--probe|--stop-stale-service)
-      PASS_ARGS+=("$1")
+    --dry-run|--keep-answered|--probe|--stop-stale-service|--captcha-free)
+      if [[ "$1" == "--captcha-free" ]]; then
+        CAPTCHA_FREE=true
+      else
+        PASS_ARGS+=("$1")
+      fi
       if [[ "$1" == "--dry-run" ]]; then
         DRY_RUN=true
       fi
@@ -239,6 +247,9 @@ mkdir -p -- "$BATCH_DIR"
 BUILD_ARGS=()
 if [[ -n "$TIPO_RICHIESTA" ]]; then
   BUILD_ARGS+=(--tipo-richiesta "$TIPO_RICHIESTA")
+fi
+if [[ "$CAPTCHA_FREE" == true ]]; then
+  BUILD_ARGS+=(--captcha-free)
 fi
 if [[ -n "$EXTRA" ]]; then
   BUILD_ARGS+=(--extra "$EXTRA")

@@ -89,6 +89,42 @@ def apply_extra(queries: list[dict], extra: str, defaults: dict | None = None) -
     return changed
 
 
+def make_captcha_free(queries: list[dict], defaults: dict | None = None) -> int:
+    """Turn every row that would request a document into its HTML-only counterpart; returns the number of rows changed.
+
+    The *Tipo di visura* form is the only page with a CAPTCHA, and only the queries that request documents reach it:
+
+    * ``visura-storica`` becomes ``search`` (the property and its owners, read from the pages; no ``vista``);
+    * ``soggetto-documento`` becomes ``soggetto-immobili`` (the properties of the subject; no ``vista`` / ``tipo_richiesta``);
+    * ``search`` / ``intestati`` get ``richiedi_documenti=false``.
+
+    Other commands are not touched. The list file itself is never changed.
+    """
+    base_command = (defaults or {}).get("command")
+    changed = 0
+    for query in queries:
+        command = query.get("command") or base_command
+        params = dict(query.get("params") or {})
+        before = (command, dict(params))
+        if command == "visura-storica":
+            command = "search"
+            params.pop("vista", None)
+            params["richiedi_documenti"] = False
+        elif command == "soggetto-documento":
+            command = "soggetto-immobili"
+            for name in ("vista", "tipo_richiesta"):
+                params.pop(name, None)
+        elif command in ("search", "intestati"):
+            params["richiedi_documenti"] = False
+        else:
+            continue
+        if (command, params) != before:
+            changed += 1
+        query["command"] = command
+        query["params"] = params
+    return changed
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("list_file", type=Path)
@@ -99,6 +135,12 @@ def main() -> int:
         choices=EXTRA_CHOICES,
         help="extra data to read besides the list itself: immobili (other properties of each owner of a parcel), "
         "intestati (co-owners of each property of a subject), all or none; default: as written in the list",
+    )
+    parser.add_argument(
+        "--captcha-free",
+        action="store_true",
+        help="read only the pages without a CAPTCHA: rows that request documents become their HTML-only counterparts "
+        "(visura-storica -> search, soggetto-documento -> soggetto-immobili, richiedi_documenti=false)",
     )
     parser.add_argument("--name")
     args = parser.parse_args()
@@ -115,6 +157,8 @@ def main() -> int:
             query.setdefault("metadata", {})["tags"] = list(dict.fromkeys([*query.get("metadata", {}).get("tags", []), "PVP"]))
 
     defaults = batch.defaults.model_dump(mode="json", exclude_defaults=True)
+    if args.captcha_free:
+        print(f"--captcha-free: {make_captcha_free(queries, defaults)} righe senza richiesta di documenti")
     if args.extra:
         print(f"--extra {args.extra}: {apply_extra(queries, args.extra, defaults)} righe aggiornate")
     queries, duplicates = drop_duplicate_queries(queries, defaults)
