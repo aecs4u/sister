@@ -14,7 +14,7 @@ import secrets
 from typing import Callable, Iterable
 
 from starlette.exceptions import HTTPException
-from starlette.requests import Request
+from starlette.requests import ClientDisconnect, Request
 from starlette.responses import JSONResponse, Response
 
 HEADER_NAME = "X-CSRF-Token"
@@ -76,7 +76,12 @@ class CookieCSRFMiddleware:
         if not submitted and request.headers.get("content-type", "").lower().startswith(
             ("application/x-www-form-urlencoded", "multipart/form-data")
         ):
-            body = await request.body()  # cached on the request; replayed below for the route
+            try:
+                body = await request.body()  # cached on the request; replayed below for the route
+            except ClientDisconnect:
+                # Finish the middleware response without passing an incomplete form to a write route.
+                # A response also lets outer BaseHTTPMiddleware layers finish normally.
+                return await Response("Incomplete request body", status_code=400)(scope, receive, send)
             max_part_size = LARGE_FORM_PART_MAX_BYTES if path in LARGE_FORM_PART_PATHS else 1024 * 1024
             try:
                 submitted = str((await request.form(max_part_size=max_part_size)).get(FORM_FIELD, ""))

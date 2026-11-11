@@ -32,6 +32,7 @@ from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from . import database
+from .database_config import database_dsn_setting
 from .subject_names import CODE_COLUMNS, _cells, _header_key
 
 AUTOTAG_USER = "script:tag_subjects"
@@ -154,9 +155,9 @@ def pvp_dsn() -> str:
     explicit = os.getenv("PVP_DATABASE_DSN")
     if explicit:
         return explicit
-    dsn = os.getenv("DATABASE_DSN")
+    dsn = database.DATABASE_DSN
     if not dsn:
-        raise RuntimeError("DATABASE_DSN (or PVP_DATABASE_DSN) must be set")
+        raise RuntimeError(f"{database_dsn_setting()} (or PVP_DATABASE_DSN) must be set")
     return make_url(dsn).set(database="pvp", query={}).render_as_string(hide_password=False)
 
 

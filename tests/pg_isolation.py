@@ -1,7 +1,7 @@
 """Isolated PostgreSQL schema for the database-backed tests.
 
 ``sister.database`` is PostgreSQL-only, so DB tests need a real Postgres. They never touch the application's own schema:
-a session-scoped throwaway schema ``sister_test_<8 hex>`` is created on the *local* server named by ``DATABASE_DSN``,
+a session-scoped throwaway schema ``sister_test_<8 hex>`` is created on the *local* server named by ``SISTER_DATABASE_DSN_LOCALHOST``,
 filled from the current ORM models, stamped with the expected Alembic revision, truncated before every test and dropped
 at the end. Safety rules, enforced in code:
 
@@ -27,14 +27,14 @@ _LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1"}
 def _local_dsn():
     from sqlalchemy.engine import make_url
 
-    dsn = os.getenv("DATABASE_DSN")
+    dsn = os.getenv("SISTER_DATABASE_DSN_LOCALHOST")
     if not dsn:
-        pytest.skip("DB tests need DATABASE_DSN pointing at a local PostgreSQL")
+        pytest.skip("DB tests need SISTER_DATABASE_DSN_LOCALHOST pointing at a local PostgreSQL")
     url = make_url(dsn)
     if url.get_backend_name() != "postgresql":
-        pytest.skip("DB tests need a PostgreSQL DATABASE_DSN")
+        pytest.skip("DB tests need a PostgreSQL SISTER_DATABASE_DSN_LOCALHOST")
     if (url.host or "") not in _LOCAL_HOSTS:
-        pytest.skip(f"DB tests only run against a local PostgreSQL (DATABASE_DSN host is {url.host!r})")
+        pytest.skip(f"DB tests only run against a local PostgreSQL (SISTER_DATABASE_DSN_LOCALHOST host is {url.host!r})")
     return url
 
 
@@ -85,6 +85,9 @@ def _apply_table_migrations(engine, schema: str, istat_schema: str) -> None:
         "20261125_subject_holding_details.py",
         "20261126_ownership_history.py",
         "20261127_subject_tags.py",
+        "20261128_subject_access.py",
+        "20261129_subject_purchases.py",
+        "20261130_wallet_gift_coupons.py",
     ):
         path = migration_dir / name
         spec = importlib.util.spec_from_file_location(f"_{path.stem}_migration", path)

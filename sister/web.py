@@ -22,7 +22,7 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from threading import Lock
-from typing import Any, AsyncIterable, Optional
+from typing import Any, AsyncIterable, AsyncIterator, Optional
 from urllib.parse import quote, urlencode, urlsplit
 from uuid import uuid4
 
@@ -32,6 +32,7 @@ from jinja2 import TemplateNotFound
 from starlette.concurrency import run_in_threadpool
 from starlette.responses import StreamingResponse
 
+from . import database
 from .database import (
     count_result_rows,
     count_total_result_rows,
@@ -178,6 +179,32 @@ _VIEWABLE_DOC_TYPES = {
 
 # document_types that are "visure" (excludes visura_soggetto, which lives under Soggetto).
 _VISURA_TYPES = {"visura", "visura_fabbricati", "visura_terreni", "visura_storica"}
+
+# Shared by the catalogue filters and the category sections. A category may
+# contain several historical document_type codes.
+_DOCUMENT_CATEGORIES = (
+    ("visura_immobile", "Visura per Immobile", "fa-house", "success", _VISURA_TYPES),
+    ("visura_soggetto", "Visura per Soggetto", "fa-user-group", "info", {"visura_soggetto"}),
+    ("elenco_immobili", "Elenco degli Immobili", "fa-list", "primary", {"elenco_immobili", "intestati"}),
+    ("planimetria", "Planimetria Catastale", "fa-ruler-combined", "secondary", {"planimetria", "planimetria_catastale"}),
+    ("elaborato_planimetrico", "Elaborato Planimetrico (EPA)", "fa-drafting-compass", "secondary", {"elaborato_planimetrico", "epa"}),
+    ("richieste", "Richieste", "fa-clock-rotate-left", "secondary", {"richieste"}),
+    ("estratto_mappa", "Estratto di Mappa o Visura di Mappa", "fa-map", "secondary", {"estratto_mappa", "estratto_di_mappa", "visura_mappa", "mappa"}),
+    ("elenco_subalterni", "Elenco Subalterni", "fa-layer-group", "secondary", {"elenco_subalterni", "elenco_subalterno"}),
+    ("ispezione_ipotecaria", "Ispezione / Visura Ipotecaria", "fa-file-circle-check", "primary", {"ispezione_ipotecaria", "visura_ipotecaria"}),
+    ("fiduciali", "Punti Fiduciali", "fa-crosshairs", "secondary", {"fiduciali"}),
+    ("nota_trascrizione_iscrizione", "Nota di Trascrizione o Iscrizione", "fa-file-signature", "primary", {"nota_trascrizione", "nota_iscrizione", "nota_trascrizione_iscrizione", "nota_annotazione"}),
+    ("titolo_telematico", "Titolo Telematico (Atto Notarile)", "fa-file-contract", "primary", {"titolo_telematico", "titolo_notarile", "atto_notarile"}),
+)
+_DOCUMENT_CATEGORY_TYPES = {key: types for key, _label, _icon, _color, types in _DOCUMENT_CATEGORIES}
+_CLASSIFIED_DOCUMENT_TYPES = set().union(*_DOCUMENT_CATEGORY_TYPES.values())
+
+
+def _document_matches_type_filter(document: dict, selected_type: str) -> bool:
+    document_type = str(document.get("document_type") or "").casefold()
+    if selected_type == "altro":
+        return document_type not in _CLASSIFIED_DOCUMENT_TYPES
+    return not selected_type or document_type in _DOCUMENT_CATEGORY_TYPES.get(selected_type, {selected_type})
 
 
 def _doc_tipo_visura(d: dict) -> Optional[str]:
@@ -777,7 +804,7 @@ def _logical_document_matches(document: dict, terms: list[str]) -> bool:
 async def _iter_documents_of_type(documents: AsyncIterable[dict], document_type: str) -> AsyncIterator[dict]:
     """Stream all documents or only rows matching the catalog's type filter."""
     async for document in documents:
-        if not document_type or str(document.get("document_type") or "").casefold() == document_type:
+        if _document_matches_type_filter(document, document_type):
             yield document
 
 
@@ -1510,199 +1537,50 @@ def _build_document_tree(
     Input should already be collapsed via _collapse_to_logical_docs().
     Returns node dicts: {key, label, icon, color, count, docs, children}.
     """
-    from collections import defaultdict
-
-    def _decorate(items: list[dict]) -> list[dict]:
+    tree = []
+    empty_categories = {
+        "estratto_mappa", "elenco_subalterni", "fiduciali",
+        "nota_trascrizione_iscrizione", "titolo_telematico",
+    }
+    for key, label, icon, color, type_codes in _DOCUMENT_CATEGORIES:
+        full_catalog = key == "ispezione_ipotecaria" and all_ispezioni is not None
+        items = all_ispezioni if full_catalog else [
+            document for document in docs if (document.get("document_type") or "") in type_codes
+        ]
+        if not items and key not in empty_categories:
+            continue
         rows = sorted(items, key=lambda d: (d.get("created_at") or "", d.get("id") or 0), reverse=True)
-        for d in rows:
-            d.setdefault("size_human", _human_size(d["file_size"]) if d.get("file_size") else "")
-            d["created_display"] = (d.get("created_at") or "")[:16].replace("T", " ")
-            d.setdefault("viewable", (d.get("document_type") or "") in _VIEWABLE_DOC_TYPES)
-        return rows
-
-    def leaf(key, label, icon, color, items, is_soggetto=False):
-        return {
-            "key": key,
-            "label": label,
-            "icon": icon,
-            "color": color,
-            "count": len(items),
-            "docs": _decorate(items),
-            "children": [],
-            "is_soggetto": is_soggetto,
-        }
-
-    def node(key, label, icon, color, children, count, docs=None, is_soggetto=False):
-        return {
-            "key": key,
-            "label": label,
-            "icon": icon,
-            "color": color,
-            "count": count,
-            "docs": _decorate(docs or []),
-            "children": children,
-            "is_soggetto": is_soggetto,
-        }
-
-    by_type: dict[str, list[dict]] = defaultdict(list)
-    for d in docs:
-        by_type[d.get("document_type") or "(altro)"].append(d)
-
-    tree: list[dict] = []
-    classified_types = set(_VISURA_TYPES) | {"visura_soggetto"}
-
-    def add_document_category(
-        key, label, icon, color, *type_codes, always=False, items_override=None
-    ):
-        items = (
-            items_override
-            if items_override is not None
-            else [d for d in docs if (d.get("document_type") or "") in type_codes]
-        )
-        classified_types.update(type_codes)
-        if items or always:
-            category = leaf(key, label, icon, color, items)
-            category["empty_message"] = "Nessun documento in questa categoria."
-            category["full_catalog"] = items_override is not None
-            tree.append(category)
-
-    # ── Visura per Immobile ────────────────────────────────────────────────
-    visure = [d for d in docs if (d.get("document_type") or "") in _VISURA_TYPES]
-    if visure:
-        for doc in visure:
-            if not doc.get("tipo_catasto"):
-                cadastre = _doc_catasto_ft(doc)
-                if cadastre:
-                    doc["tipo_catasto"] = "F" if cadastre == "fabbricati" else "T"
-            if not doc.get("visura_subtype"):
-                doc["visura_subtype"] = _doc_visura_subtype(doc) or None
-        tree.append(
-            node(
-                "visura_immobile",
-                "Visura per Immobile",
-                "fa-house",
-                "success",
-                [],
-                count=len(visure),
-                docs=visure,
-            )
-        )
-
-    # ── Visura per Soggetto ────────────────────────────────────────────────
-    soggetti = by_type.get("visura_soggetto", [])
-    if soggetti:
-        tree.append(
-            leaf(
-                "visura_soggetto",
-                "Visura per Soggetto",
-                "fa-user-group",
-                "info",
-                soggetti,
-                is_soggetto=True,
-            )
-        )
-
-    # ── Intestatari ────────────────────────────────────────────────────────
-    add_document_category(
-        "elenco_immobili",
-        "Elenco degli Immobili",
-        "fa-list",
-        "primary",
-        "elenco_immobili",
-        "intestati",
-    )
-
-    # ── Planimetria Catastale ──────────────────────────────────────────────
-    add_document_category(
-        "planimetria",
-        "Planimetria Catastale",
-        "fa-ruler-combined",
-        "secondary",
-        "planimetria",
-        "planimetria_catastale",
-    )
-
-    # ── Elaborato Planimetrico (EPA) ──────────────────────────────────────
-    add_document_category(
-        "elaborato_planimetrico",
-        "Elaborato Planimetrico (EPA)",
-        "fa-drafting-compass",
-        "secondary",
-        "elaborato_planimetrico",
-        "epa",
-    )
-
-    # ── Richieste ──────────────────────────────────────────────────────────
-    add_document_category("richieste", "Richieste", "fa-clock-rotate-left", "secondary", "richieste")
-
-    # ── Additional cadastral document families ────────────────────────────
-    add_document_category(
-        "estratto_mappa",
-        "Estratto di Mappa o Visura di Mappa",
-        "fa-map",
-        "secondary",
-        "estratto_mappa",
-        "estratto_di_mappa",
-        "visura_mappa",
-        "mappa",
-        always=True,
-    )
-    add_document_category(
-        "elenco_subalterni",
-        "Elenco Subalterni",
-        "fa-layer-group",
-        "secondary",
-        "elenco_subalterni",
-        "elenco_subalterno",
-        always=True,
-    )
-    add_document_category(
-        "ispezione_ipotecaria",
-        "Ispezione / Visura Ipotecaria",
-        "fa-file-circle-check",
-        "primary",
-        "ispezione_ipotecaria",
-        "visura_ipotecaria",
-        always=bool(all_ispezioni),
-        items_override=all_ispezioni,
-    )
-    add_document_category(
-        "fiduciali",
-        "Punti Fiduciali",
-        "fa-crosshairs",
-        "secondary",
-        "fiduciali",
-        always=True,
-    )
-    add_document_category(
-        "nota_trascrizione_iscrizione",
-        "Nota di Trascrizione o Iscrizione",
-        "fa-file-signature",
-        "primary",
-        "nota_trascrizione",
-        "nota_iscrizione",
-        "nota_trascrizione_iscrizione",
-        "nota_annotazione",
-        always=True,
-    )
-    add_document_category(
-        "titolo_telematico",
-        "Titolo Telematico (Atto Notarile)",
-        "fa-file-contract",
-        "primary",
-        "titolo_telematico",
-        "titolo_notarile",
-        "atto_notarile",
-        always=True,
-    )
+        for document in rows:
+            document.setdefault("size_human", _human_size(document["file_size"]) if document.get("file_size") else "")
+            document["created_display"] = (document.get("created_at") or "")[:16].replace("T", " ")
+            document.setdefault("viewable", (document.get("document_type") or "") in _VIEWABLE_DOC_TYPES)
+            if key == "visura_immobile":
+                if not document.get("tipo_catasto"):
+                    cadastre = _doc_catasto_ft(document)
+                    if cadastre:
+                        document["tipo_catasto"] = "F" if cadastre == "fabbricati" else "T"
+                if not document.get("visura_subtype"):
+                    document["visura_subtype"] = _doc_visura_subtype(document) or None
+        tree.append({
+            "key": key, "label": label, "icon": icon, "color": color,
+            "count": len(rows), "docs": rows, "children": [],
+            "is_soggetto": key == "visura_soggetto",
+            "empty_message": "Nessun documento in questa categoria.",
+            "full_catalog": full_catalog,
+        })
 
     # Keep unexpected and newly imported document codes visible as well.
-    unclassified = [
-        d for d in docs if (d.get("document_type") or "(altro)") not in classified_types
-    ]
+    unclassified = [document for document in docs if _document_matches_type_filter(document, "altro")]
     if unclassified:
-        tree.append(leaf("altro", "Altri documenti", "fa-file", "secondary", unclassified))
-
+        rows = sorted(unclassified, key=lambda d: (d.get("created_at") or "", d.get("id") or 0), reverse=True)
+        for document in rows:
+            document.setdefault("size_human", _human_size(document["file_size"]) if document.get("file_size") else "")
+            document["created_display"] = (document.get("created_at") or "")[:16].replace("T", " ")
+            document.setdefault("viewable", False)
+        tree.append({
+            "key": "altro", "label": "Altri documenti", "icon": "fa-file", "color": "secondary",
+            "count": len(rows), "docs": rows, "children": [], "is_soggetto": False,
+        })
     return tree
 
 
@@ -2697,12 +2575,91 @@ def _get_user(request: Request):
         return None
 
 
+class _ClerkProfileUser:
+    """A Clerk user completed with its profile (name, e-mail, picture).
+
+    ``aecs4u-auth`` rebuilds the Clerk user on every request from the raw session token, which carries no name,
+    e-mail or picture, and the session sync SISTER mounts (``aecs4u_auth.routers.auth``) does not fetch them either.
+    The theme header then shows "User" and initials. Everything else is delegated to the original object.
+    """
+
+    def __init__(self, user, profile: dict[str, str]):
+        self._user = user
+        self._profile = profile
+
+    def __getattr__(self, name: str):
+        value = self._profile.get(name)
+        return value if value else getattr(self._user, name)
+
+
+_CLERK_PROFILE_KEYS = {
+    "full_name": "user_full_name",
+    "first_name": "user_first_name",
+    "last_name": "user_last_name",
+    "email": "user_email",
+    "image_url": "user_image_url",
+}
+
+
+def _fetch_clerk_profile(clerk_user_id: str) -> dict[str, str]:
+    """Name, e-mail and picture of a Clerk user from the Clerk Backend API ({} when unavailable). Blocking."""
+    from aecs4u_auth import enrich_claims_from_clerk_api, get_auth_config
+
+    claims: dict = {"sub": clerk_user_id}
+    enrich_claims_from_clerk_api(claims, get_auth_config().clerk_secret_key or "")
+    first = str(claims.get("first_name") or "").strip()
+    last = str(claims.get("last_name") or "").strip()
+    return {
+        "full_name": f"{first} {last}".strip(),
+        "first_name": first,
+        "last_name": last,
+        "email": str(claims.get("email") or "").strip(),
+        "image_url": str(claims.get("image_url") or "").strip(),
+    }
+
+
+async def _with_clerk_profile(request: Request, user):
+    """Return a Clerk ``user`` with its name, e-mail and picture; any other user (or no Clerk session) unchanged.
+
+    The profile is read from the session; when the sign-in left it empty it is fetched once from Clerk (verified
+    subject, server-side key) and kept in the session, so later requests cost nothing.
+    """
+    if user is None:
+        return user
+    try:
+        session = request.session if "session" in request.scope else None
+    except Exception:
+        session = None
+    user_id = str(getattr(user, "id", "") or "")
+    if session is None or not user_id or str(session.get("clerk_user_id") or "") != user_id:
+        return user  # local account, or a different principal than the one the session was synced for
+    profile = {name: str(session.get(key) or "").strip() for name, key in _CLERK_PROFILE_KEYS.items()}
+    if not (profile["image_url"] and (profile["full_name"] or profile["email"])) and not session.get(
+        "clerk_profile_fetched"
+    ):
+        session["clerk_profile_fetched"] = True  # one attempt per session, also when Clerk does not answer
+        try:
+            fetched = await asyncio.to_thread(_fetch_clerk_profile, user_id)
+        except Exception as exc:
+            logger.warning("Profilo Clerk non disponibile: %s", type(exc).__name__)
+            fetched = {}
+        for name, value in fetched.items():
+            if value and not profile[name]:
+                profile[name] = value
+                session[_CLERK_PROFILE_KEYS[name]] = value
+    if not profile["full_name"]:
+        profile["full_name"] = f"{profile['first_name']} {profile['last_name']}".strip()
+    if not any(profile.values()):
+        return user
+    return _ClerkProfileUser(user, profile)
+
+
 async def _optional_user(request: Request):
     """The signed-in user on pages that are public but personalised (sidebar, admin links); None when anonymous."""
     try:
         from aecs4u_auth.dependencies import get_current_user
 
-        return await get_current_user(request)
+        return await _with_clerk_profile(request, await get_current_user(request))
     except Exception:
         return _get_user(request)
 
@@ -2734,7 +2691,7 @@ async def _require_auth(request: Request):
         return _get_user(request)
 
     try:
-        return await get_current_user(request)
+        return await _with_clerk_profile(request, await get_current_user(request))
     except HTTPException:
         if not _auth_required():
             if not _auth_disabled_warned:
@@ -3759,9 +3716,9 @@ async def dashboard_redirect():
 
 @router.get("/landing", response_class=HTMLResponse)
 async def landing(request: Request):
-    """Public landing page."""
+    """Public landing page; a signed-in visitor still gets their name and menu in the header."""
     theme = _get_theme(request)
-    user = _get_user(request)
+    user = await _optional_user(request)
     return theme.render("_landing.html", request, user=user)
 
 
@@ -4678,7 +4635,15 @@ async def web_profile(request: Request, user=Depends(_require_auth)):
             balance = await purchases_billing.credit_balance(_favorite_user_key(user) or _principal_keys(user)[0])
         except Exception as exc:  # noqa: BLE001 - the profile must open even if the wallet is unreachable
             logger.warning("Credit balance unavailable: %s", type(exc).__name__)
-    return theme.render("profile.html", request, user=user, account_keys=_principal_keys(user), credit_balance=balance)
+    return theme.render(
+        "profile.html",
+        request,
+        user=user,
+        account_keys=_principal_keys(user),
+        credit_balance=balance,
+        wallet_enabled=purchases_billing.credit_grants_enabled(),
+        gift_status=request.query_params.get("gift_status", ""),
+    )
 
 
 @router.get("/settings", response_class=HTMLResponse)
@@ -4704,8 +4669,8 @@ async def web_settings(request: Request, user=Depends(_require_auth)):
                         {"label": "Catalogo documenti", "url": "/admin/documents", "icon": "fa-folder-open"},
                         {"label": "Registro accessi", "url": "/admin/activity", "icon": "fa-clock-rotate-left"},
                         {
-                            "label": "Acquisti documenti",
-                            "url": "/admin/document-purchases",
+                            "label": "Acquisti e accessi",
+                            "url": "/admin/purchases",
                             "icon": "fa-file-invoice",
                         },
                         {"label": "Comandi CLI", "url": "/admin/commands", "icon": "fa-terminal"},
@@ -4724,6 +4689,321 @@ async def web_settings(request: Request, user=Depends(_require_auth)):
 async def web_admin(request: Request, user=Depends(_require_admin)):
     """Admin landing page for managing document ownership."""
     return _get_theme(request).render("admin/index.html", request, user=user)
+
+
+@router.get("/admin/users", response_class=HTMLResponse)
+async def web_admin_users(request: Request, q: str = Query("", max_length=200), user=Depends(_require_admin)):
+    """List configured local accounts for administrators without exposing credentials."""
+    configured_admins = {
+        identity.strip().casefold()
+        for identity in os.getenv("SISTER_ADMIN_USERS", "").split(",")
+        if identity.strip()
+    }
+    users = []
+    for key in getattr(request.app.state, "local_user_keys", []) or []:
+        if not isinstance(key, str) or not key.startswith("id:"):
+            continue
+        username = key[3:].strip()
+        if not username:
+            continue
+        users.append(
+            {
+                "username": username,
+                "email": username if "@" in username else "",
+                "role": "Admin" if username.casefold() in configured_admins else "Utente",
+                "active": True,
+            }
+        )
+    users.sort(key=lambda account: (account["username"].casefold(), account["username"]))
+    query = q.strip()
+    if query:
+        folded_query = query.casefold()
+        users = [account for account in users if folded_query in account["username"].casefold()]
+    return _get_theme(request).render(
+        "admin/users.html", request, user=user, users=users, query=query, total_users=len(users)
+    )
+
+
+@router.get("/admin/wallets", response_class=HTMLResponse)
+async def web_admin_wallets(
+    request: Request,
+    q: str = Query("", max_length=320),
+    status: str = "",
+    error: str = "",
+    gift_code: str = "",
+    user=Depends(_require_admin),
+):
+    """Inspect a user's wallet and manage tracked, redeemable wallet gifts."""
+    from . import purchases_billing
+    from .database import (
+        list_document_purchases,
+        list_subject_access,
+        list_subject_purchases,
+        list_wallet_gift_coupon_redemptions,
+        list_wallet_gift_coupons,
+    )
+
+    known_users = {
+        row["user_id"] for row in await list_document_purchases(status="all", limit=1000)
+    }
+    known_users.update(row["user_id"] for row in await list_subject_purchases(limit=1000))
+    known_users.update(row["user_id"] for row in await list_subject_access(status="all", limit=1000))
+    known_users.update(getattr(request.app.state, "local_user_keys", []) or [])
+    query = q.strip()
+    selected_user = ""
+    wallet = None
+    if query:
+        try:
+            selected_user = _purchase_identity(query)
+            wallet = await purchases_billing.wallet_admin_snapshot(selected_user)
+        except Exception as exc:  # noqa: BLE001 - malformed keys/backend failures should not break admin view
+            logger.warning("Wallet lookup failed: %s", type(exc).__name__)
+            selected_user = query[:320]
+    coupons = await list_wallet_gift_coupons(limit=200)
+    now = datetime.now(timezone.utc)
+    for coupon in coupons:
+        coupon["expired"] = coupon["expires_at"] is not None and coupon["expires_at"] <= now
+    return _get_theme(request).render(
+        "admin/wallets.html",
+        request,
+        user=user,
+        query=query,
+        selected_user=selected_user,
+        wallet=wallet,
+        known_users=sorted(known_users, key=str.casefold),
+        wallet_enabled=purchases_billing.credit_grants_enabled(),
+        coupons=coupons,
+        redemptions=await list_wallet_gift_coupon_redemptions(query=query, limit=300),
+        status=status,
+        error=error,
+        gift_code=gift_code,
+    )
+
+
+def _subject_access_redirect(
+    *,
+    kind: str = "person",
+    search: str = "",
+    q: str = "",
+    state: str = "active",
+    status: str = "",
+    error: str = "",
+    purchase_link: str = "",
+):
+    params = {"kind": kind, "state": state}
+    if search:
+        params["search"] = search[:200]
+    if q:
+        params["q"] = q[:200]
+    if status:
+        params["status"] = status
+    if error:
+        params["error"] = error
+    if purchase_link:
+        params["purchase_link"] = purchase_link[:2000]
+    return RedirectResponse(url=f"/admin/subject-access?{urlencode(params)}", status_code=303)
+
+
+def _subject_access_audit(request: Request, **details: Any) -> None:
+    current = getattr(request.state, "audit_params", None) or {}
+    request.state.audit_params = {
+        **current,
+        **{key: value for key, value in details.items() if value not in (None, "")},
+    }
+
+
+@router.get("/admin/subject-access", response_class=HTMLResponse)
+async def web_admin_subject_access(
+    request: Request,
+    kind: str = "person",
+    search: str = Query("", max_length=200),
+    q: str = Query("", max_length=200),
+    state: str = "active",
+    status: str = "",
+    error: str = "",
+    purchase_link: str = Query("", max_length=2000),
+    user=Depends(_require_admin),
+):
+    """Find registered profiles and manage audited person/company access grants."""
+    from . import purchases_billing
+    from .database import list_document_purchases, list_subject_access, list_subject_purchases, query_subject_profiles
+
+    kind = kind if kind in {"person", "company"} else "person"
+    state = state if state in {"active", "revoked", "all"} else "active"
+    query = q.strip()
+    grants = await list_subject_access(query, status=state)
+    profiles = []
+    profile_query = search.strip()
+    if profile_query:
+        profiles, _ = await query_subject_profiles(
+            kind, q=profile_query, sort="name", direction="asc", limit=50
+        )
+    purchases = await list_document_purchases("", status="all")
+    subject_purchases = await list_subject_purchases(query, limit=500)
+    known_users = {
+        str(key).strip()
+        for key in (getattr(request.app.state, "local_user_keys", []) or [])
+        if isinstance(key, str) and key.strip()
+    }
+    known_users.update(row["user_id"] for row in purchases)
+    known_users.update(row["user_id"] for row in subject_purchases)
+    known_users.update(row["user_id"] for row in await list_subject_access(status="all", limit=1000))
+    for grant in grants:
+        moment = grant.get("revoked_at")
+        grant["revoked_display"] = moment.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M UTC") if moment else ""
+    return _get_theme(request).render(
+        "admin/subject_access.html",
+        request,
+        user=user,
+        kind=kind,
+        search=profile_query,
+        query=query,
+        state=state,
+        status=status,
+        error=error,
+        purchase_link=purchase_link,
+        link_days=purchases_billing.LINK_TTL_SECONDS // 86400,
+        card_enabled=purchases_billing.subject_billing_configured(kind),
+        card_price=purchases_billing.subject_price_label(kind),
+        credits_enabled=purchases_billing.subject_credits_enabled(kind),
+        credit_cost=purchases_billing.subject_credit_cost(kind),
+        profiles=profiles,
+        grants=grants,
+        subject_purchases=subject_purchases,
+        known_users=sorted(known_users, key=str.casefold),
+    )
+
+
+@router.get("/admin/subject-purchase-link")
+async def web_admin_subject_purchase_link(
+    request: Request,
+    kind: str,
+    code: str,
+    search: str = "",
+    q: str = "",
+    state: str = "active",
+    user=Depends(_require_admin),
+):
+    from fastapi import HTTPException
+
+    from . import purchases_billing
+    from .database import list_subject_profiles
+
+    normalized_code = code.strip().upper()
+    if kind not in {"person", "company"} or not await list_subject_profiles(kind, normalized_code):
+        raise HTTPException(status_code=404, detail="Profilo non trovato")
+    try:
+        token = purchases_billing.subject_purchase_link_token(kind, normalized_code)
+    except RuntimeError:
+        return _subject_access_redirect(kind=kind, search=search, q=q, state=state, error="link_unavailable")
+    link = str(request.base_url).rstrip("/") + f"/buy/entity/{token}"
+    return _subject_access_redirect(
+        kind=kind,
+        search=search,
+        q=q,
+        state=state,
+        purchase_link=link,
+    )
+
+
+@router.post("/admin/subject-access/grant")
+@_audited("admin.subject_access.grant")
+async def web_admin_subject_access_grant(request: Request, user=Depends(_require_admin)):
+    from .database import grant_subject_access, list_document_purchases, list_subject_access, list_subject_profiles
+
+    form = await request.form()
+    kind = str(form.get("kind", "person"))
+    search = str(form.get("search", "")).strip()[:200]
+    query = str(form.get("q", "")).strip()[:200]
+    state = str(form.get("state", "active"))
+    operation = "reactivate" if str(form.get("operation", "")) == "reactivate" else "grant"
+    try:
+        user_id = _purchase_identity(str(form.get("user_id", "")))
+        code = str(form.get("subject_code", "")).strip().upper()
+        note = str(form.get("note", "")).strip()
+        if kind not in {"person", "company"}:
+            raise ValueError("bad_subject_type")
+        if len(note) > 2000:
+            raise ValueError("note_too_long")
+        pattern = r"\d{11}" if kind == "company" else r"[A-Z0-9]{16}"
+        if not re.fullmatch(pattern, code):
+            raise ValueError("bad_subject_code")
+        if not await list_subject_profiles(kind, code):
+            raise ValueError("subject_not_found")
+        registered_users = {
+            str(key).strip().casefold()
+            for key in (getattr(request.app.state, "local_user_keys", []) or [])
+            if isinstance(key, str) and key.strip()
+        }
+        registered_users.update(
+            row["user_id"].casefold() for row in await list_document_purchases("", status="all")
+        )
+        registered_users.update(
+            row["user_id"].casefold() for row in await list_subject_access(status="all", limit=1000)
+        )
+        if user_id.casefold() not in registered_users:
+            raise ValueError("user_not_registered")
+        _subject_access_audit(
+            request,
+            user_id=user_id,
+            subject_type=kind,
+            subject_code=code,
+            note=note[:200],
+            operation=operation,
+        )
+        changed = await grant_subject_access(
+            user_id, kind, code, _favorite_user_key(user) or _actor(user), note
+        )
+        if not changed:
+            _subject_access_audit(request, error_code="already_active")
+            return _subject_access_redirect(kind=kind, search=search, q=query, state=state, error="already_active")
+    except Exception as exc:
+        from .database import PurchaseError
+
+        if isinstance(exc, PurchaseError):
+            error = exc.code
+        else:
+            error = str(exc) if str(exc) in {
+                "bad_subject_type", "bad_subject_code", "subject_not_found", "note_too_long", "user_not_registered"
+            } else "failed"
+        _subject_access_audit(request, error_code=error)
+        return _subject_access_redirect(kind=kind, search=search, q=query, state=state, error=error)
+    return _subject_access_redirect(kind=kind, search=search, q=query, state=state, status="granted")
+
+
+@router.post("/admin/subject-access/revoke")
+@_audited("admin.subject_access.revoke")
+async def web_admin_subject_access_revoke(request: Request, user=Depends(_require_admin)):
+    from .database import revoke_subject_access
+
+    form = await request.form()
+    user_id = str(form.get("user_id", ""))
+    kind = str(form.get("kind", "person"))
+    code = str(form.get("subject_code", "")).strip().upper()
+    query = str(form.get("q", "")).strip()[:200]
+    search = str(form.get("search", "")).strip()[:200]
+    state = str(form.get("state", "active"))
+    reason = str(form.get("reason", "")).strip()
+    try:
+        user_id = _purchase_identity(user_id)
+        if kind not in {"person", "company"} or len(reason) > 500:
+            raise ValueError("bad_request")
+        pattern = r"\d{11}" if kind == "company" else r"[A-Z0-9]{16}"
+        if not re.fullmatch(pattern, code):
+            raise ValueError("bad_request")
+        _subject_access_audit(
+            request, user_id=user_id, subject_type=kind, subject_code=code, reason=reason[:200]
+        )
+        changed = await revoke_subject_access(
+            user_id, kind, code, _favorite_user_key(user) or _actor(user), reason
+        )
+        if not changed:
+            _subject_access_audit(request, error_code="not_found")
+            return _subject_access_redirect(kind=kind, search=search, q=query, state=state, error="not_found")
+    except Exception as exc:
+        _subject_access_audit(request, error_code="bad_request" if isinstance(exc, ValueError) else "failed")
+        return _subject_access_redirect(kind=kind, search=search, q=query, state=state, error="bad_request" if isinstance(exc, ValueError) else "failed")
+    return _subject_access_redirect(kind=kind, search=search, q=query, state=state, status="frozen")
 
 
 def _admin_list_run_json(path: Path) -> dict[str, Any]:
@@ -5789,7 +6069,16 @@ async def web_admin_activity(request: Request, user=Depends(_require_admin)):
 
     from .database import get_recent_activity
 
-    events = await get_recent_activity(limit=100, action_prefix="admin.document_purchase.")
+    purchases = await get_recent_activity(limit=100, action_prefix="admin.document_purchase.")
+    subject_access = await get_recent_activity(limit=100, action_prefix="admin.subject_access.")
+    subject_purchases = await get_recent_activity(limit=100, action_prefix="subject.purchase.")
+    wallet_admin = await get_recent_activity(limit=100, action_prefix="admin.wallet.")
+    wallet_gifts = await get_recent_activity(limit=100, action_prefix="wallet.gift_coupon.")
+    events = sorted(
+        purchases + subject_access + subject_purchases + wallet_admin + wallet_gifts,
+        key=lambda event: str(event.get("started_at") or ""),
+        reverse=True,
+    )[:100]
     for event in events:
         started_at = event.get("started_at")
         if started_at:
@@ -5818,7 +6107,12 @@ def _numeric_text(value: str | None) -> str:
 def _purchase_redirect(*, status: str = "", error: str = "") -> RedirectResponse:
     """Back to the purchase manager with a status or an error *code* (never free text from the request)."""
     query = {"error": error} if error else {"status": status}
-    return RedirectResponse(url=f"/admin/document-purchases?{urlencode(query)}", status_code=303)
+    return RedirectResponse(url=f"/admin/purchases?{urlencode(query)}", status_code=303)
+
+
+def _wallet_admin_redirect(*, q: str = "", status: str = "", error: str = "") -> RedirectResponse:
+    params = {key: value for key, value in (("q", q), ("status", status), ("error", error)) if value}
+    return RedirectResponse(url=f"/admin/wallets?{urlencode(params)}", status_code=303)
 
 
 def _purchase_audit(request: Request, **details: Any) -> None:
@@ -5827,7 +6121,8 @@ def _purchase_audit(request: Request, **details: Any) -> None:
     request.state.audit_params = {**current, **{k: v for k, v in details.items() if v not in (None, "")}}
 
 
-@router.get("/admin/document-purchases", response_class=HTMLResponse)
+@router.get("/admin/purchases", response_class=HTMLResponse)
+@router.get("/admin/document-purchases", response_class=HTMLResponse, include_in_schema=False)
 async def web_admin_document_purchases(
     request: Request,
     q: str = "",
@@ -5840,10 +6135,11 @@ async def web_admin_document_purchases(
     """List and manage the purchase records that grant document access."""
     from zoneinfo import ZoneInfo
 
-    from .database import list_document_purchases
+    from .database import list_document_options, list_document_purchases, list_subject_access, list_subject_purchases
 
     state = state if state in {"active", "revoked", "all"} else "active"
     purchases = await list_document_purchases(q, status=state)
+    document_options = await list_document_options()
     rome = ZoneInfo("Europe/Rome")
     for purchase in purchases:
         for source_key, target_key in (("purchased_at", "purchased_at_local"), ("expires_at", "expires_at_local")):
@@ -5852,7 +6148,11 @@ async def web_admin_document_purchases(
         revoked_at = purchase.get("revoked_at")
         purchase["revoked_at_local"] = revoked_at.astimezone(rome).strftime("%Y-%m-%d %H:%M") if revoked_at else ""
     known_users = sorted(
-        {p["user_id"] for p in purchases} | set(getattr(request.app.state, "local_user_keys", []) or [])
+        {p["user_id"] for p in await list_document_purchases(status="all", limit=1000)}
+        | {p["user_id"] for p in purchases}
+        | {p["user_id"] for p in await list_subject_purchases(limit=1000)}
+        | {g["user_id"] for g in await list_subject_access(status="all", limit=1000)}
+        | set(getattr(request.app.state, "local_user_keys", []) or [])
     )
     from . import purchases_billing
     all_query_prices = await _query_product_prices() or {}
@@ -5867,10 +6167,11 @@ async def web_admin_document_purchases(
         except RuntimeError:  # no SECRET_KEY: links cannot be signed
             purchase_link = ""
     return _get_theme(request).render(
-        "admin/document_purchases.html",
+        "admin/purchases.html",
         request,
         user=user,
         purchases=purchases,
+        document_options=document_options,
         query=q,
         state=state,
         selected_document_id=document_id or "",
@@ -6311,7 +6612,7 @@ async def _full_group_titolarita(xml_parsed: dict) -> None:
     from sqlalchemy import text
 
     from .database import _get_session_factory, get_document_by_id
-    from .reference import _resolve_comune
+    from .reference import belfiore_code, comuni_by_cadastral_code
 
     def as_list(value):
         return value if isinstance(value, list) else ([value] if value else [])
@@ -6319,7 +6620,42 @@ async def _full_group_titolarita(xml_parsed: dict) -> None:
     def clean(value) -> str:
         return " ".join(str(value or "").split())
 
+    def first_ident(unit):
+        if not isinstance(unit, dict):
+            return None
+        return next(iter(as_list((unit.get("DatiIdentificativi") or {}).get("IdentificativoDefinitivo"))), None)
+
     cache: dict[tuple, list] = {}
+    # Filled once below: a company can hold thousands of properties, and asking the database about each one
+    # (comune, then its visure storiche) made the page take minutes. The archive has few visure storiche, so they are
+    # all read in one query and each property is looked up in memory.
+    comune_ids: dict[str, int] = {}
+    storica_ids: dict[tuple, list[int]] = {}
+
+    async def load_storica_index(session) -> None:
+        codes = set()
+        for group in groups:
+            if not isinstance(group, dict):
+                continue
+            group_code = group.get("CodiceComune") or ""
+            for unit in as_list(group.get("ImmobileFabbricatiS")) + as_list(group.get("ImmobileTerreniS")):
+                ident = first_ident(unit)
+                if isinstance(ident, dict) and ident.get("Foglio"):
+                    codes.add(ident.get("CodiceComune") or group_code)
+        comune_ids.update(await comuni_by_cadastral_code(session, codes))
+        if not comune_ids:
+            return
+        rows = await session.execute(
+            text(
+                "SELECT u.comune_id, u.sheet, u.parcel, coalesce(u.subunit, ''), d.id"
+                " FROM document d JOIN cadastral_unit u ON u.id = d.cadastral_unit_id"
+                " WHERE d.view_subtype = 'storica' AND d.document_type IN ('visura_fabbricati', 'visura_terreni')"
+                " AND u.comune_id = ANY(:comuni) ORDER BY d.id DESC"
+            ),
+            {"comuni": sorted(set(comune_ids.values()))},
+        )
+        for comune_id, sheet, parcel, subunit, doc_id in rows.all():
+            storica_ids.setdefault((comune_id, str(sheet or ""), str(parcel or ""), str(subunit or "")), []).append(doc_id)
 
     async def history_of(session, ident: dict, group_code: str) -> list:
         """The longest stored ``StoriaIntestazione`` of the property (oldest act first), or []."""
@@ -6330,19 +6666,10 @@ async def _full_group_titolarita(xml_parsed: dict) -> None:
         if key in cache:
             return cache[key]
         cache[key] = []
-        comune_id = await _resolve_comune(session, None, None, key[0])
+        comune_id = comune_ids.get(belfiore_code(key[0]) or "")
         if comune_id is None:
             return []
-        ids = (
-            await session.execute(
-                text(
-                    "SELECT d.id FROM document d JOIN cadastral_unit u ON u.id = d.cadastral_unit_id"
-                    " WHERE d.view_subtype = 'storica' AND d.document_type IN ('visura_fabbricati', 'visura_terreni')"
-                    " AND u.comune_id = :c AND u.sheet = :f AND u.parcel = :p AND coalesce(u.subunit, '') = :s ORDER BY d.id DESC"
-                ),
-                {"c": comune_id, "f": key[1], "p": key[2] or "", "s": key[3]},
-            )
-        ).scalars().all()
+        ids = storica_ids.get((comune_id, str(key[1]), str(key[2] or ""), str(key[3])), [])
         best: list = []
         for doc_id in ids:
             stored = await get_document_by_id(int(doc_id))
@@ -6356,6 +6683,9 @@ async def _full_group_titolarita(xml_parsed: dict) -> None:
         return best
 
     async with _get_session_factory()() as session:
+        await load_storica_index(session)
+        if not storica_ids:
+            return  # no visura storica is stored for any of these comuni: nothing to add
         for group in groups:
             if not isinstance(group, dict):
                 continue
@@ -6624,7 +6954,7 @@ def _cadastral_map_lookup_key(item: dict, *, feature_type: str) -> str:
 
 async def _read_visura_cadastral_map_cache(document_id: int) -> list[tuple]:
     """Read cached polygons for one document from Sister's PostGIS view."""
-    dsn = os.getenv("DATABASE_DSN", "").strip()
+    dsn = database.DATABASE_DSN
     if not dsn:
         return []
     try:
@@ -6673,7 +7003,7 @@ async def _write_visura_cadastral_map_cache(records: list[tuple]) -> None:
         import psycopg
         from psycopg import sql
 
-        dsn = os.getenv("DATABASE_DSN", "").strip()
+        dsn = database.DATABASE_DSN
         if not dsn:
             return
         dsn = dsn.replace("postgresql+asyncpg://", "postgresql://", 1)
@@ -7530,7 +7860,7 @@ async def _google_maps_context_uncached(doc: dict, *, refresh_only: bool = False
     use_sister_cadastral_views = (
         is_subject_visura and document_id is None and not direct_cadastral_dsn
     )
-    dsn = direct_cadastral_dsn or os.getenv("DATABASE_DSN", "").strip()
+    dsn = direct_cadastral_dsn or database.DATABASE_DSN
     if not dsn or not (municipality and province and sheet and parcel):
         if use_cached_map_features(cached_map_rows, require_fresh=False):
             return context
@@ -9142,10 +9472,12 @@ async def _subject_tags_replace(request: Request, kind: str, fiscal_code: str, u
     """``PUT <route>/<code>/tags`` with ``{"tags": [...]}``: the subject's tags become exactly this list."""
     from fastapi import HTTPException
 
-    from .database import set_subject_tags
+    from .database import has_subject_access, set_subject_tags
 
     editor = _tag_editor(user)
     code = _subject_tag_code(kind, fiscal_code)
+    if not _is_admin(user) and not await has_subject_access(_principal_keys(user), kind, code):
+        raise HTTPException(status_code=404, detail="Soggetto non trovato")
     payload = await _json_body(request)
     tags = payload.get("tags")
     if not isinstance(tags, list) or not all(isinstance(tag, str) for tag in tags):
@@ -9165,7 +9497,7 @@ async def _subject_tags_bulk(request: Request, kind: str, user) -> JSONResponse:
     """
     from fastapi import HTTPException
 
-    from .database import list_subject_tags, tag_subjects, untag_subjects
+    from .database import get_subject_access_codes, list_subject_tags, tag_subjects, untag_subjects
 
     editor = _tag_editor(user)
     payload = await _json_body(request)
@@ -9189,7 +9521,13 @@ async def _subject_tags_bulk(request: Request, kind: str, user) -> JSONResponse:
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from None
-    return JSONResponse({"action": action, "matched": total, "changed": changed, "tags": await list_subject_tags(kind)})
+    owned_codes = None if _is_admin(user) else await get_subject_access_codes(_principal_keys(user), kind)
+    return JSONResponse({
+        "action": action,
+        "matched": total,
+        "changed": changed,
+        "tags": await list_subject_tags(kind, allowed_codes=owned_codes),
+    })
 
 
 async def _subject_tags_for_page(code: str | None, route_prefix: str | None) -> list[str]:
@@ -9947,7 +10285,9 @@ async def _parcel_map_payload(lookup: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-async def _subject_parcel_map_data(code: str, code_pattern: str, key: str | None, after: int):
+async def _subject_parcel_map_data(
+    code: str, code_pattern: str, key: str | None, after: int, *, profile: dict | None = None
+):
     """Map data of a subject page without a document behind it, as increments (``after`` = chunks already drawn).
 
     The page names the data it was built with (``k``). If the service no longer has it (restart, eviction) the map is
@@ -9960,8 +10300,11 @@ async def _subject_parcel_map_data(code: str, code_pattern: str, key: str | None
     if not re.fullmatch(code_pattern, normalized_code):
         raise HTTPException(status_code=404, detail="Soggetto non trovato")
     headers = {"Cache-Control": "no-store"}
-    if not key or (key not in _HUB_MAP_DATA and key not in _HUB_MAP_TASKS):
-        profile = await _subject_query_profile(normalized_code, [], [], 1)
+    if profile is not None or not key or (key not in _HUB_MAP_DATA and key not in _HUB_MAP_TASKS):
+        # A granted principal's key is always derived from its authorized subject,
+        # so a supplied cache key cannot select another subject's map.
+        if profile is None:
+            profile = await _subject_query_profile(normalized_code, [], [], 1)
         if profile is None:
             raise HTTPException(status_code=404, detail="Nessuna ricerca per soggetto archiviata")
         parcels = _hub_map_parcels(profile)
@@ -9974,21 +10317,35 @@ async def _subject_parcel_map_data(code: str, code_pattern: str, key: str | None
     return JSONResponse(await _hub_map_increment(key, max(0, after)), headers=headers)
 
 
+async def _granted_subject_parcel_map(code: str, kind: str, pattern: str, key: str | None, after: int, user):
+    from fastapi import HTTPException
+
+    from .database import has_subject_access
+
+    normalized_code = code.strip().upper()
+    if not re.fullmatch(pattern, normalized_code) or not await has_subject_access(
+        _principal_keys(user), kind, normalized_code
+    ):
+        raise HTTPException(status_code=404, detail="Mappa non trovata")
+    profile = await _subject_query_profile(
+        normalized_code, [], [], 1, allowed_document_ids=await _visible_document_ids(user)
+    )
+    if profile is None:
+        raise HTTPException(status_code=404, detail="Nessuna ricerca per soggetto archiviata")
+    return await _subject_parcel_map_data(normalized_code, pattern, key, after, profile=profile)
+
+
 @router.get("/persons/{fiscal_code}/parcel-map.json", response_class=JSONResponse)
 async def web_person_parcel_map_data(fiscal_code: str, k: str | None = None, after: int = 0, user=Depends(_require_auth)):
     if not _is_admin(user):
-        from fastapi import HTTPException
-
-        raise HTTPException(status_code=404, detail="Mappa non trovata")
+        return await _granted_subject_parcel_map(fiscal_code, "person", r"[A-Z0-9]{16}", k, after, user)
     return await _subject_parcel_map_data(fiscal_code, r"[A-Z0-9]{16}", k, after)
 
 
 @router.get("/companies/{fiscal_code}/parcel-map.json", response_class=JSONResponse)
 async def web_company_parcel_map_data(fiscal_code: str, k: str | None = None, after: int = 0, user=Depends(_require_auth)):
     if not _is_admin(user):
-        from fastapi import HTTPException
-
-        raise HTTPException(status_code=404, detail="Mappa non trovata")
+        return await _granted_subject_parcel_map(fiscal_code, "company", r"\d{11}", k, after, user)
     return await _subject_parcel_map_data(fiscal_code, r"\d{11}", k, after)
 
 
@@ -10559,6 +10916,107 @@ async def web_buy_document(request: Request, token: str, user=Depends(_require_a
     )
 
 
+@router.get("/buy/entity/{token}", response_class=HTMLResponse)
+async def web_buy_subject(request: Request, token: str, user=Depends(_require_auth)):
+    """Purchase access to one person/company named by a signed, expiring link."""
+    from fastapi import HTTPException
+
+    from . import purchases_billing
+    from .database import has_subject_access, list_subject_profiles
+
+    target = purchases_billing.subject_from_purchase_token(token)
+    if target is None:
+        raise HTTPException(status_code=404, detail="Link di acquisto non valido o scaduto")
+    kind, code = target
+    profiles = await list_subject_profiles(kind, code)
+    if not profiles:
+        raise HTTPException(status_code=404, detail="Profilo non trovato")
+    profile = profiles[0]
+    keys = _principal_keys(user)
+    owned = _is_admin(user) or bool(keys and await has_subject_access(keys, kind, code))
+    credits_on = purchases_billing.subject_credits_enabled(kind)
+    balance = None
+    if credits_on and keys:
+        try:
+            balance = await purchases_billing.credit_balance(_favorite_user_key(user) or keys[0])
+        except Exception as exc:  # noqa: BLE001 - card payment remains available if wallet lookup fails
+            logger.warning("Credit balance unavailable: %s", type(exc).__name__)
+            credits_on = False
+    return _get_theme(request).render(
+        "buy_subject.html",
+        request,
+        user=user,
+        token=token,
+        profile=profile,
+        kind=kind,
+        owned=owned,
+        card_enabled=purchases_billing.subject_billing_configured(kind),
+        card_price=purchases_billing.subject_price_label(kind),
+        credits_enabled=credits_on,
+        credit_cost=purchases_billing.subject_credit_cost(kind),
+        credit_balance=balance,
+        error=request.query_params.get("error", ""),
+        status=request.query_params.get("status", ""),
+    )
+
+
+@router.post("/buy/entity/{token}/purchase")
+@_audited("subject.purchase.start")
+async def web_subject_purchase(request: Request, token: str, user=Depends(_require_auth)):
+    """Purchase the linked entity with its configured Stripe price or its entity-specific credit cost."""
+    from fastapi import HTTPException
+
+    from . import purchases_billing
+    from .database import has_subject_access, list_subject_profiles
+
+    target = purchases_billing.subject_from_purchase_token(token)
+    if target is None:
+        raise HTTPException(status_code=404, detail="Link di acquisto non valido o scaduto")
+    kind, code = target
+    if not await list_subject_profiles(kind, code):
+        raise HTTPException(status_code=404, detail="Profilo non trovato")
+    keys = _principal_keys(user)
+    user_key = _favorite_user_key(user)
+    if not keys or not user_key:
+        raise HTTPException(status_code=403, detail="Account non identificabile")
+    profile_url = f"/{'persons' if kind == 'person' else 'companies'}/{code}"
+    if _is_admin(user) or await has_subject_access(keys, kind, code):
+        return RedirectResponse(url=profile_url, status_code=303)
+    form = await request.form()
+    method = str(form.get("method") or "card")
+    _subject_access_audit(
+        request,
+        user_id=user_key,
+        subject_type=kind,
+        subject_code=code,
+        operation=method,
+    )
+    buy_url = f"/buy/entity/{token}"
+    if method == "credits":
+        if not purchases_billing.subject_credits_enabled(kind):
+            return RedirectResponse(url=f"{buy_url}?error=disabled", status_code=303)
+        outcome = await purchases_billing.pay_subject_with_credits(user_key, kind, code, user_keys=keys)
+        if outcome == "insufficient":
+            return RedirectResponse(url=f"{buy_url}?error=credits", status_code=303)
+        if outcome == "disabled":
+            return RedirectResponse(url=f"{buy_url}?error=disabled", status_code=303)
+        if outcome == "replay":
+            raise HTTPException(status_code=409, detail="Pagamento già registrato")
+        return RedirectResponse(url=profile_url if outcome == "created" else f"{buy_url}?status=owned", status_code=303)
+    if method != "card":
+        raise HTTPException(status_code=422, detail="Metodo di pagamento non valido")
+    if not purchases_billing.subject_billing_configured(kind):
+        return RedirectResponse(url=f"{buy_url}?error=disabled", status_code=303)
+    try:
+        checkout_url = await purchases_billing.start_subject_checkout(
+            request, user_key, getattr(user, "email", None), kind, code, token, user_keys=keys
+        )
+    except Exception as exc:  # noqa: BLE001 - details stay in logs; no payment was completed
+        logger.error("Subject checkout failed: %s", type(exc).__name__)
+        raise HTTPException(status_code=502, detail="Pagamento non disponibile al momento") from None
+    return RedirectResponse(url=checkout_url, status_code=303)
+
+
 @router.post("/documents/{doc_id}/purchase")
 @_audited("document.purchase.start")
 async def web_document_purchase(request: Request, doc_id: int, user=Depends(_require_auth)):
@@ -10624,7 +11082,111 @@ async def web_admin_credits_grant(request: Request, user=Depends(_require_admin)
     except PurchaseError as exc:
         _purchase_audit(request, error_code=exc.code)
         return _purchase_redirect(error=exc.code)
-    return RedirectResponse(url=f"/admin/document-purchases?status=credits&balance={balance}", status_code=303)
+    destination = str(form.get("return_to") or "").strip()
+    if destination == "wallets":
+        return _wallet_admin_redirect(q=user_key, status="credits")
+    return RedirectResponse(url=f"/admin/purchases?status=credits&balance={balance}", status_code=303)
+
+
+@router.post("/admin/wallets/state")
+@_audited("admin.wallet.state")
+async def web_admin_wallet_state(request: Request, user=Depends(_require_admin)):
+    from . import purchases_billing
+    from .database import PurchaseError
+
+    form = await request.form()
+    try:
+        user_key = _purchase_identity(str(form.get("user_id") or ""))
+    except PurchaseError:
+        return _wallet_admin_redirect(error="bad_key")
+    action = str(form.get("action") or "").strip()
+    snapshot = await purchases_billing.wallet_admin_snapshot(user_key)
+    if snapshot is None:
+        return _wallet_admin_redirect(q=user_key, error="wallet_not_found")
+    service = purchases_billing._wallet_service()
+    _purchase_audit(request, user_id=user_key, wallet_id=snapshot["id"], action=action)
+    if action == "lock":
+        await service.lock_wallet(snapshot["id"])
+    elif action == "unlock":
+        await service.unlock_wallet(snapshot["id"])
+    else:
+        return _wallet_admin_redirect(q=user_key, error="bad_wallet_action")
+    return _wallet_admin_redirect(q=user_key, status=f"wallet_{action}ed")
+
+
+@router.post("/admin/wallet-gifts/create")
+@_audited("admin.wallet.gift_coupon.create")
+async def web_admin_wallet_gift_create(request: Request, user=Depends(_require_admin)):
+    from decimal import Decimal, InvalidOperation
+
+    from . import purchases_billing
+    from .database import PurchaseError
+
+    form = await request.form()
+    try:
+        amount = Decimal(str(form.get("amount") or "").replace(",", ".").strip())
+        max_redemptions = int(str(form.get("max_redemptions") or "1").strip())
+        if not amount.is_finite() or not (Decimal("0") < amount <= Decimal("100000")):
+            raise PurchaseError("bad_amount")
+        if not 1 <= max_redemptions <= 10000:
+            raise PurchaseError("bad_redemptions")
+        expiry_raw = str(form.get("expires_at") or "").strip()
+        expires_at = _purchase_datetime(expiry_raw, allow_future=True) if expiry_raw else None
+        if expires_at is not None and expires_at <= datetime.now(timezone.utc):
+            raise PurchaseError("bad_expiry")
+        note = str(form.get("note") or "").strip()[:500]
+        code = await purchases_billing.create_gift_coupon(
+            amount, max_redemptions, _actor(user), expires_at=expires_at, note=note
+        )
+    except (InvalidOperation, ValueError, PurchaseError, RuntimeError) as exc:
+        reason = getattr(exc, "code", "gift_coupon_failed")
+        _purchase_audit(request, error_code=reason)
+        return _wallet_admin_redirect(error=reason)
+    _purchase_audit(request, amount=str(amount), max_redemptions=max_redemptions, note=note, code_hint=code[-6:])
+    # Show the generated plaintext once in this response only; it is never stored or placed in a URL.
+    return await web_admin_wallets(request, status="gift_created", gift_code=code, user=user)
+
+
+@router.post("/admin/wallet-gifts/{coupon_id}/status")
+@_audited("admin.wallet.gift_coupon.status")
+async def web_admin_wallet_gift_status(request: Request, coupon_id: int, user=Depends(_require_admin)):
+    from .database import set_wallet_gift_coupon_status
+
+    form = await request.form()
+    action = str(form.get("action") or "").strip()
+    target_status = {"freeze": "frozen", "activate": "active", "revoke": "revoked"}.get(action)
+    if target_status is None:
+        return _wallet_admin_redirect(error="bad_coupon_action")
+    changed = await set_wallet_gift_coupon_status(coupon_id, target_status)
+    _purchase_audit(request, coupon_id=coupon_id, action=action)
+    return _wallet_admin_redirect(status=f"gift_{action}" if changed else "", error="not_found" if not changed else "")
+
+
+@router.post("/admin/wallet-gifts/redemptions/{redemption_id}/undo")
+@_audited("admin.wallet.gift_coupon.undo")
+async def web_admin_wallet_gift_undo(request: Request, redemption_id: int, user=Depends(_require_admin)):
+    from . import purchases_billing
+
+    outcome = await purchases_billing.reverse_gift_coupon_redemption(redemption_id, _actor(user))
+    _purchase_audit(request, redemption_id=redemption_id, outcome=outcome)
+    return _wallet_admin_redirect(status="gift_undone" if outcome in {"reversed", "already_reversed"} else "", error="gift_" + outcome if outcome not in {"reversed", "already_reversed"} else "")
+
+
+@router.post("/wallet/gift-coupons/redeem")
+@_audited("wallet.gift_coupon.redeem")
+async def web_wallet_gift_redeem(request: Request, user=Depends(_require_auth)):
+    from . import purchases_billing
+
+    user = user or _get_user(request)
+    keys = _principal_keys(user)
+    if not keys or not purchases_billing.credit_grants_enabled():
+        return RedirectResponse(url="/profile?gift_status=unavailable", status_code=303)
+    form = await request.form()
+    code = str(form.get("code") or "").strip()
+    user_key = _favorite_user_key(user) or keys[0]
+    outcome = await purchases_billing.redeem_gift_coupon(code, user_key)
+    _purchase_audit(request, user_id=purchases_billing.wallet_user_id(user_key), outcome=outcome)
+    return RedirectResponse(url=f"/profile?gift_status={outcome}", status_code=303)
 
 
 @router.get("/documents", response_class=HTMLResponse)
@@ -10943,7 +11505,7 @@ async def web_documents(
         logical = [
             document
             for document in logical
-            if str(document.get("document_type") or "").casefold() == document_type_filter
+            if _document_matches_type_filter(document, document_type_filter)
         ]
         raw_document_file_count = sum(document.get("n_files") or 1 for document in logical)
     if logical is not None and search_terms:
@@ -10987,6 +11549,8 @@ async def web_documents(
         if active_view == "categories"
         else []
     )
+    if document_type_filter:
+        tree = [category for category in tree if category["count"]]
     page_file_id_to_logical_id: dict[int, int] = {}
     for document in page_documents:
         logical_id = document.get("id")
@@ -11129,8 +11693,13 @@ async def web_documents(
         page_start=document_page_start,
         page_end=document_page_end,
         document_type_filter=document_type_filter,
+        document_categories=[
+            {"key": key, "label": label, "icon": icon}
+            for key, label, icon, _color, _types in _DOCUMENT_CATEGORIES
+        ] + [{"key": "altro", "label": "Altri documenti", "icon": "fa-file"}],
         search_query=search_query,
-        document_type_label={
+        document_type_label=({key: label for key, label, *_ in _DOCUMENT_CATEGORIES} | {
+            "altro": "Altri documenti",
             "ispezione_ipotecaria": "Ispezioni ipotecarie",
             "nota_trascrizione_iscrizione": "Note di trascrizione e iscrizione",
             "nota_iscrizione": "Note di iscrizione",
@@ -11139,7 +11708,7 @@ async def web_documents(
             "elenco_immobili": "Elenco degli Immobili",
             "elenco_subalterni": "Elenco Subalterni",
             "fiduciali": "Punti Fiduciali",
-        }.get(document_type_filter, document_type_filter.replace("_", " ").capitalize()),
+        }).get(document_type_filter, document_type_filter.replace("_", " ").capitalize()),
     )
 
 
@@ -12928,9 +13497,12 @@ async def _web_subject_profile(
 
     subject_documents = _collapse_to_logical_docs(candidates)
     is_company = route_prefix == "/companies"
+    subject_type = "company" if is_company else "person"
     # the saved soggetto query is the hub's skeleton; it enriches the visura layout, or stands alone without a visura
     subject_hub = None
-    if visible_document_ids is None:
+    from .database import has_subject_access
+
+    if visible_document_ids is None or await has_subject_access(_principal_keys(user), subject_type, normalized_code):
         subject_hub = await _subject_query_profile(
             normalized_code,
             subject_documents,
@@ -12940,7 +13512,6 @@ async def _web_subject_profile(
             allowed_document_ids=visible_document_ids,
         )
     favorite_user_key = _favorite_user_key(user)
-    subject_type = "company" if is_company else "person"
     subject_favorite_enabled = bool(favorite_user_key)
     subject_is_favorite = False
     if subject_favorite_enabled and not as_pdf:
@@ -13193,10 +13764,11 @@ _SUBJECT_KINDS = {
 async def _render_subject_index(request: Request, user, kind: str, code: str = "", error_message: str | None = None):
     """The archive table page. Only aggregates are computed here (summary cards, column widths): the rows are paged
     from ``<route>/index.json``, so the cost does not grow with the number of subjects shown."""
-    from .database import list_subject_tags, subject_overview
+    from .database import get_subject_access_codes, list_subject_tags, subject_overview
 
     spec = _SUBJECT_KINDS[kind]
-    overview = await subject_overview(kind)
+    codes = None if _is_admin(user) else await get_subject_access_codes(_principal_keys(user), kind)
+    overview = await subject_overview(kind, allowed_codes=codes)
     response = _get_theme(request).render(
         "subject_index.html",
         request,
@@ -13208,7 +13780,7 @@ async def _render_subject_index(request: Request, user, kind: str, code: str = "
         error_message=error_message,
         stats=overview,
         overview={"total": overview["subjects"], "widest": overview["widest"], "max": overview["max"]},
-        subject_tags=await list_subject_tags(kind),
+        subject_tags=await list_subject_tags(kind, allowed_codes=codes),
         tags_editable=bool(_favorite_user_key(user)),
     )
     if error_message:
@@ -13242,6 +13814,7 @@ async def _subject_table_query(request: Request, kind: str, user, *, paged: bool
     from .database import (
         SUBJECT_FILTER_FIELDS,
         SUBJECT_SORT_FIELDS,
+        get_subject_access_codes,
         get_subject_favorite_codes,
         query_subject_profiles,
     )
@@ -13261,6 +13834,7 @@ async def _subject_table_query(request: Request, kind: str, user, *, paged: bool
     }
     user_key = _favorite_user_key(user)
     favorites = await get_subject_favorite_codes(user_key, kind) if user_key else set()
+    allowed_codes = None if _is_admin(user) else await get_subject_access_codes(_principal_keys(user), kind)
     rows, total = await query_subject_profiles(
         kind,
         q=(query.get("q") or "")[:200],
@@ -13272,6 +13846,7 @@ async def _subject_table_query(request: Request, kind: str, user, *, paged: bool
         limit=size if paged else None,
         offset=(page - 1) * size,
         favorites=favorites,
+        allowed_codes=allowed_codes,
     )
     return rows, total, size
 
@@ -13342,9 +13917,10 @@ async def web_persons_index_csv(request: Request, user=Depends(_require_auth)):
 @router.get("/persons/tags.json", response_class=JSONResponse)
 async def web_persons_tags_json(user=Depends(_require_auth)):
     """Every tag in use for persons with its number of profiles."""
-    from .database import list_subject_tags
+    from .database import get_subject_access_codes, list_subject_tags
 
-    return JSONResponse({"tags": await list_subject_tags("person")}, headers={"Cache-Control": "private, no-store"})
+    codes = None if _is_admin(user) else await get_subject_access_codes(_principal_keys(user), "person")
+    return JSONResponse({"tags": await list_subject_tags("person", allowed_codes=codes)}, headers={"Cache-Control": "private, no-store"})
 
 
 @router.post("/persons/tags/bulk", response_class=JSONResponse)
@@ -13371,9 +13947,10 @@ async def web_companies_index_csv(request: Request, user=Depends(_require_auth))
 @router.get("/companies/tags.json", response_class=JSONResponse)
 async def web_companies_tags_json(user=Depends(_require_auth)):
     """Every tag in use for companies with its number of profiles."""
-    from .database import list_subject_tags
+    from .database import get_subject_access_codes, list_subject_tags
 
-    return JSONResponse({"tags": await list_subject_tags("company")}, headers={"Cache-Control": "private, no-store"})
+    codes = None if _is_admin(user) else await get_subject_access_codes(_principal_keys(user), "company")
+    return JSONResponse({"tags": await list_subject_tags("company", allowed_codes=codes)}, headers={"Cache-Control": "private, no-store"})
 
 
 @router.post("/companies/tags/bulk", response_class=JSONResponse)

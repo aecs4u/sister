@@ -111,6 +111,12 @@
             </a>
         </div>
         <div class="nav-item">
+            <a class="nav-link{% if request.url.path.startswith('/admin/wallets') or request.url.path.startswith('/admin/wallet-gifts') %} active{% endif %}" href="/admin/wallets">
+                <i class="fas fa-wallet"></i>
+                <span>Portafogli e buoni</span>
+            </a>
+        </div>
+        <div class="nav-item">
             <a class="nav-link{% if request.url.path.startswith('/admin/inputs') %} active{% endif %}" href="/admin/inputs">
                 <i class="fas fa-list-check"></i>
                 <span>Input Markdown</span>

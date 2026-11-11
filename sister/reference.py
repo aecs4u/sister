@@ -167,6 +167,25 @@ async def get_or_create_comune(
     return result
 
 
+async def comuni_by_cadastral_code(session: AsyncSession, cadastral_codes: Any) -> dict[str, int]:
+    """ISTAT ``numeric_code`` of many Belfiore codes in one query (``{"H501": 58091}``; unknown codes are left out).
+
+    The ISTAT table is a foreign table: a lookup per property is a round trip to another database each time.
+    """
+    codes = sorted({code for code in map(belfiore_code, cadastral_codes or ()) if code})
+    if not codes:
+        return {}
+    cadastral_code = func.upper(func.trim(IstatMunicipality.cadastral_code))
+    rows = await session.execute(
+        select(cadastral_code, IstatMunicipality.numeric_code).where(cadastral_code.in_(codes))
+    )
+    found: dict[str, int] = {}
+    for code, numeric_code in rows.all():
+        if numeric_code is not None:
+            found.setdefault(code, numeric_code)
+    return found
+
+
 async def _resolve_comune(session: AsyncSession, name: Any, province: Any, cadastral_code: Any) -> Optional[int]:
     place = place_name(name)
     prov = province_code(province)

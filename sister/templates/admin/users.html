@@ -1,0 +1,11 @@
+{% extends "aecs4u_theme/admin/users.html" %}
+{% set base_template = "_base.html" %}
+{% set admin_users_read_only = true %}
+{% set admin_users_title = "Gestione utenti" %}
+{% set admin_users_description = "Account locali configurati per SISTER e relativo ruolo applicativo." %}
+{% set admin_users_list_title = "Account locali" %}
+{% set admin_users_back_label = "Amministrazione" %}
+
+{% block admin_users_footer %}
+<div class="card-footer small text-muted">I ruoli Admin derivano da <code>SISTER_ADMIN_USERS</code>. Le credenziali non vengono mostrate in questa pagina.</div>
+{% endblock %}

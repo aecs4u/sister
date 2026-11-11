@@ -53,7 +53,9 @@ FINAL_ERRORS = (
     "NESSUNA CORRISPONDENZA",
     "Superato il limite massimo",
     "Il sistema non riesce a produrre la risposta nei limiti di tempo previsti",
+    "La sezione è obbligatoria",  # the comune has sezioni and the row gives none: same answer every time
 )
+SECTION_REQUIRED = "La sezione è obbligatoria"
 TOO_MANY = "Superato il limite massimo"  # SISTER lists at most 400 subjects for a search
 # the "Provincia della sede" options of the persona giuridica form (EE = estero): a search by name that matches more than
 # 400 subjects is split into one request per province
@@ -456,11 +458,16 @@ class BatchRunner:
         self._prior = journal.load() if journal and resume else {}
         self._stop = False
         self._prompt_lock = asyncio.Lock()
+        self._section_comuni: set[tuple[str, str]] = set()  # (provincia, comune) SISTER refuses without a sezione
 
     async def run(self, plan: list[PlannedQuery], name: str | None = None) -> BatchReport:
         report = BatchReport(name=name)
         gate = asyncio.Semaphore(self.options.max_in_flight)
         total = len(plan)
+        for item in plan:  # a resumed run knows the comuni refused earlier: their other rows are not sent
+            prior = self._prior.get(item.id) or {}
+            if SECTION_REQUIRED in str(prior.get("error", "")):
+                self._note_section(item, prior)
 
         async def one(item: PlannedQuery) -> dict:
             if item.state != "ready":
@@ -498,6 +505,20 @@ class BatchRunner:
         if self._session_expired(entry):
             self._stop, self.stopped = True, STOPPED_SESSION_EXPIRED
         return entry
+
+    @staticmethod
+    def _comune_key(item: PlannedQuery) -> tuple[str, str] | None:
+        """(provincia, comune) of a parcel row that gives no sezione, else None."""
+        comune = " ".join(str(item.params.get("comune") or "").split()).upper()
+        if not comune or str(item.params.get("sezione") or "").strip():
+            return None
+        return (str(item.params.get("provincia") or "").strip().upper(), comune)
+
+    def _note_section(self, item: PlannedQuery, entry: dict) -> None:
+        """SISTER refused a parcel row because its comune has sezioni: every other row of that comune would be refused too."""
+        key = self._comune_key(item)
+        if key and SECTION_REQUIRED in str(entry.get("error", "")):
+            self._section_comuni.add(key)
 
     # -- one row ------------------------------------------------------------------------------------------------
 
@@ -537,6 +558,19 @@ class BatchRunner:
             self.journal.append({**{k: v for k, v in entry.items() if k != "results"}, "updated_at": _now()})
 
     async def _execute(self, item: PlannedQuery, total: int) -> dict:
+        key = self._comune_key(item)
+        if key and key in self._section_comuni and not (self._prior.get(item.id) or {}).get("request_ids"):
+            entry = self._entry(
+                item,
+                ERROR,
+                error=f"{SECTION_REQUIRED} per il comune {key[1]} ({key[0]}): comune saltato, riga non inviata",
+                retryable=False,
+            )
+            entry.pop("retryable", None)
+            self._record(entry)
+            self._write_row(item, entry)
+            self.emit("skip", item, status=ERROR, reason="sezione obbligatoria")
+            return entry
         prior = self._prior.get(item.id)
         if prior and prior.get("fingerprint") != item.fingerprint:
             prior = None  # the query was edited: it is a new request
@@ -643,6 +677,7 @@ class BatchRunner:
         elif entry["status"] == ERROR and TOO_MANY in str(entry.get("error", "")) and self._splittable(item):
             entry = await self._split(item, total, entry)
         self._note_session(entry)
+        self._note_section(item, entry)
         self._stamp_records(entry)
         self._record(entry)
         self._write_row(item, entry)

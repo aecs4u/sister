@@ -110,7 +110,7 @@ uv run sister build dossier-graph --seed <CF|PIVA>
 - Run commands with `uv run` prefix
 - Tests: `../.venv/bin/python -m pytest -p no:logfire --continue-on-collection-errors` (`uv run` and the logfire plugin fail in this checkout); fixtures in `tests/fixtures/` (`portal_forms/` = saved SISTER forms, `single_step/` = anonymised results)
 - Service default port: 8025
-- Database: PostgreSQL configured with `DATABASE_DSN`
+- Database: PostgreSQL configured with `SISTER_DATABASE_DSN_LOCALHOST` for development/local environments and `SISTER_DATABASE_DSN_NEON` for `ENVIRONMENT=production`/`prod`/`staging`; the service, batches and Alembic use the same selection.
 - All internal imports use relative imports (e.g., `from .database import ...`)
 - CLI entry point: `sister` (registered in pyproject.toml as `sister = "sister.cli:run"`)
 - Auth config: `.env` file with `ADE_USERNAME`, `ADE_PASSWORD`, `ADE_AUTH_METHOD=cie`
@@ -182,7 +182,7 @@ uv run sister build dossier-graph --seed <CF|PIVA>
 - The interactive API docs (`/docs`, `/redoc`, `/openapi.json`) require sign-in like the web UI (`main._docs_auth`); `/health` stays public.
 - Saved results are kept in the database indefinitely. `RESPONSE_TTL_SECONDS` (6 h) only governs the in-memory cache; deleting
   database rows is opt-in via `DB_RETENTION_SECONDS` (default 0 = never). (It used to reuse the cache TTL, which silently purged
-  jobs/responses older than 6 h every minute.) After switching `DATABASE_DSN` to an empty database, rebuild jobs/responses from
+  jobs/responses older than 6 h every minute.) After switching the selected SISTER database DSN to an empty database, rebuild jobs/responses from
   `outputs/` with the admin "Importa output" button on `/results`; it is idempotent.
 - Logins: `LOCAL_USERS_FILE` (in `.env`) points at `local_users.sister.txt` — hashed, mode 600, git-ignored (`local_users*.txt`). Regenerate or add users with `sister app hash-password <user>`; plain entries still work but log a warning.
 - Static files: SISTER's own `/static` assets revalidate via ETag (no long cache); only versioned `aecs4u-theme` assets are immutable.

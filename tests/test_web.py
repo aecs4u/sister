@@ -1450,7 +1450,19 @@ def test_admin_activity_shows_duplicate_stripe_payment_for_refund(main_module, m
     admin = SimpleNamespace(role="admin", is_superuser=True)
 
     async def _recent_activity(*, limit, action_prefix):
-        assert (limit, action_prefix) == (100, "admin.document_purchase.")
+        assert limit == 100
+        if action_prefix == "subject.purchase.":
+            return [{
+                "action": "subject.purchase.completed",
+                "actor": "Stripe",
+                "status": "success",
+                "started_at": "2026-10-30T10:01:00+00:00",
+                "params": {"user_id": "email:buyer@example.test", "subject_type": "company", "subject_code": "00112580535"},
+                "result": {"amount_cents": 1490, "currency": "EUR"},
+            }]
+        if action_prefix == "admin.subject_access.":
+            return []
+        assert action_prefix == "admin.document_purchase."
         return [
             {
                 "action": "admin.document_purchase.refund_required",
@@ -1473,6 +1485,9 @@ def test_admin_activity_shows_duplicate_stripe_payment_for_refund(main_module, m
     assert "Rimborso manuale richiesto" in response.text
     assert "cs_test_ref" in response.text
     assert "€ 12,90 EUR" in response.text
+    assert "Acquisto profilo completato" in response.text
+    assert "00112580535" in response.text
+    assert "€ 14,90 EUR" in response.text
     assert "/documents/456" in response.text
 
 
@@ -1741,3 +1756,18 @@ def test_mirrored_payload_tables_are_dropped_when_the_master_detail_pair_has_the
     ]
     different = [{"name": "immobili", "count": 2}, {"name": "results", "count": 5}]
     assert web._drop_mirrored_sections(different) == different
+
+
+def test_landing_shows_the_signed_in_user_in_the_header(main_module, monkeypatch):
+    from fastapi.testclient import TestClient
+
+    async def signed_in(_request):
+        return SimpleNamespace(id="u1", username="mario", email="mario@example.com", full_name="Mario Rossi",
+                               role="user", is_superuser=False)
+
+    monkeypatch.setattr(web, "_optional_user", signed_in)
+    page = TestClient(main_module.app).get("/landing")
+
+    assert page.status_code == 200
+    assert "Mario Rossi" in page.text and 'id="userDropdown"' in page.text
+    assert 'href="/settings"' in page.text and 'class="fas fa-cog"' in page.text

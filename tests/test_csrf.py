@@ -2,6 +2,7 @@
 
 import pytest
 from fastapi import FastAPI, Form, Request
+from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.testclient import TestClient
 
 from sister.csrf import CookieCSRFMiddleware, make_token
@@ -93,3 +94,45 @@ def test_api_clients_get_a_json_403(client):
     response = client.post("/act", headers={"accept": "application/json"})
     assert response.status_code == 403
     assert response.json() == {"detail": "CSRF token missing or invalid"}
+
+
+@pytest.mark.parametrize("content_type", ["application/x-www-form-urlencoded", "multipart/form-data; boundary=test"])
+@pytest.mark.parametrize("partial_body", [False, True])
+@pytest.mark.parametrize("outer_middleware", [False, True])
+async def test_disconnected_form_is_rejected_without_running_the_route(content_type, partial_body, outer_middleware):
+    async def route(scope, receive, send):
+        pytest.fail("An incomplete request must not reach the route")
+
+    middleware = CookieCSRFMiddleware(route, cookie_name=COOKIE, secret_getter=lambda: SECRET)
+    if outer_middleware:
+        async def dispatch(request, call_next):
+            return await call_next(request)
+
+        middleware = BaseHTTPMiddleware(middleware, dispatch=dispatch)
+
+    scope = {
+        "type": "http", "method": "POST", "path": "/admin/credits/grant", "root_path": "",
+        "scheme": "http", "query_string": b"", "http_version": "1.1",
+        "headers": [(b"cookie", f"{COOKIE}=jwt".encode()), (b"content-type", content_type.encode())],
+    }
+    messages = []
+    if partial_body:
+        token = make_token(SECRET, "jwt")
+        body = (
+            f"--test\r\nContent-Disposition: form-data; name=\"csrf_token\"\r\n\r\n{token}\r\n--test\r\n"
+            if content_type.startswith("multipart/") else f"csrf_token={token}&amount="
+        ).encode()
+        messages.append({"type": "http.request", "body": body, "more_body": True})
+
+    async def receive():
+        return messages.pop(0) if messages else {"type": "http.disconnect"}
+
+    responses = []
+
+    async def send(message):
+        responses.append(message)
+
+    await middleware(scope, receive, send)
+
+    assert responses[0]["type"] == "http.response.start"
+    assert responses[0]["status"] == 400

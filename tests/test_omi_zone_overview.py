@@ -349,3 +349,13 @@ def test_cache_ttl_comes_from_the_environment(monkeypatch):
     assert cache_ttl_seconds() == 7 * 86400
     monkeypatch.setenv("OMI_CACHE_DAYS", "garbage")
     assert cache_ttl_seconds() == 30 * 86400
+
+
+def test_transaction_volume_query_reads_the_normalised_sales_tables():
+    sql = overview._NTN_SQL
+    assert "omi_flat" not in sql and "omi_core" not in sql and "public." not in sql
+    for table in ("omi.municipality_version", "omi.sales_record", "omi.sales_measure", "omi.sales_indicator"):
+        assert table in sql
+    for column in ("ntn_totale", "ntn_oltre_145mq", "ntn_uffici", "ntn_produttivo", "ntn_box", "ntn_depositi_pertinenziali"):
+        assert f"AS {column}" in sql
+    assert sql.count("$1") == 1

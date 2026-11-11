@@ -11,10 +11,10 @@ on:
         default: production
 
 env:
-  GCP_PROJECT_ID: apps-aecs4u
-  GCP_REGION: europe-west1
-  SERVICE_NAME: sister-service
-  IMAGE_BASE: europe-west1-docker.pkg.dev/apps-aecs4u/cloud-run-source-deploy/sister-service
+  GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID || 'apps-aecs4u' }}
+  GCP_REGION: ${{ vars.GCP_REGION || 'europe-west1' }}
+  SERVICE_NAME: ${{ vars.CLOUD_RUN_SERVICE || 'sister-service' }}
+  IMAGE_BASE: ${{ vars.ARTIFACT_REGISTRY_IMAGE || 'europe-west1-docker.pkg.dev/apps-aecs4u/cloud-run-source-deploy/sister-service' }}
 
 jobs:
   deploy:
@@ -32,8 +32,8 @@ jobs:
         id: auth
         uses: google-github-actions/auth@v2
         with:
-          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
-          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER || secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_SERVICE_ACCOUNT || secrets.GCP_SERVICE_ACCOUNT }}
           token_format: access_token
 
       - name: Set up Cloud SDK
@@ -85,14 +85,14 @@ jobs:
             --service-account=sister-runtime@apps-aecs4u.iam.gserviceaccount.com \
             --allow-unauthenticated \
             --ingress=all \
-            --memory=512Mi \
-            --cpu=1 \
-            --max-instances=3 \
-            --min-instances=0 \
-            --concurrency=80 \
-            --execution-environment=gen2 \
-            --port=8080 \
-            --timeout=300 \
+            --memory="${{ vars.CLOUDRUN_MEMORY || '512Mi' }}" \
+            --cpu="${{ vars.CLOUDRUN_CPU || '1' }}" \
+            --max-instances="${{ vars.CLOUDRUN_MAX_INSTANCES || '3' }}" \
+            --min-instances="${{ vars.CLOUDRUN_MIN_INSTANCES || '0' }}" \
+            --concurrency="${{ vars.CLOUDRUN_CONCURRENCY || '80' }}" \
+            --execution-environment="${{ vars.CLOUDRUN_EXECUTION_ENV || 'gen2' }}" \
+            --port="${{ vars.CLOUDRUN_PORT || '8080' }}" \
+            --timeout="${{ vars.CLOUDRUN_TIMEOUT || '300' }}" \
             --cpu-boost \
             --cpu-throttling \
             --set-env-vars=ENVIRONMENT=production,DEBUG=false,LOG_LEVEL=INFO,SISTER_OUTPUTS_DIR=/app/outputs,BROWSER_HEADLESS=true,REQUIRE_AUTHENTICATION=true,USE_CLERK_AUTH=true,CLERK_AFTER_SIGN_IN_URL=/web/,CLERK_AFTER_SIGN_UP_URL=/web/ \

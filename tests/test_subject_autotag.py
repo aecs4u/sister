@@ -3,7 +3,8 @@
 import pytest
 from sqlalchemy import text
 
-from sister import database, subject_autotag as auto
+from sister import database
+from sister import subject_autotag as auto
 
 ROSSI, VERDI, BIANCHI = "RSSMRA80A01H501U", "VRDLGU75B12F205X", "BNCLRA90C41H501Z"
 ACME, BETA = "01234567890", "09876543210"
@@ -12,6 +13,23 @@ ACME, BETA = "01234567890", "09876543210"
 def test_kind_of_code():
     assert auto.kind_of(ROSSI) == "person" and auto.kind_of(ACME) == "company"
     assert auto.kind_of("1234567890A") is None and auto.kind_of("short") is None
+
+
+def test_pvp_dsn_uses_selected_sister_connection(monkeypatch):
+    from sqlalchemy.engine import make_url
+
+    monkeypatch.delenv("PVP_DATABASE_DSN", raising=False)
+    monkeypatch.setenv("DATABASE_DSN", "postgresql://old.invalid/wrong")
+    monkeypatch.setattr(database, "DATABASE_DSN", "postgresql+psycopg://user@localhost/sister?options=-csearch_path%3Dsister")
+    target = make_url(auto.pvp_dsn())
+    assert target.host == "localhost" and target.username == "user"
+    assert target.database == "pvp" and not target.query
+
+
+def test_pvp_dsn_preserves_explicit_override(monkeypatch):
+    monkeypatch.setenv("PVP_DATABASE_DSN", "postgresql://override.invalid/pvp")
+    monkeypatch.setattr(database, "DATABASE_DSN", None)
+    assert auto.pvp_dsn() == "postgresql://override.invalid/pvp"
 
 
 def test_pvp_tags_add_one_tag_per_role_and_group_the_rare_ones():

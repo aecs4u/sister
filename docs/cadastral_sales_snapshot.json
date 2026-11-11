@@ -1,0 +1,187 @@
+{
+  "migration": "cadastral_sales migration v1; managed by scripts/create_cadastral_sales.py",
+  "snapshot_started_at": "2026-11-10T17:14:08.783573+00:00",
+  "relations": {
+    "cadastral_parcel": {
+      "columns": [
+        [
+          "id",
+          "bigint"
+        ],
+        [
+          "canonical_reference",
+          "text"
+        ],
+        [
+          "national_cadastral_reference",
+          "text"
+        ],
+        [
+          "parcel",
+          "text"
+        ],
+        [
+          "sheet",
+          "text"
+        ],
+        [
+          "municipality_id",
+          "bigint"
+        ],
+        [
+          "area_sqm",
+          "double precision"
+        ],
+        [
+          "source_release",
+          "text"
+        ],
+        [
+          "region",
+          "text"
+        ],
+        [
+          "province",
+          "text"
+        ],
+        [
+          "municipality_code",
+          "text"
+        ],
+        [
+          "municipality_name",
+          "text"
+        ],
+        [
+          "inspire_localid",
+          "text"
+        ],
+        [
+          "geom",
+          "geometry(Geometry,4326)"
+        ],
+        [
+          "has_visura",
+          "boolean"
+        ],
+        [
+          "is_auction_sale",
+          "boolean"
+        ]
+      ],
+      "rows": 110657,
+      "bytes": 74518522,
+      "sha256": "2adc9ee1dc7a5d6bf39b11b0f0b2e746bfdc80780f89c5d272efd908dcad1b2d",
+      "distinct_references": 110653
+    },
+    "cadastral_sheet": {
+      "columns": [
+        [
+          "id",
+          "bigint"
+        ],
+        [
+          "sheet_reference",
+          "text"
+        ],
+        [
+          "level",
+          "text"
+        ],
+        [
+          "level_name",
+          "text"
+        ],
+        [
+          "municipality_id",
+          "bigint"
+        ],
+        [
+          "area_sqm",
+          "double precision"
+        ],
+        [
+          "source_release",
+          "text"
+        ],
+        [
+          "region",
+          "text"
+        ],
+        [
+          "province",
+          "text"
+        ],
+        [
+          "municipality_code",
+          "text"
+        ],
+        [
+          "municipality_name",
+          "text"
+        ],
+        [
+          "inspire_localid",
+          "text"
+        ],
+        [
+          "geom",
+          "geometry(Geometry,4326)"
+        ]
+      ],
+      "rows": 27653,
+      "bytes": 313887582,
+      "sha256": "27c2223087cbb4a773e75daec575ad1f2067c564f8563a6b50977cecd3df6c4b",
+      "distinct_references": 27653
+    }
+  },
+  "selection_audit": {
+    "pvp_enriched": {
+      "reference_status_counts": {
+        "valid_reference": 325172,
+        "unresolved_section": 34957,
+        "sheet_only_or_unparsed_parcel": 3553,
+        "invalid_or_ambiguous_sheet": 6100,
+        "missing_municipality": 17616
+      },
+      "distinct_parcel_references": 123326,
+      "matched_parcel_references": 54032,
+      "unmatched_parcel_references": 69294,
+      "distinct_sheet_references": 37166,
+      "matched_sheet_references": 21326,
+      "unmatched_sheet_references": 15840
+    },
+    "sister": {
+      "reference_status_counts": {
+        "valid_reference": 166465,
+        "unresolved_section": 4972,
+        "invalid_or_ambiguous_sheet": 408,
+        "sheet_only_or_unparsed_parcel": 1838,
+        "missing_municipality": 6206
+      },
+      "distinct_parcel_references": 114410,
+      "matched_parcel_references": 56867,
+      "unmatched_parcel_references": 57543,
+      "distinct_sheet_references": 14713,
+      "matched_sheet_references": 9384,
+      "unmatched_sheet_references": 5329
+    },
+    "opendata": {
+      "reference_status_counts": {
+        "valid_reference": 454,
+        "missing_municipality": 10,
+        "invalid_or_ambiguous_sheet": 2,
+        "unresolved_section": 1
+      },
+      "distinct_parcel_references": 128,
+      "matched_parcel_references": 89,
+      "unmatched_parcel_references": 39,
+      "distinct_sheet_references": 34,
+      "matched_sheet_references": 22,
+      "unmatched_sheet_references": 12
+    },
+    "parcel_parent_sheets_missing_geometry": 3
+  },
+  "snapshot_completed_at": "2026-11-10T17:17:16.217996+00:00",
+  "neon_verified_at": "2026-11-10T17:17:53.876064+00:00"
+}

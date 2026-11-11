@@ -1,4 +1,5 @@
 {% extends "_base.html" %}
+{% from "components/hero.html" import hero_section %}
 {% from "components/related_links.html" import related_pages %}
 {% from "_doc_macros.html" import query_section, query_subsection, doc_table, doc_macros_js, documents_favorites_js %}
 {% from "components/documents_category_navigation.html" import document_category_navigation %}
@@ -37,68 +38,53 @@
 {% block extra_css %}
 {{ super() }}
 <link rel="stylesheet" href="/static/css/doc_sections.css?v=20261009a">
-<link rel="stylesheet" href="/static/css/pages/documents_index.css?v=20261103a">
+<link rel="stylesheet" href="/static/css/pages/documents_index.css?v=20261110a">
 <link rel="stylesheet" href="/static/css/pages/documents_map.css?v=20261009a">
 {% endblock %}
 
 {% block content %}
-<div class="page-hero no-print">
-    <div class="container-fluid">
-        <nav class="mb-3" aria-label="breadcrumb">
-            <ol class="breadcrumb mb-0">
-                <li class="breadcrumb-item"><a href="/" class="text-white-50">Dashboard</a></li>
-                <li class="breadcrumb-item active text-white">Documenti</li>
-            </ol>
-        </nav>
-        <div class="d-flex flex-wrap justify-content-between align-items-center gap-3">
-            <div>
-                <h1 class="display-6 fw-bold mb-2"><i class="fas fa-folder-tree me-3"></i>Documenti</h1>
-                <p class="lead mb-0 opacity-75">
-                    <strong>{{ total }}</strong> {% if can_admin(user) %}{{ 'documento indicizzato' if total == 1 else 'documenti indicizzati' }}{% else %}{{ 'documento disponibile' if total == 1 else 'documenti disponibili' }}{% endif %}
-                    {% if document_file_count and document_file_count != total and not search_query %}<span class="opacity-75">· {{ document_file_count }} file (PDF allegati inclusi)</span>{% endif %}
-                </p>
-            </div>
-            <div class="d-flex flex-wrap gap-2 align-items-center">
-                <a href="/dossiers" class="btn btn-outline-light"><i class="fas fa-folder-open me-2"></i>Dossier</a>
-                <a href="/documents?type=ispezione_ipotecaria" class="btn btn-outline-light"><i class="fas fa-landmark me-2" aria-hidden="true"></i>Ispezioni ipotecarie</a>
-                {% if favorites_enabled %}<a href="/favorites" class="btn btn-outline-light"><i class="fas fa-heart me-2"></i>I miei preferiti</a>{% endif %}
-                <a href="/documents?view=cadastral-map" class="btn btn-outline-light"><i class="fas fa-map-location-dot me-2"></i>Mappa catastale</a>
-                {% if can_admin(user) %}
-                <div class="dropdown">
-                    <button type="button" class="btn btn-outline-warning dropdown-toggle" data-bs-toggle="dropdown" aria-expanded="false">
-                        <i class="fas fa-rotate me-2" aria-hidden="true"></i>Aggiorna archivio
+{% set hero_actions %}
+    <a href="/dossiers" class="btn btn-outline-light"><i class="fas fa-folder-open me-2"></i>Dossier</a>
+    <a href="/documents?type=ispezione_ipotecaria" class="btn btn-outline-light"><i class="fas fa-landmark me-2" aria-hidden="true"></i>Ispezioni ipotecarie</a>
+    {% if favorites_enabled %}<a href="/favorites" class="btn btn-outline-light"><i class="fas fa-heart me-2"></i>I miei preferiti</a>{% endif %}
+    <a href="/documents?view=cadastral-map" class="btn btn-outline-light"><i class="fas fa-map-location-dot me-2"></i>Mappa catastale</a>
+    {% if can_admin(user) %}
+    <div class="dropdown">
+        <button type="button" class="btn btn-outline-warning dropdown-toggle" data-bs-toggle="dropdown" aria-expanded="false">
+            <i class="fas fa-rotate me-2" aria-hidden="true"></i>Aggiorna archivio
+        </button>
+        <ul class="dropdown-menu dropdown-menu-end">
+            <li>
+                <form method="post" action="/documents/rescan">
+                    {{ csrf_input() }}
+                    <button type="submit" class="dropdown-item" title="Cerca nella cartella i file aggiunti o rimossi">
+                        <i class="fas fa-magnifying-glass me-2" aria-hidden="true"></i>Cerca file nuovi o rimossi
                     </button>
-                    <ul class="dropdown-menu dropdown-menu-end">
-                        <li>
-                            <form method="post" action="/documents/rescan">
-                                {{ csrf_input() }}
-                                <button type="submit" class="dropdown-item" title="Cerca nella cartella i file aggiunti o rimossi">
-                                    <i class="fas fa-magnifying-glass me-2" aria-hidden="true"></i>Cerca file nuovi o rimossi
-                                </button>
-                            </form>
-                        </li>
-                        <li>
-                            <button type="button" data-click="importDocuments" data-args='["@this", false]' class="dropdown-item"
-                                    title="Indicizza i file nuovi e riempie le tabelle strutturate dai documenti XML non ancora importati">
-                                <i class="fas fa-file-import me-2" aria-hidden="true"></i>Importa i documenti nuovi
-                            </button>
-                        </li>
-                        <li><hr class="dropdown-divider"></li>
-                        <li>
-                            <button type="button" data-click="importDocuments" data-args='["@this", true]' class="dropdown-item text-danger"
-                                    title="Rielabora tutti i documenti XML già importati (chiede conferma)">
-                                <i class="fas fa-arrows-rotate me-2" aria-hidden="true"></i>Reimporta tutti i documenti&hellip;
-                            </button>
-                        </li>
-                    </ul>
-                </div>
-                {% endif %}
-                <button type="button" data-click="exportNamed" data-args='["@this"]' class="btn btn-outline-light"><i class="fas fa-file-export me-2"></i>Esporta con nomi</button>
-                <button type="button" data-click="sisterActions.print" class="btn btn-outline-light"><i class="fas fa-print me-2"></i>Stampa</button>
-            </div>
-        </div>
+                </form>
+            </li>
+            <li>
+                <button type="button" data-click="importDocuments" data-args='["@this", false]' class="dropdown-item"
+                        title="Indicizza i file nuovi e riempie le tabelle strutturate dai documenti XML non ancora importati">
+                    <i class="fas fa-file-import me-2" aria-hidden="true"></i>Importa i documenti nuovi
+                </button>
+            </li>
+            <li><hr class="dropdown-divider"></li>
+            <li>
+                <button type="button" data-click="importDocuments" data-args='["@this", true]' class="dropdown-item text-danger"
+                        title="Rielabora tutti i documenti XML già importati (chiede conferma)">
+                    <i class="fas fa-arrows-rotate me-2" aria-hidden="true"></i>Reimporta tutti i documenti&hellip;
+                </button>
+            </li>
+        </ul>
     </div>
-</div>
+    {% endif %}
+    <button type="button" data-click="exportNamed" data-args='["@this"]' class="btn btn-outline-light"><i class="fas fa-file-export me-2"></i>Esporta con nomi</button>
+    <button type="button" data-click="sisterActions.print" class="btn btn-outline-light"><i class="fas fa-print me-2"></i>Stampa</button>
+{% endset %}
+{% call hero_section('Documenti', 'fa-folder-tree', '/', breadcrumb_parent='Dashboard', show_back=false, show_print=false, actions=hero_actions) %}
+    <strong>{{ total }}</strong> {% if can_admin(user) %}{{ 'documento indicizzato' if total == 1 else 'documenti indicizzati' }}{% else %}{{ 'documento disponibile' if total == 1 else 'documenti disponibili' }}{% endif %}
+    {% if document_file_count and document_file_count != total and not search_query %}<span class="opacity-75">· {{ document_file_count }} file (PDF allegati inclusi)</span>{% endif %}
+{% endcall %}
 
 <div id="export-toast-container" style="position:fixed;top:1.2rem;right:1.2rem;z-index:9999;min-width:320px"></div>
 
@@ -129,16 +115,10 @@
         · tutte le parole devono comparire (oggetto, nome file, comune, foglio, particella, protocollo, codice fiscale).
     </div>
     {% endif %}
-    {% if total == 0 and not can_admin(user) %}
+    {% if total == 0 and not can_admin(user) and not (document_type_filter or search_query or favorites_only) %}
     <div class="alert alert-info" role="status"><i class="fas fa-circle-info me-2" aria-hidden="true"></i>Non hai ancora documenti disponibili. Per ottenere l’accesso a un documento <a class="alert-link" href="/contact">contatta l’amministratore</a> indicando le chiavi account del tuo <a class="alert-link" href="/profile">profilo</a> e l’ID o il nome del documento.</div>
     {% endif %}
-    {{ documents_pager() }}
-    {% if document_type_filter %}
-    <div class="alert alert-info d-flex flex-wrap justify-content-between align-items-center gap-2" role="status">
-        <span>Filtro attivo: <strong>{{ document_type_label }}</strong> · {{ total }} risultati.</span>
-        <a class="alert-link" href="/documents">Mostra tutti i documenti</a>
-    </div>
-    {% endif %}
+    {{ document_category_navigation(request, document_categories, document_type_filter, document_type_label) }}
     {# Only the active view is rendered (the full page was 5 MB / 58,000 nodes), so switching view is a page load:
        plain links, not an ARIA tablist. #}
     <nav aria-label="Viste documenti">
@@ -158,11 +138,23 @@
         </ul>
     </nav>
 
+    {{ documents_pager() }}
+    {% if document_type_filter %}
+    <p class="small text-muted" role="status"><strong>{{ document_type_label }}</strong> · {{ total }} risultati.</p>
+    {% endif %}
+    {% if active_view == 'categories' and total %}
+    <div class="d-flex justify-content-end gap-2 mb-2 no-print">
+        <button type="button" data-click="toggleActiveDocuments" data-args='[true]' class="btn btn-sm btn-outline-secondary">Espandi sezioni</button>
+        <button type="button" data-click="toggleActiveDocuments" data-args='[false]' class="btn btn-sm btn-outline-secondary">Riduci sezioni</button>
+    </div>
+    {% endif %}
+    {% if total == 0 and (document_type_filter or search_query or favorites_only) %}
+    <div class="alert alert-info" role="status">Nessun documento corrisponde ai filtri selezionati. Modifica il tipo di documento o la ricerca.</div>
+    {% endif %}
     <div id="documents-tab-panes">
         <section id="documents-pane-{{ active_view }}" aria-labelledby="documents-tab-{{ active_view }}">
             {% if active_view == 'categories' %}
-            {{ document_category_navigation(tree) }}
-            {% if not tree %}
+            {% if not tree and not (document_type_filter or search_query or favorites_only) %}
             <div class="alert alert-info"><i class="fas fa-circle-info me-2"></i>{% if can_admin(user) %}Nessun documento indicizzato.{% else %}Non hai ancora documenti disponibili. Per ottenere l’accesso a un documento <a class="alert-link" href="/contact">contatta l’amministratore</a> indicando le chiavi account del tuo <a class="alert-link" href="/profile">profilo</a> e l’ID o il nome del documento.{% endif %}</div>
             {% else %}
             {% for g in tree %}
@@ -206,16 +198,8 @@
 {{ super() }}
 {{ doc_macros_js(csp_nonce) }}
 {{ documents_favorites_js(csp_nonce) }}
+<script src="/static/js/documents_navigation.js?v=20261110a" defer></script>
 <script nonce="{{ csp_nonce }}">
-(function () {
-    if (window.location.hash !== '#q-elenco_immobili') return;
-    var url = new URL(window.location.href);
-    if (url.searchParams.get('type') === 'elenco_immobili') return;
-    url.searchParams.set('type', 'elenco_immobili');
-    url.searchParams.delete('page');
-    window.location.replace(url.pathname + url.search + url.hash);
-})();
-
 function toggleActiveDocuments(expand) {
     var pane = document.querySelector('#documents-tab-panes > section');
     if (!pane) return;

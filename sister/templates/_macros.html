@@ -300,3 +300,27 @@
 <span class="nested-empty">Empty</span>
 {% endif %}
 {% endmacro %}
+
+{# Table of contents of a long reference page: a collapsible list under 992 px, a sticky card beside the text above.
+   items: [(anchor, label)] or [(anchor, label, short_label)] (short_label is used in the narrow side card).
+   Call it as the first child of the page's .row, before the .col-lg-9 text column. #}
+{% macro page_toc(items, mobile_label='Indice della pagina', label='Sezioni') %}
+<details class="col-12 d-lg-none mb-3">
+    <summary class="btn btn-outline-primary w-100 text-start"><i class="fas fa-list me-2" aria-hidden="true"></i>{{ mobile_label }}</summary>
+    <div class="list-group list-group-flush small border rounded mt-2">
+        {% for item in items %}<a href="#{{ item[0] }}" class="list-group-item list-group-item-action">{{ item[1] }}</a>
+        {% endfor %}
+    </div>
+</details>
+<div class="col-lg-3 d-none d-lg-block">
+    <nav class="card border-0 shadow-sm sticky-top" style="top:1rem" aria-label="{{ label }}">
+        <div class="card-header bg-primary text-white py-2">
+            <small class="fw-semibold"><i class="fas fa-list me-2" aria-hidden="true"></i>{{ label }}</small>
+        </div>
+        <div class="list-group list-group-flush small">
+            {% for item in items %}<a href="#{{ item[0] }}" class="list-group-item list-group-item-action py-2">{{ item[2] if item|length > 2 else item[1] }}</a>
+            {% endfor %}
+        </div>
+    </nav>
+</div>
+{% endmacro %}

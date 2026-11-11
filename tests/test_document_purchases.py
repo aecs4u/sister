@@ -298,6 +298,34 @@ def test_purchase_links_are_signed_and_expire(monkeypatch):
     assert pb.document_id_from_token(token) is None  # no secret: nothing validates
 
 
+def test_subject_purchase_links_and_prices_are_type_specific(monkeypatch):
+    from sister import purchases_billing as pb
+
+    monkeypatch.setenv("SECRET_KEY", "unit-test-secret")
+    token = pb.subject_purchase_link_token("person", "rssmra80a01h501u")
+    assert pb.subject_from_purchase_token(token) == ("person", "RSSMRA80A01H501U")
+    assert pb.subject_from_purchase_token(token[:-2] + "xx") is None
+    monkeypatch.setenv("STRIPE_API_KEY", "sk_test")
+    monkeypatch.setenv("STRIPE_WEBHOOK_SECRET", "whsec_test")
+    monkeypatch.setenv("SISTER_PERSON_PRICE_ID", "price_person")
+    monkeypatch.setenv("SISTER_COMPANY_PRICE_ID", "price_company")
+    monkeypatch.setenv("SISTER_PERSON_PRICE_CENTS", "990")
+    monkeypatch.setenv("SISTER_COMPANY_PRICE_CENTS", "1490")
+    monkeypatch.setenv("SISTER_PERSON_CREDITS", "8")
+    monkeypatch.setenv("SISTER_COMPANY_CREDITS", "12")
+    assert pb.subject_billing_configured("person") and pb.subject_billing_configured("company")
+    assert pb.subject_price_label("person") == "€ 9,90"
+    assert pb.subject_price_label("company") == "€ 14,90"
+    assert pb.subject_credit_cost("person") == Decimal("8")
+    assert pb.subject_credit_cost("company") == Decimal("12")
+    assert pb.subject_checkout_metadata("id:buyer@example.test", "company", "00112580535") == {
+        "item_type": "company",
+        "reference_id": "00112580535",
+        "sister_user_key": "id:buyer@example.test",
+        "sister_user_keys": "id:buyer@example.test",
+    }
+
+
 def test_query_result_tokens_are_signed_and_bound_to_the_user(monkeypatch):
     from sister import purchases_billing as pb
 

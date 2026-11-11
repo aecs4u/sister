@@ -1,0 +1,114 @@
+{% extends "_base.html" %}
+{% from "admin/_form_options.html" import user_select %}
+{% block page_title %}Portafogli e buoni regalo{% endblock %}
+
+{% block content %}
+<div class="container-fluid py-4" id="admin-wallets-page">
+    <nav aria-label="breadcrumb" class="mb-3"><ol class="breadcrumb">
+        <li class="breadcrumb-item"><a href="/admin">Amministrazione</a></li>
+        <li class="breadcrumb-item active" aria-current="page">Portafogli e buoni regalo</li>
+    </ol></nav>
+    <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+        <div><h1 class="h2 mb-1"><i class="fas fa-wallet me-2" aria-hidden="true"></i>Portafogli e buoni regalo</h1>
+            <p class="text-muted mb-0">Consulta saldi e movimenti, accredita crediti e gestisci buoni tracciati.</p></div>
+        <a class="btn btn-outline-secondary" href="/admin">Torna all’amministrazione</a>
+    </div>
+
+    <div id="wallet-feedback" tabindex="-1">
+        {% if status == 'credits' %}<div class="alert alert-success" role="status">Crediti accreditati al wallet di <code>{{ selected_user }}</code>.</div>
+        {% elif status == 'wallet_locked' %}<div class="alert alert-warning" role="status">Wallet bloccato: non può effettuare transazioni.</div>
+        {% elif status == 'wallet_unlocked' %}<div class="alert alert-success" role="status">Wallet sbloccato.</div>
+        {% elif status == 'gift_created' %}<div class="alert alert-success" role="status">Buono creato. Copia il codice ora: non sarà mostrato di nuovo.</div>
+        {% elif status == 'gift_freeze' %}<div class="alert alert-success" role="status">Buono congelato; non può essere riscattato.</div>
+        {% elif status == 'gift_activate' %}<div class="alert alert-success" role="status">Buono riattivato.</div>
+        {% elif status == 'gift_revoke' %}<div class="alert alert-success" role="status">Buono revocato.</div>
+        {% elif status == 'gift_undone' %}<div class="alert alert-success" role="status">Riscatto annullato con un movimento inverso nel wallet.</div>{% endif %}
+        {% if gift_code %}<div class="alert alert-warning" role="status"><label class="form-label fw-semibold" for="new-gift-code">Codice da consegnare all’utente</label>
+            <div class="input-group"><input class="form-control font-monospace" id="new-gift-code" readonly value="{{ gift_code }}" data-select-on-focus>
+            <button class="btn btn-outline-dark" type="button" data-click="sisterActions.copyValue" data-args='["new-gift-code"]'>Copia</button></div></div>{% endif %}
+        {% if error %}<div class="alert alert-danger" role="alert">{% set messages = {'bad_key':'Chiave utente non valida.','bad_amount':'Importo non valido.','bad_expiry':'La scadenza deve essere futura.','bad_redemptions':'Numero di riscatti non valido.','credits_off':'Il servizio wallet non è attivo.','wallet_not_found':'Wallet non trovato.','bad_wallet_action':'Operazione wallet non valida.','not_found':'Buono o riscatto non trovato.','gift_insufficient_balance':'Saldo insufficiente per annullare il riscatto.','gift_wallet_locked':'Sblocca il wallet prima di annullare il riscatto.','gift_not_reversible':'Questo riscatto non può essere annullato.','gift_already_reversed':'Il riscatto è già stato annullato.','gift_coupon_failed':'Non è stato possibile creare il buono. Controlla SECRET_KEY.'} %}{{ messages.get(error, 'Operazione non riuscita: ' ~ error) }}</div>{% endif %}
+    </div>
+
+    <section class="card mb-4" aria-labelledby="wallet-search-heading">
+        <div class="card-body">
+            <div class="d-flex flex-wrap justify-content-between align-items-end gap-3">
+                <div><h2 class="h5" id="wallet-search-heading">Cerca il wallet di un utente</h2>
+                    <p class="small text-muted mb-0">Seleziona un utente dall’elenco degli account conosciuti.</p></div>
+                <form method="get" action="/admin/wallets" class="d-flex flex-wrap gap-2">
+                    <label class="visually-hidden" for="wallet-user-search">Chiave account</label>
+                    {{ user_select('wallet-user-search', known_users, selected_user, name='q') }}
+                    <button class="btn btn-outline-primary" type="submit">Apri wallet</button>
+                </form>
+            </div>
+        </div>
+    </section>
+
+    {% if selected_user %}
+    <section class="card mb-4" aria-labelledby="wallet-details-heading">
+        <div class="card-body border-bottom d-flex flex-wrap justify-content-between align-items-center gap-3">
+            <div><h2 class="h5 mb-1" id="wallet-details-heading">Wallet <code>{{ selected_user }}</code></h2>
+                {% if wallet %}<p class="mb-0 text-muted">Saldo disponibile: <strong>{{ '%.2f'|format(wallet.balance) }} {{ wallet.currency }}</strong> · {{ 'Bloccato' if wallet.locked else 'Attivo' }} · ID <code>{{ wallet.id }}</code></p>
+                {% else %}<p class="mb-0 text-muted">Non esiste ancora un wallet per questo account.</p>{% endif %}</div>
+            {% if wallet %}<form method="post" action="/admin/wallets/state">
+                {{ csrf_input() }}<input type="hidden" name="user_id" value="{{ selected_user }}">
+                {% if wallet.locked %}<button class="btn btn-outline-success" name="action" value="unlock" type="submit">Sblocca wallet</button>
+                {% else %}<button class="btn btn-outline-warning" name="action" value="lock" type="submit">Blocca wallet</button>{% endif %}
+            </form>{% endif %}
+        </div>
+        <div class="card-body">
+            {% if wallet_enabled %}<h3 class="h6">Accredita crediti</h3>
+            <form method="post" action="/admin/credits/grant" class="row g-2 align-items-end">
+                {{ csrf_input() }}<input type="hidden" name="user_id" value="{{ selected_user }}"><input type="hidden" name="return_to" value="wallets">
+                <div class="col-6 col-md-3"><label class="form-label" for="wallet-credit-amount">Crediti</label><input class="form-control" id="wallet-credit-amount" name="amount" inputmode="decimal" required></div>
+                <div class="col-12 col-md-6"><label class="form-label" for="wallet-credit-reason">Motivo</label><input class="form-control" id="wallet-credit-reason" name="reason" maxlength="200" required></div>
+                <div class="col-12 col-md-3"><button class="btn btn-primary w-100" type="submit">Accredita</button></div>
+            </form>{% else %}<p class="mb-0 text-muted">Wallet non attivo. Configura un backend crediti.</p>{% endif %}
+        </div>
+        {% if wallet and wallet.transactions %}<div class="table-responsive">
+            <table class="table table-sm table-striped align-middle mb-0"><thead><tr><th>Data</th><th>Tipo</th><th>Importo</th><th>Saldo dopo</th><th>Descrizione</th><th>Riferimento</th></tr></thead><tbody>
+            {% for tx in wallet.transactions %}<tr><td class="text-nowrap">{{ tx.created_at|it_date }}</td><td>{{ tx.type }}</td><td>{{ '%.2f'|format(tx.amount) }}</td><td>{{ '%.2f'|format(tx.balance_after) }}</td><td>{{ tx.description }}</td><td><code>{{ tx.reference_id or tx.id }}</code></td></tr>{% endfor %}
+            </tbody></table></div>{% elif wallet %}<div class="card-body text-muted">Nessun movimento registrato.</div>{% endif %}
+    </section>
+    {% endif %}
+
+    <section class="card mb-4" aria-labelledby="gift-create-heading"><div class="card-body">
+        <h2 class="h5" id="gift-create-heading">Crea un buono regalo</h2>
+        <p class="small text-muted">Il codice viene mostrato una sola volta. Il database conserva solo il digest; importo e riscatti sono registrati e ogni riscatto accredita il wallet con un riferimento tracciabile.</p>
+        <form method="post" action="/admin/wallet-gifts/create" class="row g-3 align-items-end">
+            {{ csrf_input() }}
+            <div class="col-6 col-md-2"><label class="form-label" for="gift-amount">Crediti</label><input class="form-control" id="gift-amount" name="amount" inputmode="decimal" required></div>
+            <div class="col-6 col-md-2"><label class="form-label" for="gift-redemptions">Riscatti massimi</label><input class="form-control" id="gift-redemptions" name="max_redemptions" type="number" min="1" max="10000" value="1" required></div>
+            <div class="col-12 col-md-3"><label class="form-label" for="gift-expiry">Scade il (facoltativo)</label><input class="form-control" id="gift-expiry" name="expires_at" type="datetime-local"></div>
+            <div class="col-12 col-md-3"><label class="form-label" for="gift-note">Nota</label><input class="form-control" id="gift-note" name="note" maxlength="500"></div>
+            <div class="col-12 col-md-2"><button class="btn btn-primary w-100" type="submit">Crea buono</button></div>
+        </form>
+    </div></section>
+
+    <section class="card mb-4" aria-labelledby="gift-coupons-heading"><div class="card-body border-bottom">
+        <h2 class="h5 mb-0" id="gift-coupons-heading">Buoni emessi <span class="badge text-bg-secondary">{{ coupons|length }}</span></h2>
+    </div><div class="table-responsive"><table class="table table-striped align-middle mb-0">
+        <thead><tr><th>Codice</th><th>Crediti</th><th>Riscatti</th><th>Stato</th><th>Scadenza</th><th>Nota</th><th class="text-end">Azioni</th></tr></thead><tbody>
+        {% for coupon in coupons %}<tr><td><code>…{{ coupon.code_hint }}</code></td><td>{{ '%.2f'|format(coupon.amount) }}</td><td>{{ coupon.redeemed_count }} / {{ coupon.max_redemptions }}</td>
+            <td>{% if coupon.expired %}<span class="badge text-bg-secondary">Scaduto</span>{% elif coupon.status == 'active' %}<span class="badge text-bg-success">Attivo</span>{% elif coupon.status == 'frozen' %}<span class="badge text-bg-warning">Congelato</span>{% else %}<span class="badge text-bg-secondary">Revocato</span>{% endif %}</td>
+            <td>{{ coupon.expires_at|it_date if coupon.expires_at else '—' }}</td><td>{{ coupon.note or '—' }}</td><td class="text-end text-nowrap">
+                <form method="post" action="/admin/wallet-gifts/{{ coupon.id }}/status" class="d-inline">{{ csrf_input() }}
+                    {% if coupon.status == 'active' %}<button class="btn btn-sm btn-outline-warning" name="action" value="freeze" type="submit">Congela</button>
+                    {% else %}<button class="btn btn-sm btn-outline-success" name="action" value="activate" type="submit">Riattiva</button>{% endif %}
+                    {% if coupon.status != 'revoked' %}<button class="btn btn-sm btn-outline-danger" name="action" value="revoke" type="submit" data-confirm="Revocare questo buono?">Revoca</button>{% endif %}
+                </form></td></tr>
+        {% else %}<tr><td colspan="7" class="text-center text-muted py-4">Nessun buono emesso.</td></tr>{% endfor %}
+    </tbody></table></div></section>
+
+    <section class="card" aria-labelledby="gift-redemptions-heading"><div class="card-body border-bottom d-flex flex-wrap justify-content-between align-items-center gap-3">
+        <h2 class="h5 mb-0" id="gift-redemptions-heading">Riscatti e storno <span class="badge text-bg-secondary">{{ redemptions|length }}</span></h2>
+        <form method="get" action="/admin/wallets" class="d-flex gap-2"><label class="visually-hidden" for="gift-redemption-search">Cerca</label><input class="form-control" id="gift-redemption-search" name="q" value="{{ query }}" placeholder="Utente o codice buono"><button class="btn btn-outline-primary" type="submit">Cerca</button></form>
+    </div><div class="table-responsive"><table class="table table-striped align-middle mb-0">
+        <thead><tr><th>Data</th><th>Utente</th><th>Buono</th><th>Crediti</th><th>Stato</th><th>Movimento wallet</th><th class="text-end">Azioni</th></tr></thead><tbody>
+        {% for redemption in redemptions %}<tr><td>{{ redemption.redeemed_at|it_date }}</td><td><code>{{ redemption.user_id }}</code></td><td><code>…{{ redemption.code_hint }}</code></td><td>{{ '%.2f'|format(redemption.amount) }}</td>
+            <td>{{ redemption.status }}</td><td><code>{{ redemption.reversed_tx_id or redemption.wallet_tx_id or '—' }}</code></td><td class="text-end">
+                {% if redemption.status == 'completed' %}<form method="post" action="/admin/wallet-gifts/redemptions/{{ redemption.id }}/undo" data-confirm="Annullare il credito regalo? Sarà registrato un addebito inverso nel wallet.">{{ csrf_input() }}<button class="btn btn-sm btn-outline-danger" type="submit">Annulla riscatto</button></form>{% endif %}
+            </td></tr>
+        {% else %}<tr><td colspan="7" class="text-center text-muted py-4">Nessun riscatto registrato.</td></tr>{% endfor %}
+    </tbody></table></div></section>
+</div>
+{% endblock %}

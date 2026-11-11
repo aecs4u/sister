@@ -1,5 +1,10 @@
 """OMI quote selection per cadastral category, DSN derivation and result shaping."""
 
+import asyncio
+import weakref
+from types import SimpleNamespace
+
+import asyncpg
 import pytest
 
 from sister import omi_quotes
@@ -93,6 +98,149 @@ async def test_unconfigured_database_means_no_data_source_not_no_quote(monkeypat
     for name in ("OMI_POSTGRES_DSN", "STATS_POSTGRES_DSN", "CADASTRAL_POSTGRES_DSN"):
         monkeypatch.delenv(name, raising=False)
     assert await omi_quotes.omi_zone_quotes("G273", "D1") is None
+
+
+@pytest.fixture
+def quote_database(monkeypatch):
+    """Track real lookup scheduling without consuming the developer's PostgreSQL slots."""
+    monkeypatch.setenv("OMI_POSTGRES_DSN", "postgresql://test/omi")
+    monkeypatch.setenv("OMI_CACHE_DAYS", "30")
+    monkeypatch.setenv("OMI_MAX_CONNECTIONS", "2")
+    monkeypatch.setattr(omi_quotes, "_cache", {})
+    monkeypatch.setattr(omi_quotes, "_retry_at", {})
+    monkeypatch.setattr(omi_quotes, "_lookup_states", weakref.WeakKeyDictionary())
+    db = SimpleNamespace(calls=0, active=0, peak=0, closed=0, fetch=None)
+
+    async def fetch(*args):
+        if db.fetch is not None:
+            return await db.fetch(*args)
+        await asyncio.sleep(0)
+        return []
+
+    async def close():
+        await asyncio.sleep(0)
+        db.active -= 1
+        db.closed += 1
+
+    async def connect(*args, **kwargs):
+        db.calls += 1
+        db.active += 1
+        db.peak = max(db.peak, db.active)
+        await asyncio.sleep(0)
+        return SimpleNamespace(fetch=fetch, close=close)
+
+    monkeypatch.setattr(asyncpg, "connect", connect)
+    return db
+
+
+@pytest.mark.parametrize("zone", ["*", "D1"])
+async def test_concurrent_pages_share_lookups_and_limit_connections(quote_database, zone):
+    async def lookup(index):
+        code = f"K{index % 20:03}"
+        if zone == "*":
+            return await omi_quotes.omi_comune_quotes(code)
+        return await omi_quotes.omi_zone_quotes(code, zone)
+
+    results = await asyncio.gather(*(lookup(index) for index in range(60)))
+
+    assert results == [[]] * 60  # a successful empty result is different from an unavailable database
+    assert quote_database.calls == quote_database.closed == 20
+    assert quote_database.peak == 2
+    assert quote_database.active == 0
+    assert not omi_quotes._lookup_state().pending
+
+
+async def test_capacity_failure_pauses_all_comuni_but_keeps_cached_results(quote_database, monkeypatch, caplog):
+    assert await omi_quotes.omi_comune_quotes("CACHED") == []
+    now = [100.0]
+    monkeypatch.setattr(omi_quotes, "time", SimpleNamespace(monotonic=lambda: now[0]))
+    attempts = 0
+
+    async def saturated(*args, **kwargs):
+        nonlocal attempts
+        attempts += 1
+        await asyncio.sleep(0)
+        raise asyncpg.TooManyConnectionsError("too many clients")
+
+    monkeypatch.setattr(asyncpg, "connect", saturated)
+    results = await asyncio.gather(*(omi_quotes.omi_comune_quotes(f"K{i:03}") for i in range(60)))
+
+    assert results == [None] * 60
+    assert attempts == 2  # already running attempts; queued requests observe the shared backoff
+    assert sum("connection limit reached" in record.message for record in caplog.records) == 1
+    assert await omi_quotes.omi_comune_quotes("ANOTHER") is None
+    assert await omi_quotes.omi_comune_quotes("CACHED") == []
+    assert attempts == 2
+
+    now[0] += omi_quotes._FAILURE_BACKOFF_SECONDS + 1
+    assert await omi_quotes.omi_comune_quotes("ANOTHER") is None
+    assert attempts == 3  # the database is retried when the backoff expires
+
+
+async def test_identical_inflight_lookups_are_shared_even_without_cache(quote_database, monkeypatch):
+    monkeypatch.setenv("OMI_CACHE_DAYS", "0")
+    assert await asyncio.gather(*(omi_quotes.omi_comune_quotes("L220") for _ in range(20))) == [[]] * 20
+    assert quote_database.calls == 1
+    assert await omi_quotes.omi_comune_quotes("L220") == []
+    assert quote_database.calls == 2
+
+
+async def test_cancelling_one_page_preserves_another_pages_lookup(quote_database):
+    started, finish = asyncio.Event(), asyncio.Event()
+
+    async def blocked_fetch(*args):
+        started.set()
+        await finish.wait()
+        return []
+
+    quote_database.fetch = blocked_fetch
+    first = asyncio.create_task(omi_quotes.omi_comune_quotes("L220"))
+    await started.wait()
+    second = asyncio.create_task(omi_quotes.omi_comune_quotes("L220"))
+    await asyncio.sleep(0)
+    first.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await first
+    finish.set()
+
+    assert await second == []
+    assert quote_database.calls == quote_database.closed == 1
+    assert not omi_quotes._lookup_state().pending
+
+
+async def test_cancelling_all_pages_closes_connections_and_discards_queued_work(quote_database):
+    started = asyncio.Event()
+
+    async def blocked_fetch(*args):
+        started.set()
+        await asyncio.Event().wait()
+
+    quote_database.fetch = blocked_fetch
+    tasks = [asyncio.create_task(omi_quotes.omi_comune_quotes(f"K{i:03}")) for i in range(20)]
+    await started.wait()
+    for task in tasks:
+        task.cancel()
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    assert all(isinstance(result, asyncio.CancelledError) for result in results)
+    assert quote_database.calls == quote_database.closed == 2
+    assert quote_database.active == 0
+    assert not omi_quotes._lookup_state().pending
+    quote_database.fetch = None
+    assert await omi_quotes.omi_comune_quotes("NEXT") == []
+
+
+async def test_failed_query_closes_connection_without_disabling_other_comuni(quote_database):
+    async def broken_fetch(*args):
+        raise RuntimeError("query failed")
+
+    quote_database.fetch = broken_fetch
+    assert await omi_quotes.omi_comune_quotes("BROKEN") is None
+    assert quote_database.closed == 1
+    quote_database.fetch = None
+    assert await omi_quotes.omi_comune_quotes("NEXT") == []
+    assert await omi_quotes.omi_comune_quotes("BROKEN") is None
+    assert quote_database.calls == quote_database.closed == 2
 
 
 ALL_RESIDENTIAL = [

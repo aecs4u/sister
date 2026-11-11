@@ -22,7 +22,7 @@ tags (a tag someone already wrote counts as present), so it is safe to run again
 
 | Tag | Rule | Source |
 |---|---|---|
-| `PVP` | the code is a person of the Portale Vendite Pubbliche, in any role, or the custodian code of a PVP sale | `pvp.pvp_persons`, `modelview.modelview_sales.custodian_fiscal_code` in the local `pvp` database (`PVP_DATABASE_DSN`, default: same server and login as `DATABASE_DSN`) |
+| `PVP` | the code is a person of the Portale Vendite Pubbliche, in any role, or the custodian code of a PVP sale | `pvp.pvp_persons`, `modelview.modelview_sales.custodian_fiscal_code` in the `pvp` database (`PVP_DATABASE_DSN`, default: same server and login as the SISTER DSN selected by `ENVIRONMENT`) |
 | `PVP: delegato` / `custode` / `curatore` / `giudice` / `liquidatore` / `commissario` / `altro` | the role(s) (`DELEGATO`, `CUSTODE`, `CURATOR`, `GIUDICE`, `LIQUGIU`+`LIQUIDAT`+`COMMLIQUID`+`GESTLIQU`, `COMMGIU`+`COMISIO`, anything else) | same |
 | `Aste: proprietario immobile` | owner of a property of a PVP sale: owner in a result of a request tagged `PVP` (the property visure that `inputs/pvp_sales` asked for) | `request_tag` + `result_owner` |
 | `Politici` + `Politici: Regione` / `Libero consorzio` / `Città metropolitana` / `Comune` | the code is in `inputs/politici_siciliani.md`, tagged with the level of its section | the list; a match needs the archive name to agree with the list's (`names_agree`), the others are printed for checking |

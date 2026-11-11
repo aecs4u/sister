@@ -42,7 +42,7 @@ Upload [`inputs/recrowd_visura_storica_analitica_immobili.json`](../inputs/recro
 
 ## Database and API settings
 
-- Sister reads `DATABASE_DSN` from `.env`; it must point to the Sister PostgreSQL database and its schema search path.
+- Sister reads `SISTER_DATABASE_DSN_LOCALHOST` from `.env` in development/local environments, including its schema search path. `ENVIRONMENT=production` (also `prod`/`staging`) selects `SISTER_DATABASE_DSN_NEON` instead.
 - Recrowd reads `RECROWD_DATABASE_DSN` when set. Otherwise the script connects as `postgres` to `localhost/recrowd` and uses libpq's configured password file.
 - The API defaults to `http://localhost:8025`; override it with `VISURA_API_URL`, `SISTER_URL`, or `--sister-url`.
 - If the API requires a key, set `VISURA_API_KEY` or `API_KEY` in the environment.

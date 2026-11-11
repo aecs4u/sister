@@ -2,8 +2,9 @@
 
 Sources (both local PostgreSQL databases, read with short-lived asyncpg connections):
 
-* ``omi`` (``public`` schema): ``omi_ref_zone`` / ``omi_fact_quotazioni_valori`` for the quotes of every published
-  semester, ``omi_ref_comuni`` / ``omi_fact_compravendite_*`` for the number of normalised transactions (NTN).
+* ``omi`` (``omi`` schema, the normalised tables): ``zone_version`` / ``quotation_fact`` for the quotes of every
+  published semester, ``municipality_version`` / ``sales_record`` / ``sales_measure`` for the number of normalised
+  transactions (NTN).
 * ``aecs4u-stats`` (``STATS_POSTGRES_DSN``): ISTAT resident population (``istat``), MEF IRPEF income (``mef_irpef``),
   ISTAT house price index (``serving.istat_house_price_index``) and the Eurostat NUTS3 series (``eurostat``).
 
@@ -42,35 +43,78 @@ _retry_at: dict[str, float] = {}
 
 _OMI_SQL = """
 WITH zz AS MATERIALIZED (
-    SELECT zona_id, anno, semestre, zona, fascia, zona_descrizione, link_zona, comune, provincia, regione,
-           cod_comune_amm, cod_comune_catastale, cod_comune_istat, anno * 10 + semestre AS period
-    FROM public.omi_ref_zone
-    WHERE cod_comune_amm = $1 OR cod_comune_catastale = $1 OR cod_comune_istat = $3::float8
+    SELECT z.zone_version_id AS zona_id, p.year AS anno, p.semester AS semestre, z.zone_name AS zona,
+           z.market_band AS fascia, z.zone_description AS zona_descrizione, z.zone_link AS link_zona,
+           zm.municipality_name AS comune, pr.province_name AS provincia, r.region_name AS regione,
+           administrative.code_value AS cod_comune_amm, cadastral.code_value AS cod_comune_catastale,
+           istat.code_value::float8 AS cod_comune_istat, p.year * 10 + p.semester AS period
+    FROM omi.zone_municipality zm
+    JOIN omi.zone_version z ON z.zone_municipality_id = zm.zone_municipality_id
+    JOIN omi.period p ON p.period_id = z.period_id
+    LEFT JOIN omi.province pr ON pr.province_id = zm.province_id
+    LEFT JOIN omi.region r ON r.region_id = zm.region_id
+    LEFT JOIN omi.municipality_code istat ON istat.municipality_code_id = zm.istat_code_id
+    LEFT JOIN omi.municipality_code cadastral ON cadastral.municipality_code_id = zm.cadastral_code_id
+    LEFT JOIN omi.municipality_code administrative ON administrative.municipality_code_id = zm.administrative_code_id
+    WHERE administrative.code_value = $1 OR cadastral.code_value = $1 OR istat.code_value = ($3::float8)::bigint::text
 ),
 bounds AS (
     SELECT (SELECT max(period) FROM zz) AS newest,
            (SELECT max(period) FROM zz WHERE UPPER(zona) = $2) AS zone_newest
+),
+sel AS MATERIALIZED (
+    SELECT zz.* FROM zz CROSS JOIN bounds
+    WHERE UPPER(zz.zona) = $2 OR zz.period = bounds.newest OR zz.period = bounds.zone_newest
 )
 SELECT zz.anno, zz.semestre, zz.zona, zz.fascia, zz.zona_descrizione, zz.link_zona, zz.comune, zz.provincia,
-       zz.regione, zz.cod_comune_amm, zz.cod_comune_istat, v.cod_tipologia, v.tipologia, v.stato_conservazione,
-       v.stato_prevalente, v.prezzo_min, v.prezzo_max, v.superficie_nl_compravendita, v.locazione_min,
-       v.locazione_max, v.superficie_nl_locazione
-FROM zz
-CROSS JOIN bounds
-JOIN public.omi_fact_quotazioni_valori AS v ON v.zona_id = zz.zona_id
-WHERE UPPER(zz.zona) = $2 OR zz.period = bounds.newest OR zz.period = bounds.zone_newest
+       zz.regione, zz.cod_comune_amm, zz.cod_comune_istat, pt.source_code AS cod_tipologia, pt.type_name AS tipologia,
+       cs.status_code AS stato_conservazione, ps.state_code AS stato_prevalente,
+       f.purchase_min::float8 AS prezzo_min, f.purchase_max::float8 AS prezzo_max,
+       sp.class_code AS superficie_nl_compravendita, f.rental_min::float8 AS locazione_min,
+       f.rental_max::float8 AS locazione_max, sr.class_code AS superficie_nl_locazione
+FROM sel AS zz
+JOIN omi.quotation_fact f ON f.zone_version_id = zz.zona_id
+LEFT JOIN omi.property_type pt ON pt.property_type_id = f.property_type_id
+LEFT JOIN omi.conservation_status cs ON cs.conservation_status_id = f.conservation_status_id
+LEFT JOIN omi.prevalent_state ps ON ps.prevalent_state_id = f.prevalent_state_id
+LEFT JOIN omi.surface_class sp ON sp.surface_class_id = f.purchase_surface_id
+LEFT JOIN omi.surface_class sr ON sr.surface_class_id = f.rental_surface_id
 """
 
+# NTN by year from the normalised sales tables. The comune is matched on the code OMI publishes with the transaction
+# volumes (``OMI_COMUNE``, the Belfiore code), as before: the sales rows of 79 historic comuni do not yet share the zone's
+# ISTAT key, so a lookup by ``istat_code`` would lose their history.
 _NTN_SQL = """
-SELECT r.anno, f.ntn_totale, f.ntn_fino_50mq, f.ntn_50_85mq, f.ntn_85_115mq, f.ntn_115_145mq, f.ntn_oltre_145mq,
-       c.ntn_uffici, c.ntn_negozi_lab, c.ntn_depositi_comm_autorimesse, c.ntn_depositi_comm, c.ntn_produttivo,
-       p.ntn_box, p.ntn_depositi_pertinenziali
-FROM public.omi_ref_comuni AS r
-LEFT JOIN public.omi_fact_compravendite_residenziali AS f ON f.comune_id = r.comune_id
-LEFT JOIN public.omi_fact_compravendite_commerciali AS c ON c.comune_id = r.comune_id
-LEFT JOIN public.omi_fact_compravendite_pertinenze AS p ON p.comune_id = r.comune_id
-WHERE r.cod_comune = $1
-ORDER BY r.anno
+WITH mv AS MATERIALIZED (
+    SELECT m.municipality_version_id, p.year AS anno
+    FROM omi.municipality_code c
+    JOIN omi.municipality_code_system cs ON cs.code_system_id = c.code_system_id AND cs.system_code = 'OMI_COMUNE'
+    JOIN omi.municipality_version_code vc ON vc.municipality_code_id = c.municipality_code_id
+    JOIN omi.municipality_version m ON m.municipality_version_id = vc.municipality_version_id
+    JOIN omi.period p ON p.period_id = m.period_id
+    WHERE c.code_value = $1
+)
+SELECT mv.anno,
+       max(sm.value_numeric) FILTER (WHERE ac.class_code = 'residential' AND si.indicator_code = 'ntn_totale')::float8 AS ntn_totale,
+       max(sm.value_numeric) FILTER (WHERE ac.class_code = 'residential' AND si.indicator_code = 'ntn_fino_50mq')::float8 AS ntn_fino_50mq,
+       max(sm.value_numeric) FILTER (WHERE ac.class_code = 'residential' AND si.indicator_code = 'ntn_50_85mq')::float8 AS ntn_50_85mq,
+       max(sm.value_numeric) FILTER (WHERE ac.class_code = 'residential' AND si.indicator_code = 'ntn_85_115mq')::float8 AS ntn_85_115mq,
+       max(sm.value_numeric) FILTER (WHERE ac.class_code = 'residential' AND si.indicator_code = 'ntn_115_145mq')::float8 AS ntn_115_145mq,
+       max(sm.value_numeric) FILTER (WHERE ac.class_code = 'residential' AND si.indicator_code = 'ntn_oltre_145mq')::float8 AS ntn_oltre_145mq,
+       max(sm.value_numeric) FILTER (WHERE ac.class_code = 'commercial' AND si.indicator_code = 'ntn_uffici')::float8 AS ntn_uffici,
+       max(sm.value_numeric) FILTER (WHERE ac.class_code = 'commercial' AND si.indicator_code = 'ntn_negozi_lab')::float8 AS ntn_negozi_lab,
+       max(sm.value_numeric) FILTER (WHERE ac.class_code = 'commercial' AND si.indicator_code = 'ntn_depositi_comm_autorimesse')::float8 AS ntn_depositi_comm_autorimesse,
+       max(sm.value_numeric) FILTER (WHERE ac.class_code = 'commercial' AND si.indicator_code = 'ntn_depositi_comm')::float8 AS ntn_depositi_comm,
+       max(sm.value_numeric) FILTER (WHERE ac.class_code = 'commercial' AND si.indicator_code = 'ntn_produttivo')::float8 AS ntn_produttivo,
+       max(sm.value_numeric) FILTER (WHERE ac.class_code = 'accessory' AND si.indicator_code = 'ntn_box')::float8 AS ntn_box,
+       max(sm.value_numeric) FILTER (WHERE ac.class_code = 'accessory' AND si.indicator_code = 'ntn_depositi_pertinenziali')::float8 AS ntn_depositi_pertinenziali
+FROM mv
+LEFT JOIN omi.sales_record rec ON rec.municipality_version_id = mv.municipality_version_id
+LEFT JOIN omi.sales_measure sm ON sm.sales_record_id = rec.sales_record_id
+LEFT JOIN omi.sales_indicator si ON si.sales_indicator_id = sm.sales_indicator_id
+LEFT JOIN omi.asset_class ac ON ac.asset_class_id = rec.asset_class_id
+GROUP BY mv.municipality_version_id, mv.anno
+ORDER BY mv.anno
 """
 
 

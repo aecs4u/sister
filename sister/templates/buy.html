@@ -1,9 +1,10 @@
 {% extends "_base.html" %}
+{% from "components/page_header.html" import page_header %}
 {% block page_title %}Acquista documento{% endblock %}
 
 {% block content %}
 <div class="container py-5">
-    <h1 class="h2 mb-4"><i class="fas fa-cart-shopping text-primary me-2" aria-hidden="true"></i>Acquista documento</h1>
+    {{ page_header("Acquista documento", icon="fas fa-cart-shopping text-primary") }}
     <div class="row">
         <div class="col-lg-7">
             <div class="card border-0 shadow-sm">

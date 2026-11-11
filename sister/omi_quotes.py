@@ -1,7 +1,8 @@
-"""Official OMI quotes (Agenzia delle Entrate) read from the local PostgreSQL ``omi`` database, ``public`` schema.
+"""Official OMI quotes (Agenzia delle Entrate) read from the local PostgreSQL ``omi`` database, ``omi`` schema.
 
-The star-schema tables ``omi_ref_zone`` (one row per zone and semester) and ``omi_fact_quotazioni_valori`` (one row per
-zone, typology and conservation state) hold the published quotes. OMI quotes cover buildings only (abitazioni, box,
+The normalised tables ``zone_version`` (one row per zone and semester) and ``quotation_fact`` (one row per zone,
+typology and conservation state), with their small dimension tables, hold the published quotes. The legacy
+``public.omi_ref_zone`` / ``omi_fact_quotazioni_valori`` copies are no longer read. OMI quotes cover buildings only (abitazioni, box,
 negozi, uffici, ...): there are no land / agricultural typologies, so nothing here can value terreni.
 
 Connection: ``OMI_POSTGRES_DSN``, otherwise the database part of ``STATS_POSTGRES_DSN`` / ``CADASTRAL_POSTGRES_DSN``
@@ -14,6 +15,8 @@ import asyncio
 import logging
 import os
 import time
+import weakref
+from dataclasses import dataclass, field
 from statistics import median
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
@@ -25,10 +28,42 @@ logger = logging.getLogger("sister")
 DEFAULT_CACHE_DAYS = 30.0
 _CACHE_MAX_ENTRIES = 512
 _FAILURE_BACKOFF_SECONDS = 60.0
+_DEFAULT_MAX_CONNECTIONS = 2
 
 # comune (cadastral/administrative code), zone -> (stored at, quotes of the latest published semester)
 _cache: dict[tuple[str, str], tuple[float, list[dict[str, Any]]]] = {}
 _retry_at: dict[tuple[str, str], float] = {}
+
+
+@dataclass
+class _PendingLookup:
+    task: asyncio.Task
+    waiters: int = 0
+
+
+@dataclass
+class _LookupState:
+    # Shared by all document requests on this worker, rather than one gate per page.
+    gate: asyncio.Semaphore
+    pending: dict[tuple[str, str], _PendingLookup] = field(default_factory=dict)
+    retry_at: float = 0.0
+
+
+_lookup_states: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
+
+
+def _lookup_state() -> _LookupState:
+    loop = asyncio.get_running_loop()
+    state = _lookup_states.get(loop)
+    if state is None:
+        try:
+            limit = max(1, int(os.getenv("OMI_MAX_CONNECTIONS", str(_DEFAULT_MAX_CONNECTIONS))))
+        except ValueError:
+            limit = _DEFAULT_MAX_CONNECTIONS
+        state = _LookupState(asyncio.Semaphore(limit))
+        _lookup_states[loop] = state
+    return state
+
 
 # Cadastral category -> OMI typology codes in order of preference.
 #
@@ -74,41 +109,62 @@ OMI_TYPOLOGY_LABELS: dict[int, str] = {
 }
 
 _QUOTES_SQL = """
-WITH latest AS (
-    SELECT anno, semestre
-    FROM public.omi_ref_zone
-    WHERE (cod_comune_amm = $1 OR cod_comune_catastale = $1
-           OR ($3::float8 IS NOT NULL AND cod_comune_istat = $3::float8))
-      AND UPPER(zona) = $2
-    ORDER BY anno DESC, semestre DESC
-    LIMIT 1
+WITH zz AS MATERIALIZED (
+    SELECT p.year AS anno, p.semester AS semestre, z.zone_version_id AS zona_id, z.zone_name AS zona,
+           z.market_band AS fascia, z.zone_description AS zona_descrizione
+    FROM omi.zone_municipality zm
+    JOIN omi.zone_version z ON z.zone_municipality_id = zm.zone_municipality_id
+    JOIN omi.period p ON p.period_id = z.period_id
+    LEFT JOIN omi.municipality_code istat ON istat.municipality_code_id = zm.istat_code_id
+    LEFT JOIN omi.municipality_code cadastral ON cadastral.municipality_code_id = zm.cadastral_code_id
+    LEFT JOIN omi.municipality_code administrative ON administrative.municipality_code_id = zm.administrative_code_id
+    WHERE (administrative.code_value = $1 OR cadastral.code_value = $1
+           OR ($3::float8 IS NOT NULL AND istat.code_value = ($3::float8)::bigint::text))
+      AND UPPER(z.zone_name) = $2
+),
+latest AS (
+    SELECT anno, semestre FROM zz ORDER BY anno DESC, semestre DESC LIMIT 1
 )
-SELECT DISTINCT z.anno, z.semestre, z.zona, z.fascia, z.zona_descrizione, v.cod_tipologia, v.tipologia,
-       v.stato_conservazione, v.stato_prevalente, v.prezzo_min, v.prezzo_max, v.superficie_nl_compravendita
-FROM public.omi_ref_zone AS z
-JOIN public.omi_fact_quotazioni_valori AS v ON v.zona_id = z.zona_id
-JOIN latest AS latest ON latest.anno = z.anno AND latest.semestre = z.semestre
-WHERE (z.cod_comune_amm = $1 OR z.cod_comune_catastale = $1
-       OR ($3::float8 IS NOT NULL AND z.cod_comune_istat = $3::float8))
-  AND UPPER(z.zona) = $2
+SELECT DISTINCT zz.anno, zz.semestre, zz.zona, zz.fascia, zz.zona_descrizione, pt.source_code AS cod_tipologia,
+       pt.type_name AS tipologia, cs.status_code AS stato_conservazione, ps.state_code AS stato_prevalente,
+       f.purchase_min::float8 AS prezzo_min, f.purchase_max::float8 AS prezzo_max,
+       sp.class_code AS superficie_nl_compravendita
+FROM zz
+JOIN latest ON latest.anno = zz.anno AND latest.semestre = zz.semestre
+JOIN omi.quotation_fact f ON f.zone_version_id = zz.zona_id
+LEFT JOIN omi.property_type pt ON pt.property_type_id = f.property_type_id
+LEFT JOIN omi.conservation_status cs ON cs.conservation_status_id = f.conservation_status_id
+LEFT JOIN omi.prevalent_state ps ON ps.prevalent_state_id = f.prevalent_state_id
+LEFT JOIN omi.surface_class sp ON sp.surface_class_id = f.purchase_surface_id
 """
 
 _COMUNE_QUOTES_SQL = """
-WITH latest AS (
-    SELECT anno, semestre
-    FROM public.omi_ref_zone
-    WHERE (cod_comune_amm = $1 OR cod_comune_catastale = $1
-           OR ($2::float8 IS NOT NULL AND cod_comune_istat = $2::float8))
-    ORDER BY anno DESC, semestre DESC
-    LIMIT 1
+WITH zz AS MATERIALIZED (
+    SELECT p.year AS anno, p.semester AS semestre, z.zone_version_id AS zona_id, z.zone_name AS zona,
+           z.market_band AS fascia, z.zone_description AS zona_descrizione
+    FROM omi.zone_municipality zm
+    JOIN omi.zone_version z ON z.zone_municipality_id = zm.zone_municipality_id
+    JOIN omi.period p ON p.period_id = z.period_id
+    LEFT JOIN omi.municipality_code istat ON istat.municipality_code_id = zm.istat_code_id
+    LEFT JOIN omi.municipality_code cadastral ON cadastral.municipality_code_id = zm.cadastral_code_id
+    LEFT JOIN omi.municipality_code administrative ON administrative.municipality_code_id = zm.administrative_code_id
+    WHERE (administrative.code_value = $1 OR cadastral.code_value = $1
+           OR ($2::float8 IS NOT NULL AND istat.code_value = ($2::float8)::bigint::text))
+),
+latest AS (
+    SELECT anno, semestre FROM zz ORDER BY anno DESC, semestre DESC LIMIT 1
 )
-SELECT DISTINCT z.anno, z.semestre, z.zona, z.fascia, z.zona_descrizione, v.cod_tipologia, v.tipologia,
-       v.stato_conservazione, v.stato_prevalente, v.prezzo_min, v.prezzo_max, v.superficie_nl_compravendita
-FROM public.omi_ref_zone AS z
-JOIN public.omi_fact_quotazioni_valori AS v ON v.zona_id = z.zona_id
-JOIN latest AS latest ON latest.anno = z.anno AND latest.semestre = z.semestre
-WHERE (z.cod_comune_amm = $1 OR z.cod_comune_catastale = $1
-       OR ($2::float8 IS NOT NULL AND z.cod_comune_istat = $2::float8))
+SELECT DISTINCT zz.anno, zz.semestre, zz.zona, zz.fascia, zz.zona_descrizione, pt.source_code AS cod_tipologia,
+       pt.type_name AS tipologia, cs.status_code AS stato_conservazione, ps.state_code AS stato_prevalente,
+       f.purchase_min::float8 AS prezzo_min, f.purchase_max::float8 AS prezzo_max,
+       sp.class_code AS superficie_nl_compravendita
+FROM zz
+JOIN latest ON latest.anno = zz.anno AND latest.semestre = zz.semestre
+JOIN omi.quotation_fact f ON f.zone_version_id = zz.zona_id
+LEFT JOIN omi.property_type pt ON pt.property_type_id = f.property_type_id
+LEFT JOIN omi.conservation_status cs ON cs.conservation_status_id = f.conservation_status_id
+LEFT JOIN omi.prevalent_state ps ON ps.prevalent_state_id = f.prevalent_state_id
+LEFT JOIN omi.surface_class sp ON sp.surface_class_id = f.purchase_surface_id
 """
 
 
@@ -201,11 +257,44 @@ async def _fetch_quotes(
     """Cached query of the ``omi`` database; ``None`` when it cannot be queried (see :func:`omi_zone_quotes`)."""
     dsn = omi_dsn()
     now = time.monotonic()
-    if not dsn or now < _retry_at.get(key, 0.0):
+    if not dsn:
         return None
     cached = _cache.get(key)
     if cached and now - cached[0] < cache_ttl_seconds():
         return cached[1]
+    state = _lookup_state()
+    if now < max(_retry_at.get(key, 0.0), state.retry_at):
+        return None
+    pending = state.pending.get(key)
+    if pending is None:
+        pending = _PendingLookup(asyncio.create_task(_query_quotes(state, dsn, key, sql, args, timeout)))
+        state.pending[key] = pending
+    pending.waiters += 1
+    try:
+        # A page timing out must not cancel a lookup another page is still awaiting.
+        return await asyncio.shield(pending.task)
+    finally:
+        pending.waiters -= 1
+        if not pending.waiters:
+            state.pending.pop(key, None)
+            if not pending.task.done():
+                pending.task.cancel()
+                await asyncio.gather(pending.task, return_exceptions=True)
+
+
+async def _query_quotes(
+    state: _LookupState, dsn: str, key: tuple[str, str], sql: str, args: tuple[Any, ...], timeout: float
+) -> list[dict[str, Any]] | None:
+    async with state.gate:
+        # Queued requests must observe a capacity failure from an earlier lookup.
+        if time.monotonic() < state.retry_at:
+            return None
+        return await _query_quotes_connected(state, dsn, key, sql, args, timeout)
+
+
+async def _query_quotes_connected(
+    state: _LookupState, dsn: str, key: tuple[str, str], sql: str, args: tuple[Any, ...], timeout: float
+) -> list[dict[str, Any]] | None:
     try:
         import asyncpg
 
@@ -214,7 +303,10 @@ async def _fetch_quotes(
                 dsn,
                 timeout=3,
                 command_timeout=timeout,
-                server_settings={"jit": "off", "statement_timeout": str(int(timeout * 1000))},
+                server_settings={
+                    "jit": "off", "statement_timeout": str(int(timeout * 1000)),
+                    "application_name": "sister-omi-quotes",
+                },
             ),
             timeout=4,
         )
@@ -223,10 +315,16 @@ async def _fetch_quotes(
         finally:
             await connection.close()
     except Exception as exc:  # The estimate is optional: never break the document page.
-        _retry_at[key] = time.monotonic() + _FAILURE_BACKOFF_SECONDS
+        now = time.monotonic()
+        _retry_at[key] = now + _FAILURE_BACKOFF_SECONDS
         if len(_retry_at) > _CACHE_MAX_ENTRIES:
             _retry_at.pop(next(iter(_retry_at)))
-        logger.warning("OMI database lookup failed (%s): %s", key, type(exc).__name__)
+        if getattr(exc, "sqlstate", None) == "53300":  # PostgreSQL too_many_connections, shared across comuni.
+            if now >= state.retry_at:
+                logger.warning("OMI database connection limit reached; pausing lookups for %.0fs", _FAILURE_BACKOFF_SECONDS)
+            state.retry_at = now + _FAILURE_BACKOFF_SECONDS
+        else:
+            logger.warning("OMI database lookup failed (%s): %s", key, type(exc).__name__)
         return None
     _retry_at.pop(key, None)
     quotes = _latest_period(rows)

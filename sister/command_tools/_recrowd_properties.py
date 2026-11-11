@@ -30,6 +30,7 @@ load_dotenv(PROJECT_ROOT / ".env")
 load_dotenv(PROJECT_ROOT.parent / ".env", override=False)
 
 from sister.database import _property_row  # noqa: E402 — reuse Sister's canonical property/location parser
+from sister.database_config import get_database_dsn  # noqa: E402
 
 RECROWD_DSN_DEFAULT = "postgresql+psycopg://postgres@localhost/recrowd"
 SISTER_URL_DEFAULT = os.getenv("VISURA_API_URL") or os.getenv("SISTER_URL", "http://localhost:8025")
@@ -333,9 +334,7 @@ def _save_report(path: Path, proponents: list[dict], properties: dict[str, dict]
 
 
 def run(args: argparse.Namespace) -> int:
-    sister_dsn = os.getenv("DATABASE_DSN")
-    if not sister_dsn:
-        raise RuntimeError("DATABASE_DSN must point to the local Sister PostgreSQL database")
+    sister_dsn = get_database_dsn(required=True)
     recrowd_dsn = args.recrowd_dsn or os.getenv("RECROWD_DATABASE_DSN") or RECROWD_DSN_DEFAULT
     recrowd_engine = create_engine(_postgres_url(recrowd_dsn), pool_pre_ping=True)
     sister_engine = create_engine(_postgres_url(sister_dsn), pool_pre_ping=True)

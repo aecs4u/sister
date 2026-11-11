@@ -1,4 +1,5 @@
 {% extends "_base.html" %}
+{% from "components/hero.html" import hero_section %}
 {% from "land_registry/components/land_registry_map.html" import cadastral_map_assets, cadastral_map_scripts, cadastral_map_view, cadastral_layer_control %}
 
 {% block page_title %}Mappa catastale{% endblock %}
@@ -10,28 +11,10 @@
 {% endblock %}
 
 {% block content %}
-<div class="page-hero no-print">
-    <div class="container-fluid">
-        <nav class="mb-3" aria-label="breadcrumb">
-            <ol class="breadcrumb mb-0">
-                <li class="breadcrumb-item"><a href="/" class="text-white-50">Dashboard</a></li>
-                <li class="breadcrumb-item"><a href="/documents" class="text-white-50">Documenti</a></li>
-                <li class="breadcrumb-item active text-white">Mappa catastale</li>
-            </ol>
-        </nav>
-        <div class="d-flex flex-wrap justify-content-between align-items-center gap-3">
-            <div>
-                <h1 class="display-6 fw-bold mb-2"><i class="fas fa-map-location-dot me-3"></i>Mappa catastale</h1>
-                <p class="lead mb-0 opacity-75">Fogli e particelle catastali · {{ total }} documenti indicizzati</p>
-            </div>
-            <div class="d-flex gap-2">
-                <a href="/documents" class="btn btn-outline-light"><i class="fas fa-folder-tree me-2"></i>Per tipo</a>
-                <a href="/documents?view=map" class="btn btn-outline-light"><i class="fas fa-diagram-project me-2"></i>Per ubicazione</a>
-                <a href="/documents?view=files" class="btn btn-outline-light"><i class="fas fa-file-lines me-2"></i>Per file</a>
-            </div>
-        </div>
-    </div>
-</div>
+{% call hero_section('Mappa catastale', 'fa-map-location-dot', '/documents', show_back=false, show_print=false,
+                     breadcrumbs=[('Dashboard', '/'), ('Documenti', '/documents')],
+                     actions=[('/documents', 'Per tipo', 'fa-folder-tree'), ('/documents?view=map', 'Per ubicazione', 'fa-diagram-project'),
+                              ('/documents?view=files', 'Per file', 'fa-file-lines')]) %}Fogli e particelle catastali · {{ total }} documenti indicizzati{% endcall %}
 
 <div class="container-fluid documents-cadastral-map-page">
     <p class="text-muted small mb-2">Attiva o disattiva i fogli e le particelle dal controllo livelli. I confini catastali compaiono ai livelli di zoom supportati.</p>

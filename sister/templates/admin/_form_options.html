@@ -1,0 +1,16 @@
+{% macro user_select(id, users, selected='', name='user_id', small=false) -%}
+<select class="form-select{% if small %} form-select-sm{% endif %}" id="{{ id }}" name="{{ name }}" required>
+    <option value="" disabled{% if not selected %} selected{% endif %}>Seleziona un utente</option>
+    {% if selected and selected not in users %}<option value="{{ selected }}" selected>{{ selected }}</option>{% endif %}
+    {% for key in users %}<option value="{{ key }}"{% if key == selected %} selected{% endif %}>{{ key }}</option>{% endfor %}
+</select>
+{%- endmacro %}
+
+{% macro document_select(id, documents, selected='', small=false, defer_options=false) -%}
+<select class="form-select{% if small %} form-select-sm{% endif %}" id="{{ id }}" name="document_id" required{% if defer_options %} data-document-options="new-document-id"{% endif %}>
+    <option value="" disabled{% if selected not in documents|map(attribute='id') %} selected{% endif %}>Seleziona un documento</option>
+    {% for document in documents if not defer_options or document.id == selected %}
+    <option value="{{ document.id }}"{% if document.id == selected %} selected{% endif %}>#{{ document.id }} · {{ document.title or document.filename }}</option>
+    {% endfor %}
+</select>
+{%- endmacro %}

@@ -28,6 +28,7 @@ PENDING = "pending"
 
 TOO_MANY_MARKER = "Superato il limite massimo di 400 elementi"
 TOO_MANY_ERROR = f"{TOO_MANY_MARKER}. Aggiungere altri parametri per la ricerca"
+SECTION_REQUIRED_MARKER = "La sezione è obbligatoria"  # the comune has sezioni: a parcel row without one is refused
 CRITERIA_TIMEOUT_MARKER = "Il sistema non riesce a produrre la risposta nei limiti di tempo previsti"
 CRITERIA_TIMEOUT_ERROR = f"{CRITERIA_TIMEOUT_MARKER}. Affinare i criteri di ricerca."
 
@@ -56,8 +57,8 @@ def classify(status: str | None, error: str | None = None) -> str:
         return FOUND
     if "NESSUNA CORRISPONDENZA" in error:
         return INVALID_CODE if "non valido" in error else NO_MATCH
-    if "Superato il limite massimo" in error:
-        return TOO_MANY
+    if "Superato il limite massimo" in error or SECTION_REQUIRED_MARKER in error:
+        return TOO_MANY  # more criteria needed (narrower search / the sezione of the comune)
     if any(marker in error for marker in _SESSION_MARKERS):
         return SESSION_EXPIRED
     if status in ("queued", "running", "incomplete", None):

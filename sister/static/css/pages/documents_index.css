@@ -25,6 +25,31 @@
   color: #11151a;
 }
 
-.documents-type-reference > summary {
-  cursor: pointer;
+.documents-type-menu {
+  width: min(26rem, calc(100vw - 2rem));
+  max-height: 60vh;
+  overflow-y: auto;
+}
+
+.documents-type-index .dropdown,
+.documents-type-index .dropdown-toggle {
+  max-width: 100%;
+}
+
+.documents-type-index .dropdown-toggle,
+.documents-type-menu .dropdown-item {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  text-align: left;
+}
+
+.documents-category-nav {
+  padding: 1rem;
+  border: 1px solid var(--bs-border-color);
+  border-radius: var(--bs-border-radius);
+  background: var(--bs-tertiary-bg);
+}
+
+.documents-hub .q-section {
+  scroll-margin-top: 6rem;
 }

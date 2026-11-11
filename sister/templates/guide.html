@@ -1,4 +1,6 @@
 {% extends "_base.html" %}
+{% from "components/hero.html" import hero_section %}
+{% from "_macros.html" import page_toc %}
 {% from "components/related_links.html" import related_pages %}
 {% block page_title %}Guida Utente{% endblock %}
 
@@ -8,56 +10,23 @@
 {% endblock %}
 
 {% block content %}
-<div class="page-hero no-print">
-    <div class="container-fluid">
-        <nav class="mb-3" aria-label="breadcrumb">
-            <ol class="breadcrumb mb-0">
-                <li class="breadcrumb-item"><a href="/" class="text-white-50">Dashboard</a></li>
-                <li class="breadcrumb-item active text-white">Guida Utente</li>
-            </ol>
-        </nav>
-        <h1 class="display-6 fw-bold mb-1"><i class="fas fa-book-open me-3"></i>Guida Utente SISTER</h1>
-        <p class="lead mb-0 opacity-75">Guida operativa ai servizi catastali e ipotecari telematici</p>
-    </div>
-</div>
+{% call hero_section('Guida Utente SISTER', 'fa-book-open', '/', 'Dashboard', breadcrumb_parent='Dashboard', breadcrumb_current='Guida Utente') %}Guida operativa ai servizi catastali e ipotecari telematici{% endcall %}
 
 <div class="container-fluid">
     <div class="row">
-        <details class="col-12 d-lg-none mb-3">
-            <summary class="btn btn-outline-primary w-100 text-start"><i class="fas fa-list me-2"></i>Indice della guida</summary>
-            <div class="list-group list-group-flush small border rounded mt-2">
-                <a href="#cos-e" class="list-group-item list-group-item-action">1. Cos'è SISTER</a>
-                <a href="#chi-lo-usa" class="list-group-item list-group-item-action">2. Chi lo usa</a>
-                <a href="#come-si-entra" class="list-group-item list-group-item-action">3. Come si entra</a>
-                <a href="#prima-attivazione" class="list-group-item list-group-item-action">4. Prima attivazione</a>
-                <a href="#aree-principali" class="list-group-item list-group-item-action">5. Aree principali</a>
-                <a href="#flussi" class="list-group-item list-group-item-action">6. Flussi operativi</a>
-                <a href="#preparazione" class="list-group-item list-group-item-action">7. Cosa preparare</a>
-                <a href="#errori" class="list-group-item list-group-item-action">8. Errori frequenti</a>
-                <a href="#supporto" class="list-group-item list-group-item-action">9. Accesso e supporto</a>
-                <a href="#riepilogo" class="list-group-item list-group-item-action">10. Riepilogo</a>
-            </div>
-        </details>
-        {# TOC sidebar #}
-        <div class="col-lg-3 d-none d-lg-block">
-            <div class="card border-0 shadow-sm sticky-top" style="top:1rem">
-                <div class="card-header bg-primary text-white py-2">
-                    <small class="fw-semibold"><i class="fas fa-list me-2"></i>Indice</small>
-                </div>
-                <div class="list-group list-group-flush small">
-                    <a href="#cos-e" class="list-group-item list-group-item-action py-2">1. Cos'è SISTER</a>
-                    <a href="#chi-lo-usa" class="list-group-item list-group-item-action py-2">2. Chi lo usa</a>
-                    <a href="#come-si-entra" class="list-group-item list-group-item-action py-2">3. Come si entra</a>
-                    <a href="#prima-attivazione" class="list-group-item list-group-item-action py-2">4. Prima attivazione</a>
-                    <a href="#aree-principali" class="list-group-item list-group-item-action py-2">5. Aree principali</a>
-                    <a href="#flussi" class="list-group-item list-group-item-action py-2">6. Flussi operativi</a>
-                    <a href="#preparazione" class="list-group-item list-group-item-action py-2">7. Cosa preparare</a>
-                    <a href="#errori" class="list-group-item list-group-item-action py-2">8. Errori frequenti</a>
-                    <a href="#supporto" class="list-group-item list-group-item-action py-2">9. Accesso e supporto</a>
-                    <a href="#riepilogo" class="list-group-item list-group-item-action py-2">10. Riepilogo</a>
-                </div>
-            </div>
-        </div>
+        {% set toc_items = [
+    ("cos-e", "1. Cos'è SISTER"),
+    ("chi-lo-usa", "2. Chi lo usa"),
+    ("come-si-entra", "3. Come si entra"),
+    ("prima-attivazione", "4. Prima attivazione"),
+    ("aree-principali", "5. Aree principali"),
+    ("flussi", "6. Flussi operativi"),
+    ("preparazione", "7. Cosa preparare"),
+    ("errori", "8. Errori frequenti"),
+    ("supporto", "9. Accesso e supporto"),
+    ("riepilogo", "10. Riepilogo"),
+] %}
+        {{ page_toc(toc_items, "Indice della guida", "Indice") }}
 
         <div class="col-lg-9">
 

@@ -40,7 +40,7 @@ Sister's download endpoint downloads **all** ready items in the account's Richie
 
 ## Database and API settings
 
-- Sister reads `DATABASE_DSN` from `.env`; configure it for the local Sister database and its schema search path.
+- Sister reads `SISTER_DATABASE_DSN_LOCALHOST` from `.env` in development/local environments; configure its schema search path. `ENVIRONMENT=production` (also `prod`/`staging`) selects `SISTER_DATABASE_DSN_NEON` instead.
 - Recrowd reads `RECROWD_DATABASE_DSN` when set. Otherwise the script connects to `postgres` on `localhost`, database `recrowd`, and uses libpq's normal password-file lookup (for example `.pgpass`).
 - The API defaults to `http://localhost:8025`; override it with `VISURA_API_URL` or `--sister-url`.
 - When the API is protected, set `VISURA_API_KEY` or `API_KEY` in the environment.

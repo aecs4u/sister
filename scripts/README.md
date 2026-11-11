@@ -47,7 +47,6 @@ Use `one_off/` for fixed-data backfills, targeted repairs, and scripts tied to a
 | `one_off/backfill_reports.py` | Import the legacy reports archive described in the script. |
 | `one_off/batch_opendata.py` | Submit the fixed OpenData cadastral request set. |
 | `one_off/download_remaining.py` | Continue the specific remaining-code-list workflow. |
-| `one_off/omi_quote_index.sql` | Install the OMI quote indexes concurrently. |
 | `one_off/populate_query_data.py` | Import exported query JSON into the configured database. |
 | `one_off/query_recrowd_proponents.py` | Query the fixed Recrowd proponent set. |
 | `one_off/repair_subject_data.py` | Apply or revert the targeted subject-data repair plan. |

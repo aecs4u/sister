@@ -204,7 +204,7 @@ def test_the_migration_creates_the_table_the_model_describes():
 
     source = (Path(__file__).resolve().parent.parent / "alembic" / "versions" / "20261127_subject_tags.py").read_text()
     assert 'down_revision: Union[str, None] = "20261126_ownership_history"' in source
-    assert database.DATABASE_REVISION == "20261127_subject_tags"
+    assert database.DATABASE_REVISION == "20261128_subject_access"
     columns = {c.name for c in database.SubjectTag.__table__.columns}
     assert columns == {"subject_type", "subject_code", "tag_key", "tag", "created_by", "created_at"}
     for column in columns:

@@ -1,4 +1,6 @@
 {% extends "_base.html" %}
+{% from "components/hero.html" import hero_section %}
+{% from "_macros.html" import page_toc %}
 {% from "components/related_links.html" import related_pages %}
 {% block page_title %}Glossario{% endblock %}
 
@@ -8,48 +10,19 @@
 {% endblock %}
 
 {% block content %}
-<div class="page-hero no-print">
-    <div class="container-fluid">
-        <nav class="mb-3" aria-label="breadcrumb">
-            <ol class="breadcrumb mb-0">
-                <li class="breadcrumb-item"><a href="/" class="text-white-50">Dashboard</a></li>
-                <li class="breadcrumb-item active text-white">Glossario</li>
-            </ol>
-        </nav>
-        <h1 class="display-6 fw-bold mb-1"><i class="fas fa-book me-3"></i>Glossario</h1>
-        <p class="lead mb-0 opacity-75">Tipi di documento, sottotipi di visura e concetti chiave</p>
-    </div>
-</div>
+{% call hero_section('Glossario', 'fa-book', '/', 'Dashboard', breadcrumb_parent='Dashboard', breadcrumb_current='Glossario') %}Tipi di documento, sottotipi di visura e concetti chiave{% endcall %}
 
 <div class="container-fluid">
     <div class="row">
-        <details class="col-12 d-lg-none mb-3">
-            <summary class="btn btn-outline-primary w-100 text-start"><i class="fas fa-list me-2"></i>Indice del glossario</summary>
-            <div class="list-group list-group-flush small border rounded mt-2">
-                <a href="#tipi-documento" class="list-group-item list-group-item-action">Tipi di documento</a>
-                <a href="#sottotipi-visura" class="list-group-item list-group-item-action">Sottotipi di visura</a>
-                <a href="#formati-file" class="list-group-item list-group-item-action">Formati file</a>
-                <a href="#dossier" class="list-group-item list-group-item-action">Dossier</a>
-                <a href="#catasto" class="list-group-item list-group-item-action">Termini catastali</a>
-                <a href="#ipotecario" class="list-group-item list-group-item-action">Termini ipotecari</a>
-            </div>
-        </details>
-        {# TOC #}
-        <div class="col-lg-3 d-none d-lg-block">
-            <div class="card border-0 shadow-sm sticky-top" style="top:1rem">
-                <div class="card-header py-2" style="background:#6f42c1;color:white">
-                    <small class="fw-semibold"><i class="fas fa-list me-2"></i>Sezioni</small>
-                </div>
-                <div class="list-group list-group-flush small">
-                    <a href="#tipi-documento" class="list-group-item list-group-item-action py-2">Tipi di documento</a>
-                    <a href="#sottotipi-visura" class="list-group-item list-group-item-action py-2">Sottotipi di visura</a>
-                    <a href="#formati-file" class="list-group-item list-group-item-action py-2">Formati file</a>
-                    <a href="#dossier" class="list-group-item list-group-item-action py-2">Dossier</a>
-                    <a href="#catasto" class="list-group-item list-group-item-action py-2">Termini catastali</a>
-                    <a href="#ipotecario" class="list-group-item list-group-item-action py-2">Termini ipotecari</a>
-                </div>
-            </div>
-        </div>
+        {% set toc_items = [
+    ("tipi-documento", "Tipi di documento"),
+    ("sottotipi-visura", "Sottotipi di visura"),
+    ("formati-file", "Formati file"),
+    ("dossier", "Dossier"),
+    ("catasto", "Termini catastali"),
+    ("ipotecario", "Termini ipotecari"),
+] %}
+        {{ page_toc(toc_items, "Indice del glossario", "Sezioni") }}
 
         <div class="col-lg-9">
 

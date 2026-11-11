@@ -3,6 +3,8 @@
   (`valuation_docs.valuation_page_context`), so this page and the calculation cannot disagree.
 #}
 {% extends "_base.html" %}
+{% from "components/hero.html" import hero_section %}
+{% from "_macros.html" import page_toc %}
 {% from "components/related_links.html" import related_pages %}
 {% block page_title %}Metodo di valutazione{% endblock %}
 
@@ -12,52 +14,21 @@
 {% endblock %}
 
 {% block content %}
-<div class="page-hero no-print">
-    <div class="container-fluid">
-        <nav class="mb-3" aria-label="breadcrumb">
-            <ol class="breadcrumb mb-0">
-                <li class="breadcrumb-item"><a href="/" class="text-white-50">Dashboard</a></li>
-                <li class="breadcrumb-item active text-white">Metodo di valutazione</li>
-            </ol>
-        </nav>
-        <h1 class="display-6 fw-bold mb-1"><i class="fas fa-scale-balanced me-3"></i>Metodo di valutazione</h1>
-        <p class="lead mb-0 opacity-75">Come leggere il valore catastale, la stima OMI e le fonti esterne inserite dall'utente</p>
-    </div>
-</div>
+{% call hero_section('Metodo di valutazione', 'fa-scale-balanced', '/', 'Dashboard', breadcrumb_parent='Dashboard', breadcrumb_current='Metodo di valutazione') %}Come leggere il valore catastale, la stima OMI e le fonti esterne inserite dall'utente{% endcall %}
 
 <div class="container-fluid">
     <div class="row">
-        <details class="col-12 d-lg-none mb-3">
-            <summary class="btn btn-outline-primary w-100 text-start"><i class="fas fa-list me-2"></i>Indice della pagina</summary>
-            <div class="list-group list-group-flush small border rounded mt-2">
-                <a href="#panoramica" class="list-group-item list-group-item-action">Due misure diverse</a>
-                <a href="#valore-catastale" class="list-group-item list-group-item-action">Valore catastale (base IMU)</a>
-                <a href="#stima-omi" class="list-group-item list-group-item-action">Stima OMI indicativa</a>
-                <a href="#terreni" class="list-group-item list-group-item-action">Perché i terreni non hanno una stima OMI</a>
-                <a href="#fonti-esterne" class="list-group-item list-group-item-action">Valutazioni da fonti esterne</a>
-                <a href="#lettura" class="list-group-item list-group-item-action">Come leggere la pagina</a>
-                <a href="#limiti" class="list-group-item list-group-item-action">Limiti e avvertenze</a>
-                <a href="#fonti" class="list-group-item list-group-item-action">Fonti</a>
-            </div>
-        </details>
-        {# TOC #}
-        <div class="col-lg-3 d-none d-lg-block">
-            <div class="card border-0 shadow-sm sticky-top" style="top:1rem">
-                <div class="card-header py-2" style="background:#6f42c1;color:white">
-                    <small class="fw-semibold"><i class="fas fa-list me-2"></i>Sezioni</small>
-                </div>
-                <div class="list-group list-group-flush small">
-                    <a href="#panoramica" class="list-group-item list-group-item-action py-2">Due misure diverse</a>
-                    <a href="#valore-catastale" class="list-group-item list-group-item-action py-2">Valore catastale (base IMU)</a>
-                    <a href="#stima-omi" class="list-group-item list-group-item-action py-2">Stima OMI indicativa</a>
-                    <a href="#terreni" class="list-group-item list-group-item-action py-2">Terreni</a>
-                    <a href="#fonti-esterne" class="list-group-item list-group-item-action py-2">Fonti esterne</a>
-                    <a href="#lettura" class="list-group-item list-group-item-action py-2">Come leggere la pagina</a>
-                    <a href="#limiti" class="list-group-item list-group-item-action py-2">Limiti e avvertenze</a>
-                    <a href="#fonti" class="list-group-item list-group-item-action py-2">Fonti</a>
-                </div>
-            </div>
-        </div>
+        {% set toc_items = [
+    ("panoramica", "Due misure diverse"),
+    ("valore-catastale", "Valore catastale (base IMU)"),
+    ("stima-omi", "Stima OMI indicativa"),
+    ("terreni", "Perché i terreni non hanno una stima OMI", "Terreni"),
+    ("fonti-esterne", "Valutazioni da fonti esterne", "Fonti esterne"),
+    ("lettura", "Come leggere la pagina"),
+    ("limiti", "Limiti e avvertenze"),
+    ("fonti", "Fonti"),
+] %}
+        {{ page_toc(toc_items, "Indice della pagina", "Sezioni") }}
 
         <div class="col-lg-9">
 

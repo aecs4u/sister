@@ -180,7 +180,7 @@ git clone https://github.com/aecs4u/sister.git
 cd sister
 
 cp .env.example .env
-# Imposta DATABASE_DSN e le credenziali SPID in .env
+# Imposta SISTER_DATABASE_DSN_LOCALHOST (o SISTER_DATABASE_DSN_NEON) e le credenziali SPID in .env
 
 docker-compose run --rm visure-service alembic upgrade head
 
@@ -208,7 +208,7 @@ pip install -e .
 playwright install chromium
 
 cp .env.example .env
-# Imposta DATABASE_DSN e le credenziali SPID in .env
+# Imposta SISTER_DATABASE_DSN_LOCALHOST (o SISTER_DATABASE_DSN_NEON) e le credenziali SPID in .env
 
 alembic upgrade head
 
@@ -229,6 +229,9 @@ All'avvio il servizio:
 
 ## Configurazione
 
+La [strategia di configurazione proposta](docs/configuration_strategy.md) definisce
+la precedenza tra ambiente del processo, `.env` dell'applicazione, `../.env` condiviso e valori predefiniti.
+
 Crea un file `.env` nella root del progetto (vedi `.env.example`):
 
 ```env
@@ -237,7 +240,10 @@ ADE_USERNAME=RSSMRA85M01H501Z    # Codice fiscale
 ADE_PASSWORD=la_tua_password
 
 # Obbligatorio — Database PostgreSQL (schema gestito da Alembic)
-DATABASE_DSN=postgresql+psycopg://utente:password@host:5432/sister?sslmode=require
+ENVIRONMENT=development
+SISTER_DATABASE_DSN_LOCALHOST=postgresql+psycopg://postgres@127.0.0.1:5432/sister?options=-csearch_path%3Dsister
+# Per production/prod/staging viene usata soltanto questa variabile:
+# SISTER_DATABASE_DSN_NEON=postgresql+psycopg://utente:password@host/sister?sslmode=require&options=-csearch_path%3Dsister
 
 # Opzionale — Autenticazione (gestite da aecs4u-auth)
 ADE_AUTH_METHOD=spid              # spid | cie | cns | fisconline
@@ -271,7 +277,9 @@ non fa logout. Dettagli, livelli di ufficio (Nazionale/Provincia) e risoluzione 
 
 | Variabile | Obbligatoria | Default | Descrizione |
 |-----------|:------------:|---------|-------------|
-| `DATABASE_DSN` | ✅ | — | URL di connessione PostgreSQL usato dal servizio e da Alembic |
+| `ENVIRONMENT` | | `development` | `production`, `prod` e `staging` selezionano Neon; gli altri ambienti selezionano localhost |
+| `SISTER_DATABASE_DSN_LOCALHOST` | in locale | — | URL PostgreSQL locale usato dal servizio, dai batch e da Alembic |
+| `SISTER_DATABASE_DSN_NEON` | su Neon | — | URL PostgreSQL usato in production/prod/staging; nessun fallback al database locale |
 | `ADE_USERNAME` | ✅ | — | Codice fiscale per il login SPID |
 | `ADE_PASSWORD` | ✅ | — | Password SPID |
 | `ADE_AUTH_METHOD` | | `spid` | Metodo di autenticazione: `spid`, `cie`, `cns`, `fisconline` |

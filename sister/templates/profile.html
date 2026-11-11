@@ -1,9 +1,10 @@
 {% extends "_base.html" %}
+{% from "components/page_header.html" import page_header %}
 {% block page_title %}Profilo{% endblock %}
 
 {% block content %}
 <div class="container-fluid py-4">
-    <h1 class="h2 mb-4"><i class="fas fa-user text-primary me-2" aria-hidden="true"></i>Profilo</h1>
+    {{ page_header("Profilo", icon="fas fa-user text-primary") }}
     <div class="card border-0 shadow-sm profile-card">
         <div class="card-body">
             <dl class="row mb-0">
@@ -30,5 +31,28 @@
             <a class="btn btn-outline-danger btn-sm" href="/auth/logout"><i class="fas fa-sign-out-alt me-2" aria-hidden="true"></i>Esci</a>
         </div>
     </div>
+    {% if wallet_enabled %}
+    <section class="card border-0 shadow-sm mt-4" aria-labelledby="gift-coupon-heading">
+        <div class="card-body">
+            <h2 class="h5" id="gift-coupon-heading"><i class="fas fa-gift me-2 text-primary" aria-hidden="true"></i>Riscatta un buono regalo</h2>
+            {% if gift_status == 'redeemed' %}<div class="alert alert-success" role="status">Buono riscattato: i crediti sono stati aggiunti al tuo portafoglio.</div>
+            {% elif gift_status == 'already_redeemed' %}<div class="alert alert-info" role="status">Questo buono è già stato utilizzato dal tuo account.</div>
+            {% elif gift_status == 'frozen' %}<div class="alert alert-warning" role="status">Questo buono è temporaneamente sospeso.</div>
+            {% elif gift_status == 'expired' %}<div class="alert alert-warning" role="status">Questo buono è scaduto.</div>
+            {% elif gift_status == 'exhausted' %}<div class="alert alert-warning" role="status">Questo buono ha raggiunto il numero massimo di riscatti.</div>
+            {% elif gift_status == 'unavailable' %}<div class="alert alert-warning" role="status">Il portafoglio crediti non è al momento disponibile.</div>
+            {% elif gift_status == 'wallet_locked' %}<div class="alert alert-warning" role="status">Il wallet è bloccato: contatta l’amministratore.</div>
+            {% elif gift_status %}<div class="alert alert-danger" role="alert">Codice non valido o non riscattabile.</div>{% endif %}
+            <form method="post" action="/wallet/gift-coupons/redeem" class="row g-2 align-items-end">
+                {{ csrf_input() }}
+                <div class="col-12 col-md-8">
+                    <label class="form-label" for="gift-coupon-code">Codice buono</label>
+                    <input class="form-control text-uppercase" id="gift-coupon-code" name="code" required maxlength="80" autocomplete="off" placeholder="SISTER-…">
+                </div>
+                <div class="col-12 col-md-4"><button class="btn btn-primary w-100" type="submit">Riscatta crediti</button></div>
+            </form>
+        </div>
+    </section>
+    {% endif %}
 </div>
 {% endblock %}

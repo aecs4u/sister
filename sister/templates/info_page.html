@@ -1,4 +1,5 @@
 {% extends "_base.html" %}
+{% from "components/page_header.html" import page_header %}
 {% block page_title %}{{ page_heading }}{% endblock %}
 
 {% block content %}
@@ -9,7 +10,7 @@
             <li class="breadcrumb-item active" aria-current="page">{{ page_heading }}</li>
         </ol>
     </nav>
-    <h1 class="mb-4"><i class="fas {{ page_icon }} text-primary me-2" aria-hidden="true"></i>{{ page_heading }}</h1>
+    {{ page_header(page_heading, icon="fas " ~ page_icon ~ " text-primary") }}
     <div class="row">
         <div class="col-lg-8">
             <div class="card border-0 shadow-sm mb-4">

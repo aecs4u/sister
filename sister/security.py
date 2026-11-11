@@ -22,7 +22,8 @@ _STRICT_DIRECTIVES = {
     "font-src": "'self' data:",
     "connect-src": "'self'",
     # UI imagery is either same-origin, embedded data, or explicitly widened on pages that need a map.
-    "img-src": "'self' data: blob:",
+    # img.clerk.com: the profile picture of a Clerk sign-in, shown in the header of every page.
+    "img-src": "'self' data: blob: https://img.clerk.com",
 }
 
 

@@ -1,6 +1,7 @@
 {% extends "_base.html" %}
+{% from "admin/_form_options.html" import user_select, document_select %}
 
-{% block page_title %}Acquisti documenti{% endblock %}
+{% block page_title %}Acquisti{% endblock %}
 
 {% macro state_badge(state) -%}
     {%- if state == 'active' %}<span class="badge text-bg-success">Attivo</span>
@@ -14,18 +15,25 @@
     <nav aria-label="breadcrumb" class="mb-3">
         <ol class="breadcrumb">
             <li class="breadcrumb-item"><a href="/admin">Amministrazione</a></li>
-            <li class="breadcrumb-item active" aria-current="page">Acquisti documenti</li>
+            <li class="breadcrumb-item active" aria-current="page">Acquisti</li>
         </ol>
     </nav>
     <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
         <div>
-            <h1 class="h2 mb-1">Acquisti documenti</h1>
-            <p class="text-muted mb-0">Ogni riga concede a un utente l’accesso al documento indicato. Una revoca conserva lo storico.</p>
+            <h1 class="h2 mb-1">Acquisti e accessi</h1>
+            <p class="text-muted mb-0">Gestisci gli acquisti dei documenti e le assegnazioni di accesso a persone e aziende archiviate.</p>
         </div>
         <div class="d-flex gap-2">
             <a class="btn btn-outline-primary" href="/admin/documents">Catalogo documenti</a>
+            <a class="btn btn-outline-primary" href="/admin/subject-access">Persone e aziende</a>
+            <a class="btn btn-outline-primary" href="/admin/wallets">Portafogli e buoni</a>
             <a class="btn btn-outline-secondary" href="/admin">Torna all’amministrazione</a>
         </div>
+    </div>
+
+    <div class="alert alert-info" role="note">
+        Gli acquisti di documenti e gli accessi ai profili sono registrati separatamente. Per persone e aziende, apri il registro dedicato per assegnare, congelare o riattivare l’accesso; le operazioni restano tracciate.
+        <a class="alert-link" href="/admin/subject-access">Apri accessi a persone e aziende</a>.
     </div>
 
     <div id="purchase-feedback" tabindex="-1">
@@ -40,16 +48,16 @@
     <section class="card mb-4" aria-labelledby="new-purchase-heading">
         <div class="card-body">
             <h2 class="h5" id="new-purchase-heading">Concedi accesso a un documento</h2>
-            <p class="small text-muted">Scegli l’utente dall’elenco o digita la sua chiave: <code>id:nome</code>, <code>email:nome@example.com</code> oppure <code>username:nome</code>. L’account riconosce tutte e tre le forme; la propria chiave è nella pagina <a href="/profile">Profilo</a>.</p>
+            <p class="small text-muted">Seleziona l’utente e il documento dagli elenchi.</p>
             <form method="post" action="/admin/document-purchases/create" class="row g-3 align-items-end">
                 {{ csrf_input() }}
                 <div class="col-12 col-lg-3">
                     <label class="form-label" for="new-user-id">Utente</label>
-                    <input class="form-control" id="new-user-id" name="user_id" list="known-users" required maxlength="320" autocomplete="off" placeholder="id:nome o email:nome@example.com">
+                    {{ user_select('new-user-id', known_users) }}
                 </div>
                 <div class="col-6 col-lg-2">
-                    <label class="form-label" for="new-document-id">ID documento</label>
-                    <input class="form-control" id="new-document-id" name="document_id" type="number" min="1" inputmode="numeric" value="{{ selected_document_id }}" required>
+                    <label class="form-label" for="new-document-id">Documento</label>
+                    {{ document_select('new-document-id', document_options, selected_document_id) }}
                     <a class="small" href="/admin/documents">Trova nel catalogo</a>
                 </div>
                 <div class="col-6 col-lg-2">
@@ -70,7 +78,6 @@
                     <button class="btn btn-primary w-100" type="submit">Concedi</button>
                 </div>
             </form>
-            <datalist id="known-users">{% for key in known_users %}<option value="{{ key }}">{% endfor %}</datalist>
         </div>
     </section>
 
@@ -100,7 +107,7 @@
             {% if query_price_list %}<details class="small mb-3"><summary>Prezzi query attivi</summary><ul class="mt-2">{% for price in query_price_list %}<li><code>{{ price.endpoint }}</code>: {{ price.credits }} crediti</li>{% endfor %}</ul></details>{% endif %}
             <form method="post" action="/admin/credits/grant" class="row g-3 align-items-end">
                 {{ csrf_input() }}
-                <div class="col-12 col-lg-4"><label class="form-label" for="credit-user">Utente</label><input class="form-control" id="credit-user" name="user_id" list="known-users" required maxlength="320" autocomplete="off"></div>
+                <div class="col-12 col-lg-4"><label class="form-label" for="credit-user">Utente</label>{{ user_select('credit-user', known_users) }}</div>
                 <div class="col-6 col-lg-2"><label class="form-label" for="credit-amount">Crediti</label><input class="form-control" id="credit-amount" name="amount" inputmode="decimal" required></div>
                 <div class="col-12 col-lg-4"><label class="form-label" for="credit-reason">Motivo</label><input class="form-control" id="credit-reason" name="reason" maxlength="200"></div>
                 <div class="col-6 col-lg-2"><button class="btn btn-outline-primary w-100" type="submit">Accredita</button></div>
@@ -113,7 +120,7 @@
         <div class="card-body border-bottom">
             <div class="d-flex flex-wrap justify-content-between align-items-center gap-3">
                 <h2 class="h5 mb-0" id="purchase-list-heading">Acquisti registrati <span class="badge text-bg-secondary">{{ purchases|length }}</span></h2>
-                <form method="get" action="/admin/document-purchases" class="d-flex flex-wrap gap-2">
+                <form method="get" action="/admin/purchases" class="d-flex flex-wrap gap-2">
                     <label class="visually-hidden" for="purchase-state">Stato</label>
                     <select class="form-select w-auto" id="purchase-state" name="state">
                         <option value="active"{% if state == 'active' %} selected{% endif %}>Attivi</option>
@@ -141,11 +148,11 @@
                                 <input type="hidden" name="purchased_at_orig" value="{{ purchase.purchased_at_local }}">
                                 <div class="col-12 col-xl-3">
                                     <label class="visually-hidden" for="user-{{ row_id }}">Utente</label>
-                                    <input class="form-control form-control-sm" id="user-{{ row_id }}" name="user_id" value="{{ purchase.user_id }}" list="known-users" required maxlength="320">
+                                    {{ user_select('user-' ~ row_id, known_users, purchase.user_id, small=true) }}
                                 </div>
                                 <div class="col-6 col-xl-1">
-                                    <label class="visually-hidden" for="doc-{{ row_id }}">ID documento</label>
-                                    <input class="form-control form-control-sm" id="doc-{{ row_id }}" name="document_id" type="number" min="1" inputmode="numeric" value="{{ purchase.document_id }}" required>
+                                    <label class="visually-hidden" for="doc-{{ row_id }}">Documento</label>
+                                    {{ document_select('doc-' ~ row_id, document_options, purchase.document_id, small=true, defer_options=true) }}
                                 </div>
                                 <div class="col-6 col-xl-2">
                                     <label class="visually-hidden" for="date-{{ row_id }}">Acquistato il</label>
@@ -199,6 +206,22 @@
 </div>
 <script nonce="{{ csp_nonce }}">
 (function () {
+  // Share the catalog with edit rows without rendering it hundreds of times.
+  function loadDocumentOptions(event) {
+    var select = event.target.closest('select[data-document-options]');
+    if (!select) return;
+    var source = document.getElementById(select.dataset.documentOptions);
+    if (!source) return;
+    var selected = select.value;
+    var options = document.createDocumentFragment();
+    Array.from(source.options).forEach(function (option) { options.appendChild(option.cloneNode(true)); });
+    select.replaceChildren(options);
+    select.value = selected;
+    delete select.dataset.documentOptions;
+  }
+  document.addEventListener('focusin', loadDocumentOptions);
+  document.addEventListener('pointerdown', loadDocumentOptions);
+
   // Move focus to the result message so keyboard and screen-reader users hear it after the redirect.
   // (after load: the theme restores focus/scroll state on its own schedule and would win a parse-time call)
   var feedback = document.getElementById('purchase-feedback');

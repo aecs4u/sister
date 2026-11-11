@@ -1,0 +1,52 @@
+{% extends "_base.html" %}
+{% from "components/page_header.html" import page_header %}
+{% block page_title %}Acquista accesso al profilo{% endblock %}
+
+{% block content %}
+<div class="container py-5">
+    {{ page_header("Acquista accesso al profilo", icon="fas fa-cart-shopping text-primary") }}
+    <div class="row">
+        <div class="col-lg-7">
+            <div class="card border-0 shadow-sm">
+                <div class="card-body">
+                    <h2 class="h5 mb-1">{{ profile.name or 'Profilo senza nome' }}</h2>
+                    <p class="text-muted small mb-3">{{ 'Persona' if kind == 'person' else 'Azienda' }} · <code>{{ profile.fiscal_code }}</code></p>
+                    {% if error == 'credits' %}<div class="alert alert-warning" role="alert">Crediti insufficienti per questo profilo.</div>
+                    {% elif error == 'disabled' %}<div class="alert alert-info" role="alert">I pagamenti per questo tipo di profilo non sono configurati. Contatta l’<a class="alert-link" href="/contact">amministratore</a>.</div>
+                    {% elif error == 'cancelled' %}<div class="alert alert-info" role="status">Pagamento annullato; non è stato addebitato nulla.</div>
+                    {% elif error %}<div class="alert alert-danger" role="alert">Pagamento non riuscito. Riprova o contatta l’amministratore.</div>{% endif %}
+                    {% if status == 'paid' %}<div class="alert alert-info" role="status">Pagamento ricevuto. L’accesso sarà disponibile appena il pagamento viene confermato.</div>
+                    {% elif status == 'owned' %}<div class="alert alert-success" role="status">Hai già accesso a questo profilo.</div>{% endif %}
+                    {% if owned %}
+                    <div class="alert alert-success" role="status">Hai già accesso a questo profilo.</div>
+                    <a class="btn btn-primary" href="{{ '/persons/' if kind == 'person' else '/companies/' }}{{ profile.fiscal_code }}">Apri il profilo</a>
+                    {% elif not card_enabled and not credits_enabled %}
+                    <div class="alert alert-info" role="status">I pagamenti per questo tipo di profilo non sono attivi. Contatta l’<a class="alert-link" href="/contact">amministratore</a> indicando il codice <code>{{ profile.fiscal_code }}</code>.</div>
+                    {% else %}
+                    <p class="text-muted">L’acquisto concede accesso al profilo archiviato. I documenti collegati richiedono un acquisto separato.</p>
+                    <ul class="list-unstyled mb-3">
+                        {% if card_enabled %}<li class="mb-1"><i class="fas fa-credit-card me-2 text-muted" aria-hidden="true"></i>Carta (Stripe): <strong>{{ card_price or 'prezzo al checkout' }}</strong></li>{% endif %}
+                        {% if credits_enabled %}<li class="mb-1"><i class="fas fa-coins me-2 text-muted" aria-hidden="true"></i>Crediti: <strong>{{ credit_cost }}</strong>{% if credit_balance is not none %} · saldo <strong>{{ credit_balance }}</strong>{% endif %}</li>{% endif %}
+                    </ul>
+                    <div class="d-flex flex-wrap gap-2">
+                        {% if card_enabled %}
+                        <form method="post" action="/buy/entity/{{ token }}/purchase">
+                            {{ csrf_input() }}<input type="hidden" name="method" value="card">
+                            <button class="btn btn-primary" type="submit"><i class="fas fa-credit-card me-2" aria-hidden="true"></i>Paga con carta{% if card_price %} ({{ card_price }}){% endif %}</button>
+                        </form>
+                        {% endif %}
+                        {% if credits_enabled %}
+                        <form method="post" action="/buy/entity/{{ token }}/purchase" data-confirm="Usare {{ credit_cost }} crediti per questo profilo?">
+                            {{ csrf_input() }}<input type="hidden" name="method" value="credits">
+                            <button class="btn btn-outline-primary" type="submit"{% if credit_balance is not none and credit_balance < credit_cost %} disabled aria-describedby="credits-low"{% endif %}><i class="fas fa-coins me-2" aria-hidden="true"></i>Paga con crediti ({{ credit_cost }})</button>
+                        </form>
+                        {% if credit_balance is not none and credit_balance < credit_cost %}<p class="form-text w-100" id="credits-low">Saldo insufficiente: chiedi all’amministratore di ricaricare i crediti.</p>{% endif %}
+                        {% endif %}
+                    </div>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

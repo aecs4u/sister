@@ -170,6 +170,39 @@ and an indexed foreign key everywhere, 59 foreign keys). `20261030_request_jobs_
 `request_type`). Tables left without relations on purpose: `sezioni_extraction_jobs` (standalone job store), `parcel_geometry_cache`
 (keyed by ISTAT `comune_id`, a foreign table), `comune_pre_istat` (rollback snapshot), `alembic_version`, `spatial_ref_sys`.
 
+## Local schema cleanup (2026-11-10)
+
+The localhost `sister` database also contained an abandoned `empty` schema from the
+older import layout: 16 tables, all with zero rows, and eight sequences. Its
+cadastral and feedback tables had no application schema mapping or incoming
+cross-schema dependencies; some still referenced `sister_legacy` tables. The
+`sezioni_extraction_jobs` table duplicated the active `sister` job store. No
+localhost foreign-table mapping referenced `empty`.
+
+[`drop_unused_local_schema.sql`](../scripts/one_off/drop_unused_local_schema.sql)
+removes only those named tables and sequences. It locks the tables before checking
+that they are empty and uses `RESTRICT` throughout. Unexpected relations,
+populated tables, or external dependencies abort the transaction. Run it using
+the `psql --single-transaction` command in the script header, after a full backup.
+The script is idempotent when `empty` is already absent.
+
+The cleanup was rehearsed with rollback, including a populated-table refusal
+check, then committed and checked again. All 146 retained tables/materialized
+views kept their exact row counts (2,010,735 rows total); retained relation OIDs,
+ACLs, 742 constraints, and all 33 view/materialized-view definitions were unchanged.
+The archive, legacy, audit, energy export, and cadastral-sales support schemas
+remain available for their existing consumers and history.
+
+The private, Git-ignored full backup is
+`backup_original/schema_consolidation_20261110/sister_before.dump`; the same
+directory contains its archive listing and before/after catalog/count inventories.
+To recover only the removed schema on this database:
+
+```bash
+pg_restore -w -h 127.0.0.1 -U postgres -d sister --exit-on-error \
+  --schema=empty backup_original/schema_consolidation_20261110/sister_before.dump
+```
+
 ## Regenerate the diagram
 
 ```bash

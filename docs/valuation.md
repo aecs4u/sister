@@ -167,10 +167,9 @@ Gotchas learned on the real data:
 - Match the visura's comune code with **`cod_comune_amm`** (`G273` for Palermo). `cod_comune_catastale` is OMI's own code
   (`U1AA`) and does not match.
 - Zone rows can be duplicated (section `''` vs `' '`), hence `SELECT DISTINCT`.
-- `idx_omi_ref_zone_comune_period_zone`, `idx_omi_ref_zone_comune_catastale`, and `idx_omi_ref_zone_comune_istat`
-  support lookup by each accepted comune key. Without the alternate-key indexes, PostgreSQL can choose a full scan for
-  the overview's `OR` filter. The quote SQL selects the newest semester before joining the fact table, avoiding the full
-  historical join. Keep these indexes on the `omi` database; `scripts/one_off/omi_quote_index.sql` installs them concurrently.
+- The quote SQL filters `omi.zone_municipality` / `omi.zone_version` first and selects the newest semester before
+  joining `omi.quotation_fact` by `zone_version_id`, avoiding the full historical join. The indexes it relies on
+  (`omi_core_zone_version_municipality_idx`, `omi_core_quotation_fact_zone_idx`) belong to the normalised `omi` schema.
   Results are cached for `OMI_CACHE_DAYS` (30 days, 512 entries, memory only) and lookups run concurrently, bounded.
 - **OMI has no land typologies**: the latest semester contains only building types (codes 1, 5-10 and 13-22).
   `zornade.zornade_zone_omi` in `aecs4u-stats` has "Seminativo/Uliveto/Vigneto" rows, but they are not land prices (Barolo's

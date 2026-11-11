@@ -31,6 +31,7 @@ from sister.cadastral import (  # noqa: F401, E402
     CadastralProspectProperty,
     CadastralQuery,
 )
+from sister.database_config import database_dsn_setting, get_database_dsn  # noqa: E402
 from sister.db_models import (  # noqa: F401, E402
     ActivityAction,
     ActivityLog,
@@ -77,9 +78,16 @@ from sister.db_models import (  # noqa: F401, E402
     RequestTypeTag,
     ResultOwner,
     SubjectFavorite,
+    SubjectAccess,
+    SubjectPurchase,
+    SubjectHolding,
+    SubjectNote,
+    SubjectTag,
     RightKind,
     Subject,
     TerritoryProvince,
+    WalletGiftCoupon,
+    WalletGiftCouponRedemption,
 )
 from sister.visura_xml_models import (  # noqa: F401, E402
     BuildingUnit,
@@ -98,12 +106,10 @@ from sister.visura_xml_models import (  # noqa: F401, E402
 config = context.config
 
 # Alembic and the application use the same PostgreSQL connection setting.
-database_dsn = os.getenv("DATABASE_DSN")
-if not database_dsn:
-    raise RuntimeError("DATABASE_DSN must be set to a PostgreSQL connection URL")
+database_dsn = get_database_dsn(required=True)
 url = make_url(database_dsn)
 if url.get_backend_name() != "postgresql":
-    raise RuntimeError("DATABASE_DSN must use PostgreSQL; other database backends are unsupported")
+    raise RuntimeError(f"{database_dsn_setting()} must use PostgreSQL; other database backends are unsupported")
 if url.drivername in {
     "postgres",
     "postgresql",

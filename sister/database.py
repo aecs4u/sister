@@ -38,6 +38,7 @@ from sqlalchemy import (
     or_,
     text,
     union_all,
+    update,
 )
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -46,6 +47,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import aliased, sessionmaker
 from sqlmodel import select
 
+from .database_config import database_dsn_setting, get_database_dsn
 from .db_models import (
     PROPERTY_FIELD_MAP,
     PROPERTY_LOCATION_FIELD_MAP,
@@ -86,10 +88,14 @@ from .db_models import (
     ResultOwner,
     RightKind,
     Subject,
+    SubjectAccess,
     SubjectFavorite,
     SubjectHolding,
     SubjectNote,
+    SubjectPurchase,
     SubjectTag,
+    WalletGiftCoupon,
+    WalletGiftCouponRedemption,
 )
 from .provinces import province_code, province_name
 from .reference import (
@@ -132,12 +138,12 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 load_dotenv(PROJECT_ROOT / ".env")
 load_dotenv(PROJECT_ROOT.parent / ".env", override=False)
 DATA_ROOT = Path(os.getenv("SISTER_DATA_ROOT", str(PROJECT_ROOT))).expanduser().resolve()
-DATABASE_DSN = os.getenv("DATABASE_DSN")
+DATABASE_DSN = get_database_dsn()
 DATABASE_SCHEMA = os.getenv("DATABASE_SCHEMA", "sister")
 DATABASE_ISTAT_SCHEMA = os.getenv("DATABASE_ISTAT_SCHEMA", DATABASE_SCHEMA)
 # raw payloads (response JSON, XML tree, extraction JSON) live in their own schema; tests point it at a throwaway one
 DATABASE_ARCHIVE_SCHEMA = os.getenv("DATABASE_ARCHIVE_SCHEMA", "sister_archive")
-DATABASE_REVISION = "20261127_subject_tags"
+DATABASE_REVISION = "20261130_wallet_gift_coupons"
 
 # ---------------------------------------------------------------------------
 # Engine and session
@@ -165,10 +171,10 @@ def _get_engine():
     global _engine
     if _engine is None:
         if not DATABASE_DSN:
-            raise RuntimeError("DATABASE_DSN must be set to a PostgreSQL connection URL")
+            raise RuntimeError(f"{database_dsn_setting()} must be set to a PostgreSQL connection URL")
         url = make_url(DATABASE_DSN)
         if url.get_backend_name() != "postgresql":
-            raise RuntimeError("DATABASE_DSN must use PostgreSQL; other database backends are unsupported")
+            raise RuntimeError(f"{database_dsn_setting()} must use PostgreSQL; other database backends are unsupported")
         if url.drivername in {
             "postgres",
             "postgresql",
@@ -1208,7 +1214,12 @@ async def _request_scope(session: AsyncSession, request_pk: int) -> Optional[str
 
 async def _history(session: AsyncSession, action: str, request_pk: int, observed_at: datetime, **kwargs) -> None:
     """Update the ownership / property-state history; a failure here is logged and never fails the response save."""
-    from .ownership_history import collect_observations, extend_identical, record_observations, subject_search_is_complete
+    from .ownership_history import (
+        collect_observations,
+        extend_identical,
+        record_observations,
+        subject_search_is_complete,
+    )
 
     try:
         async with session.begin_nested():
@@ -2653,12 +2664,14 @@ def _subject_profile_ctes(istat: str) -> str:
         "  SELECT upper(btrim(r.subject_query)) AS code, r.responded_at FROM request r"
         "  WHERE r.success IS TRUE AND r.responded_at IS NOT NULL AND length(btrim(r.subject_query)) = :length"
         "  AND (CAST(:code AS text) IS NULL OR upper(btrim(r.subject_query)) = CAST(:code AS text))"
+        "  AND (CAST(:codes AS text[]) IS NULL OR upper(btrim(r.subject_query)) = ANY(CAST(:codes AS text[])))"
         "), docs AS ("
         "  SELECT upper(btrim(s.fiscal_code)) AS code, count(DISTINCT d.id) AS visure,"
         "         max(coalesce(d.requested_at, d.created_at)) AS last_doc"
         "  FROM subject s JOIN document_subject ds ON ds.subject_id = s.id JOIN document d ON d.id = ds.document_id"
         "  WHERE d.document_type = 'visura_soggetto' AND length(btrim(s.fiscal_code)) = :length"
-        "  AND (CAST(:code AS text) IS NULL OR upper(btrim(s.fiscal_code)) = CAST(:code AS text)) GROUP BY 1"
+        "  AND (CAST(:code AS text) IS NULL OR upper(btrim(s.fiscal_code)) = CAST(:code AS text))"
+        "  AND (CAST(:codes AS text[]) IS NULL OR upper(btrim(s.fiscal_code)) = ANY(CAST(:codes AS text[]))) GROUP BY 1"
         "), codes AS (SELECT code FROM req UNION SELECT code FROM docs"
         "), reqs AS (SELECT code, count(*) AS searches, max(responded_at) AS last_search FROM req GROUP BY code"
         "), subj AS ("
@@ -2670,6 +2683,7 @@ def _subject_profile_ctes(istat: str) -> str:
         f"  LEFT JOIN {istat}.municipalities m ON m.numeric_code = s.birth_comune_id"
         "  WHERE length(btrim(s.fiscal_code)) = :length"
         "  AND (CAST(:code AS text) IS NULL OR upper(btrim(s.fiscal_code)) = CAST(:code AS text))"
+        "  AND (CAST(:codes AS text[]) IS NULL OR upper(btrim(s.fiscal_code)) = ANY(CAST(:codes AS text[])))"
         "  ORDER BY upper(btrim(s.fiscal_code)),"
         "           (coalesce(s.last_name, '') = '' AND upper(btrim(s.name)) = upper(btrim(s.fiscal_code))),"
         "           (s.birth_date IS NULL), s.id DESC"
@@ -2680,6 +2694,7 @@ def _subject_profile_ctes(istat: str) -> str:
         "                  '\\s+con sede in\\s.*$', '', 'i')), '') AS clean"
         "    FROM subject_record r WHERE length(btrim(r.fiscal_code)) = :length"
         "    AND (CAST(:code AS text) IS NULL OR upper(btrim(r.fiscal_code)) = CAST(:code AS text))"
+        "    AND (CAST(:codes AS text[]) IS NULL OR upper(btrim(r.fiscal_code)) = ANY(CAST(:codes AS text[])))"
         "  ) x WHERE clean IS NOT NULL GROUP BY code"
         f"), p AS ("
         f"  SELECT c.code, coalesce({_OWN_NAME_SQL}, rec.rec_name) AS name, subj.last_name, subj.first_name,"
@@ -2711,6 +2726,7 @@ def _subject_kind_params(kind: str, code: Optional[str] = None) -> dict[str, Any
         "length": 16 if kind == "person" else 11,
         "code": str(code).strip().upper() if code else None,
         "stype": kind,
+        "codes": None,
     }
 
 
@@ -2894,6 +2910,7 @@ async def query_subject_profiles(
     limit: Optional[int] = 50,
     offset: int = 0,
     favorites: Iterable[str] = (),
+    allowed_codes: Iterable[str] | None = None,
 ) -> tuple[list[dict[str, Any]], int]:
     """One page of the archive table and the number of rows that match (all pages).
 
@@ -2904,6 +2921,7 @@ async def query_subject_profiles(
     ``favorite`` for the codes in ``favorites``.
     """
     params = _subject_kind_params(kind)
+    params["codes"] = None if allowed_codes is None else sorted({str(code).strip().upper() for code in allowed_codes})
     where, where_params = _subject_where(q, filters or {}, favorites, name_status, tag)
     params.update(where_params)
     order = _SUBJECT_SORT_SQL.get(sort, "last_seen")
@@ -2928,7 +2946,7 @@ async def query_subject_profiles(
     return profiles, int(rows[0]["total_rows"]) if rows else 0
 
 
-async def subject_overview(kind: str = "person") -> dict[str, Any]:
+async def subject_overview(kind: str = "person", allowed_codes: Iterable[str] | None = None) -> dict[str, Any]:
     """Aggregates over the whole archive in one pass, for the page's summary cards and column widths.
 
     ``subjects`` / ``with_visura`` / ``buildings`` / ``land`` / ``value_share`` are the card totals; ``widest`` holds the
@@ -2936,6 +2954,7 @@ async def subject_overview(kind: str = "person") -> dict[str, Any]:
     to the widest value without loading the rows.
     """
     params = _subject_kind_params(kind)
+    params["codes"] = None if allowed_codes is None else sorted({str(code).strip().upper() for code in allowed_codes})
     istat = postgresql.dialect().identifier_preparer.quote_schema(DATABASE_ISTAT_SCHEMA)
 
     def widest(expression: str) -> str:
@@ -3678,6 +3697,17 @@ async def iter_all_documents(batch_size: int = 500) -> AsyncIterator[dict]:
             await result.close()
 
 
+async def list_document_options() -> list[dict]:
+    """Return only the labels and IDs needed by admin document selectors."""
+    stmt = select(Document.id, Document.file_name, Document.subject_text).order_by(Document.id.desc())
+    async with _get_session_factory()() as session:
+        rows = (await session.execute(stmt)).all()
+    return [
+        {"id": row.id, "filename": row.file_name, "title": row.subject_text or row.file_name}
+        for row in rows
+    ]
+
+
 async def list_admin_documents(query: str = "", limit: int = 50, offset: int = 0) -> tuple[list[dict], int]:
     """Search indexed documents for the admin catalog, including their current owner counts."""
     search = str(query or "").strip()
@@ -4052,6 +4082,456 @@ async def set_document_favorite(user_id: str, document_id: int, favorite: bool) 
         await session.commit()
 
 
+async def has_subject_access(user_ids: "str | Iterable[str]", subject_type: str, subject_code: str) -> bool:
+    """Match an active, explicit subject-search grant against the signed-in principal's account keys."""
+    keys = _purchase_user_keys(user_ids)
+    if not keys:
+        return False
+    async with _get_session_factory()() as session:
+        result = await session.execute(
+            select(SubjectAccess.subject_code).where(
+                func.lower(SubjectAccess.user_id).in_(keys),
+                SubjectAccess.subject_type == subject_type,
+                SubjectAccess.subject_code == subject_code.strip().upper(),
+                SubjectAccess.granted_at <= func.now(),
+                SubjectAccess.revoked_at.is_(None),
+            ).limit(1)
+        )
+        return result.first() is not None
+
+
+async def get_subject_access_codes(user_ids: "str | Iterable[str]", subject_type: str) -> set[str]:
+    """Codes whose archived person or company searches belong to this active user principal."""
+    keys = _purchase_user_keys(user_ids)
+    if not keys:
+        return set()
+    async with _get_session_factory()() as session:
+        result = await session.execute(
+            select(SubjectAccess.subject_code).where(
+                func.lower(SubjectAccess.user_id).in_(keys),
+                SubjectAccess.subject_type == subject_type,
+                SubjectAccess.granted_at <= func.now(),
+                SubjectAccess.revoked_at.is_(None),
+            )
+        )
+        return {str(code) for code in result.scalars()}
+
+
+async def grant_subject_access(
+    user_id: str, subject_type: str, subject_code: str, created_by: str, note: str | None = None
+) -> bool:
+    """Grant a saved search without changing document ownership; preserve existing active grants."""
+    code = subject_code.strip().upper()
+    pattern = r"\d{11}" if subject_type == "company" else r"[A-Z0-9]{16}"
+    keys = _purchase_user_keys(user_id)
+    if subject_type not in {"company", "person"} or not re.fullmatch(pattern, code) or not keys:
+        raise ValueError("Invalid subject access grant")
+    values = {
+        "granted_at": datetime.now(timezone.utc),
+        "created_by": created_by,
+        "note": note or None,
+        "revoked_at": None,
+        "revoked_by": None,
+        "revoked_reason": None,
+    }
+    async with _get_session_factory()() as session:
+        result = await session.execute(
+            pg_insert(SubjectAccess)
+            .values(user_id=keys[0], subject_type=subject_type, subject_code=code, **values)
+            .on_conflict_do_update(
+                index_elements=[SubjectAccess.user_id, SubjectAccess.subject_type, SubjectAccess.subject_code],
+                set_=values,
+                where=SubjectAccess.revoked_at.is_not(None),
+            )
+            .returning(SubjectAccess.subject_code)
+        )
+        changed = result.scalar_one_or_none() is not None
+        await session.commit()
+        return changed
+
+
+async def complete_subject_purchase(
+    user_id: str,
+    subject_type: str,
+    subject_code: str,
+    *,
+    source: str,
+    payment_ref: str,
+    created_by: str,
+    amount: Decimal | None = None,
+    currency: str | None = None,
+    wallet_tx_id: str | None = None,
+    note: str | None = None,
+) -> str:
+    """Record one paid entity purchase and grant access atomically; payment refs are replay-safe."""
+    keys = _purchase_user_keys(user_id)
+    code = str(subject_code or "").strip().upper()
+    pattern = r"\d{11}" if subject_type == "company" else r"[A-Z0-9]{16}"
+    payment_key = str(payment_ref or "").strip()
+    source_value = str(source or "").strip().lower()
+    if (
+        not keys
+        or subject_type not in {"person", "company"}
+        or not re.fullmatch(pattern, code)
+        or source_value not in {"stripe", "wallet"}
+        or not payment_key
+    ):
+        raise PurchaseError("bad_subject_purchase")
+    values = {
+        "user_id": keys[0],
+        "subject_type": subject_type,
+        "subject_code": code,
+        "source": source_value,
+        "payment_ref": payment_key,
+        "created_by": str(created_by or source_value)[:320],
+        "amount": amount,
+        "currency": (str(currency or "").upper() or None),
+        "wallet_tx_id": wallet_tx_id,
+        "status": "completed",
+        "note": str(note or "")[:2000] or None,
+    }
+    async with _get_session_factory()() as session:
+        lock_keys = [f"subject:{subject_type}:{code}:{_identity_part(keys[0])}", f"subject-payment:{payment_key}"]
+        for lock_key in sorted(lock_keys):
+            await session.execute(
+                text("SELECT pg_advisory_xact_lock(hashtextextended(:lock_key, 0))"),
+                {"lock_key": lock_key},
+            )
+        existing = await session.execute(
+            select(SubjectPurchase.id).where(SubjectPurchase.payment_ref == payment_key).limit(1)
+        )
+        if existing.first() is not None:
+            return "replay"
+        owned = await session.execute(
+            select(SubjectAccess.user_id).where(
+                func.lower(SubjectAccess.user_id).in_(keys),
+                SubjectAccess.subject_type == subject_type,
+                SubjectAccess.subject_code == code,
+                SubjectAccess.granted_at <= func.now(),
+                SubjectAccess.revoked_at.is_(None),
+            ).limit(1)
+        )
+        if owned.first() is not None:
+            values["status"] = "refund_required"
+            await session.execute(pg_insert(SubjectPurchase).values(**values))
+            await session.commit()
+            return "already_owned"
+        await session.execute(pg_insert(SubjectPurchase).values(**values))
+        grant_values = {
+            "granted_at": datetime.now(timezone.utc),
+            "created_by": source_value,
+            "note": note or f"Pagamento {payment_key}",
+            "revoked_at": None,
+            "revoked_by": None,
+            "revoked_reason": None,
+        }
+        await session.execute(
+            pg_insert(SubjectAccess)
+            .values(user_id=keys[0], subject_type=subject_type, subject_code=code, **grant_values)
+            .on_conflict_do_update(
+                index_elements=[SubjectAccess.user_id, SubjectAccess.subject_type, SubjectAccess.subject_code],
+                set_=grant_values,
+                where=SubjectAccess.revoked_at.is_not(None),
+            )
+        )
+        await session.commit()
+        return "created"
+
+
+async def list_subject_purchases(query: str = "", *, limit: int = 500) -> list[dict[str, Any]]:
+    """Return recent paid subject purchases and refund follow-ups for the admin audit view."""
+    stmt = select(SubjectPurchase).order_by(SubjectPurchase.purchased_at.desc(), SubjectPurchase.id.desc())
+    search = str(query or "").strip()
+    if search:
+        pattern = f"%{search}%"
+        stmt = stmt.where(
+            SubjectPurchase.user_id.ilike(pattern)
+            | SubjectPurchase.subject_code.ilike(pattern)
+            | SubjectPurchase.payment_ref.ilike(pattern)
+        )
+    stmt = stmt.limit(max(1, min(int(limit), 1000)))
+    async with _get_session_factory()() as session:
+        rows = (await session.execute(stmt)).scalars().all()
+    return [
+        {
+            "id": row.id,
+            "user_id": row.user_id,
+            "subject_type": row.subject_type,
+            "subject_code": row.subject_code,
+            "purchased_at": row.purchased_at,
+            "source": row.source,
+            "amount": row.amount,
+            "currency": row.currency or "",
+            "payment_ref": row.payment_ref or "",
+            "status": row.status,
+            "note": row.note or "",
+        }
+        for row in rows
+    ]
+
+
+async def mark_subject_purchase_refunded(payment_ref: str) -> bool:
+    """Mark a purchase row refunded after the wallet credit reversal succeeds."""
+    async with _get_session_factory()() as session:
+        result = await session.execute(
+            update(SubjectPurchase)
+            .where(SubjectPurchase.payment_ref == str(payment_ref or "").strip())
+            .values(status="refunded")
+        )
+        await session.commit()
+        return bool(result.rowcount)
+
+
+async def create_wallet_gift_coupon(
+    code_hash: str,
+    code_hint: str,
+    amount: Decimal,
+    max_redemptions: int,
+    created_by: str,
+    *,
+    expires_at: datetime | None = None,
+    note: str | None = None,
+) -> int:
+    """Persist a wallet gift coupon without retaining its redeemable plaintext code."""
+    coupon = WalletGiftCoupon(
+        code_hash=code_hash,
+        code_hint=code_hint,
+        amount=amount,
+        max_redemptions=max_redemptions,
+        redeemed_count=0,
+        status="active",
+        created_by=str(created_by or "admin")[:320],
+        expires_at=expires_at,
+        note=str(note or "")[:500] or None,
+    )
+    async with _get_session_factory()() as session:
+        session.add(coupon)
+        await session.commit()
+        await session.refresh(coupon)
+    return int(coupon.id)
+
+
+async def list_wallet_gift_coupons(*, limit: int = 200) -> list[dict[str, Any]]:
+    stmt = select(WalletGiftCoupon).order_by(WalletGiftCoupon.created_at.desc(), WalletGiftCoupon.id.desc())
+    stmt = stmt.limit(max(1, min(int(limit), 500)))
+    async with _get_session_factory()() as session:
+        rows = (await session.execute(stmt)).scalars().all()
+    return [
+        {
+            "id": row.id,
+            "code_hint": row.code_hint,
+            "amount": row.amount,
+            "max_redemptions": row.max_redemptions,
+            "redeemed_count": row.redeemed_count,
+            "status": row.status,
+            "created_by": row.created_by,
+            "created_at": row.created_at,
+            "expires_at": row.expires_at,
+            "note": row.note or "",
+        }
+        for row in rows
+    ]
+
+
+async def set_wallet_gift_coupon_status(coupon_id: int, status: str) -> bool:
+    if status not in {"active", "frozen", "revoked"}:
+        raise ValueError("invalid_gift_coupon_status")
+    async with _get_session_factory()() as session:
+        result = await session.execute(
+            update(WalletGiftCoupon).where(WalletGiftCoupon.id == int(coupon_id)).values(status=status)
+        )
+        await session.commit()
+        return bool(result.rowcount)
+
+
+async def reserve_wallet_gift_coupon_redemption(code_hash: str, user_id: str) -> dict[str, Any]:
+    """Reserve one code redemption under an advisory lock; repeated submissions resume safely."""
+    user_key = str(user_id or "").strip().casefold()
+    if not code_hash or not user_key:
+        return {"status": "invalid"}
+    async with _get_session_factory()() as session:
+        await session.execute(
+            text("SELECT pg_advisory_xact_lock(hashtextextended(:lock_key, 0))"),
+            {"lock_key": f"wallet-gift-coupon:{code_hash}"},
+        )
+        coupon = (
+            await session.execute(select(WalletGiftCoupon).where(WalletGiftCoupon.code_hash == code_hash).limit(1))
+        ).scalar_one_or_none()
+        if coupon is None:
+            return {"status": "invalid"}
+        existing = (
+            await session.execute(
+                select(WalletGiftCouponRedemption).where(
+                    WalletGiftCouponRedemption.coupon_id == coupon.id,
+                    func.lower(WalletGiftCouponRedemption.user_id) == user_key,
+                ).limit(1)
+            )
+        ).scalar_one_or_none()
+        if existing is not None:
+            if existing.status == "pending":
+                return {"status": "pending", "redemption_id": existing.id, "amount": existing.amount}
+            return {"status": "already_redeemed"}
+        if coupon.status != "active":
+            return {"status": "frozen" if coupon.status == "frozen" else "invalid"}
+        if coupon.expires_at is not None and coupon.expires_at <= datetime.now(timezone.utc):
+            return {"status": "expired"}
+        if coupon.redeemed_count >= coupon.max_redemptions:
+            return {"status": "exhausted"}
+        redemption = WalletGiftCouponRedemption(
+            coupon_id=coupon.id,
+            user_id=user_key,
+            amount=coupon.amount,
+            status="pending",
+            note="Gift coupon redemption",
+        )
+        coupon.redeemed_count += 1
+        session.add(redemption)
+        await session.commit()
+        await session.refresh(redemption)
+        return {"status": "pending", "redemption_id": redemption.id, "amount": redemption.amount}
+
+
+async def complete_wallet_gift_coupon_redemption(redemption_id: int, wallet_tx_id: str) -> bool:
+    async with _get_session_factory()() as session:
+        result = await session.execute(
+            update(WalletGiftCouponRedemption)
+            .where(
+                WalletGiftCouponRedemption.id == int(redemption_id),
+                WalletGiftCouponRedemption.status == "pending",
+            )
+            .values(status="completed", wallet_tx_id=str(wallet_tx_id), completed_at=datetime.now(timezone.utc))
+        )
+        await session.commit()
+        return bool(result.rowcount)
+
+
+async def get_wallet_gift_coupon_redemption(redemption_id: int) -> dict[str, Any] | None:
+    stmt = (
+        select(WalletGiftCouponRedemption, WalletGiftCoupon)
+        .join(WalletGiftCoupon, WalletGiftCoupon.id == WalletGiftCouponRedemption.coupon_id)
+        .where(WalletGiftCouponRedemption.id == int(redemption_id))
+        .limit(1)
+    )
+    async with _get_session_factory()() as session:
+        row = (await session.execute(stmt)).first()
+    if row is None:
+        return None
+    redemption, coupon = row
+    return {
+        "id": redemption.id,
+        "coupon_id": coupon.id,
+        "code_hint": coupon.code_hint,
+        "user_id": redemption.user_id,
+        "amount": redemption.amount,
+        "status": redemption.status,
+        "wallet_tx_id": redemption.wallet_tx_id,
+        "reversed_tx_id": redemption.reversed_tx_id,
+        "redeemed_at": redemption.redeemed_at,
+    }
+
+
+async def list_wallet_gift_coupon_redemptions(*, query: str = "", limit: int = 300) -> list[dict[str, Any]]:
+    stmt = (
+        select(WalletGiftCouponRedemption, WalletGiftCoupon)
+        .join(WalletGiftCoupon, WalletGiftCoupon.id == WalletGiftCouponRedemption.coupon_id)
+        .order_by(WalletGiftCouponRedemption.redeemed_at.desc(), WalletGiftCouponRedemption.id.desc())
+    )
+    search = str(query or "").strip()
+    if search:
+        pattern = f"%{search}%"
+        wallet_pattern = f"%sister:{_identity_part(search)}%"
+        stmt = stmt.where(
+            WalletGiftCouponRedemption.user_id.ilike(pattern)
+            | WalletGiftCouponRedemption.user_id.ilike(wallet_pattern)
+            | WalletGiftCoupon.code_hint.ilike(pattern)
+        )
+    stmt = stmt.limit(max(1, min(int(limit), 1000)))
+    async with _get_session_factory()() as session:
+        rows = (await session.execute(stmt)).all()
+    return [
+        {
+            "id": redemption.id,
+            "coupon_id": coupon.id,
+            "code_hint": coupon.code_hint,
+            "user_id": redemption.user_id,
+            "amount": redemption.amount,
+            "status": redemption.status,
+            "wallet_tx_id": redemption.wallet_tx_id or "",
+            "reversed_tx_id": redemption.reversed_tx_id or "",
+            "redeemed_at": redemption.redeemed_at,
+        }
+        for redemption, coupon in rows
+    ]
+
+
+async def mark_wallet_gift_coupon_redemption_reversed(redemption_id: int, reversed_tx_id: str) -> bool:
+    async with _get_session_factory()() as session:
+        result = await session.execute(
+            update(WalletGiftCouponRedemption)
+            .where(
+                WalletGiftCouponRedemption.id == int(redemption_id),
+                WalletGiftCouponRedemption.status.in_(["completed", "reversal_required"]),
+            )
+            .values(status="reversed", reversed_tx_id=str(reversed_tx_id))
+        )
+        await session.commit()
+        return bool(result.rowcount)
+
+
+async def list_subject_access(query: str = "", *, status: str = "active", limit: int = 500) -> list[dict[str, Any]]:
+    """List subject grants for the admin manager without returning document or credential data."""
+    stmt = select(SubjectAccess).order_by(SubjectAccess.granted_at.desc(), SubjectAccess.subject_code)
+    if status == "active":
+        stmt = stmt.where(SubjectAccess.revoked_at.is_(None), SubjectAccess.granted_at <= func.now())
+    elif status == "revoked":
+        stmt = stmt.where(SubjectAccess.revoked_at.is_not(None))
+    search = str(query or "").strip()
+    if search:
+        pattern = f"%{search}%"
+        stmt = stmt.where(SubjectAccess.user_id.ilike(pattern) | SubjectAccess.subject_code.ilike(pattern))
+    stmt = stmt.limit(max(1, min(int(limit), 1000)))
+    async with _get_session_factory()() as session:
+        rows = (await session.execute(stmt)).scalars().all()
+    return [
+        {
+            "user_id": row.user_id,
+            "subject_type": row.subject_type,
+            "subject_code": row.subject_code,
+            "granted_at": row.granted_at,
+            "created_by": row.created_by,
+            "note": row.note or "",
+            "revoked_at": row.revoked_at,
+            "revoked_by": row.revoked_by or "",
+            "revoked_reason": row.revoked_reason or "",
+        }
+        for row in rows
+    ]
+
+
+async def revoke_subject_access(
+    user_id: str, subject_type: str, subject_code: str, revoked_by: str, reason: str | None = None
+) -> bool:
+    """Soft-revoke one subject grant while retaining its history."""
+    keys = _purchase_user_keys(user_id)
+    code = str(subject_code or "").strip().upper()
+    if subject_type not in {"person", "company"} or not code or not keys:
+        raise ValueError("Invalid subject access revocation")
+    now = datetime.now(timezone.utc)
+    async with _get_session_factory()() as session:
+        result = await session.execute(
+            update(SubjectAccess)
+            .where(
+                func.lower(SubjectAccess.user_id).in_(keys),
+                SubjectAccess.subject_type == subject_type,
+                SubjectAccess.subject_code == code,
+                SubjectAccess.revoked_at.is_(None),
+            )
+            .values(revoked_at=now, revoked_by=revoked_by, revoked_reason=reason or None)
+        )
+        await session.commit()
+        return bool(result.rowcount)
+
+
 async def get_subject_favorite_codes(user_id: str, subject_type: str) -> set[str]:
     """Return the profile codes of one kind saved by an authenticated user."""
     async with _get_session_factory()() as session:
@@ -4217,17 +4697,19 @@ async def untag_subjects(kind: str, codes: Iterable[str], tag: str) -> int:
         return int(result.rowcount or 0)
 
 
-async def list_subject_tags(kind: str) -> list[dict[str, Any]]:
-    """Every tag in use for one kind with the number of subjects carrying it, most used first."""
+async def list_subject_tags(kind: str, allowed_codes: Iterable[str] | None = None) -> list[dict[str, Any]]:
+    """Tags in use for one kind, optionally scoped to records owned by one account."""
     kind = _subject_tag_kind(kind)
+    codes = None if allowed_codes is None else sorted({str(code).strip().upper() for code in allowed_codes})
     async with _get_session_factory()() as session:
         rows = (
             await session.execute(
                 text(
                     "SELECT (array_agg(tag ORDER BY created_at))[1] AS tag, count(*) AS subjects FROM subject_tag "
-                    "WHERE subject_type = :kind GROUP BY tag_key ORDER BY count(*) DESC, tag_key"
+                    "WHERE subject_type = :kind AND (CAST(:codes AS text[]) IS NULL "
+                    "OR subject_code = ANY(CAST(:codes AS text[]))) GROUP BY tag_key ORDER BY count(*) DESC, tag_key"
                 ),
-                {"kind": kind},
+                {"kind": kind, "codes": codes},
             )
         ).all()
     return [{"tag": str(tag), "count": int(count)} for tag, count in rows]

@@ -26,6 +26,9 @@ START_UVICORN_ARGS=(
 START_DEFAULT_RELOAD=true
 START_SKIP_SYNC="${START_SKIP_SYNC:-true}"
 START_PROJECT_ROOT="${PROJECT_ROOT}"
+# The host-wide uv cache may be owned by another account. Keep an explicit
+# caller override, otherwise use the standard user-writable cache location.
+export UV_CACHE_DIR="${UV_CACHE_DIR:-${XDG_CACHE_HOME:-${HOME}/.cache}/uv}"
 
 SHARED_START="${AECS4U_START_COMMON:-${SCRIPT_DIR}/start-common.sh}"
 if [[ ! -r "${SHARED_START}" ]]; then

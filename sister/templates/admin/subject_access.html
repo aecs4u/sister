@@ -1,0 +1,215 @@
+{% extends "_base.html" %}
+{% from "admin/_form_options.html" import user_select %}
+
+{% block page_title %}Accesso a persone e aziende{% endblock %}
+
+{% block content %}
+<div class="container-fluid py-4" id="admin-subject-access-page">
+    <nav aria-label="breadcrumb" class="mb-3">
+        <ol class="breadcrumb">
+            <li class="breadcrumb-item"><a href="/admin">Amministrazione</a></li>
+            <li class="breadcrumb-item active" aria-current="page">Accesso a persone e aziende</li>
+        </ol>
+    </nav>
+
+    <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+        <div>
+            <h1 class="h2 mb-1"><i class="fas fa-user-shield me-2" aria-hidden="true"></i>Accesso a persone e aziende</h1>
+            <p class="text-muted mb-0">Assegna accesso ai profili archiviati, congela un’autorizzazione o riattivala. Gli acquisti dei documenti restano separati.</p>
+        </div>
+        <div class="d-flex gap-2">
+            <a class="btn btn-outline-primary" href="/admin/users">Utenti</a>
+            <a class="btn btn-outline-secondary" href="/admin">Amministrazione</a>
+        </div>
+    </div>
+
+    <div class="mb-3" aria-live="polite">
+        {% if status == 'granted' %}<div class="alert alert-success" role="status">Accesso registrato e attività tracciata.</div>
+        {% elif status == 'frozen' %}<div class="alert alert-success" role="status">Accesso congelato. Il record resta nello storico e può essere riattivato.</div>{% endif %}
+        {% if error == 'already_active' %}<div class="alert alert-info" role="alert">L’utente ha già accesso a questo profilo.</div>
+        {% elif error == 'subject_not_found' %}<div class="alert alert-warning" role="alert">Il profilo non è presente nell’archivio.</div>
+        {% elif error == 'bad_subject_code' %}<div class="alert alert-warning" role="alert">Il codice fiscale o la partita IVA non è valido.</div>
+        {% elif error == 'bad_key' %}<div class="alert alert-warning" role="alert">Chiave utente non valida. Usa <code>id:…</code>, <code>email:…</code> o <code>username:…</code>.</div>
+        {% elif error == 'user_not_registered' %}<div class="alert alert-warning" role="alert">L’utente non risulta tra gli account SISTER registrati. Sceglilo dall’elenco degli account conosciuti.</div>
+        {% elif error == 'note_too_long' %}<div class="alert alert-warning" role="alert">La nota supera il limite di 2000 caratteri.</div>
+        {% elif error == 'not_found' %}<div class="alert alert-info" role="alert">L’accesso era già congelato o non esiste.</div>
+        {% elif error == 'link_unavailable' %}<div class="alert alert-warning" role="alert">Imposta <code>SECRET_KEY</code> o <code>SISTER_LINK_SECRET</code> per creare link firmati.</div>
+        {% elif error %}<div class="alert alert-danger" role="alert">Operazione non completata. Controlla il registro accessi e riprova.</div>{% endif %}
+    </div>
+
+    {% if purchase_link %}
+    <section class="card mb-4" aria-labelledby="subject-purchase-link-heading">
+        <div class="card-body">
+            <h2 class="h5" id="subject-purchase-link-heading">Link di acquisto del profilo</h2>
+            <p class="small text-muted">Condividi il link con l’utente: il codice profilo è firmato e il link scade dopo {{ link_days }} giorni. Il prezzo dipende dal tipo di entità.</p>
+            <div class="input-group">
+                <label class="visually-hidden" for="subject-purchase-link">Link di acquisto</label>
+                <input class="form-control font-monospace" id="subject-purchase-link" readonly value="{{ purchase_link }}" data-select-on-focus>
+                <button class="btn btn-outline-primary" type="button" data-click="sisterActions.copyValue" data-args='["subject-purchase-link"]'>Copia</button>
+            </div>
+        </div>
+    </section>
+    {% endif %}
+
+    <section class="card mb-4" aria-labelledby="profile-search-heading">
+        <div class="card-body">
+            <h2 class="h5" id="profile-search-heading">Trova un profilo da assegnare</h2>
+            <form method="get" action="/admin/subject-access" class="row g-2 align-items-end">
+                <input type="hidden" name="state" value="{{ state }}">
+                {% if query %}<input type="hidden" name="q" value="{{ query }}">{% endif %}
+                <div class="col-12 col-md-3">
+                    <label class="form-label" for="subject-kind">Tipo</label>
+                    <select class="form-select" id="subject-kind" name="kind">
+                        <option value="person"{% if kind == 'person' %} selected{% endif %}>Persona</option>
+                        <option value="company"{% if kind == 'company' %} selected{% endif %}>Azienda</option>
+                    </select>
+                </div>
+                <div class="col-12 col-md-7">
+                    <label class="form-label" for="profile-search">Nome o codice fiscale / partita IVA</label>
+                    <input class="form-control" id="profile-search" name="search" value="{{ search }}" maxlength="200" required>
+                </div>
+                <div class="col-12 col-md-2"><button class="btn btn-primary w-100" type="submit">Cerca profili</button></div>
+            </form>
+        </div>
+        {% if search %}
+        <div class="px-3 pt-3 small text-muted">
+            Prezzo profilo {{ 'persona' if kind == 'person' else 'azienda' }}:
+            {% if card_enabled %}Stripe <strong>{{ card_price or 'configurato al checkout' }}</strong>{% else %}Stripe non configurato{% endif %}
+            {% if credits_enabled %} · Crediti <strong>{{ credit_cost }}</strong>{% elif card_enabled %} · Pagamento con crediti non configurato{% endif %}
+        </div>
+        <div class="table-responsive">
+            <table class="table table-striped table-hover align-middle mb-0">
+                <thead><tr><th scope="col">Profilo</th><th scope="col">Codice</th><th scope="col">Assegna a utente</th><th scope="col">Acquisto</th></tr></thead>
+                <tbody>
+                {% for profile in profiles %}
+                    <tr>
+                        <td class="fw-semibold">{{ profile.name or 'Nome non disponibile' }}</td>
+                        <td><code>{{ profile.fiscal_code }}</code></td>
+                        <td>
+                            <form method="post" action="/admin/subject-access/grant" class="d-flex flex-wrap gap-2 align-items-end">
+                                {{ csrf_input() }}
+                                <input type="hidden" name="kind" value="{{ kind }}">
+                                <input type="hidden" name="subject_code" value="{{ profile.fiscal_code }}">
+                                <input type="hidden" name="search" value="{{ search }}">
+                                <input type="hidden" name="q" value="{{ query }}">
+                                <input type="hidden" name="state" value="{{ state }}">
+                                <div>
+                                    <label class="visually-hidden" for="target-user-{{ loop.index }}">Utente destinatario</label>
+                                    {{ user_select('target-user-' ~ loop.index, known_users, small=true) }}
+                                </div>
+                                <div>
+                                    <label class="visually-hidden" for="grant-note-{{ loop.index }}">Nota</label>
+                                    <input class="form-control form-control-sm" id="grant-note-{{ loop.index }}" name="note" maxlength="2000" placeholder="Motivo / riferimento">
+                                </div>
+                                <button class="btn btn-sm btn-primary" type="submit">Registra accesso</button>
+                            </form>
+                        </td>
+                        <td>
+                            <a class="btn btn-sm btn-outline-primary" href="/admin/subject-purchase-link?kind={{ kind }}&amp;code={{ profile.fiscal_code }}&amp;search={{ search|urlencode }}&amp;q={{ query|urlencode }}&amp;state={{ state|urlencode }}">Crea link</a>
+                        </td>
+                    </tr>
+                {% else %}
+                    <tr><td colspan="4" class="text-center text-muted py-4">Nessun profilo trovato. Prova con il nome completo o il codice.</td></tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% endif %}
+    </section>
+
+
+    <section class="card" aria-labelledby="grants-heading">
+        <div class="card-body border-bottom">
+            <div class="d-flex flex-wrap justify-content-between align-items-center gap-3">
+                <h2 class="h5 mb-0" id="grants-heading">Registro assegnazioni <span class="badge text-bg-secondary">{{ grants|length }}</span></h2>
+                <form method="get" action="/admin/subject-access" class="d-flex flex-wrap gap-2">
+                    <input type="hidden" name="kind" value="{{ kind }}">
+                    {% if search %}<input type="hidden" name="search" value="{{ search }}">{% endif %}
+                    <label class="visually-hidden" for="grant-state">Stato accesso</label>
+                    <select class="form-select w-auto" id="grant-state" name="state">
+                        <option value="active"{% if state == 'active' %} selected{% endif %}>Attivi</option>
+                        <option value="revoked"{% if state == 'revoked' %} selected{% endif %}>Congelati</option>
+                        <option value="all"{% if state == 'all' %} selected{% endif %}>Tutti</option>
+                    </select>
+                    <label class="visually-hidden" for="grant-search">Cerca assegnazione</label>
+                    <input class="form-control w-auto" id="grant-search" name="q" value="{{ query }}" placeholder="Utente o codice">
+                    <button class="btn btn-outline-primary" type="submit">Filtra</button>
+                </form>
+            </div>
+        </div>
+        <div class="table-responsive">
+            <table class="table table-striped table-hover align-middle mb-0">
+                <thead><tr><th scope="col">Utente</th><th scope="col">Tipo</th><th scope="col">Profilo</th><th scope="col">Origine</th><th scope="col">Nota</th><th scope="col">Stato</th><th scope="col">Gestione</th></tr></thead>
+                <tbody>
+                {% for grant in grants %}
+                    <tr>
+                        <td><code>{{ grant.user_id }}</code></td>
+                        <td>{{ 'Persona' if grant.subject_type == 'person' else 'Azienda' }}</td>
+                        <td><a href="{{ '/persons/' if grant.subject_type == 'person' else '/companies/' }}{{ grant.subject_code }}"><code>{{ grant.subject_code }}</code></a></td>
+                        <td>{% if grant.created_by in ['stripe', 'wallet'] %}Acquisto · {{ grant.created_by }}{% else %}Omaggio / assegnazione{% if grant.created_by %}<div class="small text-muted">{{ grant.created_by }}</div>{% endif %}{% endif %}</td>
+                        <td>{{ grant.note or '—' }}{% if grant.revoked_reason %}<div class="small text-muted">Congelato: {{ grant.revoked_reason }}</div>{% endif %}</td>
+                        <td>{% if grant.revoked_at %}<span class="badge text-bg-secondary">Congelato</span>{% if grant.revoked_display %}<div class="small text-muted">{{ grant.revoked_display }}</div>{% endif %}{% else %}<span class="badge text-bg-success">Attivo</span>{% endif %}</td>
+                        <td>
+                            {% if grant.revoked_at %}
+                            <form method="post" action="/admin/subject-access/grant" class="d-flex gap-2 align-items-center">
+                                {{ csrf_input() }}
+                                <input type="hidden" name="user_id" value="{{ grant.user_id }}">
+                                <input type="hidden" name="kind" value="{{ grant.subject_type }}">
+                                <input type="hidden" name="subject_code" value="{{ grant.subject_code }}">
+                                <input type="hidden" name="state" value="{{ state }}">
+                                <input type="hidden" name="q" value="{{ query }}">
+                                <input type="hidden" name="note" value="{{ grant.note }}">
+                                <input type="hidden" name="operation" value="reactivate">
+                                <button class="btn btn-sm btn-outline-primary" type="submit">Riattiva</button>
+                            </form>
+                            {% else %}
+                            <form method="post" action="/admin/subject-access/revoke" class="d-flex flex-wrap gap-2 align-items-center">
+                                {{ csrf_input() }}
+                                <input type="hidden" name="user_id" value="{{ grant.user_id }}">
+                                <input type="hidden" name="kind" value="{{ grant.subject_type }}">
+                                <input type="hidden" name="subject_code" value="{{ grant.subject_code }}">
+                                <input type="hidden" name="state" value="{{ state }}">
+                                <input type="hidden" name="q" value="{{ query }}">
+                                <label class="visually-hidden" for="freeze-reason-{{ loop.index }}">Motivo del congelamento</label>
+                                <input class="form-control form-control-sm" id="freeze-reason-{{ loop.index }}" name="reason" maxlength="500" placeholder="Motivo, facoltativo">
+                                <button class="btn btn-sm btn-outline-danger" type="submit">Congela</button>
+                            </form>
+                            {% endif %}
+                        </td>
+                    </tr>
+                {% else %}
+                    <tr><td colspan="7" class="text-center text-muted py-4">Nessuna assegnazione corrisponde ai filtri.</td></tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        <div class="card-footer small text-muted">Ogni assegnazione, congelamento e riattivazione viene registrata nel registro accessi. Congelare revoca temporaneamente la visibilità; riattivare crea un nuovo evento di audit. L’elenco utenti include gli account locali e quelli già registrati in acquisti o assegnazioni SISTER.</div>
+    </section>
+
+    <section class="card mt-4" aria-labelledby="subject-purchases-heading">
+        <div class="card-body border-bottom">
+            <h2 class="h5 mb-0" id="subject-purchases-heading">Acquisti di persone e aziende <span class="badge text-bg-secondary">{{ subject_purchases|length }}</span></h2>
+        </div>
+        <div class="table-responsive">
+            <table class="table table-striped table-hover align-middle mb-0">
+                <thead><tr><th scope="col">Data</th><th scope="col">Utente</th><th scope="col">Profilo</th><th scope="col">Importo</th><th scope="col">Pagamento</th><th scope="col">Stato</th></tr></thead>
+                <tbody>
+                {% for purchase in subject_purchases %}
+                    <tr>
+                        <td class="text-nowrap">{{ purchase.purchased_at.strftime('%Y-%m-%d %H:%M UTC') if purchase.purchased_at else '—' }}</td>
+                        <td><code>{{ purchase.user_id }}</code></td>
+                        <td>{{ 'Persona' if purchase.subject_type == 'person' else 'Azienda' }} <code>{{ purchase.subject_code }}</code></td>
+                        <td>{% if purchase.amount is not none %}{{ purchase.amount }} {{ purchase.currency }}{% else %}—{% endif %}</td>
+                        <td><code>{{ purchase.payment_ref or '—' }}</code></td>
+                        <td>{% if purchase.status == 'refund_required' %}<span class="badge text-bg-warning">Rimborso da verificare</span>{% elif purchase.status == 'refunded' %}<span class="badge text-bg-secondary">Rimborsato</span>{% else %}<span class="badge text-bg-success">Completato · {{ purchase.source }}</span>{% endif %}</td>
+                    </tr>
+                {% else %}
+                    <tr><td colspan="6" class="text-center text-muted py-4">Nessun acquisto di profili registrato.</td></tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        <div class="card-footer small text-muted">La tabella conserva gli acquisti anche quando l’accesso viene congelato o riattivato. I riferimenti Stripe e wallet sono usati per deduplicare il pagamento.</div>
+    </section>
+</div>
+{% endblock %}

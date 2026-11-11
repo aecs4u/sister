@@ -489,3 +489,47 @@ def test_build_list_extra_sets_immobili_and_intestati():
     q = rows()
     apply_extra(q, "all")
     assert q[0]["params"]["immobili_intestatari"] is True and q[1]["params"]["con_intestati"] is True
+
+
+# --- comuni with sezioni ------------------------------------------------------------------------------------------
+
+
+SECTION_ERROR = "SISTER ha rifiutato il modulo: La sezione è obbligatoria per il comune specificato."
+
+
+def _comuni_spec():
+    rows = [
+        {"id": "c1", "params": {**SEARCH, "comune": "CORLEONE", "particella": 1}},
+        {"id": "c2", "params": {**SEARCH, "comune": "CORLEONE", "particella": 2}},
+        {"id": "r1", "params": {**SEARCH, "comune": "RAVENNA", "particella": 3}},
+        {"id": "c3", "params": {**SEARCH, "comune": "CORLEONE", "particella": 4, "sezione": "A"}},
+    ]
+    return make(rows)
+
+
+def _section_wait(client):
+    def wait(rid):
+        command, params, *_ = client.submits[int(rid[1:]) - 1]
+        if params.get("comune") == "CORLEONE" and not params.get("sezione"):
+            return {"status": "error", "error": SECTION_ERROR}
+        return {"request_id": rid, "status": "completed", "data": {}}
+
+    return wait
+
+
+def test_comune_that_needs_a_sezione_is_skipped_for_its_other_rows(tmp_path):
+    client = FakeClient()
+    client._wait = _section_wait(client)
+    runner, plan = _runner(client, _comuni_spec(), journal=tmp_path / "j.jsonl")
+    report = asyncio.run(runner.run(plan))
+
+    assert [c[1]["particella"] for c in client.submits] == ["1", "3", "4"]  # row c2 was never sent; the row with a sezione was
+    by_id = {e["id"]: e for e in report.entries}
+    assert "comune saltato" in by_id["c2"]["error"] and by_id["r1"]["status"] == "completed" and by_id["c3"]["status"] == "completed"
+
+    # a resumed run knows it from the journal: nothing is sent again for the refused comune
+    second = FakeClient()
+    second._wait = _section_wait(second)
+    runner, plan = _runner(second, _comuni_spec(), journal=tmp_path / "j.jsonl", resume=True)
+    asyncio.run(runner.run(plan))
+    assert second.submits == []

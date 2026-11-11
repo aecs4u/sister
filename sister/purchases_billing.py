@@ -1,4 +1,4 @@
-"""Pay-per-document access through ``aecs4u-billing`` (Stripe Checkout) — dormant until Stripe is configured.
+"""Paid document and entity access through ``aecs4u-billing`` (Stripe Checkout) and prepaid wallet credits.
 
 The entitlement stays the ``document_purchase`` table (``database.create_document_purchase``); this module only
 *fulfils* it from a paid Checkout session and starts such a session:
@@ -11,9 +11,10 @@ The entitlement stays the ``document_purchase`` table (``database.create_documen
   a failed handler makes Stripe retry) calls ``fulfil_checkout_session`` for ``checkout.session.completed``. A
   ``payment_ref`` that was already used never grants twice.
 
-Settings (all required, otherwise nothing is mounted): ``STRIPE_API_KEY``, ``STRIPE_WEBHOOK_SECRET``,
-``SISTER_DOCUMENT_PRICE_ID`` (and ``ALLOWED_STRIPE_PRICE_IDS`` should list it). ``SISTER_DOCUMENT_PRICE_CENTS`` labels the
-price shown to the buyer.
+Stripe requires ``STRIPE_API_KEY``, ``STRIPE_WEBHOOK_SECRET``, and a product price ID. Documents use
+``SISTER_DOCUMENT_PRICE_ID``; persons and companies use their own ``SISTER_PERSON_PRICE_ID`` and
+``SISTER_COMPANY_PRICE_ID``. Add every configured price to ``ALLOWED_STRIPE_PRICE_IDS``. ``*_PRICE_CENTS`` settings label
+the price shown to the buyer.
 
 Prepaid credits (``aecs4u_billing.wallet``) are the second way to pay: ``SISTER_DOCUMENT_CREDITS`` is the cost of one
 document in credits, an admin loads credits on an account (``grant_credits``) and the buyer pays with ``pay_with_credits``
@@ -27,8 +28,11 @@ listed to non-admins, so titles of other customers' documents stay private.
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import logging
 import os
+import secrets
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import ROUND_DOWN, Decimal, InvalidOperation
@@ -45,6 +49,32 @@ def billing_configured() -> bool:
     return all(os.getenv(name, "").strip() for name in ("STRIPE_API_KEY", "STRIPE_WEBHOOK_SECRET", "SISTER_DOCUMENT_PRICE_ID"))
 
 
+def subject_price_id(subject_type: str) -> str | None:
+    """The server-configured Stripe price for one kind of entity."""
+    if subject_type not in {"person", "company"}:
+        return None
+    value = os.getenv(f"SISTER_{subject_type.upper()}_PRICE_ID", "").strip()
+    return value or None
+
+
+def subject_billing_configured(subject_type: str) -> bool:
+    return bool(subject_price_id(subject_type)) and all(
+        os.getenv(name, "").strip() for name in ("STRIPE_API_KEY", "STRIPE_WEBHOOK_SECRET")
+    )
+
+
+def any_billing_configured() -> bool:
+    """Whether at least one document or entity Stripe product is ready for fulfilment."""
+    return billing_configured() or any(subject_billing_configured(kind) for kind in ("person", "company"))
+
+
+def subject_price_label(subject_type: str) -> str | None:
+    cents = os.getenv(f"SISTER_{subject_type.upper()}_PRICE_CENTS", "").strip()
+    if not cents.isdigit():
+        return None
+    return f"€ {int(cents) / 100:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+
+
 def document_price_label() -> str | None:
     cents = os.getenv("SISTER_DOCUMENT_PRICE_CENTS", "").strip()
     if not cents.isdigit():
@@ -52,9 +82,39 @@ def document_price_label() -> str | None:
     return f"€ {int(cents) / 100:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
 
+def subject_credit_cost(subject_type: str) -> Decimal | None:
+    if subject_type not in {"person", "company"}:
+        return None
+    raw = os.getenv(f"SISTER_{subject_type.upper()}_CREDITS", "").strip()
+    try:
+        cost = Decimal(raw)
+    except Exception:  # noqa: BLE001 - missing or malformed setting means disabled
+        return None
+    return cost if cost.is_finite() and cost > 0 else None
+
+
+def subject_credits_enabled(subject_type: str) -> bool:
+    return subject_credit_cost(subject_type) is not None and wallet_backend() != "none"
+
+
 def checkout_metadata(user_key: str, document_id: int) -> dict[str, str]:
     """Session metadata that lets the webhook find the buyer and the document (never trusted from the client)."""
     return {"item_type": ITEM_TYPE, "reference_id": str(int(document_id)), KEY_FIELD: user_key}
+
+
+def subject_checkout_metadata(
+    user_key: str, subject_type: str, subject_code: str, user_keys: list[str] | None = None
+) -> dict[str, str]:
+    """Session metadata for one entity type and code, all selected by the server."""
+    if subject_type not in {"person", "company"}:
+        raise ValueError("Invalid subject purchase type")
+    keys = sorted({str(key).strip() for key in [user_key, *(user_keys or [])] if str(key).strip()})
+    return {
+        "item_type": subject_type,
+        "reference_id": str(subject_code).strip().upper(),
+        KEY_FIELD: user_key,
+        "sister_user_keys": ",".join(keys),
+    }
 
 
 async def fulfil_checkout_session(session: dict[str, Any]) -> str:
@@ -67,6 +127,8 @@ async def fulfil_checkout_session(session: dict[str, Any]) -> str:
     from .database import PurchaseError, create_document_purchase, record_activity
 
     metadata = session.get("metadata") or {}
+    if metadata.get("item_type") in {"person", "company"}:
+        return await fulfil_subject_checkout_session(session)
     if metadata.get("item_type") != ITEM_TYPE:
         return "ignored"
     if session.get("payment_status") not in {"paid", "no_payment_required"}:
@@ -146,9 +208,100 @@ async def start_document_checkout(request: Any, user_key: str, email: str | None
     return result.url
 
 
+async def start_subject_checkout(
+    request: Any,
+    user_key: str,
+    email: str | None,
+    subject_type: str,
+    subject_code: str,
+    token: str,
+    user_keys: list[str] | None = None,
+) -> str:
+    """Start a Stripe Checkout session using the configured price for this entity kind."""
+    from aecs4u_billing.demo.routers.billing import CreateCheckoutRequest, create_checkout
+
+    price_id = subject_price_id(subject_type)
+    if not price_id or not subject_billing_configured(subject_type):
+        raise RuntimeError("Entity checkout is not configured")
+    base = str(request.base_url).rstrip("/")
+    return_url = f"{base}/buy/entity/{token}"
+    result = await create_checkout(
+        request,
+        CreateCheckoutRequest(
+            price_id=price_id,
+            mode="payment",
+            quantity=1,
+            customer_email=email,
+            metadata=subject_checkout_metadata(user_key, subject_type, subject_code, user_keys),
+            idempotency_key=f"subject-{subject_type}-{subject_code}-{wallet_user_id(user_key)}"[:255],
+            success_url=f"{return_url}?status=paid",
+            cancel_url=f"{return_url}?error=cancelled",
+        ),
+        None,
+    )
+    return result.url
+
+
+async def fulfil_subject_checkout_session(session: dict[str, Any]) -> str:
+    """Turn a completed Stripe person/company checkout into an audited entitlement."""
+    from .database import complete_subject_purchase, record_activity
+
+    metadata = session.get("metadata") or {}
+    kind = metadata.get("item_type")
+    user_key = str(metadata.get(KEY_FIELD) or "").strip()
+    user_keys = [key.strip() for key in str(metadata.get("sister_user_keys") or "").split(",") if key.strip()]
+    code = str(metadata.get("reference_id") or "").strip().upper()
+    payment_ref = str(session.get("id") or "").strip()
+    if kind not in {"person", "company"}:
+        return "ignored"
+    if session.get("payment_status") not in {"paid", "no_payment_required"}:
+        return "ignored"
+    if not (user_key and code and payment_ref):
+        logger.warning("Subject checkout %s lacks buyer or profile: not fulfilled", payment_ref or "?")
+        return "ignored"
+    raw_amount = session.get("amount_total")
+    amount = Decimal(int(raw_amount)) / Decimal(100) if raw_amount is not None else None
+    outcome = await complete_subject_purchase(
+        user_keys or [user_key],
+        kind,
+        code,
+        source="stripe",
+        payment_ref=payment_ref,
+        created_by="stripe",
+        amount=amount,
+        currency=str(session.get("currency") or "").upper() or None,
+        note=f"Pagamento Stripe {payment_ref}",
+    )
+    if outcome == "already_owned":
+        await record_activity(
+            "subject.purchase.refund_required",
+            actor="Stripe",
+            source="stripe_webhook",
+            status="review",
+            target=f"{kind}:{code}",
+            params={"user_id": user_key, "subject_type": kind, "subject_code": code, "payment_ref": payment_ref},
+            result={
+                "refund_required": True,
+                "amount_cents": raw_amount,
+                "currency": str(session.get("currency") or "").upper(),
+            },
+        )
+        return outcome
+    if outcome == "created":
+        await record_activity(
+            "subject.purchase.completed",
+            actor="Stripe",
+            source="stripe_webhook",
+            target=f"{kind}:{code}",
+            params={"user_id": user_key, "subject_type": kind, "subject_code": code, "payment_ref": payment_ref},
+            result={"amount_cents": raw_amount, "currency": str(session.get("currency") or "").upper()},
+        )
+    return outcome
+
+
 def mount_billing(app: Any) -> bool:
     """Mount the signed Stripe webhook route and register fulfilment when payments are configured."""
-    if not billing_configured():
+    if not any_billing_configured():
         return False
     from aecs4u_billing import setup_billing
 
@@ -160,7 +313,7 @@ def mount_billing(app: Any) -> bool:
         start_usage_tracking=False,
     )
     register_stripe_handlers()
-    logger.info("Pagamenti documenti attivi (Stripe Checkout via aecs4u-billing)")
+    logger.info("Pagamenti documenti/profili attivi (Stripe Checkout via aecs4u-billing)")
     return True
 
 
@@ -195,6 +348,35 @@ def document_id_from_token(token: str) -> int | None:
         return None
     doc = payload.get("doc") if isinstance(payload, dict) else None
     return doc if isinstance(doc, int) and doc > 0 else None
+
+
+def subject_purchase_link_token(subject_type: str, subject_code: str) -> str:
+    """Sign an expiring purchase link for one archived person or company profile."""
+    code = str(subject_code or "").strip().upper()
+    pattern = r"\d{11}" if subject_type == "company" else r"[A-Z0-9]{16}"
+    import re
+
+    if subject_type not in {"person", "company"} or not re.fullmatch(pattern, code):
+        raise ValueError("Invalid subject purchase link")
+    return _serializer().dumps({"subject_type": subject_type, "subject_code": code})
+
+
+def subject_from_purchase_token(token: str) -> tuple[str, str] | None:
+    """Decode one signed entity purchase link or return None when invalid/expired."""
+    import re
+
+    from itsdangerous import BadSignature
+
+    try:
+        payload = _serializer().loads(token, max_age=LINK_TTL_SECONDS)
+    except (BadSignature, RuntimeError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    kind = payload.get("subject_type")
+    code = str(payload.get("subject_code") or "").strip().upper()
+    pattern = r"\d{11}" if kind == "company" else r"[A-Z0-9]{16}"
+    return (kind, code) if kind in {"person", "company"} and re.fullmatch(pattern, code) else None
 
 
 def _query_token_serializer():
@@ -418,6 +600,179 @@ async def grant_credits(user_key: str, amount: Decimal, reason: str, actor: str)
     return await credit_balance(user_key)
 
 
+def _gift_code_secret() -> bytes:
+    secret = os.getenv("SISTER_GIFT_COUPON_SECRET") or os.getenv("SISTER_LINK_SECRET") or os.getenv("SECRET_KEY") or ""
+    if not secret:
+        raise RuntimeError("SECRET_KEY (or SISTER_GIFT_COUPON_SECRET) is required for gift coupons")
+    return secret.encode("utf-8")
+
+
+def _normalize_gift_code(code: str) -> str:
+    return "".join(ch for ch in str(code or "").upper() if ch.isascii() and ch.isalnum())
+
+
+def gift_coupon_digest(code: str) -> str:
+    normalized = _normalize_gift_code(code)
+    if len(normalized) < 12 or len(normalized) > 64:
+        raise ValueError("invalid_gift_coupon")
+    return hmac.new(_gift_code_secret(), normalized.encode("ascii"), hashlib.sha256).hexdigest()
+
+
+async def create_gift_coupon(
+    amount: Decimal,
+    max_redemptions: int,
+    created_by: str,
+    *,
+    expires_at: datetime | None = None,
+    note: str | None = None,
+) -> str:
+    """Create a one-time-display gift code and persist only its keyed digest."""
+    from .database import create_wallet_gift_coupon
+
+    coupon = f"SISTER-{secrets.token_hex(8).upper()}"
+    await create_wallet_gift_coupon(
+        gift_coupon_digest(coupon),
+        coupon[-6:],
+        amount,
+        max_redemptions,
+        created_by,
+        expires_at=expires_at,
+        note=note,
+    )
+    return coupon
+
+
+async def redeem_gift_coupon(code: str, user_key: str) -> str:
+    """Redeem a gift to wallet credits with a durable reservation and wallet idempotency key."""
+    from aecs4u_billing.wallet.models import TransactionType
+    from aecs4u_billing.wallet.service import WalletInactiveError, WalletLockedError
+
+    from .database import (
+        complete_wallet_gift_coupon_redemption,
+        record_activity,
+        reserve_wallet_gift_coupon_redemption,
+    )
+
+    try:
+        digest = gift_coupon_digest(code)
+    except (ValueError, RuntimeError):
+        return "invalid"
+    result = await reserve_wallet_gift_coupon_redemption(digest, wallet_user_id(user_key))
+    status = result["status"]
+    if status != "pending":
+        return status
+    service = _wallet_service()
+    wallet = await service.get_or_create_wallet(wallet_user_id(user_key))
+    redemption_id = int(result["redemption_id"])
+    try:
+        tx = await service.credit(
+            wallet.id,
+            Decimal(str(result["amount"])),
+            wallet.default_currency,
+            description=f"Gift coupon {digest[:8]}",
+            reference_id=f"gift_coupon_{redemption_id}",
+            idempotency_key=f"gift-coupon-{redemption_id}",
+            metadata={"gift_coupon_redemption_id": redemption_id},
+            type=TransactionType.BONUS,
+        )
+    except (WalletInactiveError, WalletLockedError):
+        return "wallet_locked"
+    await complete_wallet_gift_coupon_redemption(redemption_id, str(tx.id))
+    try:
+        await record_activity(
+            "wallet.gift_coupon.redeemed",
+            actor=user_key,
+            source="gift_coupon",
+            target=f"wallet-redemption:{redemption_id}",
+            params={"user_id": wallet_user_id(user_key), "amount": str(result["amount"])},
+            result={"wallet_tx_id": str(tx.id)},
+        )
+    except Exception as exc:  # noqa: BLE001 - the durable coupon/redemption and wallet ledger are authoritative
+        logger.warning("Gift coupon redemption activity was not recorded: %s", type(exc).__name__)
+    return "redeemed"
+
+
+async def reverse_gift_coupon_redemption(redemption_id: int, actor: str) -> str:
+    """Reverse an unspent gift credit as a new wallet debit; preserve both ledger entries."""
+    from aecs4u_billing.wallet.models import TransactionType
+    from aecs4u_billing.wallet.service import InsufficientBalanceError, WalletInactiveError, WalletLockedError
+
+    from .database import (
+        get_wallet_gift_coupon_redemption,
+        mark_wallet_gift_coupon_redemption_reversed,
+        record_activity,
+    )
+
+    redemption = await get_wallet_gift_coupon_redemption(redemption_id)
+    if redemption is None:
+        return "not_found"
+    if redemption["status"] == "reversed":
+        return "already_reversed"
+    if redemption["status"] != "completed":
+        return "not_reversible"
+    service = _wallet_service()
+    wallet = await service.get_or_create_wallet(redemption["user_id"])
+    try:
+        tx = await service.debit(
+            wallet.id,
+            Decimal(str(redemption["amount"])),
+            wallet.default_currency,
+            description=f"Undo gift coupon {redemption['code_hint']}",
+            reference_id=f"gift_coupon_undo_{redemption_id}",
+            idempotency_key=f"gift-coupon-undo-{redemption_id}",
+            metadata={"gift_coupon_redemption_id": redemption_id, "actor": actor},
+            type=TransactionType.DEBIT,
+        )
+    except InsufficientBalanceError:
+        return "insufficient_balance"
+    except (WalletInactiveError, WalletLockedError):
+        return "wallet_locked"
+    await mark_wallet_gift_coupon_redemption_reversed(redemption_id, str(tx.id))
+    try:
+        await record_activity(
+            "wallet.gift_coupon.reversed",
+            actor=actor,
+            source="admin",
+            target=f"wallet-redemption:{redemption_id}",
+            params={"user_id": redemption["user_id"], "amount": str(redemption["amount"])},
+            result={"wallet_tx_id": str(tx.id)},
+        )
+    except Exception as exc:  # noqa: BLE001 - preserve the completed reversal
+        logger.warning("Gift coupon reversal activity was not recorded: %s", type(exc).__name__)
+    return "reversed"
+
+
+async def wallet_admin_snapshot(user_key: str) -> dict[str, Any] | None:
+    """Read one existing wallet and its recent ledger without creating a wallet on page load."""
+    service = _wallet_service()
+    wallet = await service.storage.get_wallet_by_user(wallet_user_id(user_key), service.config.site_id)
+    if wallet is None:
+        return None
+    balance = await service.get_balance(wallet.id, wallet.default_currency)
+    transactions = await service.get_transactions(wallet.id, limit=100)
+    return {
+        "id": wallet.id,
+        "user_id": wallet.user_id,
+        "currency": wallet.default_currency,
+        "balance": balance.available,
+        "locked": wallet.is_locked,
+        "active": wallet.is_active,
+        "transactions": [
+            {
+                "id": tx.id,
+                "type": tx.type.value,
+                "status": tx.status.value,
+                "amount": tx.amount,
+                "balance_after": tx.balance_after,
+                "description": tx.description,
+                "reference_id": tx.reference_id or "",
+                "created_at": tx.created_at,
+            }
+            for tx in transactions
+        ],
+    }
+
+
 @dataclass
 class QueryCreditCharge:
     """A wallet debit reserved for one portal form action."""
@@ -532,7 +887,84 @@ async def pay_with_credits(user_key: str, document_id: int) -> str:
     return "created"
 
 
-async def _refund(service, wallet, tx, cost: Decimal) -> None:
+async def pay_subject_with_credits(
+    user_key: str, subject_type: str, subject_code: str, *, user_keys: list[str] | None = None
+) -> str:
+    """Buy one person/company profile with credits; each entity kind has its own configured cost."""
+    from aecs4u_billing.wallet.models import TransactionType
+    from aecs4u_billing.wallet.service import InsufficientBalanceError
+
+    from .database import complete_subject_purchase, has_subject_access, record_activity
+
+    cost = subject_credit_cost(subject_type)
+    code = str(subject_code or "").strip().upper()
+    if cost is None or not subject_credits_enabled(subject_type):
+        return "disabled"
+    buyer_keys = user_keys or [user_key]
+    if await has_subject_access(buyer_keys, subject_type, code):
+        return "already_owned"
+    service = _wallet_service()
+    wallet = await service.get_or_create_wallet(wallet_user_id(user_key))
+    if (await service.get_balance(wallet.id, wallet.default_currency)).available < cost:
+        return "insufficient"
+    try:
+        tx = await service.debit(
+            wallet.id,
+            cost,
+            wallet.default_currency,
+            description=f"Profilo {subject_type} {code}",
+            reference_id=f"subject_{subject_type}_{code}",
+            idempotency_key=f"subject-{subject_type}-{code}-{wallet.id}",
+            type=TransactionType.USAGE,
+        )
+    except InsufficientBalanceError:
+        return "insufficient"
+    try:
+        outcome = await complete_subject_purchase(
+            buyer_keys,
+            subject_type,
+            code,
+            source="wallet",
+            payment_ref=f"wallet:{tx.id}",
+            created_by="wallet",
+            amount=cost,
+            currency="CREDITS",
+            wallet_tx_id=str(tx.id),
+            note=f"Pagamento con {cost} crediti",
+        )
+    except Exception:
+        await _refund(service, wallet, tx, cost)
+        raise
+    if outcome == "created":
+        await record_activity(
+            "subject.purchase.completed",
+            actor="wallet",
+            source="wallet",
+            target=f"{subject_type}:{code}",
+            params={"user_id": user_key, "subject_type": subject_type, "subject_code": code, "payment_ref": f"wallet:{tx.id}"},
+            result={"amount": str(cost), "currency": "CREDITS"},
+        )
+        return "created"
+    if outcome == "already_owned":
+        refunded = await _refund(service, wallet, tx, cost)
+        if refunded:
+            from .database import mark_subject_purchase_refunded
+
+            await mark_subject_purchase_refunded(f"wallet:{tx.id}")
+        await record_activity(
+            "subject.purchase.refunded" if refunded else "subject.purchase.refund_required",
+            actor="wallet",
+            source="wallet",
+            status="success" if refunded else "review",
+            target=f"{subject_type}:{code}",
+            params={"user_id": user_key, "subject_type": subject_type, "subject_code": code, "payment_ref": f"wallet:{tx.id}"},
+            result={"refunded": refunded, "amount": str(cost), "currency": "CREDITS"},
+        )
+        return "already_owned"
+    return "already_owned" if await has_subject_access(buyer_keys, subject_type, code) else "replay"
+
+
+async def _refund(service, wallet, tx, cost: Decimal) -> bool:
     from aecs4u_billing.wallet.models import TransactionType
 
     try:
@@ -540,5 +972,7 @@ async def _refund(service, wallet, tx, cost: Decimal) -> None:
             wallet.id, cost, wallet.default_currency, description=f"Rimborso {tx.id}",
             reference_id=f"refund_{tx.id}", idempotency_key=f"refund-{tx.id}", type=TransactionType.REFUND,
         )
+        return True
     except Exception as exc:  # noqa: BLE001 - leave a trace for a manual refund rather than hide the original error
         logger.error("Refund of wallet transaction %s failed: %s", tx.id, type(exc).__name__)
+        return False

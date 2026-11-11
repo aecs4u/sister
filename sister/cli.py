@@ -1397,7 +1397,7 @@ def _batch_printer(total: int):
     def emit(event: str, item, **info) -> None:
         tag = f"[dim]({item.index}/{total})[/dim]"
         if event == "skip":
-            why = "already done (resume)" if info.get("resumed") else info["status"]
+            why = "already done (resume)" if info.get("resumed") else info.get("reason") or info["status"]
             detail = item.error or (f"same as {item.duplicate_of}" if item.duplicate_of else "")
             style = "red" if info["status"] == "invalid" else "yellow"
             console.print(f"  {tag} [{style}]{why}[/{style}] {item.id} {escape(item.label)} {detail}".rstrip())

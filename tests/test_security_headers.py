@@ -38,7 +38,9 @@ def test_nonce_policy_drops_third_party_hosts_but_keeps_inline_styles():
     assert "style-src 'self' 'unsafe-inline'" in out
     assert "font-src 'self' data:" in out
     assert "connect-src 'self'" in out
-    assert "googleapis" not in out and "gstatic" not in out and "clerk" not in out
+    # img.clerk.com (profile pictures in the header) is the only third-party host on regular pages.
+    assert "googleapis" not in out and "gstatic" not in out
+    assert "clerk" not in out.replace("https://img.clerk.com", "")
 
 
 def test_nonce_policy_keeps_unrelated_directives_and_adds_missing_ones():

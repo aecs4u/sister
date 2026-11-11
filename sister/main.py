@@ -574,6 +574,7 @@ try:
     _static_dir = _sister_dir / "static"
 
     # --- Auth setup (before theme) ---
+    require_auth = os.getenv("REQUIRE_AUTHENTICATION", "true").lower() not in ("false", "0", "no")
     try:
         import aecs4u_auth
         from aecs4u_auth import AuthConfig, setup_auth
@@ -590,7 +591,6 @@ try:
             CLERK_AFTER_SIGN_IN_URL="/",
             CLERK_AFTER_SIGN_UP_URL="/",
         )
-        require_auth = os.getenv("REQUIRE_AUTHENTICATION", "true").lower() not in ("false", "0", "no")
         # Per-path rate limits: /auth/* (login brute force) is much stricter than normal browsing/polling. The client
         # is the socket peer, not X-Forwarded-For (spoofable); behind a trusted proxy supply the real address instead.
         from aecs4u_auth.middleware import FixedWindowRateLimiter, FixedWindowRateLimitMiddleware, RateLimitPolicy
@@ -724,7 +724,7 @@ try:
                 allow_plaintext=_allow_plaintext,
             )
         except ValueError as exc:
-            logger.critical("Refusing local authentication startup: %s", exc)
+            logger.critical("Refusing local authentication startup for %s: %s", _local_users_path, exc)
             raise RuntimeError(str(exc)) from exc
         if plaintext_count:
             logger.warning(
@@ -790,9 +790,13 @@ try:
         app.state.auth_config = auth_config
         auth_mode = getattr(auth_config, "AUTH_MODE", getattr(auth_config, "auth_mode", "unknown"))
         logger.info("Autenticazione configurata (mode=%s)", auth_mode)
-    except ImportError:
+    except ImportError as exc:
+        if require_auth:
+            raise RuntimeError("Authentication setup failed; refusing startup") from exc
         logger.warning("aecs4u-auth non disponibile: autenticazione disabilitata")
     except Exception as e:
+        if require_auth:
+            raise RuntimeError("Authentication setup failed; refusing startup") from e
         logger.warning("Errore configurazione auth: %s", e)
 
     # --- Theme setup --- read the theme settings from env and provide SISTER's default logo.
@@ -916,9 +920,9 @@ try:
     try:
         from .purchases_billing import mount_billing
 
-        mount_billing(app)  # dormant unless STRIPE_API_KEY, STRIPE_WEBHOOK_SECRET and SISTER_DOCUMENT_PRICE_ID are set
+        mount_billing(app)  # enabled when Stripe is configured with at least one document/person/company price
     except Exception as exc:  # noqa: BLE001 - a payment setup problem must not take the rest of the UI down
-        logger.error("Pagamenti documenti non attivati: %s", exc)
+        logger.error("Pagamenti non attivati: %s", exc)
 
     try:
         from .feedback_admin import router as feedback_admin_router

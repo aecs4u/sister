@@ -1,4 +1,5 @@
 {% extends "_base.html" %}
+{% from "components/hero.html" import hero_section %}
 {% from "_doc_macros.html" import document_favorite_button, documents_favorites_js %}
 {% from "components/subject_favorites.html" import subject_favorite_button, subject_favorites_js %}
 {% set company_favorites = company_favorites|default([], true) %}
@@ -13,56 +14,28 @@
 {% endblock %}
 
 {% block content %}
-<div class="page-hero no-print">
-    <div class="container-fluid">
-        <nav class="mb-3" aria-label="breadcrumb">
-            <ol class="breadcrumb mb-0">
-                <li class="breadcrumb-item"><a href="/" class="text-white-50">Dashboard</a></li>
-                <li class="breadcrumb-item active text-white" aria-current="page">I miei preferiti</li>
-            </ol>
-        </nav>
-        <div class="d-flex flex-wrap justify-content-between align-items-center gap-3">
-            <div>
-                <h1 class="display-6 fw-bold mb-2"><i class="fas fa-heart me-3"></i>I miei preferiti</h1>
-                <p class="lead mb-0 opacity-75">{{ documents|length }} documenti · {{ company_favorites|length }} aziende · {{ person_favorites|length }} persone salvate</p>
-            </div>
-            <a href="/documents" class="btn btn-outline-light"><i class="fas fa-folder-open me-2"></i>Esplora documenti</a>
-        </div>
-    </div>
-</div>
+{% call hero_section('I miei preferiti', 'fa-heart', '/', breadcrumb_parent='Dashboard', show_back=false, show_print=false,
+                     actions=[('/documents', 'Esplora documenti', 'fa-folder-open')]) %}{{ documents|length }} documenti · {{ company_favorites|length }} aziende · {{ person_favorites|length }} persone salvate{% endcall %}
 
 <div class="container-fluid py-3" data-favorites-management>
-    {% if company_favorites %}
+    {% for kind, title, icon, code_label, base, subjects in [
+        ('company', 'Aziende salvate', 'fa-building', 'Partita IVA', '/companies/', company_favorites),
+        ('person', 'Persone salvate', 'fa-user', 'Codice fiscale', '/persons/', person_favorites),
+    ] if subjects %}
     <div class="card border-0 shadow-sm mb-3" data-subject-favorites-section>
-        <div class="card-header bg-white"><h2 class="h6 mb-0">Aziende salvate</h2></div>
+        <div class="card-header bg-white"><h2 class="h6 mb-0">{{ title }}</h2></div>
         <div class="list-group list-group-flush" data-subject-favorites-list>
-            {% for company in company_favorites %}
+            {% for subject in subjects %}
             <div class="list-group-item d-flex flex-wrap align-items-center gap-2" data-subject-favorite-item>
-                <i class="fas fa-building text-primary" aria-hidden="true"></i>
-                <a href="/companies/{{ company.code }}" class="font-monospace">{{ company.code }}</a>
-                <span class="small text-muted">Partita IVA</span>
-                <span class="ms-auto">{{ subject_favorite_button(company.code, favorites_enabled, true, 'company') }}</span>
+                <i class="fas {{ icon }} text-primary" aria-hidden="true"></i>
+                <a href="{{ base }}{{ subject.code }}" class="font-monospace">{{ subject.code }}</a>
+                <span class="small text-muted">{{ code_label }}</span>
+                <span class="ms-auto">{{ subject_favorite_button(subject.code, favorites_enabled, true, kind) }}</span>
             </div>
             {% endfor %}
         </div>
     </div>
-    {% endif %}
-
-    {% if person_favorites %}
-    <div class="card border-0 shadow-sm mb-3" data-subject-favorites-section>
-        <div class="card-header bg-white"><h2 class="h6 mb-0">Persone salvate</h2></div>
-        <div class="list-group list-group-flush" data-subject-favorites-list>
-            {% for person in person_favorites %}
-            <div class="list-group-item d-flex flex-wrap align-items-center gap-2" data-subject-favorite-item>
-                <i class="fas fa-user text-primary" aria-hidden="true"></i>
-                <a href="/persons/{{ person.code }}" class="font-monospace">{{ person.code }}</a>
-                <span class="small text-muted">Codice fiscale</span>
-                <span class="ms-auto">{{ subject_favorite_button(person.code, favorites_enabled, true, 'person') }}</span>
-            </div>
-            {% endfor %}
-        </div>
-    </div>
-    {% endif %}
+    {% endfor %}
 
     {% if documents %}
     <div class="card border-0 shadow-sm" data-favorites-documents-section>

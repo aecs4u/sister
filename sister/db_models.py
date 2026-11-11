@@ -550,6 +550,129 @@ class DocumentPurchase(SQLModel, table=True):
     revoked_reason: Optional[str] = Field(default=None, sa_column=Column(sa.Text(), nullable=True))
 
 
+class SubjectAccess(SQLModel, table=True):
+    """A grant to view a saved subject search; document contents still require their own purchases."""
+
+    __tablename__ = "subject_access"
+    __table_args__ = (
+        sa.CheckConstraint("subject_type IN ('company', 'person')", name="ck_subject_access_type"),
+        sa.CheckConstraint(
+            "(subject_type = 'company' AND subject_code ~ '^[0-9]{11}$') OR "
+            "(subject_type = 'person' AND subject_code ~ '^[A-Z0-9]{16}$')",
+            name="ck_subject_access_code",
+        ),
+    )
+
+    user_id: str = Field(sa_column=Column(sa.String(), primary_key=True))
+    subject_type: str = Field(sa_column=Column(sa.String(16), primary_key=True))
+    subject_code: str = Field(sa_column=Column(sa.String(16), primary_key=True))
+    granted_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc),
+        sa_column=Column(sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
+    )
+    created_by: str
+    note: Optional[str] = Field(default=None, sa_column=Column(sa.Text(), nullable=True))
+    revoked_at: Optional[datetime] = Field(default=None, sa_column=Column(sa.DateTime(timezone=True), nullable=True))
+    revoked_by: Optional[str] = Field(default=None)
+    revoked_reason: Optional[str] = Field(default=None, sa_column=Column(sa.Text(), nullable=True))
+
+
+class SubjectPurchase(SQLModel, table=True):
+    """Append-only payment records for buying person and company profile access."""
+
+    __tablename__ = "subject_purchase"
+    __table_args__ = (
+        sa.CheckConstraint("subject_type IN ('company', 'person')", name="ck_subject_purchase_type"),
+        sa.CheckConstraint(
+            "(subject_type = 'company' AND subject_code ~ '^[0-9]{11}$') OR "
+            "(subject_type = 'person' AND subject_code ~ '^[A-Z0-9]{16}$')",
+            name="ck_subject_purchase_code",
+        ),
+        sa.CheckConstraint("status IN ('completed', 'refund_required', 'refunded')", name="ck_subject_purchase_status"),
+        sa.Index(
+            "uq_subject_purchase_payment_ref",
+            "payment_ref",
+            unique=True,
+            postgresql_where=sa.text("payment_ref IS NOT NULL"),
+        ),
+    )
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    user_id: str = Field(sa_column=Column(sa.String(), nullable=False, index=True))
+    subject_type: str = Field(sa_column=Column(sa.String(16), nullable=False))
+    subject_code: str = Field(sa_column=Column(sa.String(16), nullable=False))
+    purchased_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc),
+        sa_column=Column(sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
+    )
+    created_by: str = Field(default="stripe", sa_column=Column(sa.String(), nullable=False, server_default="stripe"))
+    source: str = Field(default="stripe", sa_column=Column(sa.String(32), nullable=False, server_default="stripe"))
+    amount: Optional[Decimal] = Field(default=None, sa_column=Column(sa.Numeric(12, 2), nullable=True))
+    currency: Optional[str] = Field(default=None, sa_column=Column(sa.String(8), nullable=True))
+    payment_ref: Optional[str] = Field(default=None, sa_column=Column(sa.String(), nullable=True))
+    wallet_tx_id: Optional[str] = Field(default=None, sa_column=Column(sa.String(), nullable=True))
+    status: str = Field(default="completed", sa_column=Column(sa.String(24), nullable=False, server_default="completed"))
+    note: Optional[str] = Field(default=None, sa_column=Column(sa.Text(), nullable=True))
+
+
+class WalletGiftCoupon(SQLModel, table=True):
+    """Hashed wallet-credit gift codes; plaintext codes are shown only when first created."""
+
+    __tablename__ = "wallet_gift_coupon"
+    __table_args__ = (
+        sa.UniqueConstraint("code_hash", name="uq_wallet_gift_coupon_code_hash"),
+        sa.CheckConstraint("amount > 0", name="ck_wallet_gift_coupon_amount"),
+        sa.CheckConstraint("max_redemptions > 0", name="ck_wallet_gift_coupon_max_redemptions"),
+        sa.CheckConstraint("redeemed_count >= 0 AND redeemed_count <= max_redemptions", name="ck_wallet_gift_coupon_redemptions"),
+        sa.CheckConstraint("status IN ('active', 'frozen', 'revoked')", name="ck_wallet_gift_coupon_status"),
+    )
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    code_hash: str = Field(sa_column=Column(sa.String(64), nullable=False))
+    code_hint: str = Field(sa_column=Column(sa.String(8), nullable=False))
+    amount: Decimal = Field(sa_column=Column(sa.Numeric(12, 2), nullable=False))
+    max_redemptions: int = Field(default=1, nullable=False)
+    redeemed_count: int = Field(default=0, nullable=False)
+    status: str = Field(default="active", sa_column=Column(sa.String(16), nullable=False, server_default="active"))
+    created_by: str = Field(sa_column=Column(sa.String(), nullable=False))
+    created_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc),
+        sa_column=Column(sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
+    )
+    expires_at: Optional[datetime] = Field(default=None, sa_column=Column(sa.DateTime(timezone=True), nullable=True))
+    note: Optional[str] = Field(default=None, sa_column=Column(sa.Text(), nullable=True))
+
+
+class WalletGiftCouponRedemption(SQLModel, table=True):
+    """Append-only redemption lifecycle for one user per wallet gift coupon."""
+
+    __tablename__ = "wallet_gift_coupon_redemption"
+    __table_args__ = (
+        sa.UniqueConstraint("coupon_id", "user_id", name="uq_wallet_gift_coupon_redemption_user"),
+        sa.ForeignKeyConstraint(
+            ["coupon_id"], ["wallet_gift_coupon.id"],
+            name="fk_wallet_gift_coupon_redemption_coupon_id_wallet_gift_coupon", ondelete="RESTRICT",
+        ),
+        sa.CheckConstraint("status IN ('pending', 'completed', 'reversed', 'reversal_required')", name="ck_wallet_gift_coupon_redemption_status"),
+        sa.Index("ix_wallet_gift_coupon_redemption_coupon_id", "coupon_id"),
+        sa.Index("ix_wallet_gift_coupon_redemption_user_id", "user_id"),
+    )
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    coupon_id: int = Field(nullable=False)
+    user_id: str = Field(sa_column=Column(sa.String(), nullable=False))
+    amount: Decimal = Field(sa_column=Column(sa.Numeric(12, 2), nullable=False))
+    status: str = Field(default="pending", sa_column=Column(sa.String(24), nullable=False, server_default="pending"))
+    wallet_tx_id: Optional[str] = Field(default=None, sa_column=Column(sa.String(), nullable=True))
+    reversed_tx_id: Optional[str] = Field(default=None, sa_column=Column(sa.String(), nullable=True))
+    redeemed_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc),
+        sa_column=Column(sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
+    )
+    completed_at: Optional[datetime] = Field(default=None, sa_column=Column(sa.DateTime(timezone=True), nullable=True))
+    note: Optional[str] = Field(default=None, sa_column=Column(sa.Text(), nullable=True))
+
+
 class SubjectFavorite(SQLModel, table=True):
     """A user's saved person or company profile, identified independently of its documents."""
 
