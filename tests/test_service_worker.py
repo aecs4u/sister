@@ -545,6 +545,46 @@ def test_auth_status_ready(main_module):
     assert _service(main_module).auth_status["state"] == "ready"
 
 
+def test_auth_status_expired_when_the_session_is_gone(main_module):
+    """A session that ended after the attach must not keep showing as ready (the /browser panel polls this)."""
+    browser = FakeBrowser()
+    browser.session_lost_reason = lambda: "Sessione SISTER scaduta alle 10:30"
+    status = _service(main_module, browser).auth_status
+
+    assert status["state"] == "expired"
+    assert status["message"] == "Sessione SISTER scaduta alle 10:30"
+    assert status["error_kind"] == "session_expired"
+
+
+def test_auth_status_ready_carries_the_session_deadline(main_module):
+    from datetime import datetime
+
+    browser = FakeBrowser()
+    browser.session_lost_reason = lambda: None
+    browser.session_expires_at = lambda: datetime(2026, 11, 11, 10, 30)
+    status = _service(main_module, browser).auth_status
+
+    assert status["state"] == "ready"
+    assert status["session_expires_at"].startswith("2026-11-11T10:30:00")
+
+
+async def test_start_browser_reattaches_when_the_session_is_gone(main_module):
+    browser = FakeBrowser()
+    browser.session_lost_reason = lambda: "scaduta"
+    service = _service(main_module, browser)
+    started = []
+
+    async def fake_auth():
+        started.append(True)
+
+    service._background_auth = fake_auth
+    await service.start_browser()
+    await service._auth_task
+
+    assert started == [True]
+    assert service.auth_ready is False
+
+
 def test_auth_status_reports_failure_message(main_module):
     service = _service(main_module, auth_ready=False)
     service._auth_failed_message = "nope"

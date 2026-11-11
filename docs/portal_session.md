@@ -18,7 +18,15 @@ The service does **not** log in to AdE/SISTER on its own. The login lives in a s
    disconnects.
 
 `SISTER_BROWSER_AUTOSTART` no longer exists. `/health` reports `auth_ready` / `state` (`ready`, `idle`,
-`connecting`, `unavailable`).
+`connecting`, `unavailable`, `expired`).
+
+`expired` is the state of a session the service attached to and that has since ended. It is found without touching
+the portal (`BrowserManager.session_lost_reason`): a failed session check, Chrome disconnected, the tab closed or
+sitting on `login.jsp` / `sessione_scaduta` (where the package's periodic refresh leaves it), or the login recorded
+by `sister app login` being older than `SISTER_SESSION_MINUTES` (30). While `ready`, the status carries
+`session_expires_at` when that login time is known, and `/browser` counts down to it. A recorded login is ignored
+once a real check has passed after its deadline (a later login made by hand in Chrome). *Start* on an expired
+session looks for a new one instead of answering "already ready".
 
 ## Things that end the session
 

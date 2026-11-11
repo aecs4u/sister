@@ -6,7 +6,7 @@
 
 {% block extra_css %}
 {{ super() }}
-<link rel="stylesheet" href="/static/css/pages/browser_control.css?v=20261009a">
+<link rel="stylesheet" href="/static/css/pages/browser_control.css?v=20261111a">
 {% endblock %}
 
 {% block content %}
@@ -35,7 +35,8 @@ Gestisci la sessione Playwright / autenticazione SISTER
                         <span id="state-label">{{ status.state | title }}</span>
                     </span>
                 </div>
-                <p id="state-msg" class="text-muted small mb-3">{{ status.message or '' }}</p>
+                <p id="state-msg" class="text-muted small mb-3" role="status">{{ status.message or '' }}</p>
+                <p id="state-expiry" class="small mb-3 d-none"></p>
 
                 <div class="row g-2 mb-3">
                     <div class="col-4">
@@ -142,6 +143,7 @@ Gestisci la sessione Playwright / autenticazione SISTER
         ready:       { bg: 'success',   text: 'Pronto' },
         connecting:  { bg: 'warning',   text: 'Connessione…' },
         idle:        { bg: 'secondary', text: 'In attesa' },
+        expired:     { bg: 'danger',    text: 'Sessione scaduta' },
         unavailable: { bg: 'danger',    text: 'Non disponibile' },
         failed:      { bg: 'danger',    text: 'Errore' },
     };
@@ -153,9 +155,36 @@ Gestisci la sessione Playwright / autenticazione SISTER
         box.scrollTop = box.scrollHeight;
     }
 
+    let expiresAt = null;   // when SISTER ends the session (from the recorded login), null = unknown
+    let lastState = null;
+
+    function showExpiry() {
+        const el = document.getElementById('state-expiry');
+        if (!expiresAt) { el.classList.add('d-none'); return; }
+        const left = Math.round((expiresAt - Date.now()) / 1000);
+        if (left <= 0) {
+            // the deadline passed while the page was open: ask the server now instead of waiting for the next poll
+            expiresAt = null;
+            el.classList.add('d-none');
+            poll();
+            return;
+        }
+        const mm = Math.floor(left / 60), ss = String(left % 60).padStart(2, '0');
+        const at = new Date(expiresAt).toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit' });
+        el.className = `small mb-3 ${left <= 300 ? 'text-danger fw-semibold' : 'text-muted'}`;
+        el.textContent = `La sessione SISTER scade alle ${at} (tra ${mm}:${ss})`;
+    }
+
     function applyStatus(data) {
         const state = data.state || 'unavailable';
         const meta = STATE_COLORS[state] || STATE_COLORS.unavailable;
+        if (lastState && lastState !== state) {
+            log(`Stato: ${meta.text}${data.message ? ' — ' + data.message : ''}`, state === 'ready' ? 'ok' : state === 'connecting' ? 'warn' : 'err');
+        }
+        lastState = state;
+        const stamp = data.session_expires_at ? Date.parse(data.session_expires_at) : NaN;
+        expiresAt = state === 'ready' && !Number.isNaN(stamp) ? stamp : null;
+        showExpiry();
 
         const wrap = document.getElementById('state-wrap');
         wrap.className = `mb-3 state-${state}`;
@@ -173,9 +202,29 @@ Gestisci la sessione Playwright / autenticazione SISTER
 
     async function poll() {
         try {
-            const r = await fetch('/browser/status');
-            if (r.ok) applyStatus(await r.json());
-        } catch (_) {}
+            const r = await fetch('/browser/status', { cache: 'no-store' });
+            if (r.status === 401 || r.status === 403 || r.redirected) {
+                // the sign-in to this site ended: a stale panel would keep showing the last state as if it were live
+                window.location.reload();
+                return;
+            }
+            if (r.ok) { applyStatus(await r.json()); return; }
+            offline(`Stato non disponibile (HTTP ${r.status})`);
+        } catch (_) {
+            offline('Servizio non raggiungibile');
+        }
+    }
+
+    // the service does not answer: say so instead of leaving the last known state on screen
+    function offline(message) {
+        expiresAt = null;
+        showExpiry();
+        if (lastState !== 'offline') log(message, 'err');
+        lastState = 'offline';
+        document.getElementById('state-wrap').className = 'mb-3 state-unavailable';
+        document.getElementById('state-badge').className = 'state-badge bg-danger bg-opacity-10 border border-danger';
+        document.getElementById('state-label').textContent = 'Non raggiungibile';
+        document.getElementById('state-msg').textContent = message;
     }
 
     window.launchChrome = async function () {
@@ -250,6 +299,9 @@ Gestisci la sessione Playwright / autenticazione SISTER
     // Poll every 4 s
     poll();
     setInterval(poll, 4000);
+    setInterval(showExpiry, 1000);
+    // a background tab is throttled: refresh as soon as it is looked at again
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) poll(); });
     log('Pannello browser aperto — polling ogni 4 s', 'ok');
 })();
 </script>

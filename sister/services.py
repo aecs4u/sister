@@ -281,11 +281,31 @@ class VisuraService:
     def auth_ready(self) -> bool:
         return getattr(self, "_auth_ready", False)
 
+    def _session_lost_reason(self) -> Optional[str]:
+        """Why the session the service is attached to is gone (expired, tab closed, Chrome down), else None."""
+        probe = getattr(self.browser_manager, "session_lost_reason", None)
+        if not callable(probe):
+            return None
+        try:
+            reason = probe()
+        except Exception as e:  # noqa: BLE001 - a status read must never fail
+            logger.debug("Controllo passivo della sessione fallito: %s", e)
+            return None
+        return reason if isinstance(reason, str) and reason else None
+
     @property
     def auth_status(self) -> dict:
         mode = "cdp" if self.browser_manager.is_cdp else "local"
         if self.auth_ready:
-            return {"state": "ready", "mode": mode, "message": "Browser authenticated"}
+            lost = self._session_lost_reason()
+            if lost:
+                return {"state": "expired", "mode": mode, "message": lost, "error_kind": "session_expired"}
+            status = {"state": "ready", "mode": mode, "message": "Browser authenticated"}
+            expires_at = getattr(self.browser_manager, "session_expires_at", None)
+            deadline = expires_at() if callable(expires_at) else None
+            if isinstance(deadline, datetime):
+                status["session_expires_at"] = deadline.astimezone().isoformat(timespec="seconds")
+            return status
         failed_msg = getattr(self, "_auth_failed_message", None)
         if failed_msg:
             return {
@@ -1128,7 +1148,9 @@ class VisuraService:
     async def start_browser(self) -> dict:
         """Start browser authentication if not already running or ready."""
         if self.auth_ready:
-            return self.auth_status
+            if not self._session_lost_reason():
+                return self.auth_status
+            self._auth_ready = False  # the session it was attached to is gone: look for (or open) a new one
         auth_task = getattr(self, "_auth_task", None)
         if auth_task and not auth_task.done():
             return self.auth_status  # already authenticating

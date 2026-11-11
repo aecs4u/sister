@@ -3,11 +3,13 @@
 import asyncio
 import functools
 import inspect
+import json
 import logging
 import os
 import time
 from contextlib import suppress
-from datetime import datetime
+from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Optional
 
 from aecs4u_auth.browser import BrowserConfig
@@ -65,6 +67,19 @@ logger = logging.getLogger("sister")
 SESSION_RECHECK_SECONDS = float(os.getenv("SISTER_SESSION_RECHECK_SECONDS", "120"))
 # the service never logs in by itself in CDP mode (see docs/portal_session.md); set true to let aecs4u-auth try to log in again
 AUTO_RELOGIN = os.getenv("SISTER_AUTO_RELOGIN", "false").strip().lower() in ("1", "true", "yes", "si")
+# SISTER ends a session this long after the login, whatever the activity (measured 2026-10-26: 29.6-30.4 min)
+SESSION_MINUTES = float(os.getenv("SISTER_SESSION_MINUTES", "30"))
+# written by `sister app login` (command_tools/ade_login.record_login)
+LOGIN_RECORD = Path(__file__).resolve().parents[1] / "logs" / "sister_login.json"
+
+
+def _recorded_login(path: Optional[Path] = None) -> Optional[datetime]:
+    """Local (naive) time of the last ``sister app login``, or None when it was not recorded."""
+    try:
+        stamp = datetime.fromisoformat(json.loads((path or LOGIN_RECORD).read_text(encoding="utf-8"))["logged_in_at"])
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    return stamp.astimezone().replace(tzinfo=None) if stamp.tzinfo else stamp
 
 _GENERIC_DISPATCHERS = {
     "indirizzo": run_ricerca_indirizzo,
@@ -224,10 +239,47 @@ class BrowserManager:
         self._session_origin = None
         self._page_lock = asyncio.Lock()
         self._session_checked_at: Optional[float] = None
+        self._session_lost_reason: Optional[str] = None
 
     @property
     def authenticated(self) -> bool:
         return self._auth.is_authenticated
+
+    def session_expires_at(self, now: Optional[datetime] = None) -> Optional[datetime]:
+        """When SISTER ends the session of the recorded login, or None when that is not known.
+
+        The record is ignored when a real session check succeeded after its deadline: the session in the browser then comes
+        from a later login that ``sister app login`` did not record (e.g. made by hand in Chrome).
+        """
+        login = _recorded_login()
+        if login is None or login > (now or datetime.now()) + timedelta(minutes=1):
+            return None
+        deadline = login + timedelta(minutes=SESSION_MINUTES)
+        if self.last_login_time is not None and self.last_login_time > deadline:
+            return None
+        return deadline
+
+    def session_lost_reason(self, now: Optional[datetime] = None) -> Optional[str]:
+        """Why the adopted SISTER session can no longer be used, or None when nothing says so.
+
+        Passive on purpose: it never navigates (a check that opens SceltaServizio would disturb the query in flight), so it
+        reads what is already known: a failed check, the browser connection, the page the tab is on and the login time.
+        """
+        if self._session_lost_reason:
+            return self._session_lost_reason
+        browser = getattr(self._auth, "_browser", None)
+        if self.is_cdp and browser is not None and not browser.is_connected():
+            return "Chrome non è più raggiungibile: riavvia la sessione"
+        page = getattr(self._auth, "_auth_page", None)
+        if page is not None:
+            if page.is_closed():
+                return "La scheda SISTER è stata chiusa: serve un nuovo accesso (sister app login)"
+            if not _on_live_sister_page(page.url):
+                return "Sessione SISTER scaduta o chiusa: serve un nuovo accesso (sister app login)"
+        deadline = self.session_expires_at(now)
+        if deadline is not None and (now or datetime.now()) >= deadline:
+            return f"Sessione SISTER scaduta alle {deadline:%H:%M}: serve un nuovo accesso (sister app login)"
+        return None
 
     @property
     def is_cdp(self) -> bool:
@@ -305,6 +357,7 @@ class BrowserManager:
                         page=page, auth_method=self._auth.config.auth_method, service="sister"
                     )
                     self.last_login_time = datetime.now()
+                    self._session_lost_reason = None
                     logger.info("Sessione SISTER esistente agganciata: %s", page.url)
                     return True
         except Exception as e:
@@ -325,6 +378,7 @@ class BrowserManager:
                 await self._auth.login(service="sister")
                 self._session_origin = "authenticated"
             self.last_login_time = datetime.now()
+            self._session_lost_reason = None
             logger.info("Login completato con successo")
         except Exception as e:
             logger.error("Errore durante il login: %s", e)
@@ -366,13 +420,16 @@ class BrowserManager:
                     valid = await self._auth._try_recovery()
             if not valid:
                 self._session_checked_at = None
-                raise AuthenticationError("Sessione SISTER scaduta o non valida: serve un nuovo accesso (sister app login)")
+                self._session_lost_reason = "Sessione SISTER scaduta o non valida: serve un nuovo accesso (sister app login)"
+                raise AuthenticationError(self._session_lost_reason)
             self.last_login_time = datetime.now()
+            self._session_lost_reason = None
             self._session_checked_at = time.monotonic()
             return
         try:
             await self._auth.ensure_authenticated()
             self.last_login_time = datetime.now()
+            self._session_lost_reason = None
             self._session_checked_at = time.monotonic()
         except Exception as e:
             logger.error("Errore nella re-autenticazione: %s", e)
