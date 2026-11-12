@@ -412,7 +412,7 @@
 {% endif %}
 {{ cadastral_table_scripts() }}
 <script type="application/json" nonce="{{ csp_nonce }}" data-subject-page-json data-editable="{{ 'true' if manual_valuation_enabled else 'false' }}">{{ subject_page_json|tojson }}</script>
-<script src="/static/js/cadastral_category_descriptions.js?v=20261105a" defer></script>
+<script src="/static/js/cadastral_category_descriptions.js?v=20261112a" defer></script>
 {{ document_parcel_map_scripts(land_registry_map, nonce=csp_nonce,
     renderer_url='/land-registry/static/document_parcel_map.js?v=20261109-labels') }}
 {# PDF export: the page's own print layout rendered by headless Chromium (/documents/<id>/pdf). #}
@@ -426,8 +426,8 @@
 <script src="/static/js/subject_cadastral_asset_enrichment.js?v=20261112a" defer></script>
 {% endif %}
 {% if manual_valuation_enabled %}
-<script src="/static/js/manual_property_valuations.js?v=20261109c" defer></script>
+<script src="/static/js/manual_property_valuations.js?v=20261112a" defer></script>
 {% endif %}
-{% if land_registry_kpis %}<script src="/static/js/property_omi_selections.js?v=20261109a" defer></script>{% endif %}
+{% if land_registry_kpis %}<script src="/static/js/property_omi_selections.js?v=20261112a" defer></script>{% endif %}
 {% endif %}
 {% endblock %}
