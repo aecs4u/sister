@@ -4,6 +4,7 @@
   parcel tree below its own content; the standalone page (subject_query_profile.html) shows both.
 #}
 {% from "catasto/visura_story.html" import unit_facts, property_history, ownership_history %}
+{% from "components/timeline.html" import render_timeline %}
 
 {% macro doc_chip(d) -%}
 <a class="badge text-bg-light border text-decoration-none fw-normal text-start" href="/documents/{{ d.id }}"
@@ -29,13 +30,15 @@
         {{ 'usata nel gruppo' if in_parcel else 'estrazione disponibile' }}
       </span>
     </div>
-    {% if extraction.inspection_date or extraction.office %}
-    <div class="text-muted mt-1">{% if extraction.inspection_date %}Data ispezione: {{ extraction.inspection_date }}{% endif %}{% if extraction.office %} · Ufficio: {{ extraction.office }}{% endif %}</div>
+    {% if extraction.inspection_date or extraction.office or extraction.inspection_number %}
+    <div class="text-muted mt-1">{% if extraction.inspection_number %}Ispezione n. {{ extraction.inspection_number }}{% if extraction.inspection_start %} · inizio {{ extraction.inspection_start }}{% endif %} · {% endif %}{% if extraction.inspection_date %}Data ispezione: {{ extraction.inspection_date }}{% endif %}{% if extraction.office %} · Ufficio: {{ extraction.office }}{% endif %}{% if extraction.tax_paid_euro %} · tassa € {{ extraction.tax_paid_euro }}{% endif %}{% if extraction.page_count %} · {{ extraction.page_count }} pagine{% endif %}</div>
+    {% if extraction.requester %}<div class="text-muted">Richiedente: {{ extraction.requester }}</div>{% endif %}
     {% endif %}
+    {% if extraction.section_a_other_data %}<div class="mt-1"><strong>Altri dati:</strong> {{ extraction.section_a_other_data }}</div>{% endif %}
     {% if extraction.title_type or extraction.title_description or extraction.title_date %}
     <div class="mt-1"><strong>Titolo:</strong>
       {{ extraction.title_type or 'tipo non indicato' }}{% if extraction.title_description %} · {{ extraction.title_description }}{% endif %}{% if extraction.title_date %} · {{ extraction.title_date }}{% endif %}
-      {% if extraction.title_repertory_number %} · Rep. {{ extraction.title_repertory_number }}{% endif %}{% if extraction.title_notary %} · Notaio {{ extraction.title_notary }}{% endif %}
+      {% if extraction.title_repertory_number %} · Rep. {{ extraction.title_repertory_number }}{% endif %}{% if extraction.title_notary %} · Notaio {{ extraction.title_notary }}{% if extraction.title_notary_location %} ({{ extraction.title_notary_location }}){% endif %}{% endif %}
     </div>
     {% endif %}
     {% if extraction.lien_type or extraction.lien_principal_euro or extraction.lien_total_euro or extraction.lien_annual_interest_rate or extraction.lien_duration %}
@@ -67,6 +70,11 @@
         {% endfor %}
       </ul>
     </div>
+    {% endif %}
+    {% if extraction.section_d_text %}
+    <details class="mt-1"><summary><strong>Sezione D - Ulteriori informazioni</strong></summary>
+      <div class="mt-1" style="white-space: pre-line">{{ extraction.section_d_text }}</div>
+    </details>
     {% endif %}
     <div class="text-muted mt-1">
       {{ extraction.property_count }} {{ 'immobile estratto' if extraction.property_count == 1 else 'immobili estratti' }}
@@ -157,40 +165,11 @@
     </div>
     {% endif %}
 
-    {% set ownership_sources = namespace(rows=[]) %}
-    {% for parcel in profile.map_parcels %}
-      {% for ownership in parcel.ownership|default([], true) %}
-        {% if ownership.view and ownership.view.ownership %}
-          {% set ownership_sources.rows = ownership_sources.rows + [{
-            'document_id': ownership.document_id,
-            'as_of': ownership.as_of,
-            'subunit': ownership.subunit,
-            'municipality': parcel.municipality,
-            'province': parcel.province,
-            'sheet': parcel.sheet,
-            'parcel': parcel.parcel,
-            'provenance': ownership.view.header.provenance,
-            'entry_count': ownership.view.ownership|length
-          }] %}
-        {% endif %}
-      {% endfor %}
-    {% endfor %}
-    {% if ownership_sources.rows %}
-    <div class="mt-3" aria-label="Fonti della titolarità">
-      <h3 class="h6"><i class="fas fa-link me-2 text-primary" aria-hidden="true"></i>Fonti della titolarità</h3>
-      <p class="small text-muted mb-1">Ogni cronologia nelle schede catastali è collegata alla visura da cui sono stati estratti gli atti.</p>
-      <ul class="list-unstyled small mb-0">
-        {% for source in ownership_sources.rows %}
-        <li class="py-1 border-bottom" data-ownership-source-document="{{ source.document_id }}">
-          <a href="/documents/{{ source.document_id }}">Visura per immobile #{{ source.document_id }}</a>
-          · {{ source.municipality }} ({{ source.province }}) · Fg {{ source.sheet }} · P.lla {{ source.parcel }}{% if source.subunit %} · Sub {{ source.subunit }}{% endif %}
-          {% if source.as_of %}· situazione al {{ source.as_of }}{% endif %}
-          {% if source.provenance %}· {{ source.provenance }}{% endif %}
-          · {{ source.entry_count }} {{ 'elemento di titolarità' if source.entry_count == 1 else 'elementi di titolarità' }}
-        </li>
-        {% endfor %}
-      </ul>
-    </div>
+    {% if profile.documented_tree %}
+    <p class="small text-muted mt-3 mb-0" aria-label="Fonti della titolarità">
+      <i class="fas fa-link me-1 text-primary" aria-hidden="true"></i>
+      Gli atti e le relative fonti sono raccolti nelle <a href="#schede-particelle">schede per particella</a>.
+    </p>
     {% endif %}
 
     {# what is still to request, per kind (parcels of the search with nothing archived) #}
@@ -256,7 +235,7 @@
         <h3 class="h6"><i class="fas fa-landmark me-2" aria-hidden="true"></i>Ispezioni ipotecarie del soggetto ({{ profile.subject_inspections|length }})</h3>
         {% if profile.subject_inspections %}
         <div class="d-flex flex-wrap gap-2">{% for d in profile.subject_inspections %}{{ doc_chip(d) }}{% endfor %}</div>
-        {% if not embedded %}{{ inspection_extraction_details(profile.subject_inspections, false) }}{% endif %}
+        {{ inspection_extraction_details(profile.subject_inspections, false) }}
         {% else %}
         <p class="text-muted mb-0">Nessuna ispezione ipotecaria archiviata in cui compaia questo soggetto.</p>
         {% endif %}
@@ -365,6 +344,13 @@
             </tbody>
           </table>
         </div>
+
+        {% if parcel.subject_title_history %}
+        <section class="mb-3" aria-label="Storia della titolarità dalla visura per soggetto">
+          <h4 class="h6"><i class="fas fa-history me-1 text-info" aria-hidden="true"></i>Storia della titolarità dalla visura per soggetto</h4>
+          {{ render_timeline(parcel.subject_title_history, situazione_al='', color='#17a2b8', badge_class='bg-info') }}
+        </section>
+        {% endif %}
 
         {% if parcel.ownership %}
         <div class="mb-3">
@@ -487,14 +473,14 @@
 {% endmacro %}
 
 {# Full cadastral sheets: each parcel keeps its saved query data, Visura details, ownership and related documents together. #}
-{% macro documented_parcels(profile, group=none) %}
+{% macro documented_parcels(profile, group=none, heading_level=2) %}
 {% if profile.documented_tree %}
 {% if group %}
 <div class="hub-group-parcels mt-3" role="group" aria-label="Dettagli catastali e documenti delle particelle">
 {% else %}
 <section class="container-fluid py-3" id="schede-particelle" aria-label="Schede catastali per particella">
-  <h2 class="h5 mb-3"><i class="fas fa-folder-open me-2" aria-hidden="true"></i>Schede catastali per particella
-    <span class="small text-muted fw-normal">(dati catastali, titolarità, valori fiscali, storia e documenti)</span></h2>
+  <h{{ heading_level }} class="h5 mb-3"><i class="fas fa-folder-open me-2" aria-hidden="true"></i>Schede per particella
+    <span class="small text-muted fw-normal">(dati catastali, titolarità, valori fiscali, storia e documenti)</span></h{{ heading_level }}>
   {# one folded accordion item per comune: the parcels (and their documents) open on demand #}
   <div class="accordion shadow-sm mb-3" id="hub-comuni">
 {% endif %}
@@ -548,7 +534,7 @@
       {% if parcel_matches.found %}
       {% set parcel_open = parcel.ownership and not ns.visura_parcel_open %}
       {% if parcel_open %}{% set ns.visura_parcel_open = true %}{% endif %}
-      <details class="border-bottom px-3 py-2"{% if parcel_open %} open{% endif %}>
+      <details class="border-bottom px-3 py-2"{% if parcel.anchor_id %} id="{{ parcel.anchor_id }}"{% endif %}{% if parcel_open %} open{% endif %}>
         <summary class="d-flex flex-wrap align-items-center gap-2">
           {% if parcel.is_building %}<span class="badge text-bg-primary">Fabbricato</span>{% else %}<span class="badge text-bg-success">Terreno</span>{% endif %}
           <span class="fw-semibold">{% if parcel.section %}Sez. {{ parcel.section }} · {% endif %}Fg {{ parcel.sheet }} · P.lla {{ parcel.parcel }}</span>
@@ -582,6 +568,13 @@
             </tbody>
           </table>
         </div>
+
+        {% if parcel.subject_title_history %}
+        <section class="mb-3" aria-label="Storia della titolarità dalla visura per soggetto">
+          <h4 class="h6"><i class="fas fa-history me-1 text-info" aria-hidden="true"></i>Storia della titolarità dalla visura per soggetto</h4>
+          {{ render_timeline(parcel.subject_title_history, situazione_al='', color='#17a2b8', badge_class='bg-info') }}
+        </section>
+        {% endif %}
 
         {% if parcel.ownership %}
         <div class="mb-3">

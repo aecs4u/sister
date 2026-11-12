@@ -12,14 +12,21 @@
     </div>
     <div class="card-body p-0">
       {% for unit in subject_ownership_history_rows %}
+      {% set _sheet_anchor = subject_parcel_anchor(subject_hub, '', unit.comune, unit.sezione, unit.foglio, unit.particella, true) if subject_hub and subject_parcel_anchor is defined else none %}
       <details class="border-top" {% if loop.first %}open{% endif %}>
         <summary class="px-3 py-2">
           <strong>{{ unit.comune or 'Comune n.d.' }}</strong>
           <span class="badge bg-secondary ms-1">{{ unit.catasto or '' }}</span>
           <span class="ms-1">{% if unit.sezione %}Sez. {{ unit.sezione }} {% endif %}Fg {{ unit.foglio }} · Part. {{ unit.particella }}{% if unit.subalterno %} · Sub {{ unit.subalterno }}{% endif %}</span>
           {% if unit.last_change_at %}<span class="small text-muted ms-2">ultima variazione: {{ unit.last_change_at.strftime('%d/%m/%Y') }}</span>{% endif %}
+          {% if _sheet_anchor %}<a class="small ms-2 subject-parcel-link" href="#{{ _sheet_anchor }}">Apri la scheda completa</a>{% endif %}
         </summary>
-        {% if unit.acts %}
+        {% if unit.acts and _sheet_anchor %}
+        <p class="small text-muted px-3 pt-2 mb-2">
+          {{ unit.acts|length }} atti: cronologia completa nella <a class="subject-parcel-link" href="#{{ _sheet_anchor }}">scheda per particella</a>.
+          {% if unit.document %}<span>Fonte: <a href="/documents/{{ unit.document.id }}">{{ unit.document.file_name }}</a>.</span>{% endif %}
+        </p>
+        {% elif unit.acts %}
         <div class="px-3 pt-2">
           <h3 class="h6 mb-1">Atti dalla visura storica
             {% if unit.document %}<a class="small fw-normal ms-1" href="/documents/{{ unit.document.id }}">{{ unit.document.file_name }}</a>{% endif %}</h3>

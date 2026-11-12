@@ -673,6 +673,83 @@ def _subject_visura_items(
     )]
 
 
+def _subject_formalities_items(inspections: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+    """Render the archived mortgage-inspection summaries shown on the subject page."""
+    if not inspections:
+        return []
+
+    items: list[dict[str, Any]] = [{"kind": "note", "text": (
+        "Dati estratti dall'elenco SISTER archiviato; non sono il contenuto delle singole note PDF."
+    )}]
+    for inspection in inspections:
+        if not isinstance(inspection, dict):
+            continue
+        meta = inspection.get("inspection") or {}
+        if not isinstance(meta, dict):
+            meta = {}
+        note_request = inspection.get("note_request") or {}
+        if not isinstance(note_request, dict):
+            note_request = {}
+
+        if note_request.get("accepted") and not note_request.get("downloaded"):
+            items.append({"kind": "note", "text": (
+                "Il portale ha accettato la richiesta PDF per "
+                f"{_s(note_request.get('selected_count'))} note. "
+                "Le note sono disponibili per il download nella pagina Richieste; "
+                "non sono ancora archiviate tra i documenti SISTER."
+            )})
+
+        title_parts = ["Ispezione " + (_s(meta.get("number")) or "—")]
+        if meta.get("date"):
+            title_parts.append("del " + _it_date(meta.get("date")))
+        if meta.get("office"):
+            title_parts.append(_s(meta.get("office")))
+        if meta.get("request_code"):
+            title_parts.append("Richiesta " + _s(meta.get("request_code")))
+
+        rows = []
+        formalities = inspection.get("formalities") or []
+        for formality in formalities:
+            if not isinstance(formality, dict):
+                continue
+            kind = _joined([formality.get("tipo") or "Formalità", formality.get("verso")])
+            registers = _joined([
+                "RP " + (_s(formality.get("registro_particolare")) or "—"),
+                "RG " + (_s(formality.get("registro_generale")) or "—"),
+            ])
+            official = _s(formality.get("pubblico_ufficiale")) or "—"
+            repertoire = _s(formality.get("repertorio"))
+            if repertoire:
+                repertoire_text = "Rep. " + repertoire
+                repertoire_date = _s(formality.get("data_repertorio_display"))
+                if repertoire_date:
+                    repertoire_text += " del " + repertoire_date
+                official = _joined([official, repertoire_text])
+
+            availability = []
+            if formality.get("nota_disponibile_elettronica"):
+                availability.append("Nota elettronica")
+            if formality.get("presenza_titolo_telematico"):
+                availability.append("Titolo telematico presente")
+            place = _s(formality.get("immobili")) or "—"
+            rows.append([
+                _s(formality.get("data_formalita_display") or formality.get("data_formalita")) or "—",
+                _joined([kind, registers]),
+                official,
+                _s(formality.get("causale")) or "—",
+                _joined([place, *availability]),
+            ])
+
+        items.append(_table(
+            _joined(title_parts),
+            ["Data", "Formalità e registri", "Pubblico ufficiale e repertorio", "Atto", "Luogo e disponibilità"],
+            ["0.8fr", "1.6fr", "1.6fr", "1.2fr", "1.5fr"],
+            ["left"] * 5,
+            rows,
+        ))
+    return items if len(items) > 1 else []
+
+
 def _subject_hub_report_items(
     profile: dict[str, Any] | None,
     portfolio: dict[str, Any] | None = None,
@@ -1313,6 +1390,9 @@ def subject_context(
     archive = subject_report.get("archive") or {}
     if archive_items and (archive.get("document_count") or archive.get("file_count")):
         sections.append({"title": "Archivio storico completo dei documenti", "badges": [], "items": archive_items})
+    formalities_items = _subject_formalities_items(subject_report.get("subject_formalities"))
+    if formalities_items:
+        sections.append({"title": "Ispezioni ipotecarie", "badges": [], "items": formalities_items})
     if appendix_section:
         sections.append(appendix_section)
     sections.append({"title": "Avvertenze", "badges": [], "items": [{"kind": "note", "text": (

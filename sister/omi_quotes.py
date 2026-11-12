@@ -5,8 +5,9 @@ typology and conservation state), with their small dimension tables, hold the pu
 ``public.omi_ref_zone`` / ``omi_fact_quotazioni_valori`` copies are no longer read. OMI quotes cover buildings only (abitazioni, box,
 negozi, uffici, ...): there are no land / agricultural typologies, so nothing here can value terreni.
 
-Connection: ``OMI_POSTGRES_DSN``, otherwise the database part of ``STATS_POSTGRES_DSN`` / ``CADASTRAL_POSTGRES_DSN``
-is replaced with ``omi`` (the same convention ``land_registry`` uses for its sibling databases).
+Connection: ``OMI_POSTGRES_DSN``, otherwise the database part of ``STATS_POSTGRES_DSN`` / legacy
+``CADASTRAL_POSTGRES_DSN`` is replaced with ``omi``. When those are unset, the selected
+``CADASTRAL_DATABASE_DSN_LOCALHOST`` / ``CADASTRAL_DATABASE_DSN_NEON`` is used according to ``ENVIRONMENT``.
 """
 
 from __future__ import annotations
@@ -213,6 +214,10 @@ def omi_dsn() -> str | None:
     dsn = os.getenv("OMI_POSTGRES_DSN", "").strip()
     if not dsn:
         base = os.getenv("STATS_POSTGRES_DSN", "").strip() or os.getenv("CADASTRAL_POSTGRES_DSN", "").strip()
+        if not base:
+            environment = os.getenv("ENVIRONMENT", "development").strip().lower()
+            suffix = "NEON" if environment in {"production", "prod", "staging"} else "LOCALHOST"
+            base = os.getenv(f"CADASTRAL_DATABASE_DSN_{suffix}", "").strip()
         if not base:
             return None
         dsn = urlunsplit(urlsplit(base)._replace(path="/omi"))

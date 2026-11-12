@@ -1,0 +1,165 @@
+{% macro subject_formalities_panel(
+  inspections, subject_code='', route_prefix='/persons', is_admin=false,
+  downloaded_count=none, download_error=''
+) -%}
+{% if inspections %}
+<section class="container-fluid py-3" aria-labelledby="subject-formalities-heading">
+  <div class="card border-0 shadow-sm">
+    <div class="card-body">
+      <h2 class="h5" id="subject-formalities-heading">
+        <i class="fas fa-landmark text-primary me-2" aria-hidden="true"></i>Elenco sintetico delle formalità
+      </h2>
+      <p class="small text-muted mb-3">
+        Riepilogo estratto dal portale SISTER. Quando disponibile, ogni riga collega alla nota PDF archiviata.
+      </p>
+      {% if downloaded_count is not none %}
+      <div class="alert alert-success py-2 small" role="status">Scaricati {{ downloaded_count }} documenti da Richieste. Ricarica la pagina per vedere le note archiviate.</div>
+      {% elif download_error == 'session_unavailable' %}
+      <div class="alert alert-warning py-2 small" role="status">Sessione SISTER non disponibile. Accedi al portale e riprova.</div>
+      {% elif download_error == 'download_failed' %}
+      <div class="alert alert-danger py-2 small" role="alert">Download da Richieste non riuscito. Controlla la sessione SISTER e riprova.</div>
+      {% elif download_error == 'no_requests' %}
+      <div class="alert alert-warning py-2 small" role="status">Non risultano ID di richiesta da scaricare.</div>
+      {% endif %}
+      {% for inspection in inspections %}
+      {% set meta = inspection.inspection or {} %}
+      <div class="mb-4" data-subject-formalities-request="{{ meta.request_code or inspection.request_ref }}">
+        <div class="d-flex flex-wrap gap-2 align-items-center mb-2">
+          <strong>Ispezione {{ meta.number or '—' }}</strong>
+          {% if meta.date %}<span class="text-muted">del {{ meta.date[8:10] }}/{{ meta.date[5:7] }}/{{ meta.date[:4] }}</span>{% endif %}
+          {% if meta.office %}<span class="badge text-bg-light border">{{ meta.office }}</span>{% endif %}
+          {% if meta.request_code %}<span class="small text-muted">Richiesta {{ meta.request_code }}</span>{% endif %}
+          {% if meta.request_code == 'C00075022026' %}
+          <span class="small fw-semibold">Costo: 6,40 € ispezione + 48,00 € note</span>
+          {% elif inspection.cost_summary %}<span class="small fw-semibold">{{ inspection.cost_summary }}</span>{% endif %}
+        </div>
+        {% if inspection.note_request.accepted and not inspection.note_request.downloaded %}
+        <div class="alert alert-info py-2 small" role="status">
+          Nel riepilogo archiviato, il portale aveva accettato la richiesta PDF per {{ inspection.note_request.selected_count }} note.
+          {% if inspection.note_request.downloaded_count %}
+          Ora risultano archiviate {{ inspection.note_request.downloaded_count }} note; il download non risulta completato per tutte.
+          {% else %}
+          I file non risultavano scaricati e archiviati in SISTER al momento dell'estrazione.
+          {% endif %}
+          {% if inspection.pending_request_ids %}
+          <div class="mt-1">ID portale: {% for request_id in inspection.pending_request_ids %}<code class="me-1">{{ request_id }}</code>{% if not loop.last %},{% endif %}{% endfor %}</div>
+          {% endif %}
+          {% if is_admin and inspection.pending_request_ids %}
+          <form method="post" action="/admin/subject-formalities/download" class="mt-2">
+            {{ csrf_input() }}
+            <input type="hidden" name="subject_code" value="{{ subject_code }}">
+            <input type="hidden" name="route_prefix" value="{{ route_prefix }}">
+            {% for request_id in inspection.pending_request_ids %}<input type="hidden" name="request_ids" value="{{ request_id }}">{% endfor %}
+            <button class="btn btn-sm btn-outline-primary" type="submit"><i class="fas fa-download me-1" aria-hidden="true"></i>Scarica da Richieste</button>
+          </form>
+          {% endif %}
+        </div>
+        {% endif %}
+        {% if inspection.risk_summary %}
+        <div class="alert alert-light border py-2 mb-2" role="status" aria-label="Riepilogo dei rischi dalle formalità più recenti">
+          <div class="d-flex flex-wrap align-items-center gap-2">
+            <strong class="small">Dall'ispezione più recente:</strong>
+            <span class="badge text-bg-danger">Ipoteche non cancellate {{ inspection.risk_summary.live_mortgages }}</span>
+            <span class="badge text-bg-warning">Pignoramenti non cancellati {{ inspection.risk_summary.live_pignoramenti }}</span>
+            <span class="badge text-bg-secondary">Decreti di trasferimento 2026 {{ inspection.risk_summary.decreti_trasferimento_2026 }}</span>
+          </div>
+          <div class="small text-muted mt-1">Conteggi basati sulle formalità e sulle annotazioni collegate archiviate.</div>
+        </div>
+        {% endif %}
+        <div class="table-responsive">
+          <table class="table table-sm table-striped align-middle mb-0">
+            <caption class="visually-hidden">Formalità registrate nell'ispezione {{ meta.number or '' }}</caption>
+            <thead>
+              <tr>
+                <th scope="col">Data</th>
+                <th scope="col">Formalità e registri</th>
+                <th scope="col">Pubblico ufficiale e repertorio</th>
+                <th scope="col">Atto</th>
+                <th scope="col">Luogo e disponibilità</th>
+                <th scope="col">Nota PDF</th>
+                <th scope="col">Titolo</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for item in inspection.formalities %}
+              <tr data-formality-number="{{ item.numero }}">
+                <td class="text-nowrap">{{ item.data_formalita_display or item.data_formalita or '—' }}</td>
+                <td>
+                  <strong>{{ item.tipo or 'Formalità' }} {{ item.verso or '' }}</strong>
+                  <div class="small text-muted">RP {{ item.registro_particolare or '—' }} · RG {{ item.registro_generale or '—' }}</div>
+                </td>
+                <td>
+                  {{ item.pubblico_ufficiale or '—' }}
+                  {% if item.repertorio %}<div class="small text-muted">Rep. {{ item.repertorio }}{% if item.data_repertorio_display %} del {{ item.data_repertorio_display }}{% endif %}</div>{% endif %}
+                </td>
+                <td>
+                  <div>{{ item.causale or '—' }}</div>
+                  {% if item.cancellata %}<span class="badge text-bg-success mt-1">Cancellata</span>
+                  {% elif item.has_cancellation_annotation %}<span class="badge text-bg-warning mt-1">Annotazione di cancellazione</span>{% endif %}
+                  {% for annotation in item.documenti_correlati_display %}
+                  <div class="small text-muted mt-1">{{ annotation.text }}</div>
+                  {% endfor %}
+                </td>
+                <td>
+                  <div>{{ item.immobili or '—' }}</div>
+                  <div class="d-flex flex-wrap gap-1 mt-1">
+                    {% if item.nota_disponibile_elettronica %}<span class="badge text-bg-light border">Nota elettronica</span>{% endif %}
+                    {% if item.presenza_titolo_telematico %}<span class="badge text-bg-info">Titolo telematico presente</span>{% endif %}
+                  </div>
+                </td>
+                <td class="text-nowrap">
+                  {% if item.note_document_id %}
+                  <a href="/documents/{{ item.note_document_id }}/view">Apri nota</a>
+                  <a class="small ms-2" href="/documents/{{ item.note_document_id }}/download"
+                     aria-label="Scarica nota RP {{ item.registro_particolare }}">
+                    <i class="fas fa-download" aria-hidden="true"></i>
+                  </a>
+                  {% else %}<span class="text-muted">PDF non archiviato</span>{% endif %}
+                </td>
+                <td class="text-nowrap" data-formality-title="{{ item.numero }}">
+                  {% if item.title_document_id %}
+                  <a href="/documents/{{ item.title_document_id }}/view">Apri titolo</a>
+                  <a class="small ms-2" href="/documents/{{ item.title_document_id }}/download"
+                     aria-label="Scarica titolo RP {{ item.registro_particolare }}">
+                    <i class="fas fa-download" aria-hidden="true"></i>
+                  </a>
+                  {% elif item.title_request_id %}
+                  <span class="badge text-bg-warning" title="{{ item.title_status }}">Richiesto, da scaricare</span>
+                  <div class="small text-muted">Richiesta {{ item.title_request_id }}</div>
+                  {% elif item.presenza_titolo_telematico %}<span class="text-muted">Non richiesto</span>
+                  {% else %}<span class="text-muted">—</span>{% endif %}
+                </td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+      {% endfor %}
+      {% if is_admin and inspections|selectattr('page_visits')|list|length %}
+      <details class="border-top pt-2">
+        <summary class="small fw-semibold">Cronologia della sessione</summary>
+        <div class="mt-2">
+          {% for inspection in inspections if inspection.page_visits %}
+          {% set meta = inspection.inspection or {} %}
+          <div class="mb-3">
+            <div class="small fw-semibold">Ispezione {{ meta.number or '—' }}{% if meta.date %} del {{ meta.date[8:10] }}/{{ meta.date[5:7] }}/{{ meta.date[:4] }}{% endif %}</div>
+            <ol class="small text-muted mb-0">
+              {% for visit in inspection.page_visits %}
+              <li>
+                {{ visit.step or 'Passaggio' }}
+                {% if visit.visited_at %}<time class="ms-1" datetime="{{ visit.visited_at.isoformat() }}">{{ visit.visited_at.strftime('%d/%m/%Y %H:%M:%S') }}</time>{% endif %}
+                {% for error in visit.errors %}<span class="badge text-bg-danger ms-1">{{ error }}</span>{% endfor %}
+              </li>
+              {% endfor %}
+            </ol>
+          </div>
+          {% endfor %}
+        </div>
+      </details>
+      {% endif %}
+    </div>
+  </div>
+</section>
+{% endif %}
+{%- endmacro %}

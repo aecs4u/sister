@@ -3,8 +3,8 @@
     'use strict';
 
     var root = document.querySelector('[data-manual-property-valuations-root]');
-    var source = document.querySelector('[data-manual-property-valuations]');
-    if (!root || !source) return;
+    var pageDataSource = document.querySelector('[data-subject-page-json]');
+    if (!root || !pageDataSource) return;
 
     var PROVIDERS = {
         immobiliare: 'Immobiliare.it',
@@ -12,7 +12,10 @@
         other: 'Altro'
     };
     var entries;
-    try { entries = JSON.parse(source.textContent || '[]'); } catch (error) { entries = []; }
+    try {
+        var pageData = JSON.parse(pageDataSource.textContent || '{}');
+        entries = pageData.manual_property_valuations || [];
+    } catch (error) { entries = []; }
     if (!Array.isArray(entries)) return;
 
     var cards = root.querySelector('[data-manual-property-valuation-items]');
@@ -369,12 +372,14 @@
     }
 
     function addAssessmentAffrancationLinks() {
-        var assessmentSource = document.querySelector('[data-land-map-owner-assessment]');
         var section = document.querySelector('[data-owner-financial-assessment]');
-        if (!assessmentSource || !section || section.dataset.affrancationLinksApplied) return false;
+        if (!pageDataSource || !section || section.dataset.affrancationLinksApplied) return false;
 
         var assessment;
-        try { assessment = JSON.parse(assessmentSource.textContent || '{}'); } catch (error) { return false; }
+        try {
+            assessment = JSON.parse(pageDataSource.textContent || '{}').owner_assessment;
+        } catch (error) { return false; }
+        if (!assessment) return false;
         var assetsByKey = {};
         entries.forEach(function (item) {
             if (item.affrancation && item.asset_key) assetsByKey[item.asset_key] = item;

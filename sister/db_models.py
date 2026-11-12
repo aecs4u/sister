@@ -673,6 +673,52 @@ class WalletGiftCouponRedemption(SQLModel, table=True):
     note: Optional[str] = Field(default=None, sa_column=Column(sa.Text(), nullable=True))
 
 
+class PagoPAPaymentHistory(SQLModel, table=True):
+    """Imported pagoPA source rows, kept separate from wallet balances and billing transactions."""
+
+    __tablename__ = "pagopa_payment_history"
+    __table_args__ = (
+        sa.UniqueConstraint(
+            "user_id", "source_file", "source_row", name="uq_pagopa_history_user_source_row"
+        ),
+        sa.CheckConstraint(
+            "payment_status IN ('validated', 'rejected', 'unconfirmed')",
+            name="ck_pagopa_history_status",
+        ),
+        sa.CheckConstraint("amount > 0", name="ck_pagopa_history_amount"),
+        sa.Index("ix_pagopa_payment_history_user_id", "user_id"),
+        sa.Index("ix_pagopa_payment_history_payment_date", "payment_date"),
+    )
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    user_id: str = Field(sa_column=Column(sa.String(), nullable=False))
+    payer_reference: Optional[str] = Field(default=None, sa_column=Column(sa.String(), nullable=True))
+    payment_method: str = Field(sa_column=Column(sa.String(32), nullable=False))
+    amount: Decimal = Field(sa_column=Column(sa.Numeric(12, 2), nullable=False))
+    amount_source: str = Field(sa_column=Column(sa.String(32), nullable=False))
+    currency: str = Field(default="EUR", sa_column=Column(sa.String(8), nullable=False, server_default="EUR"))
+    payment_status: str = Field(sa_column=Column(sa.String(16), nullable=False))
+    payment_date: Optional[date] = Field(default=None, sa_column=Column(sa.Date(), nullable=True))
+    payment_date_source: Optional[str] = Field(default=None, sa_column=Column(sa.String(32), nullable=True))
+    operation_date: Optional[date] = Field(default=None, sa_column=Column(sa.Date(), nullable=True))
+    operation_date_source: Optional[str] = Field(default=None, sa_column=Column(sa.String(32), nullable=True))
+    validation_date: Optional[date] = Field(default=None, sa_column=Column(sa.Date(), nullable=True))
+    validation_date_source: Optional[str] = Field(default=None, sa_column=Column(sa.String(32), nullable=True))
+    rejection_date: Optional[date] = Field(default=None, sa_column=Column(sa.Date(), nullable=True))
+    rejection_date_source: Optional[str] = Field(default=None, sa_column=Column(sa.String(32), nullable=True))
+    office: Optional[str] = Field(default=None, sa_column=Column(sa.Text(), nullable=True))
+    note: Optional[str] = Field(default=None, sa_column=Column(sa.Text(), nullable=True))
+    retry_available: bool = Field(default=False, sa_column=Column(sa.Boolean(), nullable=False, server_default=sa.false()))
+    receipt_available: bool = Field(default=False, sa_column=Column(sa.Boolean(), nullable=False, server_default=sa.false()))
+    source_file: str = Field(sa_column=Column(sa.String(255), nullable=False))
+    source_sha256: str = Field(sa_column=Column(sa.String(64), nullable=False))
+    source_row: int = Field(sa_column=Column(sa.Integer(), nullable=False))
+    imported_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc),
+        sa_column=Column(sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
+    )
+
+
 class SubjectFavorite(SQLModel, table=True):
     """A user's saved person or company profile, identified independently of its documents."""
 

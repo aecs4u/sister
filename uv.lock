@@ -218,7 +218,7 @@ dependencies = [
 [[package]]
 name = "aecs4u-theme"
 version = "1.6.2"
-source = { git = "https://github.com/aecs4u/aecs4u-theme.git?branch=main#f2c36933fd0f614628356083de91ffd2124499e3" }
+source = { git = "https://github.com/aecs4u/aecs4u-theme.git?branch=main#cac33bae32d487ca018e913d2f5080c4e22fc1ce" }
 dependencies = [
     { name = "aecs4u-i18n" },
     { name = "fastapi" },
@@ -7355,6 +7355,7 @@ dependencies = [
     { name = "aecs4u-crypto" },
     { name = "aecs4u-domain" },
     { name = "aecs4u-email" },
+    { name = "aecs4u-storage" },
     { name = "aecs4u-theme" },
     { name = "aecs4u-workflow" },
     { name = "alembic" },
@@ -7366,6 +7367,7 @@ dependencies = [
     { name = "jinja2" },
     { name = "land-registry" },
     { name = "lxml" },
+    { name = "pillow" },
     { name = "psycopg", extra = ["binary"] },
     { name = "pydantic" },
     { name = "python-dotenv" },
@@ -7408,6 +7410,7 @@ requires-dist = [
     { name = "aecs4u-crypto", git = "https://github.com/aecs4u/aecs4u-crypto.git?branch=main" },
     { name = "aecs4u-domain", git = "https://github.com/aecs4u/aecs4u-domain.git?branch=main" },
     { name = "aecs4u-email", git = "https://github.com/aecs4u/aecs4u-email.git?branch=main" },
+    { name = "aecs4u-storage", git = "https://github.com/aecs4u/aecs4u-storage.git?branch=main" },
     { name = "aecs4u-theme", git = "https://github.com/aecs4u/aecs4u-theme.git?branch=main" },
     { name = "aecs4u-workflow", git = "https://github.com/aecs4u/aecs4u-workflow.git?branch=main" },
     { name = "alembic", specifier = ">=1.13.0" },
@@ -7422,6 +7425,7 @@ requires-dist = [
     { name = "lxml", specifier = ">=6.1.1" },
     { name = "mcp", marker = "extra == 'mcp'", specifier = ">=2.0.0,<3" },
     { name = "ocular", extras = ["promptflow"], marker = "extra == 'floor-plan-ocr'", git = "https://github.com/aecs4u/ocular.git?branch=main" },
+    { name = "pillow", specifier = ">=10" },
     { name = "psycopg", extras = ["binary"], specifier = ">=3.2.0" },
     { name = "pydantic", specifier = ">=2.10.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.0" },

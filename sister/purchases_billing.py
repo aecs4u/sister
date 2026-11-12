@@ -535,6 +535,14 @@ def wallet_user_id(user_key: str) -> str:
     return "sister:" + _identity_part(user_key)
 
 
+def wallet_lookup_key(wallet_user_id_value: str) -> str:
+    """Return an accepted user key that resolves to a stored canonical wallet user ID."""
+    value = str(wallet_user_id_value or "").strip()
+    if value.startswith("sister:"):
+        value = value.partition(":")[2]
+    return "id:" + value
+
+
 _SQL_SESSION = None
 
 
@@ -742,14 +750,27 @@ async def reverse_gift_coupon_redemption(redemption_id: int, actor: str) -> str:
     return "reversed"
 
 
-async def wallet_admin_snapshot(user_key: str) -> dict[str, Any] | None:
-    """Read one existing wallet and its recent ledger without creating a wallet on page load."""
+async def wallet_admin_snapshot(
+    user_key: str,
+    *,
+    transaction_page: int = 1,
+    page_size: int = 50,
+) -> dict[str, Any] | None:
+    """Read one existing wallet and a page of its ledger without creating a wallet on page load."""
     service = _wallet_service()
     wallet = await service.storage.get_wallet_by_user(wallet_user_id(user_key), service.config.site_id)
     if wallet is None:
         return None
     balance = await service.get_balance(wallet.id, wallet.default_currency)
-    transactions = await service.get_transactions(wallet.id, limit=100)
+    page_size = max(1, min(int(page_size), 100))
+    transaction_page = max(1, int(transaction_page))
+    transactions = await service.get_transactions(
+        wallet.id,
+        limit=page_size + 1,
+        offset=(transaction_page - 1) * page_size,
+    )
+    has_more = len(transactions) > page_size
+    transactions = transactions[:page_size]
     return {
         "id": wallet.id,
         "user_id": wallet.user_id,
@@ -757,6 +778,9 @@ async def wallet_admin_snapshot(user_key: str) -> dict[str, Any] | None:
         "balance": balance.available,
         "locked": wallet.is_locked,
         "active": wallet.is_active,
+        "transaction_page": transaction_page,
+        "transaction_page_size": page_size,
+        "transaction_has_more": has_more,
         "transactions": [
             {
                 "id": tx.id,
@@ -770,6 +794,301 @@ async def wallet_admin_snapshot(user_key: str) -> dict[str, Any] | None:
             }
             for tx in transactions
         ],
+    }
+
+
+def wallet_admin_accounts(
+    query: str = "",
+    *,
+    page: int = 1,
+    page_size: int = 50,
+) -> dict[str, Any]:
+    """List every SQL wallet for this SISTER tenant, including its current balance and ledger activity count."""
+    from sqlalchemy import func, select
+
+    from aecs4u_billing.wallet.sqlmodel_storage import TransactionDB, WalletDB
+
+    service = _wallet_service()
+    session = _sql_session()
+    page_size = max(1, min(int(page_size), 100))
+    query = str(query or "").strip()[:320]
+    if ":" in query:
+        prefix, _, identifier = query.partition(":")
+        if prefix.casefold() in {"id", "email", "username"}:
+            query = identifier.strip()
+    filters = [WalletDB.site_id == service.config.site_id]
+    if query:
+        filters.append(WalletDB.user_id.ilike(f"%{query}%"))
+
+    total = int(
+        session.exec(select(func.count()).select_from(WalletDB).where(*filters)).one()[0]
+    )
+    total_pages = max(1, (total + page_size - 1) // page_size)
+    page = min(max(1, int(page)), total_pages)
+    grouped_columns = (
+        WalletDB.id,
+        WalletDB.user_id,
+        WalletDB.default_currency,
+        WalletDB.balance_available,
+        WalletDB.is_active,
+        WalletDB.is_locked,
+        WalletDB.updated_at,
+    )
+    rows = session.exec(
+        select(
+            *grouped_columns,
+            func.count(TransactionDB.id),
+            func.max(TransactionDB.created_at),
+        )
+        .select_from(WalletDB)
+        .outerjoin(TransactionDB, TransactionDB.wallet_id == WalletDB.id)
+        .where(*filters)
+        .group_by(*grouped_columns)
+        .order_by(func.lower(WalletDB.user_id), WalletDB.user_id)
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+    ).all()
+    return {
+        "rows": [
+            {
+                "id": row[0],
+                "user_id": row[1],
+                "lookup_key": wallet_lookup_key(row[1]),
+                "currency": row[2],
+                "balance": row[3],
+                "active": row[4],
+                "locked": row[5],
+                "updated_at": row[6],
+                "transaction_count": int(row[7] or 0),
+                "last_transaction_at": row[8],
+            }
+            for row in rows
+        ],
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "total_pages": total_pages,
+    }
+
+
+def wallet_admin_transactions(
+    query: str = "",
+    *,
+    page: int = 1,
+    page_size: int = 50,
+) -> dict[str, Any]:
+    """Search and paginate billing transactions across every wallet in this SISTER tenant."""
+    from sqlalchemy import func, or_, select
+
+    from aecs4u_billing.wallet.sqlmodel_storage import TransactionDB, WalletDB
+
+    service = _wallet_service()
+    session = _sql_session()
+    page_size = max(1, min(int(page_size), 100))
+    query = str(query or "").strip()[:320]
+    filters = [WalletDB.site_id == service.config.site_id]
+    if query:
+        pattern = f"%{query}%"
+        filters.append(
+            or_(
+                WalletDB.user_id.ilike(pattern),
+                TransactionDB.type.ilike(pattern),
+                TransactionDB.status.ilike(pattern),
+                TransactionDB.reference_id.ilike(pattern),
+                TransactionDB.description.ilike(pattern),
+            )
+        )
+    join = TransactionDB.wallet_id == WalletDB.id
+    total = int(
+        session.exec(
+            select(func.count(TransactionDB.id))
+            .select_from(TransactionDB)
+            .join(WalletDB, join)
+            .where(*filters)
+        ).one()[0]
+    )
+    total_pages = max(1, (total + page_size - 1) // page_size)
+    page = min(max(1, int(page)), total_pages)
+    rows = session.exec(
+        select(TransactionDB, WalletDB.user_id)
+        .join(WalletDB, join)
+        .where(*filters)
+        .order_by(TransactionDB.created_at.desc(), TransactionDB.id.desc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+    ).all()
+    return {
+        "rows": [
+            {
+                "id": tx.id,
+                "user_id": user_id,
+                "lookup_key": wallet_lookup_key(user_id),
+                "type": tx.type,
+                "status": tx.status,
+                "currency": tx.currency_code,
+                "amount": tx.amount,
+                "balance_before": tx.balance_before,
+                "balance_after": tx.balance_after,
+                "reference_id": tx.reference_id or "",
+                "description": tx.description,
+                "created_at": tx.created_at,
+            }
+            for tx, user_id in rows
+        ],
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "total_pages": total_pages,
+    }
+
+
+def billing_admin_invoices(
+    query: str = "",
+    *,
+    page: int = 1,
+    page_size: int = 50,
+) -> dict[str, Any]:
+    """List invoices stored by aecs4u-billing for this SISTER tenant."""
+    from sqlalchemy import String, func, or_, select
+
+    from aecs4u_billing.invoicing.sqlmodel_storage import InvoiceDB
+
+    service = _wallet_service()
+    session = _sql_session()
+    page_size = max(1, min(int(page_size), 100))
+    query = str(query or "").strip()[:320]
+    filters = [
+        InvoiceDB.invoice_metadata["site_id"].as_string() == service.config.site_id
+    ]
+    if query:
+        pattern = f"%{query}%"
+        filters.append(
+            or_(
+                InvoiceDB.id.ilike(pattern),
+                InvoiceDB.number.ilike(pattern),
+                InvoiceDB.customer_id.ilike(pattern),
+                InvoiceDB.status.ilike(pattern),
+                InvoiceDB.invoice_metadata.cast(String).ilike(pattern),
+            )
+        )
+
+    total = int(
+        session.exec(
+            select(func.count()).select_from(InvoiceDB).where(*filters)
+        ).one()[0]
+    )
+    total_pages = max(1, (total + page_size - 1) // page_size)
+    page = min(max(1, int(page)), total_pages)
+    invoices = session.exec(
+        select(InvoiceDB)
+        .where(*filters)
+        .order_by(InvoiceDB.created_at.desc(), InvoiceDB.id.desc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+    ).all()
+    rows = []
+    for invoice in invoices:
+        metadata = invoice.invoice_metadata or {}
+        user_key = str(
+            metadata.get("sister_user_key") or metadata.get("user_id") or ""
+        ).strip()
+        rows.append(
+            {
+                "id": invoice.id,
+                "number": invoice.number or invoice.id,
+                "customer_id": invoice.customer_id,
+                "user_id": user_key or invoice.customer_id,
+                "lookup_key": wallet_lookup_key(user_key) if user_key else "",
+                "status": invoice.status,
+                "currency": invoice.currency,
+                "total": Decimal(invoice.total or 0) / Decimal(100),
+                "amount_due": Decimal(invoice.amount_due or 0) / Decimal(100),
+                "amount_paid": Decimal(invoice.amount_paid or 0) / Decimal(100),
+                "created_at": invoice.created_at,
+                "hosted_invoice_url": invoice.hosted_invoice_url,
+                "invoice_pdf": invoice.invoice_pdf,
+            }
+        )
+    return {
+        "rows": rows,
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "total_pages": total_pages,
+    }
+
+
+def pagopa_admin_history(
+    query: str = "",
+    *,
+    page: int = 1,
+    page_size: int = 50,
+) -> dict[str, Any]:
+    """Search and paginate the imported pagoPA history without touching wallet records."""
+    from sqlalchemy import func, or_, select
+
+    from .db_models import PagoPAPaymentHistory
+
+    session = _sql_session()
+    page_size = max(1, min(int(page_size), 100))
+    query = str(query or "").strip()[:320]
+    filters = []
+    if query:
+        pattern = f"%{query}%"
+        filters.append(
+            or_(
+                PagoPAPaymentHistory.user_id.ilike(pattern),
+                PagoPAPaymentHistory.payer_reference.ilike(pattern),
+                PagoPAPaymentHistory.payment_method.ilike(pattern),
+                PagoPAPaymentHistory.payment_status.ilike(pattern),
+                PagoPAPaymentHistory.office.ilike(pattern),
+                PagoPAPaymentHistory.note.ilike(pattern),
+                PagoPAPaymentHistory.source_file.ilike(pattern),
+            )
+        )
+
+    total = int(
+        session.exec(
+            select(func.count(PagoPAPaymentHistory.id)).where(*filters)
+        ).one()[0]
+    )
+    total_pages = max(1, (total + page_size - 1) // page_size)
+    page = min(max(1, int(page)), total_pages)
+    payments = session.execute(
+        select(PagoPAPaymentHistory)
+        .where(*filters)
+        .order_by(PagoPAPaymentHistory.payment_date.desc(), PagoPAPaymentHistory.id.desc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+    ).scalars().all()
+    return {
+        "rows": [
+            {
+                "id": payment.id,
+                "user_id": payment.user_id,
+                "lookup_key": wallet_lookup_key(payment.user_id),
+                "payer_reference": payment.payer_reference or "",
+                "payment_method": payment.payment_method,
+                "amount": payment.amount,
+                "currency": payment.currency,
+                "payment_status": payment.payment_status,
+                "payment_date": payment.payment_date,
+                "payment_date_source": payment.payment_date_source or "",
+                "operation_date_source": payment.operation_date_source or "",
+                "validation_date_source": payment.validation_date_source or "",
+                "rejection_date_source": payment.rejection_date_source or "",
+                "office": payment.office or "",
+                "note": payment.note or "",
+                "retry_available": payment.retry_available,
+                "receipt_available": payment.receipt_available,
+                "source_file": payment.source_file,
+            }
+            for payment in payments
+        ],
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "total_pages": total_pages,
     }
 
 

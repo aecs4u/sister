@@ -1,0 +1,54 @@
+{# Subject visura groups arrive pre-normalized from web._subject_visura_view_model. #}
+{% for group_view in _gruppi_list %}
+{% set g = group_view.source %}
+{% set _group_total = group_view.building_count + group_view.land_count %}
+<details class="visura-group"{% if _gruppi_list|length == 1 %} open{% endif %}>
+  <summary class="visura-group-summary">
+    <h2 class="h5 mb-0">
+      <i class="fas fa-map-marker-alt me-1 text-info" aria-hidden="true"></i>
+      {{ g.Descrizione or g.CodiceComune or ('Gruppo ' ~ loop.index) }}
+      {% if g.CodiceComune and g.Descrizione %}<span class="small text-muted font-monospace ms-1" title="Codice catastale del comune">{{ g.CodiceComune }}</span>{% endif %}
+      <span class="badge bg-secondary ms-2">{{ g.TipoCatasto or '' }}</span>
+      <span class="badge bg-light text-dark border ms-1">{{ _group_total }} immobili</span>
+      {% if group_view.sheet_list %}<span class="badge bg-light text-dark border ms-1" title="Fogli: {{ group_view.sheet_list|join(', ') }}">Fg {{ group_view.sheet_list[:6]|join(', ') }}{% if group_view.sheet_list|length > 6 %} +{{ group_view.sheet_list|length - 6 }}{% endif %}</span>{% endif %}
+      {% if g.Sezione %}<span class="badge bg-light text-dark border ms-1">Sez. {{ g.Sezione }}</span>{% endif %}
+      <span class="badge bg-info-subtle text-info-emphasis border border-info-subtle ms-1" title="Diritto e quota del soggetto">{{ group_view.right or 'Diritto non indicato' }}{% if group_view.share %} · quota {{ group_view.share }}{% else %} · quota non indicata{% endif %}</span>
+      {% if g.FonteElenco %}<span class="badge bg-warning-subtle text-warning-emphasis border border-warning-subtle ms-1" title="Immobili della ricerca per soggetto non presenti in una visura archiviata">da elenco</span>{% endif %}
+    </h2>
+  </summary>
+  <div class="visura-group-body">
+    <div class="imm-tables mb-3">
+      {{ buildings_table(group_view.buildings) }}
+      {{ subject_lands_table(group_view.lands) }}
+    </div>
+    {% if g.FonteElenco %}
+    <p class="small text-muted mb-4"><i class="fas fa-circle-info me-1" aria-hidden="true"></i>Immobili dall'elenco della ricerca per soggetto: lo storico e i dati di classamento completi arrivano dalle visure archiviate delle singole particelle.</p>
+    {% if g.TitolaritaElenco and (g.TitolaritaElenco.Diritto or g.TitolaritaElenco.Quota) %}
+    <p class="small mb-4"><i class="fas fa-user-check me-1 text-info" aria-hidden="true"></i><strong>Titolarità dalla ricerca:</strong>
+      {{ g.TitolaritaElenco.Diritto or 'diritto non indicato' }}{% if g.TitolaritaElenco.Quota %} · quota {{ g.TitolaritaElenco.Quota }}{% endif %}</p>
+    {% endif %}
+    {% for history in group_view.unlinked_histories if history.events %}
+    <div class="card border-0 shadow-sm mb-4">
+      <div class="card-header bg-transparent border-bottom py-2 px-3">
+        <h3 class="h6 mb-0 text-muted"><i class="fas fa-history me-2" aria-hidden="true"></i>Titolarità · Fg {{ history.sheet }} · Part. {{ history.parcel }}{% if history.subunit %} · Sub {{ history.subunit }}{% endif %}</h3>
+      </div>
+      <div class="card-body py-3 px-3">{{ render_timeline(history.events, situazione_al='', color='#17a2b8', badge_class='bg-info') }}</div>
+    </div>
+    {% endfor %}
+    {% elif group_view.mutations %}
+    <div class="card border-0 shadow-sm mb-4">
+      <div class="card-header bg-transparent border-bottom py-2 px-3">
+        <h3 class="h6 mb-0 text-muted"><i class="fas fa-history me-2" aria-hidden="true"></i>Titolarità
+          <span class="badge bg-info ms-2" style="font-size:.65rem">{{ group_view.mutations|length }} mutazioni</span>
+        </h3>
+      </div>
+      <div class="card-body py-3 px-3">
+        {{ render_timeline(group_view.mutations, situazione_al=_t.SituazioneAl or '', color='#17a2b8', badge_class='bg-info') }}
+      </div>
+    </div>
+    {% elif g.IntestazioneGruppo %}
+    <p class="small text-muted mb-3">La visura non riporta mutazioni di titolarità per questo gruppo.</p>
+    {% endif %}
+  </div>
+</details>
+{% endfor %}

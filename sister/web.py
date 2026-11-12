@@ -29,6 +29,7 @@ from uuid import uuid4
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 from jinja2 import TemplateNotFound
+from sqlalchemy.engine import make_url
 from starlette.concurrency import run_in_threadpool
 from starlette.responses import StreamingResponse
 
@@ -60,6 +61,7 @@ from .database import (
     get_subject_document_ids,
     get_subject_document_ids_for_fiscal_codes,
     get_subject_fiscal_code_for_document,
+    get_subject_mortgage_formalities,
     get_subject_name,
     iter_all_documents,
     parcel_key,
@@ -76,6 +78,39 @@ from .visura_view import build_visura_view
 # Sister's web UI proxies workflow list/detail requests to opendata.
 _OPENDATA_API_URL = os.getenv("OPENDATA_API_URL", "http://localhost:8024")
 _QUERY_SHARED_PRICE_PATH = os.getenv("SISTER_QUERY_SHARED_PRICE_PATH", "/visura/query")
+_COMPLETE_DATA_CACHE: dict[str, dict[str, Any]] = {}
+_COMPLETE_DATA_CACHE_LOCK = Lock()
+_COMPLETE_DATA_CACHE_TTL = 3600
+_COMPLETE_DATA_CACHE_LIMIT = 32
+
+
+def _cache_complete_data(
+    document_id: int,
+    data: dict,
+    *,
+    subject_code: str | None = None,
+    subject_kind: str | None = None,
+) -> str:
+    """Keep the exact rendered visura tree briefly so the collapsed dump can fetch it on demand."""
+    now = time.monotonic()
+    with _COMPLETE_DATA_CACHE_LOCK:
+        expired = [
+            key for key, item in _COMPLETE_DATA_CACHE.items()
+            if now - item["created"] > _COMPLETE_DATA_CACHE_TTL
+        ]
+        for key in expired:
+            _COMPLETE_DATA_CACHE.pop(key, None)
+        while len(_COMPLETE_DATA_CACHE) >= _COMPLETE_DATA_CACHE_LIMIT:
+            _COMPLETE_DATA_CACHE.pop(next(iter(_COMPLETE_DATA_CACHE)))
+        key = uuid4().hex
+        _COMPLETE_DATA_CACHE[key] = {
+            "created": now,
+            "document_id": int(document_id),
+            "subject_code": subject_code,
+            "subject_kind": subject_kind,
+            "data": data,
+        }
+        return key
 _QUERY_PRICE_CACHE_SECONDS = 60.0
 _QUERY_PRICE_FAILURE_CACHE_SECONDS = 30.0
 _query_price_cache_until = 0.0
@@ -3008,7 +3043,7 @@ def _map_is_placeholder(map_lookup: dict | None) -> bool:
 
 
 _LAND_REGISTRY_CALCULATION_TYPE = "subject_land_registry_kpis"
-_LAND_REGISTRY_CALCULATION_VERSION = "13"  # 13: OMI breakdown views + market (Immobiliare/idealista) valuation; 12: units counted once, zone fallback + descriptions
+_LAND_REGISTRY_CALCULATION_VERSION = "14"  # 14: retry subject valuations after correcting the OMI database DSN selection
 _LAND_REGISTRY_CALCULATION_MAX_AGE_SECONDS = 12 * 60 * 60
 
 
@@ -4673,6 +4708,11 @@ async def web_settings(request: Request, user=Depends(_require_auth)):
                             "url": "/admin/purchases",
                             "icon": "fa-file-invoice",
                         },
+                        {
+                            "label": "Portafogli e billing",
+                            "url": "/admin/wallets",
+                            "icon": "fa-wallet",
+                        },
                         {"label": "Comandi CLI", "url": "/admin/commands", "icon": "fa-terminal"},
                         {"label": "Monitor run-list", "url": "/admin/list-runs", "icon": "fa-clock-rotate-left"},
                         {"label": "Browser", "url": "/browser", "icon": "fa-window-maximize"},
@@ -4728,37 +4768,89 @@ async def web_admin_users(request: Request, q: str = Query("", max_length=200), 
 async def web_admin_wallets(
     request: Request,
     q: str = Query("", max_length=320),
+    wallet_search: str = Query("", max_length=320),
+    billing_search: str = Query("", max_length=320),
+    invoice_search: str = Query("", max_length=320),
+    pagopa_search: str = Query("", max_length=320),
+    wallet_page: int = Query(1, ge=1),
+    billing_page: int = Query(1, ge=1),
+    invoice_page: int = Query(1, ge=1),
+    pagopa_page: int = Query(1, ge=1),
+    wallet_tx_page: int = Query(1, ge=1),
+    gift_q: str = Query("", max_length=320),
     status: str = "",
     error: str = "",
     gift_code: str = "",
     user=Depends(_require_admin),
 ):
-    """Inspect a user's wallet and manage tracked, redeemable wallet gifts."""
+    """Inspect wallet, billing and pagoPA history; manage tracked wallet gifts."""
     from . import purchases_billing
     from .database import (
-        list_document_purchases,
-        list_subject_access,
-        list_subject_purchases,
         list_wallet_gift_coupon_redemptions,
         list_wallet_gift_coupons,
     )
 
-    known_users = {
-        row["user_id"] for row in await list_document_purchases(status="all", limit=1000)
-    }
-    known_users.update(row["user_id"] for row in await list_subject_purchases(limit=1000))
-    known_users.update(row["user_id"] for row in await list_subject_access(status="all", limit=1000))
-    known_users.update(getattr(request.app.state, "local_user_keys", []) or [])
     query = q.strip()
     selected_user = ""
     wallet = None
     if query:
         try:
             selected_user = _purchase_identity(query)
-            wallet = await purchases_billing.wallet_admin_snapshot(selected_user)
         except Exception as exc:  # noqa: BLE001 - malformed keys/backend failures should not break admin view
-            logger.warning("Wallet lookup failed: %s", type(exc).__name__)
-            selected_user = query[:320]
+            logger.info("Ignoring malformed wallet account key: %s", type(exc).__name__)
+            selected_user = ""
+        if selected_user:
+            try:
+                wallet = await purchases_billing.wallet_admin_snapshot(
+                    selected_user,
+                    transaction_page=wallet_tx_page,
+                )
+            except Exception as exc:  # noqa: BLE001 - keep the global admin ledgers available on a wallet failure
+                logger.warning("Wallet lookup failed: %s", type(exc).__name__)
+    try:
+        wallet_listing = purchases_billing.wallet_admin_accounts(
+            wallet_search,
+            page=wallet_page,
+            page_size=50,
+        )
+        wallet_listing_error = False
+    except Exception as exc:  # noqa: BLE001 - report the missing ledger rather than hiding it as an empty result
+        logger.warning("Admin wallet listing failed: %s", type(exc).__name__)
+        wallet_listing = {"rows": [], "total": 0, "page": 1, "page_size": 50, "total_pages": 1}
+        wallet_listing_error = True
+    try:
+        billing_listing = purchases_billing.wallet_admin_transactions(
+            billing_search,
+            page=billing_page,
+            page_size=50,
+        )
+        billing_listing_error = False
+    except Exception as exc:  # noqa: BLE001 - report the missing ledger rather than hiding it as an empty result
+        logger.warning("Admin billing listing failed: %s", type(exc).__name__)
+        billing_listing = {"rows": [], "total": 0, "page": 1, "page_size": 50, "total_pages": 1}
+        billing_listing_error = True
+    try:
+        invoice_listing = purchases_billing.billing_admin_invoices(
+            invoice_search,
+            page=invoice_page,
+            page_size=50,
+        )
+        invoice_listing_error = False
+    except Exception as exc:  # noqa: BLE001 - keep invoice failures separate from wallet transactions
+        logger.warning("Admin invoice listing failed: %s", type(exc).__name__)
+        invoice_listing = {"rows": [], "total": 0, "page": 1, "page_size": 50, "total_pages": 1}
+        invoice_listing_error = True
+    try:
+        pagopa_listing = purchases_billing.pagopa_admin_history(
+            pagopa_search,
+            page=pagopa_page,
+            page_size=50,
+        )
+        pagopa_listing_error = False
+    except Exception as exc:  # noqa: BLE001 - keep source history failures separate from wallet ledgers
+        logger.warning("Admin pagoPA history listing failed: %s", type(exc).__name__)
+        pagopa_listing = {"rows": [], "total": 0, "page": 1, "page_size": 50, "total_pages": 1}
+        pagopa_listing_error = True
     coupons = await list_wallet_gift_coupons(limit=200)
     now = datetime.now(timezone.utc)
     for coupon in coupons:
@@ -4770,10 +4862,22 @@ async def web_admin_wallets(
         query=query,
         selected_user=selected_user,
         wallet=wallet,
-        known_users=sorted(known_users, key=str.casefold),
+        wallet_listing=wallet_listing,
+        wallet_search=wallet_search,
+        wallet_listing_error=wallet_listing_error,
+        billing_listing=billing_listing,
+        billing_search=billing_search,
+        billing_listing_error=billing_listing_error,
+        invoice_listing=invoice_listing,
+        invoice_search=invoice_search,
+        invoice_listing_error=invoice_listing_error,
+        pagopa_listing=pagopa_listing,
+        pagopa_search=pagopa_search,
+        pagopa_listing_error=pagopa_listing_error,
         wallet_enabled=purchases_billing.credit_grants_enabled(),
         coupons=coupons,
-        redemptions=await list_wallet_gift_coupon_redemptions(query=query, limit=300),
+        redemptions=await list_wallet_gift_coupon_redemptions(query=gift_q, limit=300),
+        gift_query=gift_q,
         status=status,
         error=error,
         gift_code=gift_code,
@@ -6306,6 +6410,53 @@ async def web_admin_document_purchase_delete(request: Request, user=Depends(_req
     return await _revoke_purchase(request)
 
 
+@router.post("/admin/subject-formalities/download")
+@_audited("admin.subject_formalities.download")
+async def web_admin_subject_formalities_download(request: Request, user=Depends(_require_admin)):
+    """Download selected mortgage note PDFs from the authenticated SISTER Richieste page."""
+    form = await request.form()
+    route_prefix = str(form.get("route_prefix") or "").strip()
+    subject_code = str(form.get("subject_code") or "").strip().upper()
+    valid_subject = (
+        route_prefix == "/persons" and re.fullmatch(r"[A-Z0-9]{16}", subject_code)
+    ) or (
+        route_prefix == "/companies" and re.fullmatch(r"\d{11}", subject_code)
+    )
+    if not valid_subject:
+        raise HTTPException(status_code=400, detail="Invalid subject profile")
+
+    request_ids = {
+        str(value).strip()
+        for value in form.getlist("request_ids")
+        if re.fullmatch(r"[A-Za-z0-9_-]{1,64}", str(value).strip())
+    }
+    if not request_ids or len(request_ids) > 100:
+        return RedirectResponse(
+            f"{route_prefix}/{quote(subject_code)}?formalities_download_error=no_requests", status_code=303
+        )
+    request.state.audit_params = {"subject_type": route_prefix.lstrip("/"), "request_count": len(request_ids)}
+
+    from .main import visura_service
+
+    if visura_service is None or not visura_service.auth_ready:
+        return RedirectResponse(
+            f"{route_prefix}/{quote(subject_code)}?formalities_download_error=session_unavailable", status_code=303
+        )
+    try:
+        downloaded = await visura_service.download_richieste_documents(
+            skip_known=True, request_ids=request_ids, parse_mortgage_notes=True
+        )
+    except Exception as exc:  # noqa: BLE001 - report a clean result on the subject page; details stay in the log.
+        logger.warning("Subject formalities download failed: %s", type(exc).__name__)
+        return RedirectResponse(
+            f"{route_prefix}/{quote(subject_code)}?formalities_download_error=download_failed", status_code=303
+        )
+    return RedirectResponse(
+        f"{route_prefix}/{quote(subject_code)}?{urlencode({'formalities_downloaded': len(downloaded)})}",
+        status_code=303,
+    )
+
+
 @router.get("/about", response_class=HTMLResponse)
 async def web_about(request: Request):
     """About page (public)."""
@@ -6725,6 +6876,7 @@ async def _render_doc_from_db(
     subject_portfolio: dict | None = None,
     subject_hub: dict | None = None,
     subject_archive: dict | None = None,
+    subject_formalities: list[dict] | None = None,
     subject_favorite_enabled: bool = False,
     subject_is_favorite: bool = False,
     as_pdf: bool = False,
@@ -6876,6 +7028,8 @@ async def _render_doc_from_db(
     if land_map_kind != "soggetto":
         xml_shown = xml_p
     doc = {**doc, "xml_parsed": merge_identifiers(subject_for_theme(readable_owners(xml_shown)))}
+    if land_map_kind == "soggetto" and subject_hub:
+        _attach_subject_parcel_histories(subject_hub, doc["xml_parsed"])
     if as_pdf:
         # Subject reports also carry the archive and parcel evidence shown alongside the visura.
         subject_report = None
@@ -6893,6 +7047,7 @@ async def _render_doc_from_db(
                     "subject_documents": subject_documents or [],
                     "subject_hub": subject_hub,
                     "subject_portfolio": subject_portfolio,
+                    "subject_formalities": subject_formalities or [],
                     "land_registry_history": land_registry_history,
                 }
                 if subject_hub:
@@ -6905,6 +7060,15 @@ async def _render_doc_from_db(
     if land_map_kind == "soggetto" and subject_hub:
         # every parcel of the elenco is on the map, not only the ones the visura lists
         doc["land_registry_map"] = hub_map or doc.get("land_registry_map")
+    complete_data_url = None
+    if land_map_kind == "soggetto" and doc.get("id") and doc.get("xml_parsed"):
+        complete_data_key = _cache_complete_data(
+            int(doc["id"]),
+            doc["xml_parsed"],
+            subject_code=subject_fiscal_code if subject_hub else None,
+            subject_kind=("company" if subject_route_prefix == "/companies" else "person") if subject_hub else None,
+        )
+        complete_data_url = f"/documents/{int(doc['id'])}/complete-data.json?k={complete_data_key}"
     return theme.render(
         "catasto/entity.html",
         request,
@@ -6922,9 +7086,16 @@ async def _render_doc_from_db(
         subject_portfolio=subject_portfolio,
         subject_hub=subject_hub,
         subject_archive=subject_archive,
+        subject_formalities=subject_formalities or [],
+        subject_formalities_admin=_is_admin(user),
         subject_favorite_enabled=subject_favorite_enabled,
         subject_is_favorite=subject_is_favorite,
         subject_facts=subject_facts,
+        subject_parcel_anchor=_subject_parcel_anchor,
+        subject_visura_view=_subject_visura_view_model(
+            doc["xml_parsed"], subject_hub, subject_fiscal_code
+        ) if land_map_kind == "soggetto" else None,
+        complete_data_url=complete_data_url,
         document_favorites_enabled=document_favorites_enabled,
         subject_document_id=doc.get("id") if subject_fiscal_code else None,
         manual_valuation_enabled=bool(_favorite_user_key(user)),
@@ -7853,14 +8024,24 @@ async def _google_maps_context_uncached(doc: dict, *, refresh_only: bool = False
                 _schedule_map_refresh(doc)
                 return context
 
-    # Resolve hub keys in the cadastral database directly: its indexed regional
-    # views serve parcel lookups quickly. The FDW views in SISTER remain a
-    # fallback for installations without a direct cadastral connection.
+    # Resolve document keys in the dedicated cadastral database. If no explicit
+    # source DSN is configured, cadastral_sales is on the same PostgreSQL server
+    # as SISTER (live views locally, a published snapshot on Neon). Hub maps can
+    # still use the SISTER FDW views when no direct source DSN is configured.
     direct_cadastral_dsn = os.getenv("CADASTRAL_POSTGRES_DSN", "").strip()
     use_sister_cadastral_views = (
         is_subject_visura and document_id is None and not direct_cadastral_dsn
     )
-    dsn = direct_cadastral_dsn or database.DATABASE_DSN
+    if use_sister_cadastral_views:
+        dsn = database.DATABASE_DSN
+    elif direct_cadastral_dsn:
+        dsn = direct_cadastral_dsn
+    elif database.DATABASE_DSN:
+        dsn = make_url(database.DATABASE_DSN).set(database="cadastral_sales").render_as_string(
+            hide_password=False
+        )
+    else:
+        dsn = ""
     if not dsn or not (municipality and province and sheet and parcel):
         if use_cached_map_features(cached_map_rows, require_fresh=False):
             return context
@@ -8894,6 +9075,30 @@ async def web_documents_export_named(request: Request, user=Depends(_require_aut
         "files": copied,
         "missing_files": missing,
     }
+
+
+@router.get("/documents/{doc_id}/complete-data.json", response_class=JSONResponse)
+async def web_document_complete_data(doc_id: int, k: str | None = None, user=Depends(_require_auth)):
+    """Return the exact page tree only when its authenticated user opens the complete-data panel."""
+    from fastapi import HTTPException
+
+    doc = await get_document_by_id(doc_id)
+    if doc is None:
+        raise HTTPException(status_code=404, detail="Document not found")
+    await _require_document_access(user, doc_id)
+    with _COMPLETE_DATA_CACHE_LOCK:
+        item = _COMPLETE_DATA_CACHE.get(k or "")
+        if item and time.monotonic() - item["created"] > _COMPLETE_DATA_CACHE_TTL:
+            _COMPLETE_DATA_CACHE.pop(k or "", None)
+            item = None
+    if item is None or item["document_id"] != int(doc_id):
+        raise HTTPException(status_code=404, detail="Complete data not available")
+    if item["subject_code"] and not _is_admin(user):
+        from .database import has_subject_access
+
+        if not await has_subject_access(_principal_keys(user), item["subject_kind"], item["subject_code"]):
+            raise HTTPException(status_code=404, detail="Complete data not available")
+    return JSONResponse(item["data"], headers={"Cache-Control": "private, no-store"})
 
 
 @router.get("/documents/{doc_id}/view")
@@ -11830,6 +12035,13 @@ def _hub_inspection_extraction(extraction: dict | None) -> dict | None:
         "presentation": presentation,
         "inspection_date": inspection.get("inspection_date") or "",
         "office": inspection.get("office") or "",
+        "inspection_number": inspection.get("inspection_number") or "",
+        "inspection_start": str(inspection.get("inspection_start") or "").replace("T", " "),
+        "requester": inspection.get("requester") or "",
+        "tax_paid_euro": format_amount_it(inspection.get("tax_paid_euro")),
+        "page_count": inspection.get("page_count"),
+        "section_a_other_data": inspection.get("section_a_other_data") or "",
+        "section_d_text": inspection.get("section_d_text") or "",
         "property_count": len(properties),
         "properties": properties,
         "parties": parties,
@@ -11841,6 +12053,8 @@ def _hub_inspection_extraction(extraction: dict | None) -> dict | None:
         "title_date": title.get("title_date") or "",
         "title_repertory_number": title.get("repertory_number") or "",
         "title_notary": title.get("notary_name") or "",
+        "title_notary_location": title.get("notary_location") or "",
+        "title_notary_fiscal_code": title.get("notary_fiscal_code") or "",
         "lien_type": lien.get("lien_type") or "",
         "lien_principal_euro": format_amount_it(lien.get("principal_euro")),
         "lien_total_euro": format_amount_it(lien.get("total_euro")),
@@ -12497,6 +12711,32 @@ async def _subject_query_profile(
             if p.get("ownership") or any(p["documents"].values()) or any(p["requests"].values())
         ]
     )
+    parcel_anchor_index: dict[tuple[str, str, str, str, str], str] = {}
+    parcel_ownership_anchor_index: dict[tuple[str, str, str, str, str], str] = {}
+    for province_group in documented_tree:
+        for municipality_group in province_group["municipalities"]:
+            for parcel in municipality_group["parcels"]:
+                anchor_id = _hub_parcel_anchor_id(parcel)
+                parcel["anchor_id"] = anchor_id
+                province_aliases = {
+                    _hub_anchor_part(parcel.get("province_code")),
+                    _hub_anchor_part(parcel.get("province")),
+                    "",
+                }
+                municipality_aliases = {
+                    _hub_anchor_part(parcel.get("municipality_code")),
+                    _hub_anchor_part(parcel.get("municipality")),
+                } - {""}
+                section = _hub_anchor_part(parcel.get("section"))
+                sheet = _hub_anchor_part(parcel.get("sheet"))
+                parcel_number = _hub_anchor_part(parcel.get("parcel"))
+                for province_alias in province_aliases:
+                    for municipality_alias in municipality_aliases:
+                        for section_alias in {section, ""}:
+                            key = (province_alias, municipality_alias, section_alias, sheet, parcel_number)
+                            parcel_anchor_index[key] = anchor_id
+                            if parcel.get("ownership"):
+                                parcel_ownership_anchor_index[key] = anchor_id
 
     subject_visure = [
         {
@@ -12543,6 +12783,8 @@ async def _subject_query_profile(
         "tree": tree,
         "missing": missing,
         "documented_tree": documented_tree,
+        "parcel_anchor_index": parcel_anchor_index,
+        "parcel_ownership_anchor_index": parcel_ownership_anchor_index,
         "map_parcels": ordered,  # every parcel of the query: the map is not limited to the listed page
         "subject_visure": subject_visure,
         "subject_inspections": subject_inspections,
@@ -13385,6 +13627,249 @@ async def _ownership_history_for_page(code: str | None) -> list[dict]:
         return []
 
 
+def _hub_anchor_part(value: Any) -> str:
+    text = str(value or "").strip().upper()
+    text = re.sub(r"\s*\([^)]*\)\s*$", "", text)
+    return text.lstrip("0") or ("0" if text else "") if text.isdigit() else text
+
+
+def _hub_parcel_anchor_id(parcel: dict) -> str:
+    identity = "\x1f".join(
+        _hub_anchor_part(value)
+        for value in (
+            parcel.get("province_code") or parcel.get("province"),
+            parcel.get("municipality_code") or parcel.get("municipality"),
+            parcel.get("section"),
+            parcel.get("sheet"),
+            parcel.get("parcel"),
+        )
+    )
+    return "hub-parcel-" + hashlib.sha1(identity.encode("utf-8")).hexdigest()[:16]
+
+
+def _subject_parcel_anchor(
+    profile: dict | None,
+    province: Any,
+    municipality: Any,
+    section: Any,
+    sheet: Any,
+    parcel: Any,
+    ownership_only: bool = False,
+) -> str | None:
+    """Find the rendered parcel-sheet anchor for a subject-group or ownership-history row."""
+    if not profile:
+        return None
+    index = profile.get("parcel_ownership_anchor_index" if ownership_only else "parcel_anchor_index") or {}
+    province_key, municipality_key = _hub_anchor_part(province), _hub_anchor_part(municipality)
+    section_key, sheet_key, parcel_key = map(_hub_anchor_part, (section, sheet, parcel))
+    for province_alias in (province_key, ""):
+        for municipality_alias in (municipality_key, ""):
+            if not municipality_alias:
+                continue
+            for section_alias in (section_key, ""):
+                key = (province_alias, municipality_alias, section_alias, sheet_key, parcel_key)
+                if key in index:
+                    return index[key]
+    return None
+
+
+def _attach_subject_parcel_histories(profile: dict, xml_parsed: dict) -> None:
+    """Move per-immobile histories from the visura tree onto the matching single parcel sheet."""
+    parcels_by_anchor = {
+        parcel.get("anchor_id"): parcel
+        for province in profile.get("documented_tree") or []
+        for municipality in province.get("municipalities") or []
+        for parcel in municipality.get("parcels") or []
+        if parcel.get("anchor_id")
+    }
+    if not parcels_by_anchor:
+        return
+
+    def as_items(value: Any) -> list[dict]:
+        if isinstance(value, dict):
+            return [value]
+        if isinstance(value, list):
+            return [item for item in value if isinstance(item, dict)]
+        return []
+
+    subject_keys = (
+        "VisuraSoggettoAttuale", "VisuraSoggettoStorica", "VisuraSoggettoSintetica", "VisuraSoggetto"
+    )
+    subject = next((xml_parsed.get(key) for key in subject_keys if isinstance(xml_parsed.get(key), dict)), {})
+    seen: dict[str, set[str]] = {}
+    for group in as_items(subject.get("GruppoUnitaImmobiliari")):
+        for row_key in ("ImmobileFabbricatiS", "ImmobileTerreniS"):
+            for row in as_items(group.get(row_key)):
+                history = row.get("StoriaTitolarita")
+                if not history:
+                    continue
+                identity_data = as_items(row.get("DatiIdentificativi"))
+                identifiers = as_items(
+                    (identity_data[0] if identity_data else {}).get("IdentificativoDefinitivo")
+                )
+                identifier = identifiers[0] if identifiers else {}
+                anchor = _subject_parcel_anchor(
+                    profile,
+                    identifier.get("Provincia") or group.get("Provincia"),
+                    identifier.get("CodiceComune") or group.get("CodiceComune")
+                    or identifier.get("Comune") or group.get("Descrizione"),
+                    identifier.get("SezUrbana") or identifier.get("Sezione")
+                    or identifier.get("SezCensuaria") or group.get("Sezione"),
+                    identifier.get("Foglio"),
+                    identifier.get("ParticellaNum") or identifier.get("Particella"),
+                )
+                parcel = parcels_by_anchor.get(anchor)
+                if parcel is None:
+                    continue
+                events = as_items(history)
+                if not events:
+                    continue
+                parcel_events = parcel.setdefault("subject_title_history", [])
+                parcel_seen = seen.setdefault(anchor, set())
+                for event in events:
+                    signature = json.dumps(event, ensure_ascii=False, sort_keys=True, default=str)
+                    if signature not in parcel_seen:
+                        parcel_seen.add(signature)
+                        parcel_events.append(event)
+
+
+def _subject_visura_view_model(xml_parsed: dict, profile: dict | None, subject_code: str | None) -> dict:
+    """Prepare group headings, cadastral table rows, and counts before the subject template renders."""
+    def items(value: Any) -> list[dict]:
+        if isinstance(value, dict):
+            return [value]
+        if isinstance(value, list):
+            return [item for item in value if isinstance(item, dict)]
+        return []
+
+    def first(value: Any) -> dict:
+        return next(iter(items(value)), {})
+
+    def value_text(value: Any) -> str:
+        if isinstance(value, dict):
+            return str(value.get("_text") or "")
+        return str(value or "")
+
+    roots = (
+        "VisuraSoggettoAttuale", "VisuraSoggettoStorica", "VisuraSoggettoSintetica", "VisuraSoggetto"
+    )
+    body = next((xml_parsed.get(key) for key in roots if isinstance(xml_parsed.get(key), dict)), {})
+    groups = []
+    subject_key = str(subject_code or "").strip().upper()
+    total_buildings = total_lands = 0
+
+    for source in items(body.get("GruppoUnitaImmobiliari")):
+        buildings, lands, unlinked_histories = [], [], []
+        sheet_values: set[str] = set()
+        group_province = source.get("Provincia") or ""
+        group_municipality = source.get("Descrizione") or source.get("CodiceComune") or ""
+        group_section = source.get("Sezione") or ""
+        for row_key, output in (("ImmobileFabbricatiS", buildings), ("ImmobileTerreniS", lands)):
+            for row in items(source.get(row_key)):
+                identifier = first(first(row.get("DatiIdentificativi")).get("IdentificativoDefinitivo"))
+                sheet = identifier.get("Foglio") or ""
+                parcel_number = identifier.get("ParticellaNum") or identifier.get("Particella") or ""
+                if sheet:
+                    sheet_values.add(str(sheet).strip())
+                anchor = _subject_parcel_anchor(
+                    profile,
+                    identifier.get("Provincia") or group_province,
+                    identifier.get("CodiceComune") or source.get("CodiceComune")
+                    or identifier.get("Comune") or group_municipality,
+                    identifier.get("SezUrbana") or identifier.get("Sezione")
+                    or identifier.get("SezCensuaria") or group_section,
+                    sheet,
+                    parcel_number,
+                ) if profile else None
+                if source.get("FonteElenco") and row.get("StoriaTitolarita") and not anchor:
+                    history = row.get("StoriaTitolarita")
+                    unlinked_histories.append({
+                        "sheet": sheet,
+                        "parcel": parcel_number,
+                        "subunit": identifier.get("Subalterno"),
+                        "events": items(history),
+                    })
+                if row_key == "ImmobileFabbricatiS":
+                    classification = first(row.get("DatiClassamentoF"))
+                    consistency = first(classification.get("Consistenza"))
+                    surface = first(row.get("SuperficieF"))
+                    address_container = first(row.get("DatiIndirizzo"))
+                    address = row.get("IndirizzoImm") or address_container.get("IndirizzoImm")
+                    output.append({
+                        "address": value_text(address),
+                        "municipality": group_municipality or identifier.get("Comune"),
+                        "sheet": sheet,
+                        "parcel": parcel_number,
+                        "subunit": identifier.get("Subalterno"),
+                        "parcel_anchor": anchor,
+                        "census_zone": classification.get("ZonaCensuaria"),
+                        "category": str(classification.get("Categoria") or "").replace(":", "").strip(),
+                        "cadastral_class": classification.get("Classe"),
+                        "consistency": (
+                            f"{consistency.get('Valore')} {consistency.get('Unita') or ''}".strip()
+                            if consistency.get("Valore") else (f"{surface.get('Totale')} MQ" if surface.get("Totale") else "")
+                        ),
+                        "income": f"€ {classification.get('RenditaEuro')}" if classification.get("RenditaEuro") else "",
+                        "partita": identifier.get("Partita"),
+                    })
+                else:
+                    classamento = first(row.get("DatiClassamentoT")).get("ClassamentoT")
+                    for classification in items(classamento) or [{}]:
+                        output.append({
+                            "municipality": group_municipality or identifier.get("Comune"),
+                            "sheet": sheet,
+                            "parcel": parcel_number,
+                            "parcel_anchor": anchor,
+                            "quality": classification.get("Qualita"),
+                            "cadastral_class": classification.get("Classe"),
+                            "area": f"{classification.get('SuperficieMQ')} MQ" if classification.get("SuperficieMQ") else "",
+                            "dominical_income": classification.get("RedditoDominicaleEuro"),
+                            "agricultural_income": classification.get("RedditoAgrarioEuro"),
+                            "partita": identifier.get("Partita"),
+                        })
+
+        intestazione = first(source.get("IntestazioneGruppo"))
+        mutations = items(intestazione.get("MutazioneSoggettiva"))
+        right, share = "", ""
+        if mutations:
+            latest = mutations[-1]
+            owners = items(first(latest.get("Intestazione")).get("Intestato")) or items(latest.get("Intestato"))
+            for owner in owners:
+                owner_code = str(owner.get("CF") or owner.get("CodiceFiscale") or "").strip().upper()
+                if subject_key and owner_code == subject_key:
+                    title = first(owner.get("DirittiReali"))
+                    right, share = str(title.get("Descrizione") or ""), str(title.get("Quota") or "")
+                    break
+        elenco_title = first(source.get("TitolaritaElenco"))
+        right = right or str(elenco_title.get("Diritto") or "")
+        share = share or str(elenco_title.get("Quota") or "")
+        total_buildings += len(items(source.get("ImmobileFabbricatiS")))
+        total_lands += len(items(source.get("ImmobileTerreniS")))
+        groups.append({
+            "source": source,
+            "buildings": buildings,
+            "lands": lands,
+            "building_count": len(items(source.get("ImmobileFabbricatiS"))),
+            "land_count": len(items(source.get("ImmobileTerreniS"))),
+            "sheet_list": sorted(sheet_values, key=lambda sheet: (0, int(sheet)) if sheet.isdigit() else (1, sheet)),
+            "right": right,
+            "share": share,
+            "mutations": mutations,
+            "unlinked_histories": unlinked_histories,
+        })
+
+    groups.sort(key=lambda group: (
+        str(group["source"].get("Descrizione") or group["source"].get("CodiceComune") or "").strip().lower(),
+        min((int(value) for value in group["sheet_list"] if value.isdigit()), default=10**12),
+    ))
+    return {
+        "groups": groups,
+        "group_count": len(groups),
+        "total_buildings": total_buildings,
+        "total_lands": total_lands,
+    }
+
+
 async def _render_query_only_subject(
     request,
     theme,
@@ -13396,6 +13881,7 @@ async def _render_query_only_subject(
     subject_favorite_enabled: bool = False,
     subject_is_favorite: bool = False,
     subject_facts: dict | None = None,
+    subject_formalities: list[dict] | None = None,
 ):
     """Render a subject that has a saved soggetto query but no structured visura on the visura layout.
 
@@ -13432,7 +13918,11 @@ async def _render_query_only_subject(
             land_registry_kpis,
             land_registry_map,
             profile["code"],
-            subject_report={"archive": subject_archive, "subject_hub": profile},
+            subject_report={
+                "archive": subject_archive,
+                "subject_hub": profile,
+                "subject_formalities": subject_formalities or [],
+            },
         )
     return theme.render(
         "catasto/entity.html",
@@ -13446,9 +13936,15 @@ async def _render_query_only_subject(
         subject_documents=[],
         subject_hub=profile,
         subject_archive=subject_archive,
+        subject_formalities=subject_formalities or [],
+        subject_formalities_admin=_is_admin(user),
         subject_favorite_enabled=subject_favorite_enabled,
         subject_is_favorite=subject_is_favorite,
         subject_facts=subject_facts,
+        subject_parcel_anchor=_subject_parcel_anchor,
+        subject_visura_view=_subject_visura_view_model(
+            doc["xml_parsed"], profile, profile.get("code")
+        ),
         land_registry_kpis=land_registry_kpis,
         manual_valuation_enabled=bool(_favorite_user_key(user)),
         land_registry_map=land_registry_map,
@@ -13502,7 +13998,19 @@ async def _web_subject_profile(
     subject_hub = None
     from .database import has_subject_access
 
-    if visible_document_ids is None or await has_subject_access(_principal_keys(user), subject_type, normalized_code):
+    can_view_subject_archive = visible_document_ids is None or await has_subject_access(
+        _principal_keys(user), subject_type, normalized_code
+    )
+    subject_formalities: list[dict] = []
+    if can_view_subject_archive and not is_company:
+        try:
+            subject_formalities = await get_subject_mortgage_formalities(
+                normalized_code, include_session_timeline=not as_pdf and _is_admin(user)
+            )
+        except Exception as exc:  # noqa: BLE001 - the subject profile should remain available if an optional archive query fails.
+            logger.warning("Subject mortgage formalities unavailable: %s", type(exc).__name__)
+
+    if can_view_subject_archive:
         subject_hub = await _subject_query_profile(
             normalized_code,
             subject_documents,
@@ -13540,6 +14048,7 @@ async def _web_subject_profile(
             subject_favorite_enabled=subject_favorite_enabled,
             subject_is_favorite=subject_is_favorite,
             subject_facts=subject_facts,
+            subject_formalities=subject_formalities,
         )
     if not subject_documents:
         if as_pdf:
@@ -13662,6 +14171,7 @@ async def _web_subject_profile(
             subject_favorite_enabled=subject_favorite_enabled,
             subject_is_favorite=subject_is_favorite,
             subject_facts=subject_facts,
+            subject_formalities=subject_formalities,
         )
     cadastral_group_usage.setdefault(selected_id, []).append(
         "Gruppi catastali dalla visura per soggetto selezionata"
@@ -13690,6 +14200,7 @@ async def _web_subject_profile(
         subject_portfolio=subject_portfolio,
         subject_hub=subject_hub,
         subject_archive=subject_archive,
+        subject_formalities=subject_formalities,
         subject_favorite_enabled=subject_favorite_enabled,
         subject_is_favorite=subject_is_favorite,
         subject_facts=subject_facts,

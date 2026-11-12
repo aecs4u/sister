@@ -1,0 +1,18 @@
+<section class="mt-4 mb-4 no-print" aria-label="Dati completi del documento">
+    <button class="btn btn-sm btn-outline-secondary" type="button"
+            data-bs-toggle="collapse" data-bs-target="#complete-data" aria-expanded="false"
+            aria-controls="complete-data" data-complete-data-url="{{ complete_data_url }}"
+            style="border-color:#17a2b8;color:#17a2b8">
+        <i class="fas fa-table-list me-2" aria-hidden="true"></i>Dati completi (tutti i campi)
+        <i class="fas fa-chevron-down ms-2 small" aria-hidden="true"></i>
+    </button>
+    <div class="collapse mt-3" id="complete-data" data-complete-data-panel>
+        <div class="card border-0 shadow-sm"><div class="card-body">
+            <p class="text-muted small mb-3">
+                <i class="fas fa-circle-info me-1" aria-hidden="true"></i>
+                Rappresentazione esaustiva del documento XML — include tutti i campi, anche quelli non mostrati nelle sezioni riepilogative.
+            </p>
+            <div data-complete-data-content aria-live="polite"><span class="text-muted small">I dati verranno caricati quando apri questa sezione.</span></div>
+        </div></div>
+    </div>
+</section>

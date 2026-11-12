@@ -1138,12 +1138,25 @@ class VisuraService:
     # Browser session control (manual start/stop/restart)
     # ------------------------------------------------------------------
 
-    async def download_richieste_documents(self, *, since: str = "", skip_known: bool = False) -> list[dict]:
+    async def download_richieste_documents(
+        self,
+        *,
+        since: str = "",
+        skip_known: bool = False,
+        request_ids: set[str] | None = None,
+        parse_mortgage_notes: bool = False,
+    ) -> list[dict]:
         """Download the completed documents listed on the SISTER Richieste page (see /api/v1/visura/download-documents).
 
-        ``since`` (ISO date) and ``skip_known`` limit it to recent requests whose document is not stored yet.
+        ``since`` (ISO date), ``skip_known`` and explicit ``request_ids`` limit which portal documents are downloaded.
+        ``parse_mortgage_notes`` parses selected mortgage PDFs so their parcel references are indexed.
         """
-        return await self.browser_manager.download_richieste_documents(since=since, skip_known=skip_known)
+        return await self.browser_manager.download_richieste_documents(
+            since=since,
+            skip_known=skip_known,
+            request_ids=request_ids,
+            parse_mortgage_notes=parse_mortgage_notes,
+        )
 
     async def start_browser(self) -> dict:
         """Start browser authentication if not already running or ready."""

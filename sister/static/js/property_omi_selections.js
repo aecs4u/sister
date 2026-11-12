@@ -2,16 +2,16 @@
 (function () {
     'use strict';
 
-    var estimatesSource = document.querySelector('[data-land-map-omi-estimates]');
-    var optionsSource = document.querySelector('[data-land-map-omi-options]');
-    if (!estimatesSource || !optionsSource) return;
+    var pageDataSource = document.querySelector('[data-subject-page-json]');
+    if (!pageDataSource) return;
 
     function read(source, fallback) {
         try { return JSON.parse(source.textContent || 'null') || fallback; } catch (error) { return fallback; }
     }
-    var estimates = read(estimatesSource, []);
-    var optionsByComune = read(optionsSource, {});
-    var editable = optionsSource.dataset.editable !== 'false';
+    var pageData = read(pageDataSource, {});
+    var estimates = pageData.omi_estimates || [];
+    var optionsByComune = pageData.omi_options || {};
+    var editable = pageDataSource.dataset.editable !== 'false';
     if (!Array.isArray(estimates)) return;
 
     var accordionStateKey = 'omi-selection-accordion:' + window.location.pathname + window.location.search;
@@ -445,18 +445,16 @@
             })
             .then(function (html) {
                 var fresh = new DOMParser().parseFromString(html, 'text/html');
-                var freshEstimates = fresh.querySelector('[data-land-map-omi-estimates]');
-                var freshOptions = fresh.querySelector('[data-land-map-omi-options]');
-                if (!freshEstimates || !freshOptions) throw new Error('Refresh returned no OMI data');
-                var nextEstimates = parseJson(freshEstimates);
-                var nextOptions = parseJson(freshOptions);
+                var freshPageData = fresh.querySelector('[data-subject-page-json]');
+                if (!freshPageData) throw new Error('Refresh returned no OMI data');
+                var nextPageData = parseJson(freshPageData);
+                var nextEstimates = nextPageData && nextPageData.omi_estimates;
+                var nextOptions = nextPageData && nextPageData.omi_options;
                 if (!Array.isArray(nextEstimates) || !nextOptions) throw new Error('Refresh returned invalid OMI data');
 
-                ['[data-land-map-omi-estimates]', '[data-land-map-omi-options]', '[data-land-map-owner-assessment]'].forEach(function (selector) {
-                    var live = document.querySelector(selector);
-                    var next = fresh.querySelector(selector);
-                    if (live && next) live.textContent = next.textContent;
-                });
+                pageDataSource.textContent = freshPageData.textContent;
+                pageDataSource.dataset.editable = freshPageData.dataset.editable;
+                pageData = nextPageData;
                 estimates = nextEstimates;
                 optionsByComune = nextOptions;
 
@@ -492,9 +490,6 @@
                 var manualRoot = document.querySelector('[data-manual-property-valuations-root]');
                 var freshManualRoot = fresh.querySelector('[data-manual-property-valuations-root]');
                 if (manualRoot && freshManualRoot) {
-                    var liveManualData = document.querySelector('[data-manual-property-valuations]');
-                    var freshManualData = fresh.querySelector('[data-manual-property-valuations]');
-                    if (liveManualData && freshManualData) liveManualData.textContent = freshManualData.textContent;
                     manualRoot.replaceWith(document.importNode(freshManualRoot, true));
                     reloadScript(/manual_property_valuations\.js/);
                 }

@@ -4,8 +4,9 @@
   `web._LAND_MAP_LAYOUTS`. Parents without a given block simply ignore the override.
 #}
 {% extends land_map_parent %}
-{% from "components/cadastral_assets.html" import cadastral_asset_kpis, cadastral_table_scripts, cadastral_asset_enrichment_data, cadastral_asset_enrichment_scripts %}
+{% from "components/cadastral_assets.html" import cadastral_asset_kpis, cadastral_table_scripts %}
 {% from "components/subject_document_archive.html" import subject_document_archive %}
+{% from "components/subject_formalities.html" import subject_formalities_panel %}
 {% from "components/subject_favorites.html" import subject_favorite_button, subject_favorites_js %}
 {% from "_doc_macros.html" import document_favorite_action, documents_favorites_js, optional_data_notice %}
 {% from "components/subject_notes.html" import subject_note_panel, subject_notes_js %}
@@ -16,6 +17,30 @@
 {% set subject_route_prefix = subject_route_prefix|default('/persons') %}
 {% set subject_document_id = subject_document_id|default(none) %}
 {% set subject_portfolio = subject_portfolio|default(none) %}
+{% set complete_subject_report = (subject_fiscal_code|length > 0) or (doc and doc.query_only|default(false, true)) %}
+{% if complete_subject_report %}
+{% set pdf_url = subject_route_prefix ~ '/' ~ subject_fiscal_code ~ '/pdf' ~ (('?document=' ~ subject_document_id) if subject_document_id else '') %}
+{% elif doc and doc.id %}
+{% set pdf_url = '/documents/' ~ doc.id ~ '/pdf' %}
+{% else %}
+{% set pdf_url = '' %}
+{% endif %}
+{% set report_share_title = ('Report completo del soggetto ' ~ subject_fiscal_code) if complete_subject_report else (doc.oggetto or doc.filename or 'Visura catastale') %}
+{% if pdf_url %}
+{% set subject_report_actions %}
+<a href="{{ pdf_url }}" class="btn btn-outline-light" data-document-pdf="true" title="{{ 'Scarica il report completo del soggetto in PDF' if complete_subject_report else 'Scarica la visura in PDF (A4 orizzontale)' }}">
+    <i class="fas fa-file-pdf me-2" aria-hidden="true"></i>{{ 'Report completo' if complete_subject_report else 'PDF' }}
+</a>
+<button type="button" class="btn btn-outline-light" data-aecs4u-share="native" data-share-title="{{ report_share_title }}" title="Condividi il link del report sui social">
+    <i class="fas fa-share-nodes me-2" aria-hidden="true"></i>Social
+</button>
+<button type="button" class="btn btn-outline-light" data-aecs4u-share="email" data-share-title="{{ report_share_title }}"{% if subject_fiscal_code %} data-drive-share-url="{{ subject_route_prefix }}/{{ subject_fiscal_code }}/pdf/share{% if subject_document_id %}?document={{ subject_document_id }}{% endif %}"{% endif %} title="{{ 'Salva il report su Google Drive, condividilo con il destinatario e invia il link da Gmail' if complete_subject_report else 'Invia il link del report via email' }}">
+    <i class="fas fa-envelope me-2" aria-hidden="true"></i>Invia email
+</button>
+{% endset %}
+{% else %}
+{% set subject_report_actions = none %}
+{% endif %}
 {% set subject_map_labels = {
     'aria_listed': 'Mappa catastale di {parcel_count} particelle elencate, {mapped_parcel_count} con una posizione disponibile',
     'basemap_control': 'Seleziona la mappa di base',
@@ -30,11 +55,27 @@
    visura layout (web._subject_tree_with_elenco); here its coverage summary and the parcels something is archived for #}
 {% set subject_hub = subject_hub|default(none) %}
 {% set subject_archive = subject_archive|default(none) %}
+{% set subject_formalities = subject_formalities|default([], true) %}
 {% set land_registry_kpis_display = land_registry_kpis|default(none) %}
 {% if land_registry_kpis_display and land_registry_kpis_display.asset_value_note and land_registry_kpis_display.asset_value_note|length > 320 %}
 {# the long method text is shortened, but how much of the portfolio the estimate covers stays on the card #}
 {% set land_registry_kpis_display = dict(land_registry_kpis, asset_value_note=(land_registry_kpis.asset_value_coverage_note ~ ' ' if land_registry_kpis.asset_value_coverage_note else '') ~ 'Per metodo, ipotesi e limiti consulta «Come si calcola».' if land_registry_kpis.asset_value_coverage_note else 'Stima OMI indicativa; per metodo, ipotesi e limiti consulta «Come si calcola».') %}
 {% endif %}
+{% set subject_page_json = {
+    'omi_estimates': land_registry_kpis.table_estimates|default([], true) if land_registry_kpis else [],
+    'omi_options': land_registry_kpis.omi_options_by_comune|default({}, true) if land_registry_kpis else {},
+    'owner_assessment': land_registry_kpis.owner_assessment|default(none, true) if land_registry_kpis else none,
+    'ownership_history': land_registry_history|default([], true),
+    'enrichment_config': {
+        'ownerAssessmentTarget': '.document-land-map-content .persona-header',
+        'visuraTablesSelector': '.document-land-map-content .imm-tables',
+        'documentUrlTemplate': '/documents/{id}',
+        'omiValuationUrl': '/omi/valuation',
+        'labels': preferred_assessment_labels|default({}, true)
+    },
+    'manual_property_valuations': land_registry_kpis.manual_valuation_assets|default([], true) if land_registry_kpis else [],
+    'category_descriptions': cadastral_category_descriptions|default({}, true)
+} %}
 
 {# The subject's visure as a bullet list (the theme's subject_document_nav is a row of buttons), shown at the page bottom.
    Each entry carries what the page's "Documento" card showed, so that card is not repeated for the visura on screen. #}
@@ -105,7 +146,6 @@
         <div class="row g-3" data-manual-property-valuation-items></div>
     </div>
 </section>
-<script type="application/json" nonce="{{ csp_nonce }}" data-manual-property-valuations>{{ kpis.manual_valuation_assets|tojson }}</script>
 {% endif %}
 {%- endmacro %}
 
@@ -294,6 +334,15 @@
     {{ document_favorite_action(doc.id, doc.is_favorite|default(false), doc.favorites_enabled|default(false)) }}
 </div>
 {% endif %}
+{% if pdf_url and not complete_subject_report %}
+<div class="container-fluid pt-3 no-print" aria-label="Azioni del documento">
+    <div class="d-flex flex-wrap gap-2">
+        <a href="{{ pdf_url }}" class="btn btn-outline-primary" data-document-pdf="true" title="Scarica la visura in PDF (A4 orizzontale)"><i class="fas fa-file-pdf me-2" aria-hidden="true"></i>PDF</a>
+        <button type="button" class="btn btn-outline-primary" data-aecs4u-share="native" data-share-title="{{ report_share_title }}" title="Condividi il link della visura"><i class="fas fa-share-nodes me-2" aria-hidden="true"></i>Social</button>
+        <button type="button" class="btn btn-outline-primary" data-aecs4u-share="email" data-share-title="{{ report_share_title }}" title="Invia il link della visura via email"><i class="fas fa-envelope me-2" aria-hidden="true"></i>Invia email</button>
+    </div>
+</div>
+{% endif %}
 {% if land_map_slot == 'sidecar' and (land_registry_map or land_registry_kpis) %}
 <div class="document-land-map-layout">
     <div class="document-land-map-content">
@@ -301,20 +350,14 @@
         {{ super() }}
         {% if land_map_parent == 'catasto/visura_soggetto_archive.html' %}{{ manual_property_valuation_panel(land_registry_kpis) }}{% endif %}
         {{ subject_document_archive(subject_archive) }}
+        {{ subject_formalities_panel(
+            subject_formalities, subject_fiscal_code, subject_route_prefix,
+            subject_formalities_admin|default(false),
+            request.query_params.get('formalities_downloaded'),
+            request.query_params.get('formalities_download_error', '')
+        ) }}
         {% if subject_ownership_history_rows %}{% include "catasto/_ownership_history.html" %}{% endif %}
         {% if subject_documents %}{{ subject_visure_list(subject_documents, subject_fiscal_code, subject_route_prefix, subject_document_id, subject_portfolio) }}{% endif %}
-        {% if land_registry_kpis or land_registry_history %}
-        {{ cadastral_asset_enrichment_data(land_registry_kpis, land_registry_history, {
-            'ownerAssessmentTarget': '.document-land-map-content .persona-header',
-            'visuraTablesSelector': '.document-land-map-content .imm-tables',
-            'documentUrlTemplate': '/documents/{id}',
-            'omiValuationUrl': '/omi/valuation',
-            'labels': preferred_assessment_labels
-        }, nonce=csp_nonce) }}
-        {% if land_registry_kpis %}
-        <script type="application/json" nonce="{{ csp_nonce }}" data-land-map-omi-options data-editable="{{ 'true' if manual_valuation_enabled else 'false' }}">{{ land_registry_kpis.omi_options_by_comune|default({}, true)|tojson }}</script>
-        {% endif %}
-        {% endif %}
     </div>
     <aside class="document-land-map-aside" aria-label="{{ 'Indicatori e mappa delle particelle del soggetto' if land_registry_map else 'Indicatori del patrimonio catastale' }}">
         {% if not kpis_in_main %}
@@ -334,6 +377,12 @@
 {{ super() }}
 {% if land_map_parent == 'catasto/visura_soggetto_archive.html' %}{{ manual_property_valuation_panel(land_registry_kpis) }}{% endif %}
 {{ subject_document_archive(subject_archive) }}
+{{ subject_formalities_panel(
+    subject_formalities, subject_fiscal_code, subject_route_prefix,
+    subject_formalities_admin|default(false),
+    request.query_params.get('formalities_downloaded'),
+    request.query_params.get('formalities_download_error', '')
+) }}
 {% if subject_ownership_history_rows %}{% include "catasto/_ownership_history.html" %}{% endif %}
 {% if land_map_slot == 'content' %}
 <div class="container-fluid py-3">
@@ -361,91 +410,20 @@
 {{ subject_favorites_js(csp_nonce) }}
 {{ subject_notes_js(csp_nonce) }}
 {% endif %}
-{% if land_map_parent == 'catasto/visura_soggetto_archive.html' and land_registry_kpis %}
-{# The shared theme tags these tables by their header count. Tag by meaning first, so added theme columns do not break enrichment. #}
-<script nonce="{{ csp_nonce }}">
-(function () {
-    document.querySelectorAll('.document-land-map-content .imm-tables table.cat-compact-table').forEach(function (table) {
-        if (table.dataset.landMapKind) return;
-        var headers = Array.from(table.querySelectorAll('thead th')).map(function (cell) {
-            return cell.textContent.trim().toLocaleLowerCase();
-        });
-        if (headers.some(function (name) { return ['cat.', 'cat', 'categoria', 'category'].indexOf(name) !== -1; })) {
-            table.dataset.landMapKind = 'buildings';
-        } else if (headers.some(function (name) { return ['quality', 'qualità'].indexOf(name) !== -1; })) {
-            table.dataset.landMapKind = 'lands';
-        }
-    });
-})();
-</script>
-{% endif %}
 {{ cadastral_table_scripts() }}
-<script type="application/json" nonce="{{ csp_nonce }}" data-cadastral-category-descriptions>{{ cadastral_category_descriptions|default({}, true)|tojson }}</script>
+<script type="application/json" nonce="{{ csp_nonce }}" data-subject-page-json data-editable="{{ 'true' if manual_valuation_enabled else 'false' }}">{{ subject_page_json|tojson }}</script>
 <script src="/static/js/cadastral_category_descriptions.js?v=20261105a" defer></script>
 {{ document_parcel_map_scripts(land_registry_map, nonce=csp_nonce,
     renderer_url='/land-registry/static/document_parcel_map.js?v=20261109-labels') }}
 {# PDF export: the page's own print layout rendered by headless Chromium (/documents/<id>/pdf). #}
-{# PDF of the page, always offered: a subject page exports itself (visura + elenco groups, selected visura kept), others their document #}
-{% if doc and doc.query_only or subject_fiscal_code %}
-{% set pdf_url = subject_route_prefix ~ '/' ~ subject_fiscal_code ~ '/pdf' ~ (('?document=' ~ subject_document_id) if subject_document_id else '') %}
-{% elif doc and doc.id %}
-{% set pdf_url = '/documents/' ~ doc.id ~ '/pdf' %}
-{% else %}
-{% set pdf_url = '' %}
-{% endif %}
-{% if pdf_url %}
-<script src="/static/js/document_share.js?v=20261109a" nonce="{{ csp_nonce }}" defer></script>
-<script nonce="{{ csp_nonce }}">
-(function () {
-    if (document.querySelector('[data-document-pdf]')) return;
-    var printButton = document.querySelector('button[onclick="window.print()"], button[data-aecs4u-print]');
-    var completeSubjectReport = {{ (subject_fiscal_code|length > 0 or (doc.query_only|default(false, true) if doc else false))|tojson }};
-    var link = document.createElement('a');
-    link.className = printButton ? printButton.className : 'btn btn-outline-light';
-    link.href = {{ pdf_url|tojson }};
-    link.dataset.documentPdf = 'true';
-    link.title = completeSubjectReport
-      ? 'Scarica il report completo del soggetto in PDF'
-      : 'Scarica la visura in PDF (A4 orizzontale)';
-    link.innerHTML = '<i class="fas fa-file-pdf me-2" aria-hidden="true"></i>' + (completeSubjectReport ? 'Report completo' : 'PDF');
-
-    var socialButton = document.createElement('button');
-    socialButton.type = 'button';
-    socialButton.className = link.className;
-    socialButton.dataset.documentShare = 'true';
-    socialButton.dataset.aecs4uShare = 'native';
-    socialButton.title = 'Condividi il link del report sui social';
-    socialButton.innerHTML = '<i class="fas fa-share-nodes me-2" aria-hidden="true"></i>Social';
-
-    var emailButton = document.createElement('button');
-    emailButton.type = 'button';
-    emailButton.className = link.className;
-    emailButton.dataset.documentEmail = 'true';
-    emailButton.dataset.aecs4uShare = 'email';
-    emailButton.title = completeSubjectReport
-      ? 'Salva il report su Google Drive, condividilo con il destinatario e invia il link da Gmail'
-      : 'Invia il link del report via email';
-    {% if subject_fiscal_code %}emailButton.dataset.driveShareUrl = {{ (subject_route_prefix ~ '/' ~ subject_fiscal_code ~ '/pdf/share' ~ (('?document=' ~ subject_document_id) if subject_document_id else ''))|tojson }};{% endif %}
-    emailButton.innerHTML = '<i class="fas fa-envelope me-2" aria-hidden="true"></i>Invia email';
-    var emailHeading = document.querySelector('.page-hero h1, .page-hero .display-6');
-    var emailTitle = emailHeading ? emailHeading.textContent.trim() : document.title;
-    socialButton.dataset.shareTitle = emailTitle;
-    emailButton.dataset.shareTitle = emailTitle || (completeSubjectReport ? 'Subject report' : 'Cadastral report');
-
-    var host = printButton || document.querySelector('.page-hero .d-flex .btn');
-    if (host) {
-      host.before(link, socialButton, emailButton);
-      return;
-    }
-    (document.querySelector('.page-hero') || document.body).append(link, socialButton, emailButton);
-})();
-</script>
-{% endif %}
+{# The PDF/share controls are server-rendered in the hero; this file only handles click behavior. #}
+{% if pdf_url %}<script src="/static/js/document_share.js?v=20261109a" defer></script>{% endif %}
 {% if land_map_parent == 'catasto/visura_soggetto_archive.html' %}
 <script src="/static/js/visura_global_filter.js?v=20261027a" defer></script>
 <script src="/static/js/document_visura.js?v=20261027a" defer></script>
+<script src="/static/js/subject_visura_page.js?v=20261112a" defer></script>
 {% if land_registry_kpis or land_registry_history %}
-{{ cadastral_asset_enrichment_scripts() }}
+<script src="/static/js/subject_cadastral_asset_enrichment.js?v=20261112a" defer></script>
 {% endif %}
 {% if manual_valuation_enabled %}
 <script src="/static/js/manual_property_valuations.js?v=20261109c" defer></script>

@@ -1774,6 +1774,38 @@ async def _known_richieste() -> set[tuple[str, str]]:
         return set()
 
 
+async def _known_richieste_ids(request_ids: set[str]) -> set[str]:
+    """Return portal download IDs already present in canonical or original document filenames."""
+    if not request_ids:
+        return set()
+    from sqlalchemy import text
+
+    from .database import _get_session_factory
+
+    clauses = []
+    params = {}
+    for index, request_id in enumerate(sorted(request_ids)):
+        marker_key = f"marker_{index}"
+        document_key = f"document_{index}"
+        clauses.append(f"(strpos(file_name, :{marker_key}) > 0 OR strpos(file_name, :{document_key}) > 0)")
+        params[marker_key] = f"_T{request_id}_"
+        params[document_key] = f"DOC_{request_id}"
+    statement = text(
+        "SELECT file_name FROM document WHERE " + " OR ".join(clauses)
+    )
+    try:
+        async with _get_session_factory()() as session:
+            filenames = [str(row[0] or "") for row in (await session.execute(statement, params)).all()]
+    except Exception as exc:  # noqa: BLE001 - exact-ID checks fail open; the document writer still deduplicates files.
+        log.warning("Download IDs gia' presenti non leggibili (%s)", type(exc).__name__)
+        return set()
+    return {
+        request_id
+        for request_id in request_ids
+        if any(f"_T{request_id}_" in filename or f"DOC_{request_id}" in filename for filename in filenames)
+    }
+
+
 # Richieste categories that hold a document with a Salva link. The page opens on "espletate" of the first day in the
 # list only; SISTER moves a request to "prelevate" as soon as its document has been picked up, so a request placed
 # in a run that did not save the file is only visible there.
@@ -1789,7 +1821,13 @@ async def _open_richieste_view(page, view: str) -> None:
 
 
 async def _download_richieste_documents(
-    page, page_logger, *, since: str = "", skip_known: bool = False
+    page,
+    page_logger,
+    *,
+    since: str = "",
+    skip_known: bool = False,
+    request_ids: set[str] | None = None,
+    parse_mortgage_notes: bool = False,
 ) -> list[dict]:
     """Navigate to the Richieste page, extract metadata, download and rename files.
 
@@ -1826,8 +1864,15 @@ async def _download_richieste_documents(
 
     # --- Step 1: Extract table metadata using BS4, for every category and the whole period ---
     # Unfiltered calls (the in-flow download after run_visura, the web button) keep reading the page as it opens: the
-    # whole history of both categories would be downloaded again. ``since``/``skip_known`` make the wider scan safe.
-    views = _RICHIESTE_VIEWS if (since or skip_known) else ("",)
+    # whole history of both categories would be downloaded again. ``since``/``skip_known`` and explicit request IDs
+    # make the wider scan safe.
+    request_ids = {
+        value
+        for raw_value in (request_ids or set())
+        if re.fullmatch(r"[A-Za-z0-9_-]{1,64}", value := str(raw_value).strip())
+    }
+    explicit_request_filter = bool(request_ids)
+    views = _RICHIESTE_VIEWS if (since or skip_known or request_ids) else ("",)
     richieste_meta: list[dict] = []
     seen_ids: set[str] = set()
     current_view = ""
@@ -1842,7 +1887,16 @@ async def _download_richieste_documents(
             seen_ids.add(meta["id_richiesta"])
             richieste_meta.append({**meta, "vista": view})
     log.info("Richieste trovate: %d", len(richieste_meta))
-    if since or skip_known:
+    if explicit_request_filter:
+        if skip_known:
+            request_ids -= await _known_richieste_ids(request_ids)
+        richieste_meta = [
+            meta for meta in richieste_meta
+            if meta["id_richiesta"] in request_ids
+            and (not since or (_iso_request_date(meta.get("richiesta_del", "")) or "0000-00-00") >= since)
+        ]
+        log.info("Richieste richieste per ID da scaricare: %d", len(richieste_meta))
+    elif since or skip_known:
         known = await _known_richieste() if skip_known else set()
         richieste_meta = _select_richieste(richieste_meta, since=since, known=known)
         log.info("Richieste da scaricare (dal %s%s): %d", since or "inizio", ", non gia' salvate" if skip_known else "",
@@ -1916,7 +1970,10 @@ async def _download_richieste_documents(
             elif file_format == "XML":
                 parsed = _parse_visura_xml(temp_path)
             elif file_format == "PDF":
-                parsed = _parse_visura_pdf(temp_path)
+                if parse_mortgage_notes:
+                    parsed = await asyncio.to_thread(_parse_ispezione_ipotecaria_pdf, temp_path)
+                if not parsed:
+                    parsed = await asyncio.to_thread(_parse_visura_pdf, temp_path)
 
             if file_ext == ".dat":
                 parsed = await asyncio.to_thread(_parse_elenco_immobili_dat, temp_path)
@@ -2094,6 +2151,28 @@ def _descriptive_filename(parsed: dict, *, oggetto: str = "", request_id: str = 
     particella = _filename_token(parsed.get("particella", ""))
     subalterno = _filename_token(parsed.get("subalterno", ""))
     oggetto_lower = oggetto.lower()
+
+    if tipo == "ispezione_ipotecaria":
+        parts = ["isp"]
+        if province:
+            parts.append(province)
+        if foglio:
+            parts.append(f"FG{foglio}")
+        if particella:
+            parts.append(f"PT{particella}")
+        if subalterno:
+            parts.append(f"SUB{subalterno}")
+        request_token = _filename_token(request_id)
+        request_date = _iso_request_date(requested_at)
+        if request_token:
+            parts.append(f"T{request_token}")
+        if request_date:
+            parts.append(request_date[:4])
+        registro_particolare = _filename_token(parsed.get("registro_particolare", ""))
+        if registro_particolare:
+            parts.append(f"RP{registro_particolare}")
+        if len(parts) > 1:
+            return "_".join(parts)
 
     if "soggetto" in tipo or "soggetto" in oggetto_lower:
         if "storic" in subtype:
@@ -2692,6 +2771,15 @@ def _parse_ispezione_ipotecaria_pdf(file_path: str) -> dict | None:
     if not searchable.strip():
         return None
 
+    if not _re.search(
+        r"ispezion\w*\s+(?:ipotecari\w*|delle\s+formalita)|"
+        r"nota\s+di\s+(?:iscrizione|trascrizione|annotazione)|"
+        r"elenco\s+sintetico\s+delle\s+formalita",
+        searchable,
+        re.IGNORECASE,
+    ):
+        return None
+
     def _search(pattern: str, source: str = searchable, flags: int = _re.IGNORECASE) -> str | None:
         match = _re.search(pattern, source, flags)
         return match.group(1).strip() if match else None
@@ -2728,7 +2816,8 @@ def _parse_ispezione_ipotecaria_pdf(file_path: str) -> dict | None:
     result["period_to"] = _search(r"Periodo informatizzato dal\s+\d{2}/\d{2}/\d{4}\s+al\s+(\d{2}/\d{2}/\d{4})")
 
     municipality = _re.search(
-        r"Comune(?:\s+di)?\s+(?:[A-Z0-9]{4}\s*-\s*)?([A-ZÀ-ÖØ-Ý'’ .-]+?)\s*\(([A-Z]{2})\)",
+        r"Comune(?:\s+di)?\s+(?:[A-Z0-9]{4}\s*-\s*)?([A-ZÀ-ÖØ-Ý'’ .-]+?)\s*"
+        r"(?:\([A-Z0-9]{4}\)\s*)?\(([A-Z]{2})\)",
         searchable,
         _re.IGNORECASE,
     )

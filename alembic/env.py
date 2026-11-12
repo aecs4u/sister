@@ -62,6 +62,7 @@ from sister.db_models import (  # noqa: F401, E402
     MortgageNoteType,
     MortgagePartyQuality,
     MortgageTitleType,
+    PagoPAPaymentHistory,
     OwnershipRight,
     PropertyActualSize,
     PageVisit,

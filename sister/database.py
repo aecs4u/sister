@@ -143,7 +143,7 @@ DATABASE_SCHEMA = os.getenv("DATABASE_SCHEMA", "sister")
 DATABASE_ISTAT_SCHEMA = os.getenv("DATABASE_ISTAT_SCHEMA", DATABASE_SCHEMA)
 # raw payloads (response JSON, XML tree, extraction JSON) live in their own schema; tests point it at a throwaway one
 DATABASE_ARCHIVE_SCHEMA = os.getenv("DATABASE_ARCHIVE_SCHEMA", "sister_archive")
-DATABASE_REVISION = "20261130_wallet_gift_coupons"
+DATABASE_REVISION = "20261202_pagopa_payment_history"
 
 # ---------------------------------------------------------------------------
 # Engine and session
@@ -3137,9 +3137,14 @@ async def search_person_profiles(query: str, limit: int = 50) -> tuple[list[dict
 async def find_subject_inspection_document_ids(fiscal_code: str) -> set[int]:
     """Ids of the ispezioni ipotecarie whose parties include the codice fiscale."""
     stmt = text(
-        "SELECT DISTINCT de.document_id FROM mortgage_inspection_party p "
+        "SELECT de.document_id FROM mortgage_inspection_party p "
         "JOIN subject s ON s.id = p.subject_id JOIN document_extraction de ON de.id = p.inspection_id "
-        "WHERE s.fiscal_code = :code"
+        "WHERE s.fiscal_code = :code "
+        # Notes, titles and lists of the same inspection that carry no party rows (signed .p7m titles, PDFs not
+        # extracted yet) are tied to the subject through document_subject.
+        "UNION SELECT d.id FROM document d JOIN document_subject ds ON ds.document_id = d.id "
+        "JOIN subject s ON s.id = ds.subject_id "
+        "WHERE s.fiscal_code = :code AND d.document_type = 'ispezione_ipotecaria'"
     )
     async with _get_session_factory()() as session:
         return {int(row[0]) for row in (await session.execute(stmt, {"code": fiscal_code})).all()}
@@ -3368,6 +3373,362 @@ async def find_subject_query_requests(fiscal_code: str, limit: int = 20) -> list
             }
             for req in rows
         ]
+
+
+async def get_subject_mortgage_formalities(
+    fiscal_code: str, *, include_session_timeline: bool = False
+) -> list[dict[str, Any]]:
+    """Read archived SISTER mortgage-search summaries associated with a subject code.
+
+    The portal's ``Elenco sintetico delle formalità`` is stored in the raw request payload,
+    because it is not a downloaded note or a structured document extraction. Keep that
+    provenance and expose only payloads explicitly linked to this subject's tax code.
+    """
+    code = fiscal_code_key(fiscal_code)
+    if not code:
+        return []
+    stmt = text(
+        "SELECT r.id AS request_pk, r.request_ref, coalesce(r.responded_at, r.created_at) AS recorded_at, "
+        "       p.data::jsonb #> '{portal_capture,inspection}' AS inspection, "
+        "       p.data::jsonb -> 'formalities' AS formalities, "
+        "       p.data::jsonb #> '{portal_capture,pdf_note_request}' AS note_request, "
+        "       p.data::jsonb #> '{portal_capture,title_requests}' AS title_requests, "
+        "       p.data::jsonb #> '{portal_capture,costs}' AS costs, "
+        "       p.data::jsonb -> 'cost' AS request_cost "
+        "FROM request r "
+        "JOIN sister_archive.request_payload p ON p.request_id = r.id "
+        "WHERE r.request_type = 'ipotecaria_persona_fisica' "
+        "  AND upper(btrim(p.data::jsonb #>> '{portal_capture,inspection,subject_tax_code}')) = :code "
+        "  AND CASE WHEN jsonb_typeof(p.data::jsonb -> 'formalities') = 'array' "
+        "           THEN jsonb_array_length(p.data::jsonb -> 'formalities') ELSE 0 END > 0 "
+        "ORDER BY coalesce(r.responded_at, r.created_at) DESC NULLS LAST, r.id DESC"
+    )
+    async with _get_session_factory()() as session:
+        rows = (await session.execute(stmt, {"code": code})).mappings().all()
+
+    results: list[dict[str, Any]] = []
+
+    def _decoded(value: Any, fallback: Any) -> Any:
+        if isinstance(value, str):
+            try:
+                return json.loads(value)
+            except json.JSONDecodeError:
+                return fallback
+        return value if value is not None else fallback
+
+    def _amount(value: Any) -> Decimal | None:
+        if isinstance(value, dict):
+            for key in ("value", "amount", "total", "cost", "cost_text", "cost_value", "costo", "fee", "text"):
+                if value.get(key) is not None:
+                    parsed = _amount(value[key])
+                    if parsed is not None:
+                        return parsed
+            return None
+        if isinstance(value, bool) or value is None:
+            return None
+        if isinstance(value, (int, float, Decimal)):
+            try:
+                parsed = Decimal(str(value))
+                return parsed if parsed.is_finite() else None
+            except InvalidOperation:
+                return None
+        match = re.search(r"-?\d[\d .]*(?:,\d{1,2}|\.\d{1,2})?", str(value))
+        if not match:
+            return None
+        text_value = match.group(0).replace(" ", "")
+        if "," in text_value:
+            text_value = text_value.replace(".", "").replace(",", ".")
+        try:
+            parsed = Decimal(text_value)
+            return parsed if parsed.is_finite() else None
+        except InvalidOperation:
+            return None
+
+    def _amount_label(value: Decimal) -> str:
+        whole, fraction = f"{value:.2f}".split(".")
+        groups = []
+        while whole:
+            groups.append(whole[-3:])
+            whole = whole[:-3]
+        return f"{'.'.join(reversed(groups))},{fraction}"
+
+    def _risk_summary(items: list[dict[str, Any]]) -> dict[str, int]:
+        seen: set[tuple[str, str]] = set()
+        mortgages = pignoramenti = transfers_2026 = 0
+        for item in items:
+            identity = (
+                str(item.get("registro_particolare") or item.get("numero") or "").strip(),
+                str(item.get("registro_generale") or item.get("data_formalita") or "").strip(),
+            )
+            if identity != ("", "") and identity in seen:
+                continue
+            seen.add(identity)
+            kind = str(item.get("tipo") or "").casefold()
+            cause = " ".join(
+                str(item.get(key) or "") for key in ("causale", "descrizione", "atto")
+            ).casefold()
+            if "iscrizione" in kind and not item.get("cancellata"):
+                mortgages += 1
+            if "pignoramento" in cause and not item.get("cancellata"):
+                pignoramenti += 1
+            date_value = str(item.get("data_formalita") or item.get("data_formalita_display") or "")
+            if "decreto di trasferimento" in cause and re.search(r"(?:^2026|/2026$)", date_value):
+                transfers_2026 += 1
+        return {
+            "live_mortgages": mortgages,
+            "live_pignoramenti": pignoramenti,
+            "decreti_trasferimento_2026": transfers_2026,
+        }
+
+    for row in rows:
+        formalities = _decoded(row["formalities"], [])
+        # Older drivers may return JSONB as text; accept either shape at this boundary.
+        if not isinstance(formalities, list):
+            continue
+        inspection = _decoded(row["inspection"], {})
+        if not isinstance(inspection, dict):
+            inspection = {}
+        note_request = _decoded(row["note_request"], {})
+        if not isinstance(note_request, dict):
+            note_request = {}
+        title_requests = _decoded(row["title_requests"], {})
+        single_title = title_requests.get("single_request") if isinstance(title_requests, dict) else None
+        title_request_id = ""
+        title_number = None
+        if isinstance(single_title, dict):
+            title_request_id = str(single_title.get("request_id") or "").strip()
+            title_number = single_title.get("formalita_numero")
+        title_document: dict[str, Any] | None = None
+        stored_title = single_title.get("document") if isinstance(single_title, dict) else None
+        if isinstance(stored_title, dict) and stored_title.get("document_id") is not None:
+            # The archived file recorded against the request (a title downloaded outside Richieste keeps no DOC_ name).
+            title_document = {"id": stored_title["document_id"], "file_name": stored_title.get("file_name") or ""}
+        elif title_request_id.isdigit():
+            # Downloaded titles are stored as ...DOC_<portal request id>...; absent until fetched from Richieste.
+            async with _get_session_factory()() as session:
+                found = (
+                    await session.execute(
+                        text(
+                            "SELECT id, file_name FROM document WHERE file_name LIKE :pattern "
+                            "ORDER BY id DESC LIMIT 1"
+                        ),
+                        {"pattern": f"%DOC\\_{title_request_id}%"},
+                    )
+                ).mappings().first()
+            if found:
+                title_document = {"id": found["id"], "file_name": found["file_name"]}
+        note_documents = note_request.get("documents") or []
+        if not isinstance(note_documents, list):
+            note_documents = []
+        note_documents_by_register: dict[tuple[str, str], dict[str, Any]] = {}
+        resolved_note_documents = []
+        for document in note_documents:
+            if not isinstance(document, dict):
+                continue
+            document = dict(document)
+            portal_request_id = next(
+                (
+                    str(document.get(key) or "").strip()
+                    for key in ("request_id", "id_richiesta", "idRichiesta", "portal_request_id")
+                    if document.get(key)
+                ),
+                "",
+            )
+            if document.get("document_id") is None and re.fullmatch(r"[A-Za-z0-9_-]{1,64}", portal_request_id):
+                async with _get_session_factory()() as session:
+                    found = (
+                        await session.execute(
+                            text(
+                                "SELECT id, file_name FROM document "
+                                "WHERE strpos(file_name, :marker) > 0 ORDER BY id DESC LIMIT 1"
+                            ),
+                            {"marker": f"_T{portal_request_id}_"},
+                        )
+                    ).mappings().first()
+                if found:
+                    document["document_id"] = found["id"]
+                    document["file_name"] = found["file_name"]
+            key = (
+                str(document.get("registro_particolare") or "").strip(),
+                str(document.get("registro_generale") or "").strip(),
+            )
+            resolved_note_documents.append(document)
+            if key != ("", "") and document.get("document_id") is not None:
+                note_documents_by_register.setdefault(key, document)
+        note_documents = resolved_note_documents
+        if isinstance(note_request.get("documents"), list):
+            note_request["documents"] = note_documents
+        downloaded_note_count = sum(1 for document in note_documents if document.get("document_id") is not None)
+        if note_request.get("accepted") and note_documents and downloaded_note_count == len(note_documents):
+            note_request["downloaded"] = True
+        note_request["downloaded_count"] = downloaded_note_count
+        parsed_formalities = []
+        for item in formalities:
+            if not isinstance(item, dict):
+                continue
+            normalized = dict(item)
+            for field in ("data_formalita", "data_repertorio"):
+                value = str(normalized.get(field) or "")
+                if len(value) == 10 and value[4] == "-" and value[7] == "-":
+                    normalized[f"{field}_display"] = f"{value[8:10]}/{value[5:7]}/{value[:4]}"
+            note_document = note_documents_by_register.get(
+                (
+                    str(normalized.get("registro_particolare") or "").strip(),
+                    str(normalized.get("registro_generale") or "").strip(),
+                )
+            )
+            if note_document:
+                normalized["note_document_id"] = note_document.get("document_id")
+                normalized["note_document_filename"] = note_document.get("file_name") or ""
+
+            related = _decoded(normalized.get("documenti_correlati"), [])
+            if isinstance(related, dict):
+                related = [related]
+            if not isinstance(related, list):
+                related = []
+            annotation_lines = []
+            has_cancellation = False
+            fully_cancelled = False
+            for annotation in related:
+                if isinstance(annotation, str):
+                    annotation = {"causale": annotation}
+                if not isinstance(annotation, dict):
+                    continue
+                number = (
+                    annotation.get("numero") or annotation.get("numero_annotazione")
+                    or annotation.get("registro_particolare") or ""
+                )
+                annotation_date = (
+                    annotation.get("data") or annotation.get("data_formalita")
+                    or annotation.get("data_annotazione") or ""
+                )
+                annotation_date = str(annotation_date)
+                if len(annotation_date) == 10 and annotation_date[4] == "-" and annotation_date[7] == "-":
+                    annotation_date = f"{annotation_date[8:10]}/{annotation_date[5:7]}/{annotation_date[:4]}"
+                cause = (
+                    annotation.get("causale") or annotation.get("descrizione")
+                    or annotation.get("atto") or annotation.get("tipo") or ""
+                )
+                annotation_text = " ".join(str(value) for value in annotation.values() if value is not None)
+                is_cancellation = bool(re.search(r"cancellazion|cancellat", annotation_text, re.IGNORECASE))
+                is_full_cancellation = bool(
+                    re.search(r"cancellazion\w*\s+(?:totale|integrale)|(?:totale|integrale)\s+cancellazion\w*", annotation_text, re.IGNORECASE)
+                )
+                has_cancellation = has_cancellation or is_cancellation
+                fully_cancelled = fully_cancelled or is_full_cancellation
+                line = "Annotazione"
+                if number:
+                    line += f" {number}"
+                if annotation_date:
+                    line += f" del {annotation_date}"
+                if cause:
+                    line += f" — {cause}"
+                annotation_lines.append({
+                    "text": line,
+                    "is_cancellation": is_cancellation,
+                    "is_full_cancellation": is_full_cancellation,
+                })
+            normalized["documenti_correlati_display"] = annotation_lines
+            normalized["has_cancellation_annotation"] = has_cancellation
+            normalized["cancellata"] = fully_cancelled
+            if title_number is not None and normalized.get("numero") == title_number:
+                normalized["title_request_id"] = title_request_id
+                normalized["title_status"] = (single_title or {}).get("status") or ""
+                if title_document:
+                    normalized["title_document_id"] = title_document["id"]
+                    normalized["title_document_filename"] = title_document["file_name"]
+            parsed_formalities.append(normalized)
+        if not parsed_formalities:
+            continue
+        costs = _decoded(row["costs"], {})
+        if not isinstance(costs, dict):
+            costs = {}
+        request_cost = _decoded(row["request_cost"], row["request_cost"])
+        inspection_cost = _amount(
+            costs.get("inspection_cost") or costs.get("inspection") or costs.get("ispezione")
+            or inspection.get("cost") or inspection.get("cost_value") or inspection.get("fee")
+            or request_cost
+        )
+        notes_cost = _amount(
+            costs.get("notes_cost") or costs.get("notes") or costs.get("note") or costs.get("annotazioni")
+            or note_request.get("cost") or note_request.get("total_cost") or note_request.get("amount")
+        )
+        if notes_cost is None and note_documents:
+            document_costs = [_amount(document) for document in note_documents if isinstance(document, dict)]
+            if document_costs and all(value is not None for value in document_costs):
+                notes_cost = sum(document_costs, Decimal("0"))
+        if notes_cost is None:
+            unit_cost = _amount(
+                note_request.get("unit_cost") or note_request.get("cost_per_note")
+                or note_request.get("costo_unitario")
+            )
+            selected_count = note_request.get("selected_count") or len(note_documents)
+            try:
+                if unit_cost is not None and int(selected_count) > 0:
+                    notes_cost = unit_cost * int(selected_count)
+            except (TypeError, ValueError):
+                pass
+        cost_parts = []
+        if inspection_cost is not None:
+            cost_parts.append(f"{_amount_label(inspection_cost)} € ispezione")
+        if notes_cost is not None:
+            cost_parts.append(f"{_amount_label(notes_cost)} € note")
+
+        pending_request_ids: set[str] = set()
+        if note_request.get("accepted") and not note_request.get("downloaded"):
+            pending_containers = [
+                note_request,
+                *(document for document in note_documents if document.get("document_id") is None),
+            ]
+            for container in pending_containers:
+                if not isinstance(container, dict):
+                    continue
+                for key in ("request_id", "id_richiesta", "idRichiesta", "portal_request_id"):
+                    value = str(container.get(key) or "").strip()
+                    if re.fullmatch(r"[A-Za-z0-9_-]{1,64}", value):
+                        pending_request_ids.add(value)
+        page_visits = []
+        if include_session_timeline:
+            async with _get_session_factory()() as session:
+                visits = (
+                    await session.execute(
+                        text(
+                            "SELECT pv.step, pv.url, pv.screenshot_url, pv.visited_at, "
+                            "       array_agg(pve.message ORDER BY pve.error_index) "
+                            "           FILTER (WHERE pve.id IS NOT NULL) AS errors "
+                            "FROM page_visit pv LEFT JOIN page_visit_error pve ON pve.page_visit_id = pv.id "
+                            "WHERE pv.request_id = :request_id "
+                            "GROUP BY pv.id ORDER BY pv.visited_at NULLS LAST, pv.id"
+                        ),
+                        {"request_id": row["request_pk"]},
+                    )
+                ).mappings().all()
+            page_visits = [
+                {
+                    "step": visit["step"] or "",
+                    "url": visit["url"] or "",
+                    "screenshot_url": visit["screenshot_url"] or "",
+                    "visited_at": visit["visited_at"],
+                    "errors": [str(error) for error in (visit["errors"] or []) if error],
+                }
+                for visit in visits
+            ]
+
+        recorded_at = row["recorded_at"]
+        result = {
+            "request_ref": row["request_ref"],
+            "recorded_at": recorded_at.isoformat() if recorded_at else "",
+            "inspection": inspection,
+            "formalities": parsed_formalities,
+            "note_request": note_request,
+            "pending_request_ids": sorted(pending_request_ids),
+            "cost_summary": "Costo: " + " + ".join(cost_parts) if cost_parts else "",
+            "page_visits": page_visits,
+        }
+        results.append(result)
+    if results:
+        results[0]["risk_summary"] = _risk_summary(results[0]["formalities"])
+    return results
 
 
 async def get_subject_document_ids(fiscal_code: str) -> set[int]:

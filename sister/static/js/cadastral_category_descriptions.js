@@ -6,10 +6,10 @@
   var EMPTY_VALUES = ['', '—', '-', ':'];
 
   function descriptions() {
-    var data = document.querySelector('[data-cadastral-category-descriptions]');
+    var data = document.querySelector('[data-subject-page-json]');
     if (!data) return {};
     try {
-      return JSON.parse(data.textContent || '{}');
+      return JSON.parse(data.textContent || '{}').category_descriptions || {};
     } catch (error) {
       return {};
     }
