@@ -381,7 +381,7 @@
             </div>
             {% endif %}
 
-            {{ property_history(o.view) }}
+            {{ property_history(o.view, heading_level=4) }}
             <div class="alert alert-light border py-2 px-3 mb-3 small" data-ownership-source-document="{{ o.document_id }}">
               <i class="fas fa-link me-1 text-primary" aria-hidden="true"></i>
               <strong>Fonte degli atti di titolarità:</strong>
@@ -390,7 +390,7 @@
               {% if o.view.header.provenance %}· {{ o.view.header.provenance }}{% endif %}
               <span class="text-muted">. Gli eventi e i titolari nella cronologia seguente provengono da questo documento.</span>
             </div>
-            {{ ownership_history(o.view, color='#0d6efd', badge='bg-primary') }}
+            {{ ownership_history(o.view, color='#0d6efd', badge='bg-primary', heading_level=4) }}
 
             <details class="small mt-2">
               <summary>Dati della richiesta e della visura</summary>
@@ -605,7 +605,7 @@
             </div>
             {% endif %}
 
-            {{ property_history(o.view) }}
+            {{ property_history(o.view, heading_level=heading_level + 2) }}
             <div class="alert alert-light border py-2 px-3 mb-3 small" data-ownership-source-document="{{ o.document_id }}">
               <i class="fas fa-link me-1 text-primary" aria-hidden="true"></i>
               <strong>Fonte degli atti di titolarità:</strong>
@@ -614,7 +614,7 @@
               {% if o.view.header.provenance %}· {{ o.view.header.provenance }}{% endif %}
               <span class="text-muted">. Gli eventi e i titolari nella cronologia seguente provengono da questo documento.</span>
             </div>
-            {{ ownership_history(o.view, color='#0d6efd', badge='bg-primary') }}
+            {{ ownership_history(o.view, color='#0d6efd', badge='bg-primary', heading_level=heading_level + 2) }}
 
             <details class="small mt-2">
               <summary>Dati della richiesta e della visura</summary>
