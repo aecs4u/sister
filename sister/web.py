@@ -9086,19 +9086,37 @@ async def web_document_complete_data(doc_id: int, k: str | None = None, user=Dep
     if doc is None:
         raise HTTPException(status_code=404, detail="Document not found")
     await _require_document_access(user, doc_id)
-    with _COMPLETE_DATA_CACHE_LOCK:
-        item = _COMPLETE_DATA_CACHE.get(k or "")
-        if item and time.monotonic() - item["created"] > _COMPLETE_DATA_CACHE_TTL:
-            _COMPLETE_DATA_CACHE.pop(k or "", None)
-            item = None
-    if item is None or item["document_id"] != int(doc_id):
+    if not k:
         raise HTTPException(status_code=404, detail="Complete data not available")
-    if item["subject_code"] and not _is_admin(user):
+    with _COMPLETE_DATA_CACHE_LOCK:
+        item = _COMPLETE_DATA_CACHE.get(k)
+        if item and time.monotonic() - item["created"] > _COMPLETE_DATA_CACHE_TTL:
+            _COMPLETE_DATA_CACHE.pop(k, None)
+            item = None
+    if item and item["document_id"] != int(doc_id):
+        raise HTTPException(status_code=404, detail="Complete data not available")
+    if item and item["subject_code"] and not _is_admin(user):
         from .database import has_subject_access
 
         if not await has_subject_access(_principal_keys(user), item["subject_kind"], item["subject_code"]):
             raise HTTPException(status_code=404, detail="Complete data not available")
-    return JSONResponse(item["data"], headers={"Cache-Control": "private, no-store"})
+    if item:
+        data = item["data"]
+    else:
+        # The cache keeps the page's exact transformed tree on the same worker. If a
+        # request lands on another worker or the short cache expires, rebuild it from
+        # the authenticated document so the collapsed panel still works.
+        data = _parse_xml_to_dict(doc.get("xml_content", ""))
+        if not data:
+            raise HTTPException(status_code=404, detail="Complete data not available")
+        try:
+            await _full_group_titolarita(data)
+        except Exception:  # noqa: BLE001 - the complete raw tree remains useful without the optional enrichment.
+            logger.warning("Complete-data ownership enrichment unavailable for document %s", doc_id, exc_info=True)
+        from .display import merge_identifiers, readable_owners, subject_for_theme
+
+        data = merge_identifiers(subject_for_theme(readable_owners(data)))
+    return JSONResponse(data, headers={"Cache-Control": "private, no-store"})
 
 
 @router.get("/documents/{doc_id}/view")
