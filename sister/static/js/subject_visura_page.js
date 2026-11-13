@@ -114,14 +114,56 @@
     panel.addEventListener('show.bs.collapse', () => loadCompleteData(panel, button.dataset.completeDataUrl));
   });
 
-  document.querySelectorAll('.document-land-map-content .imm-tables table.cat-compact-table').forEach(table => {
-    if (table.dataset.landMapKind) return;
-    const headers = Array.from(table.querySelectorAll('thead th'), cell => cell.textContent.trim().toLocaleLowerCase());
-    if (headers.some(name => ['cat.', 'cat', 'categoria', 'category'].includes(name))) {
-      table.dataset.landMapKind = 'buildings';
-    } else if (headers.some(name => ['quality', 'qualità'].includes(name))) {
-      table.dataset.landMapKind = 'lands';
-    }
+  document.querySelectorAll('[data-visura-group-tables] [data-cadastral-table-kind] table').forEach(table => {
+    const kind = table.closest('[data-cadastral-table-kind]')?.dataset.cadastralTableKind;
+    if (kind) table.dataset.landMapKind = kind;
+  });
+
+  document.querySelectorAll('[data-visura-group-tables] table').forEach(table => {
+    const bar = element('div', 'd-flex gap-2 mb-2 no-print');
+    const filter = element('input', 'form-control form-control-sm');
+    filter.type = 'search';
+    filter.placeholder = 'Filtra…';
+    filter.style.maxWidth = '260px';
+    filter.addEventListener('input', () => {
+      const query = filter.value.toLocaleLowerCase();
+      table.querySelectorAll('tbody tr').forEach(row => {
+        row.style.display = !query || row.textContent.toLocaleLowerCase().includes(query) ? '' : 'none';
+      });
+    });
+    const download = element('button', 'btn btn-sm btn-outline-secondary no-print');
+    download.type = 'button';
+    download.append(element('i', 'fas fa-download me-1'));
+    download.append(document.createTextNode('CSV'));
+    download.addEventListener('click', () => {
+      const rows = Array.from(table.querySelectorAll('tr')).filter(row => row.style.display !== 'none');
+      const csv = rows.map(row => Array.from(row.querySelectorAll('th,td'))
+        .map(cell => `"${cell.textContent.trim().replace(/\s+/g, ' ').replace(/"/g, '""')}"`)
+        .join(',')).join('\n');
+      const link = element('a');
+      link.href = `data:text/csv;charset=utf-8,${encodeURIComponent(csv)}`;
+      link.download = `${table.id || 'table'}.csv`;
+      link.click();
+    });
+    bar.append(filter, download);
+    const scroll = table.closest('.cat-table-wrap') || table;
+    scroll.before(bar);
+  });
+
+  document.querySelectorAll('.tl-node[data-ddm]').forEach(node => {
+    const text = node.dataset.ddm || '';
+    const match = text.match(/(\d{2}\/\d{2}\/\d{4})/) || text.match(/\b(\d{4})\b/);
+    const date = node.querySelector('.tl-date-tag');
+    if (match && date && !date.textContent.trim()) date.textContent = match[1];
+  });
+  document.querySelectorAll('.tl-header').forEach(header => {
+    header.addEventListener('click', () => {
+      const body = header.nextElementSibling;
+      if (!body) return;
+      const hidden = body.classList.toggle('d-none');
+      const chevron = header.querySelector('.tl-chevron');
+      if (chevron) chevron.classList.toggle('open', !hidden);
+    });
   });
 
   function revealParcelHash() {

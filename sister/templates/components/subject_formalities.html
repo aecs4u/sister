@@ -1,3 +1,4 @@
+{% from "components/subject_hub.html" import doc_chip, inspection_extraction_details %}
 {% macro subject_formalities_panel(
   inspections, subject_code='', route_prefix='/persons', is_admin=false,
   downloaded_count=none, download_error=''
@@ -29,9 +30,7 @@
           {% if meta.date %}<span class="text-muted">del {{ meta.date[8:10] }}/{{ meta.date[5:7] }}/{{ meta.date[:4] }}</span>{% endif %}
           {% if meta.office %}<span class="badge text-bg-light border">{{ meta.office }}</span>{% endif %}
           {% if meta.request_code %}<span class="small text-muted">Richiesta {{ meta.request_code }}</span>{% endif %}
-          {% if meta.request_code == 'C00075022026' %}
-          <span class="small fw-semibold">Costo: 6,40 € ispezione + 48,00 € note</span>
-          {% elif inspection.cost_summary %}<span class="small fw-semibold">{{ inspection.cost_summary }}</span>{% endif %}
+          {% if inspection.cost_summary %}<span class="small fw-semibold">{{ inspection.cost_summary }}</span>{% endif %}
         </div>
         {% if inspection.note_request.accepted and not inspection.note_request.downloaded %}
         <div class="alert alert-info py-2 small" role="status">
@@ -130,6 +129,21 @@
                   {% else %}<span class="text-muted">—</span>{% endif %}
                 </td>
               </tr>
+              {% if item.archive_documents %}
+              {# the archived note/title of this row, moved here from "Ispezioni ipotecarie del soggetto" #}
+              <tr data-formality-archive="{{ item.numero }}">
+                <td></td>
+                <td colspan="6" class="pt-0">
+                  <details>
+                    <summary class="small">
+                      Documenti archiviati:
+                      {% for entry in item.archive_documents %}{{ entry.role }} {{ doc_chip(entry.document) }}{% endfor %}
+                    </summary>
+                    {{ inspection_extraction_details(item.archive_documents|map(attribute='document')|list, false) }}
+                  </details>
+                </td>
+              </tr>
+              {% endif %}
               {% endfor %}
             </tbody>
           </table>

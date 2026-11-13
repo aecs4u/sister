@@ -1,8 +1,8 @@
-{# Subject visura groups arrive pre-normalized from web._subject_visura_view_model. #}
+{# Subject visura groups arrive pre-normalized from subject_view.build_subject_visura_view. #}
 {% for group_view in _gruppi_list %}
 {% set g = group_view.source %}
 {% set _group_total = group_view.building_count + group_view.land_count %}
-<details class="visura-group"{% if _gruppi_list|length == 1 %} open{% endif %}>
+<details class="visura-group" data-visura-group-index="{{ group_view.source_index }}"{% if _gruppi_list|length == 1 %} open{% endif %}>
   <summary class="visura-group-summary">
     <h2 class="h5 mb-0">
       <i class="fas fa-map-marker-alt me-1 text-info" aria-hidden="true"></i>
@@ -16,10 +16,10 @@
       {% if g.FonteElenco %}<span class="badge bg-warning-subtle text-warning-emphasis border border-warning-subtle ms-1" title="Immobili della ricerca per soggetto non presenti in una visura archiviata">da elenco</span>{% endif %}
     </h2>
   </summary>
-  <div class="visura-group-body">
-    <div class="imm-tables mb-3">
-      {{ buildings_table(group_view.buildings) }}
-      {{ subject_lands_table(group_view.lands) }}
+  <div class="visura-group-body" data-visura-group-body>
+    <div class="imm-tables mb-3" data-visura-group-tables data-visura-group-index="{{ group_view.source_index }}">
+      <div data-cadastral-table-kind="buildings">{{ buildings_table(group_view.buildings) }}</div>
+      <div data-cadastral-table-kind="lands">{{ subject_lands_table(group_view.lands) }}</div>
     </div>
     {% if g.FonteElenco %}
     <p class="small text-muted mb-4"><i class="fas fa-circle-info me-1" aria-hidden="true"></i>Immobili dall'elenco della ricerca per soggetto: lo storico e i dati di classamento completi arrivano dalle visure archiviate delle singole particelle.</p>
@@ -32,7 +32,7 @@
       <div class="card-header bg-transparent border-bottom py-2 px-3">
         <h3 class="h6 mb-0 text-muted"><i class="fas fa-history me-2" aria-hidden="true"></i>Titolarità · Fg {{ history.sheet }} · Part. {{ history.parcel }}{% if history.subunit %} · Sub {{ history.subunit }}{% endif %}</h3>
       </div>
-      <div class="card-body py-3 px-3">{{ render_timeline(history.events, situazione_al='', color='#17a2b8', badge_class='bg-info') }}</div>
+      <div class="card-body py-3 px-3" data-visura-ownership-timeline-body>{{ render_timeline(history.events, situazione_al='', color='#17a2b8', badge_class='bg-info') }}</div>
     </div>
     {% endfor %}
     {% elif group_view.mutations %}
@@ -42,7 +42,7 @@
           <span class="badge bg-info ms-2" style="font-size:.65rem">{{ group_view.mutations|length }} mutazioni</span>
         </h3>
       </div>
-      <div class="card-body py-3 px-3">
+      <div class="card-body py-3 px-3" data-visura-ownership-timeline-body>
         {{ render_timeline(group_view.mutations, situazione_al=_t.SituazioneAl or '', color='#17a2b8', badge_class='bg-info') }}
       </div>
     </div>

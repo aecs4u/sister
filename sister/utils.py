@@ -2152,7 +2152,7 @@ def _descriptive_filename(parsed: dict, *, oggetto: str = "", request_id: str = 
     subalterno = _filename_token(parsed.get("subalterno", ""))
     oggetto_lower = oggetto.lower()
 
-    if tipo == "ispezione_ipotecaria":
+    if tipo in {"ispezione_ipotecaria", "titolo_telematico"}:
         parts = ["isp"]
         if province:
             parts.append(province)
@@ -2785,7 +2785,16 @@ def _parse_ispezione_ipotecaria_pdf(file_path: str) -> dict | None:
         return match.group(1).strip() if match else None
 
     kind = "ispezione"
-    if _re.search(r"nota\s+di\s+trascrizione", searchable, _re.IGNORECASE):
+    # The title (notarial act) is delivered under a cover that names its note: "Ispezione ... per titolo telematico",
+    # "Nota di Trascrizione - Titolo telematico". A summary list only says "Presenza Titolo Telematico".
+    title_cover = _re.search(
+        r"per\s+titolo\s+telematico|nota\s+di\s+(iscrizione|trascrizione|annotazione)\s*-\s*titolo\s+telematico",
+        searchable,
+        _re.IGNORECASE,
+    )
+    if title_cover:
+        kind = "titolo_telematico"
+    elif _re.search(r"nota\s+di\s+trascrizione", searchable, _re.IGNORECASE):
         kind = "nota_trascrizione"
     elif _re.search(r"nota\s+di\s+iscrizione", searchable, _re.IGNORECASE):
         kind = "nota_iscrizione"
@@ -2793,7 +2802,8 @@ def _parse_ispezione_ipotecaria_pdf(file_path: str) -> dict | None:
         kind = "nota_annotazione"
 
     result: dict = {
-        "tipo": "ispezione_ipotecaria",
+        # A title is its own document type (catalogue category "Titolo Telematico"); notes and lists stay inspections.
+        "tipo": "titolo_telematico" if kind == "titolo_telematico" else "ispezione_ipotecaria",
         "inspection_document_type": kind,
         "raw_text": searchable.strip(),
         "sections": [],
@@ -3055,7 +3065,7 @@ async def _save_documents_to_db(documents: list[dict]) -> None:
 
             # Ispezione PDFs are separate records and notes for the same parcel must
             # not be deduplicated by cadastral coordinates.
-            if doc_type in {"ispezione_ipotecaria", "elenco_immobili"}:
+            if doc_type in {"ispezione_ipotecaria", "titolo_telematico", "elenco_immobili"}:
                 existing = await session.execute(
                     text("SELECT id FROM document WHERE file_name = :name LIMIT 1"), {"name": file_name}
                 )

@@ -65,6 +65,17 @@ def it_money(value: Any) -> str:
     return f"€ {text}"
 
 
+def it_amount(value: Any) -> str:
+    """Number -> Italian grouping with two decimals, without assuming a currency symbol."""
+    if value in (None, ""):
+        return _PLACEHOLDER
+    try:
+        text = format(value, ",.2f")
+    except (TypeError, ValueError):
+        return str(value)
+    return text.replace(",", "X").replace(".", ",").replace("X", ".")
+
+
 def it_enum(value: Any) -> str:
     """Enum code / shouting text -> readable label (``atto_notarile_pubblico`` -> ``Atto notarile pubblico``)."""
     if value in (None, ""):
@@ -227,6 +238,7 @@ def register(env) -> None:
     env.filters.update(
         it_date=it_date,
         it_money=it_money,
+        it_amount=it_amount,
         it_enum=it_enum,
         clean_requester=clean_requester,
         inspection_ref=inspection_ref,

@@ -757,11 +757,28 @@ async def wallet_admin_snapshot(
     page_size: int = 50,
 ) -> dict[str, Any] | None:
     """Read one existing wallet and a page of its ledger without creating a wallet on page load."""
+    from sqlalchemy import func, select
+
+    from aecs4u_billing.wallet.models import TransactionStatus, TransactionType
+    from aecs4u_billing.wallet.sqlmodel_storage import TransactionDB
+
     service = _wallet_service()
     wallet = await service.storage.get_wallet_by_user(wallet_user_id(user_key), service.config.site_id)
     if wallet is None:
         return None
     balance = await service.get_balance(wallet.id, wallet.default_currency)
+    spending_filter = (
+        TransactionDB.wallet_id == wallet.id,
+        TransactionDB.currency_code == wallet.default_currency,
+        TransactionDB.type == TransactionType.USAGE.value,
+        TransactionDB.status == TransactionStatus.COMPLETED.value,
+    )
+    spending = _sql_session().execute(
+        select(
+            func.coalesce(func.sum(TransactionDB.amount), 0),
+            func.count(TransactionDB.id),
+        ).where(*spending_filter)
+    ).one()
     page_size = max(1, min(int(page_size), 100))
     transaction_page = max(1, int(transaction_page))
     transactions = await service.get_transactions(
@@ -776,6 +793,8 @@ async def wallet_admin_snapshot(
         "user_id": wallet.user_id,
         "currency": wallet.default_currency,
         "balance": balance.available,
+        "spending_total": Decimal(str(spending[0] or 0)),
+        "spending_count": int(spending[1] or 0),
         "locked": wallet.is_locked,
         "active": wallet.is_active,
         "transaction_page": transaction_page,
@@ -803,9 +822,10 @@ def wallet_admin_accounts(
     page: int = 1,
     page_size: int = 50,
 ) -> dict[str, Any]:
-    """List every SQL wallet for this SISTER tenant, including its current balance and ledger activity count."""
+    """List every SISTER wallet with its balance, activity count and completed usage spend."""
     from sqlalchemy import func, select
 
+    from aecs4u_billing.wallet.models import TransactionStatus, TransactionType
     from aecs4u_billing.wallet.sqlmodel_storage import TransactionDB, WalletDB
 
     service = _wallet_service()
@@ -834,11 +854,18 @@ def wallet_admin_accounts(
         WalletDB.is_locked,
         WalletDB.updated_at,
     )
+    spending_filter = (
+        TransactionDB.type == TransactionType.USAGE.value,
+        TransactionDB.status == TransactionStatus.COMPLETED.value,
+        TransactionDB.currency_code == WalletDB.default_currency,
+    )
     rows = session.exec(
         select(
             *grouped_columns,
             func.count(TransactionDB.id),
             func.max(TransactionDB.created_at),
+            func.coalesce(func.sum(TransactionDB.amount).filter(*spending_filter), 0),
+            func.count(TransactionDB.id).filter(*spending_filter),
         )
         .select_from(WalletDB)
         .outerjoin(TransactionDB, TransactionDB.wallet_id == WalletDB.id)
@@ -861,6 +888,8 @@ def wallet_admin_accounts(
                 "updated_at": row[6],
                 "transaction_count": int(row[7] or 0),
                 "last_transaction_at": row[8],
+                "spending_total": Decimal(str(row[9] or 0)),
+                "spending_count": int(row[10] or 0),
             }
             for row in rows
         ],

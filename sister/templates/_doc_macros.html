@@ -381,7 +381,7 @@
                     <div class="btn-group doc-actions" role="group">
                         {{ document_favorite_button(d, favorites_enabled) }}
                         {% if d.viewable %}
-                        <a href="{{ document_href(d, prefix) }}" class="btn btn-outline-{{ color }}" title="{{ 'Apri ispezione ipotecaria' if d.document_type == 'ispezione_ipotecaria' else 'Apri visura' }}" aria-label="{{ 'Apri ispezione ipotecaria' if d.document_type == 'ispezione_ipotecaria' else 'Apri visura' }}"><i class="fas fa-eye" aria-hidden="true"></i></a>
+                        <a href="{{ document_href(d, prefix) }}" class="btn btn-outline-{{ color }}" title="{{ 'Apri titolo telematico' if d.document_type == 'titolo_telematico' else ('Apri ispezione ipotecaria' if d.document_type == 'ispezione_ipotecaria' else 'Apri visura') }}" aria-label="{{ 'Apri titolo telematico' if d.document_type == 'titolo_telematico' else ('Apri ispezione ipotecaria' if d.document_type == 'ispezione_ipotecaria' else 'Apri visura') }}"><i class="fas fa-eye" aria-hidden="true"></i></a>
                         {% endif %}
                         <a href="{{ prefix }}/{{ d.id }}?template=result_detail" class="btn btn-outline-secondary" title="Dati completi" aria-label="Apri i dati completi del documento"><i class="fas fa-table-list" aria-hidden="true"></i></a>
                     </div>

@@ -7,10 +7,9 @@
   Everything else is the theme's, so re-sync this file when the theme template changes (or move both hooks upstream).
 #}
 {% extends base_template|default("base.html") %}
-{% from "components/timeline.html" import timeline_css, timeline_js, render_timeline %}
+{% from "components/timeline.html" import timeline_css, render_timeline %}
 {% from "components/kpi_card.html" import stat_card %}
 {% from "components/hero.html" import hero_section %}
-{% from "components/table_filter.html" import table_filter_csv_js %}
 {% from "components/catasto.html" import assets as catasto_assets, tipo_catasto_badge, situazione_al,
     categoria_badge, liquidazione_row %}
 {% from "components/subject_hub.html" import summary as hub_summary, documented_parcels as hub_group_documents %}
@@ -132,7 +131,7 @@ Visura soggetto {{ _variant_label|lower }}
     <div class="row mb-4">
         <div class="{{ 'col-12' if subject_documents or _query_only else 'col-lg-8 mb-3 mb-lg-0' }}">
             <div class="card persona-header h-100">
-                <div class="card-body">
+                <div class="card-body" data-owner-assessment-target>
                     <h5 class="card-title">
                         <i class="fas fa-user text-info me-2"></i>Soggetto Individuato
                     </h5>
@@ -249,8 +248,8 @@ Visura soggetto {{ _variant_label|lower }}
     {% if subject_hub %}{{ hub_summary(subject_hub, subject_route_prefix, true) }}{% endif %}
     {% if _gruppi_list %}
     {% if not subject_hub %}
-    <div class="row g-4 mb-4">
-        <div class="col-md-4 col-6">{{ stat_card("Gruppi Comuni", _subject_visura_view.group_count, icon="fa-city", color="info") }}</div>
+    <div class="row g-4 mb-4" data-subject-stats-row>
+        <div class="col-md-4 col-6" data-subject-group-count>{{ stat_card("Gruppi Comuni", _subject_visura_view.group_count, icon="fa-city", color="info") }}</div>
         <div class="col-md-2 col-6">{{ stat_card("Fabbricati", _subject_visura_view.total_buildings, icon="fa-building", color="warning") }}</div>
         <div class="col-md-2 col-6">{{ stat_card("Terreni", _subject_visura_view.total_lands, icon="fa-seedling", color="success") }}</div>
         <div class="col-md-4 col-12">{{ stat_card("Tipo Catasto", _dr.TipoCatasto or '-', icon="fa-database", color="primary") }}</div>
@@ -294,6 +293,4 @@ Visura soggetto {{ _variant_label|lower }}
 
 {% block extra_js %}
 {{ super() }}
-{{ timeline_js(csp_nonce) }}
-{{ table_filter_csv_js('.imm-tables .cat-compact-table', csp_nonce) }}
 {% endblock %}

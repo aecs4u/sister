@@ -232,10 +232,20 @@
       </div>
       {% endif %}
       <div class="{{ 'col-12' if embedded else 'col-lg-6' }}">
-        <h3 class="h6"><i class="fas fa-landmark me-2" aria-hidden="true"></i>Ispezioni ipotecarie del soggetto ({{ profile.subject_inspections|length }})</h3>
+        {# documents a row of "Elenco sintetico delle formalità" already opens are shown there (web._merge_inspections_into_formalities) #}
+        {% set merged = profile.subject_inspections_merged|default(0) %}
+        {% if merged and not profile.subject_inspections %}
+        <h3 class="h6"><i class="fas fa-landmark me-2" aria-hidden="true"></i>Ispezioni ipotecarie del soggetto ({{ merged }})</h3>
+        {% else %}
+        <h3 class="h6"><i class="fas fa-landmark me-2" aria-hidden="true"></i>{{ 'Altre ispezioni' if merged else 'Ispezioni' }} ipotecarie del soggetto ({{ profile.subject_inspections|length }})</h3>
+        {% endif %}
+        {% if merged %}
+        <p class="small text-muted mb-2">{{ merged }} {{ 'documento è riportato' if merged == 1 else 'documenti sono riportati' }} nelle righe dell'<a href="#subject-formalities-heading">Elenco sintetico delle formalità</a>.</p>
+        {% endif %}
         {% if profile.subject_inspections %}
         <div class="d-flex flex-wrap gap-2">{% for d in profile.subject_inspections %}{{ doc_chip(d) }}{% endfor %}</div>
         {{ inspection_extraction_details(profile.subject_inspections, false) }}
+        {% elif merged %}
         {% else %}
         <p class="text-muted mb-0">Nessuna ispezione ipotecaria archiviata in cui compaia questo soggetto.</p>
         {% endif %}

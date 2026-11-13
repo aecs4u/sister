@@ -7,10 +7,10 @@
 {% from "components/cadastral_assets.html" import cadastral_asset_kpis, cadastral_table_scripts %}
 {% from "components/subject_document_archive.html" import subject_document_archive %}
 {% from "components/subject_formalities.html" import subject_formalities_panel %}
-{% from "components/subject_favorites.html" import subject_favorite_button, subject_favorites_js %}
-{% from "_doc_macros.html" import document_favorite_action, documents_favorites_js, optional_data_notice %}
-{% from "components/subject_notes.html" import subject_note_panel, subject_notes_js %}
-{% from "land_registry/components/document_parcel_map.html" import document_parcel_map_assets, document_parcel_map_scripts, document_parcel_map %}
+{% from "components/subject_favorites.html" import subject_favorite_button %}
+{% from "_doc_macros.html" import document_favorite_action, optional_data_notice %}
+{% from "components/subject_notes.html" import subject_note_panel %}
+{% from "land_registry/components/document_parcel_map.html" import document_parcel_map_assets, document_parcel_map %}
 
 {% set subject_documents = subject_documents|default([], true) %}
 {% set subject_fiscal_code = subject_fiscal_code|default('', true) %}
@@ -61,22 +61,6 @@
 {# the long method text is shortened, but how much of the portfolio the estimate covers stays on the card #}
 {% set land_registry_kpis_display = dict(land_registry_kpis, asset_value_note=(land_registry_kpis.asset_value_coverage_note ~ ' ' if land_registry_kpis.asset_value_coverage_note else '') ~ 'Per metodo, ipotesi e limiti consulta «Come si calcola».' if land_registry_kpis.asset_value_coverage_note else 'Stima OMI indicativa; per metodo, ipotesi e limiti consulta «Come si calcola».') %}
 {% endif %}
-{% set subject_page_json = {
-    'omi_estimates': land_registry_kpis.table_estimates|default([], true) if land_registry_kpis else [],
-    'omi_options': land_registry_kpis.omi_options_by_comune|default({}, true) if land_registry_kpis else {},
-    'owner_assessment': land_registry_kpis.owner_assessment|default(none, true) if land_registry_kpis else none,
-    'ownership_history': land_registry_history|default([], true),
-    'enrichment_config': {
-        'ownerAssessmentTarget': '.document-land-map-content .persona-header',
-        'visuraTablesSelector': '.document-land-map-content .imm-tables',
-        'documentUrlTemplate': '/documents/{id}',
-        'omiValuationUrl': '/omi/valuation',
-        'labels': preferred_assessment_labels|default({}, true)
-    },
-    'manual_property_valuations': land_registry_kpis.manual_valuation_assets|default([], true) if land_registry_kpis else [],
-    'category_descriptions': cadastral_category_descriptions|default({}, true)
-} %}
-
 {# The subject's visure as a bullet list (the theme's subject_document_nav is a row of buttons), shown at the page bottom.
    Each entry carries what the page's "Documento" card showed, so that card is not repeated for the visura on screen. #}
 {% macro subject_visure_list(documents, fiscal_code, route_prefix, current_document_id, portfolio=none) -%}
@@ -202,8 +186,7 @@
 {%- endmacro %}
 
 {# Patrimonio KPI cards: in the main section, just above the stat cards (the soggetto layout's `before_stats` hook). #}
-{% set kpis_in_main = land_map_parent == 'catasto/visura_soggetto_archive.html' %}
-{% set preferred_assessment_labels = {'attributedOmi': 'Stima attribuibile · fonte preferita'} if land_registry_kpis and land_registry_kpis.owner_assessment.preferred_source_used else {} %}
+{% set kpis_in_main = land_map_kind == 'soggetto' %}
 {% block before_stats %}
 {% if subject_fiscal_code and subject_route_prefix in ['/persons', '/companies'] %}
 <div class="d-flex flex-wrap align-items-start gap-2 mb-3 no-print" data-subject-favorite-actions>
@@ -220,7 +203,7 @@
         <h2 class="h6 mb-1" id="owner-omi-breakdown-heading">
             <i class="fas fa-scale-balanced text-info me-2" aria-hidden="true"></i>Ripartizione della stima attribuibile
         </h2>
-        <p class="small text-muted mb-2">Scegli il raggruppamento: per provincia, tipo di diritto, quota dichiarata o percentuale di proprietà; il dettaglio completo li combina. La stima tiene conto anche del tipo di diritto e dei relativi coefficienti.</p>
+        <p class="small text-muted mb-2">Scegli il raggruppamento: per provincia, comune, foglio, particella, tipo di diritto, quota dichiarata o percentuale di proprietà; il dettaglio completo combina provincia, diritto, quota e percentuale. La stima tiene conto anche del tipo di diritto e dei relativi coefficienti.</p>
         {% set value_heading = 'Stima attribuibile · fonte preferita' if owner_assessment_data.preferred_source_used else 'Stima OMI attribuibile' %}
         <ul class="nav nav-tabs nav-tabs-sm mb-2 no-print" role="tablist" aria-label="Raggruppamento della stima attribuibile">
             {% for view in owner_assessment_data.omi_breakdown_views|default([]) %}
@@ -348,7 +331,7 @@
     <div class="document-land-map-content">
         {% if subject_portfolio and not subject_documents %}{{ subject_portfolio_summary(subject_portfolio) }}{% endif %}
         {{ super() }}
-        {% if land_map_parent == 'catasto/visura_soggetto_archive.html' %}{{ manual_property_valuation_panel(land_registry_kpis) }}{% endif %}
+        {% if land_map_kind == 'soggetto' %}{{ manual_property_valuation_panel(land_registry_kpis) }}{% endif %}
         {{ subject_document_archive(subject_archive) }}
         {{ subject_formalities_panel(
             subject_formalities, subject_fiscal_code, subject_route_prefix,
@@ -375,7 +358,7 @@
 {% else %}
 {% if subject_portfolio and not subject_documents %}{{ subject_portfolio_summary(subject_portfolio) }}{% endif %}
 {{ super() }}
-{% if land_map_parent == 'catasto/visura_soggetto_archive.html' %}{{ manual_property_valuation_panel(land_registry_kpis) }}{% endif %}
+{% if land_map_kind == 'soggetto' %}{{ manual_property_valuation_panel(land_registry_kpis) }}{% endif %}
 {{ subject_document_archive(subject_archive) }}
 {{ subject_formalities_panel(
     subject_formalities, subject_fiscal_code, subject_route_prefix,
@@ -405,25 +388,29 @@
 
 {% block extra_js %}
 {{ super() }}
-{% if doc and doc.id %}{{ documents_favorites_js(csp_nonce) }}{% endif %}
+{% if doc and doc.id %}<script src="/static/js/document_favorite_action.js?v=20261113a" defer></script>{% endif %}
 {% if subject_fiscal_code and subject_route_prefix in ['/persons', '/companies'] %}
-{{ subject_favorites_js(csp_nonce) }}
-{{ subject_notes_js(csp_nonce) }}
+<script src="/static/js/subject_favorites.js?v=20261113a" defer></script>
+<script src="/static/js/subject_notes.js?v=20261113a" defer></script>
 {% endif %}
 {{ cadastral_table_scripts() }}
-<script type="application/json" nonce="{{ csp_nonce }}" data-subject-page-json data-editable="{{ 'true' if manual_valuation_enabled else 'false' }}">{{ subject_page_json|tojson }}</script>
+{% if subject_page_data_url %}<span hidden data-subject-page-json-url="{{ subject_page_data_url }}"></span>{% endif %}
 <script src="/static/js/cadastral_category_descriptions.js?v=20261112a" defer></script>
-{{ document_parcel_map_scripts(land_registry_map, nonce=csp_nonce,
-    renderer_url='/land-registry/static/document_parcel_map.js?v=20261109-labels') }}
+{% if land_registry_map and land_registry_map.available %}
+<script src="/static/vendor/leaflet/leaflet.js" data-document-map-script defer></script>
+<script src="/land-registry/static/consumer-map.js" data-document-map-script defer></script>
+<script src="/land-registry/static/document_parcel_map.js?v=20261109-labels" data-document-map-script defer></script>
+<script src="/static/js/document_parcel_map_errors.js?v=20261113a" defer></script>
+{% endif %}
 {# PDF export: the page's own print layout rendered by headless Chromium (/documents/<id>/pdf). #}
 {# The PDF/share controls are server-rendered in the hero; this file only handles click behavior. #}
 {% if pdf_url %}<script src="/static/js/document_share.js?v=20261109a" defer></script>{% endif %}
-{% if land_map_parent == 'catasto/visura_soggetto_archive.html' %}
+{% if land_map_kind == 'soggetto' %}
 <script src="/static/js/visura_global_filter.js?v=20261027a" defer></script>
 <script src="/static/js/document_visura.js?v=20261027a" defer></script>
-<script src="/static/js/subject_visura_page.js?v=20261112a" defer></script>
+<script src="/static/js/subject_visura_page.js?v=20261113a" defer></script>
 {% if land_registry_kpis or land_registry_history %}
-<script src="/static/js/subject_cadastral_asset_enrichment.js?v=20261112a" defer></script>
+<script src="/static/js/subject_cadastral_asset_enrichment.js?v=20261113a" defer></script>
 {% endif %}
 {% if manual_valuation_enabled %}
 <script src="/static/js/manual_property_valuations.js?v=20261112a" defer></script>

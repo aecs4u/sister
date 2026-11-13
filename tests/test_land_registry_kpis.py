@@ -602,7 +602,12 @@ async def test_omi_breakdown_is_also_grouped_by_province_right_quota_and_percent
     assessment = (await subject_land_registry_kpis(xml, {"parcel_markers": []}))["owner_assessment"]
 
     views = {view["key"]: view for view in assessment["omi_breakdown_views"]}
-    assert list(views) == ["province", "right_type", "quote", "ownership_percentage"]
+    assert list(views) == ["province", "municipality", "sheet", "parcel", "right_type", "quote", "ownership_percentage"]
+    assert all(" · Fg " in row["label"] or row["label"].startswith("Fg ") for row in views["sheet"]["rows"])
+    assert all("P.lla " in row["label"] for row in views["parcel"]["rows"])
+    # every view splits the same valued assets, so the sheet and parcel totals match the province total
+    valued = {key: sum(row["valued_assets"] for row in view["rows"]) for key, view in views.items()}
+    assert valued["municipality"] == valued["sheet"] == valued["parcel"] == valued["province"]
     assert assessment["show_omi_breakdown"]
     for view in views.values():
         assert view["rows"], view["key"]

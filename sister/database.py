@@ -2038,7 +2038,8 @@ def _document_record(doc: Document, unit: Optional[CadastralUnit], comune: Optio
     document_type = doc.document_type
     if filename.casefold().startswith("el_imm_"):
         document_type = "elenco_immobili"
-    elif filename.casefold().startswith("isp_"):
+    elif filename.casefold().startswith("isp_") and document_type != "titolo_telematico":
+        # a title shares the isp_ file prefix but keeps its own type
         document_type = "ispezione_ipotecaria"
     elif filename.casefold().startswith("el_sub_"):
         document_type = "elenco_subalterni"
@@ -3144,7 +3145,7 @@ async def find_subject_inspection_document_ids(fiscal_code: str) -> set[int]:
         # extracted yet) are tied to the subject through document_subject.
         "UNION SELECT d.id FROM document d JOIN document_subject ds ON ds.document_id = d.id "
         "JOIN subject s ON s.id = ds.subject_id "
-        "WHERE s.fiscal_code = :code AND d.document_type = 'ispezione_ipotecaria'"
+        "WHERE s.fiscal_code = :code AND d.document_type IN ('ispezione_ipotecaria', 'titolo_telematico')"
     )
     async with _get_session_factory()() as session:
         return {int(row[0]) for row in (await session.execute(stmt, {"code": fiscal_code})).all()}
@@ -3668,11 +3669,14 @@ async def get_subject_mortgage_formalities(
                     notes_cost = unit_cost * int(selected_count)
             except (TypeError, ValueError):
                 pass
+        titles_cost = _amount(costs.get("titles_cost") or costs.get("titles") or costs.get("titoli"))
         cost_parts = []
         if inspection_cost is not None:
             cost_parts.append(f"{_amount_label(inspection_cost)} € ispezione")
         if notes_cost is not None:
             cost_parts.append(f"{_amount_label(notes_cost)} € note")
+        if titles_cost is not None:
+            cost_parts.append(f"{_amount_label(titles_cost)} € titoli")
 
         pending_request_ids: set[str] = set()
         if note_request.get("accepted") and not note_request.get("downloaded"):
@@ -4672,9 +4676,16 @@ async def create_wallet_gift_coupon(
     return int(coupon.id)
 
 
-async def list_wallet_gift_coupons(*, limit: int = 200) -> list[dict[str, Any]]:
+async def count_wallet_gift_coupons() -> int:
+    async with _get_session_factory()() as session:
+        result = await session.execute(select(func.count(WalletGiftCoupon.id)))
+        return int(result.scalar_one() or 0)
+
+
+async def list_wallet_gift_coupons(*, limit: int = 200, offset: int = 0) -> list[dict[str, Any]]:
     stmt = select(WalletGiftCoupon).order_by(WalletGiftCoupon.created_at.desc(), WalletGiftCoupon.id.desc())
     stmt = stmt.limit(max(1, min(int(limit), 500)))
+    stmt = stmt.offset(max(0, int(offset)))
     async with _get_session_factory()() as session:
         rows = (await session.execute(stmt)).scalars().all()
     return [
@@ -4791,22 +4802,44 @@ async def get_wallet_gift_coupon_redemption(redemption_id: int) -> dict[str, Any
     }
 
 
-async def list_wallet_gift_coupon_redemptions(*, query: str = "", limit: int = 300) -> list[dict[str, Any]]:
+def _wallet_gift_redemption_search_filter(query: str):
+    search = str(query or "").strip()
+    if search:
+        pattern = f"%{search}%"
+        wallet_pattern = f"%sister:{_identity_part(search)}%"
+        return (
+            WalletGiftCouponRedemption.user_id.ilike(pattern)
+            | WalletGiftCouponRedemption.user_id.ilike(wallet_pattern)
+            | WalletGiftCoupon.code_hint.ilike(pattern)
+        )
+    return None
+
+
+async def count_wallet_gift_coupon_redemptions(*, query: str = "") -> int:
+    stmt = select(func.count(WalletGiftCouponRedemption.id)).join(
+        WalletGiftCoupon, WalletGiftCoupon.id == WalletGiftCouponRedemption.coupon_id
+    )
+    search_filter = _wallet_gift_redemption_search_filter(query)
+    if search_filter is not None:
+        stmt = stmt.where(search_filter)
+    async with _get_session_factory()() as session:
+        result = await session.execute(stmt)
+        return int(result.scalar_one() or 0)
+
+
+async def list_wallet_gift_coupon_redemptions(
+    *, query: str = "", limit: int = 300, offset: int = 0
+) -> list[dict[str, Any]]:
     stmt = (
         select(WalletGiftCouponRedemption, WalletGiftCoupon)
         .join(WalletGiftCoupon, WalletGiftCoupon.id == WalletGiftCouponRedemption.coupon_id)
         .order_by(WalletGiftCouponRedemption.redeemed_at.desc(), WalletGiftCouponRedemption.id.desc())
     )
-    search = str(query or "").strip()
-    if search:
-        pattern = f"%{search}%"
-        wallet_pattern = f"%sister:{_identity_part(search)}%"
-        stmt = stmt.where(
-            WalletGiftCouponRedemption.user_id.ilike(pattern)
-            | WalletGiftCouponRedemption.user_id.ilike(wallet_pattern)
-            | WalletGiftCoupon.code_hint.ilike(pattern)
-        )
+    search_filter = _wallet_gift_redemption_search_filter(query)
+    if search_filter is not None:
+        stmt = stmt.where(search_filter)
     stmt = stmt.limit(max(1, min(int(limit), 1000)))
+    stmt = stmt.offset(max(0, int(offset)))
     async with _get_session_factory()() as session:
         rows = (await session.execute(stmt)).all()
     return [

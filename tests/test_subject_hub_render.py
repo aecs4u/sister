@@ -420,7 +420,7 @@ def test_subject_document_archive_template_lists_available_and_database_only_fil
     assert "RAVENNA · RA · Sez. RA · Fg 103 · P.lla 1714 · Sub 8" in html
     assert "Dati usati nei gruppi catastali" in html
     assert "Dati catastali e titolarità dalla visura per immobile" in html
-    assert "Estrazione strutturata presente" in html
+    assert 'title="Apri la pagina del documento con i dati estratti">Estrazione strutturata</a> presente.' in html
 
 
 def test_mortgage_extraction_summary_renders_note_data_inside_cadastral_group():

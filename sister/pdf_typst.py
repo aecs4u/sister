@@ -31,6 +31,7 @@ from .land_registry_kpis import (
     _share_fraction,
 )
 from .result_parsers import clean_quota, clean_right_description
+from .subject_view import build_subject_visura_view
 
 logger = logging.getLogger("sister")
 
@@ -156,35 +157,31 @@ def _preferred_source_value(estimate: dict[str, Any]) -> str:
 
 
 def _building_rows(
-    group: dict[str, Any], estimates: list[dict[str, Any]], with_omi: bool, with_preferred_source: bool = False
+    group_view: dict[str, Any], estimates: list[dict[str, Any]], with_omi: bool, with_preferred_source: bool = False
 ) -> list[list[Any]]:
     rows = []
-    for index, unit in enumerate(_items(group.get("ImmobileFabbricatiS"))):
-        ident = _first(_first(unit.get("DatiIdentificativi")).get("IdentificativoDefinitivo"))
-        classamento = _first(unit.get("DatiClassamentoF"))
-        consistency = classamento.get("Consistenza") if isinstance(classamento.get("Consistenza"), dict) else {}
-        surface = _first(unit.get("SuperficieF"))
+    source = group_view["source"]
+    for index, building in enumerate(group_view["buildings"]):
         surface_parts = []
-        if surface.get("Totale"):
-            surface_parts.append(f"Totale {_s(surface.get('Totale'))} m²")
-        if surface.get("EscluseAreeScoperte"):
-            surface_parts.append(f"escluse aree scoperte {_s(surface.get('EscluseAreeScoperte'))} m²")
-        category = _s(classamento.get("Categoria"))
-        code, _, description = category.partition(":")
+        if building.get("surface_total"):
+            surface_parts.append(f"Totale {_s(building['surface_total'])} m²")
+        if building.get("surface_excluded"):
+            surface_parts.append(f"escluse aree scoperte {_s(building['surface_excluded'])} m²")
         estimate = estimates[index] if index < len(estimates) else {}
         row: list[Any] = [
-            _s(_first(unit.get("DatiIndirizzo")).get("IndirizzoImm") or unit.get("IndirizzoImm")) or "—",
-            _s(group.get("Descrizione") or ident.get("Comune")),
-            _s(ident.get("Foglio")) or "—", _s(ident.get("ParticellaNum")) or "—", _s(ident.get("Subalterno")) or "—",
-            _s(classamento.get("ZonaCensuaria")) or "—",
-            code.strip() or "—", description.strip() or "—", _s(classamento.get("Classe")) or "—",
-            (f"{_s(consistency.get('Valore'))} {_s(consistency.get('Unita'))}".strip()
-             or (f"{_s(surface.get('Totale'))} MQ" if surface.get("Totale") else "—")),
-            _money(classamento.get("RenditaEuro")) or "—",
-            _s(ident.get("Partita")) or "—",
+            _s(building.get("address")) or "—",
+            _s(building.get("municipality_label")),
+            _s(building.get("sheet")) or "—", _s(building.get("parcel")) or "—", _s(building.get("subunit")) or "—",
+            _s(building.get("census_zone")) or "—",
+            _s(building.get("category_code")) or "—", _s(building.get("category_description")) or "—",
+            _s(building.get("cadastral_class")) or "—",
+            (f"{_s(building.get('consistency_value'))} {_s(building.get('consistency_unit'))}".strip()
+             or (f"{_s(building.get('surface_total'))} MQ" if building.get("surface_total") else "—")),
+            _money(building.get("income_amount")) or "—",
+            _s(building.get("partita")) or "—",
             estimate.get("cadastral_value") or _missing(estimate.get("cadastral_missing", "")),
-            _joined([ident.get("CodiceComune"), ident.get("Provincia") or group.get("Provincia")]) or "—",
-            _s(ident.get("SezUrbana") or ident.get("SezCensuaria") or group.get("Sezione")) or "—",
+            _joined([building.get("municipality_code"), building.get("province") or source.get("Provincia")]) or "—",
+            _s(building.get("section") or source.get("Sezione")) or "—",
             _joined(surface_parts) or "—",
         ]
         if with_omi:
@@ -196,37 +193,34 @@ def _building_rows(
 
 
 def _land_rows(
-    group: dict[str, Any], estimates: list[dict[str, Any]], with_preferred_source: bool = False
+    group_view: dict[str, Any], estimates: list[dict[str, Any]], with_preferred_source: bool = False
 ) -> list[list[Any]]:
     rows = []
-    position = 0
     seen_preferred_assets: set[str] = set()
-    for unit in _items(group.get("ImmobileTerreniS")):
-        ident = _first(_first(unit.get("DatiIdentificativi")).get("IdentificativoDefinitivo"))
-        for classamento in _items(_first(unit.get("DatiClassamentoT")).get("ClassamentoT")) or [{}]:
-            estimate = estimates[position] if position < len(estimates) else {}
-            position += 1
-            area = _number(classamento.get("SuperficieMQ"))
-            rows.append([
-                _s(group.get("Descrizione") or ident.get("Comune")),
-                _s(ident.get("Foglio")) or "—", _s(ident.get("ParticellaNum")) or "—",
-                _s(classamento.get("Qualita")) or "—", _s(classamento.get("Classe")) or "—",
-                f"{_format_number_it(area)} m²" if area is not None else "—",
-                _money(classamento.get("RedditoDominicaleEuro")) or "—",
-                _money(classamento.get("RedditoAgrarioEuro")) or "—",
-                _s(ident.get("Partita")) or "—",
-                estimate.get("cadastral_value") or _missing(estimate.get("cadastral_missing", "")),
-                _joined([ident.get("CodiceComune"), ident.get("Provincia") or group.get("Provincia")]) or "—",
-                _s(ident.get("SezCensuaria") or ident.get("Sezione") or group.get("Sezione")) or "—",
-            ])
-            if with_preferred_source:
-                asset_key = (estimate.get("asset_identity") or {}).get("asset_key")
-                if asset_key and asset_key in seen_preferred_assets:
-                    rows[-1].append("—")
-                else:
-                    rows[-1].append(_preferred_source_value(estimate))
-                    if asset_key:
-                        seen_preferred_assets.add(asset_key)
+    source = group_view["source"]
+    for position, land in enumerate(group_view["lands"]):
+        estimate = estimates[position] if position < len(estimates) else {}
+        area = _number(land.get("area_sqm"))
+        rows.append([
+            _s(land.get("municipality_label")),
+            _s(land.get("sheet")) or "—", _s(land.get("parcel")) or "—",
+            _s(land.get("quality")) or "—", _s(land.get("cadastral_class")) or "—",
+            f"{_format_number_it(area)} m²" if area is not None else "—",
+            _money(land.get("dominical_income")) or "—",
+            _money(land.get("agricultural_income")) or "—",
+            _s(land.get("partita")) or "—",
+            estimate.get("cadastral_value") or _missing(estimate.get("cadastral_missing", "")),
+            _joined([land.get("municipality_code"), land.get("province") or source.get("Provincia")]) or "—",
+            _s(land.get("section") or source.get("Sezione")) or "—",
+        ])
+        if with_preferred_source:
+            asset_key = (estimate.get("asset_identity") or {}).get("asset_key")
+            if asset_key and asset_key in seen_preferred_assets:
+                rows[-1].append("—")
+            else:
+                rows[-1].append(_preferred_source_value(estimate))
+                if asset_key:
+                    seen_preferred_assets.add(asset_key)
     return rows
 
 
@@ -1265,6 +1259,8 @@ def subject_context(
             })
 
     groups = [g for g in _items(root.get("GruppoUnitaImmobiliari"))]
+    subject_code = _s(subject.get("CodiceFiscale"))
+    subject_view = build_subject_visura_view(merge_identifiers(xml), None, subject_code)
     estimates = (kpis or {}).get("table_estimates") or []
     with_omi = any(e.get("range") for group in estimates for e in group.get("buildings", []))
     with_preferred_building = any(
@@ -1273,14 +1269,17 @@ def subject_context(
     with_preferred_land = any(
         e.get("manual_valuations") for group in estimates for e in group.get("lands", [])
     )
-    for index, raw in enumerate(groups):
-        group = merge_identifiers(raw)
-        building_estimates = (estimates[index] if index < len(estimates) else {}).get("buildings", [])
-        land_estimates = (estimates[index] if index < len(estimates) else {}).get("lands", [])
-        buildings = _building_rows(group, building_estimates, with_omi, with_preferred_building)
-        lands = _land_rows(group, land_estimates, with_preferred_land)
+    for index, group_view in enumerate(subject_view["groups"]):
+        source_index = group_view["source_index"]
+        group = merge_identifiers(group_view["source"])
+        group_estimates = estimates[source_index] if source_index < len(estimates) else {}
+        building_estimates = group_estimates.get("buildings", [])
+        land_estimates = group_estimates.get("lands", [])
+        buildings = _building_rows(group_view, building_estimates, with_omi, with_preferred_building)
+        lands = _land_rows(group_view, land_estimates, with_preferred_land)
         badges = [f"Catasto {_TIPO_CATASTO.get(_s(group.get('TipoCatasto')), _s(group.get('TipoCatasto')))}".strip(),
-                  f"{len(buildings) + len(lands)} immobili"]
+                  f"{len(buildings) + len(lands)} immobili",
+                  f"{group_view['right'] or 'Diritto non indicato'} · quota {group_view['share'] or 'non indicata'}"]
         if group.get("Sezione"):
             badges.append(f"Sez. {_s(group['Sezione'])}")
         items: list[dict[str, Any]] = []
@@ -1318,7 +1317,9 @@ def subject_context(
     history = subject_report.get("land_registry_history") or []
     history_rows = []
     omitted_history_events = 0
-    for group_index, group in enumerate(groups):
+    for group_view in subject_view["groups"]:
+        group_index = group_view["source_index"]
+        group = groups[group_index]
         group_history = history[group_index] if group_index < len(history) else {}
         for kind, row_name in (("buildings", "ImmobileFabbricatiS"), ("lands", "ImmobileTerreniS")):
             source_rows = _items(group.get(row_name))

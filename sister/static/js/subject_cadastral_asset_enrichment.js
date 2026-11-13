@@ -2,9 +2,9 @@
 // Source: aecs4u-theme/static/js/cadastral_asset_enrichment.js. Keep its rendering behavior aligned.
 (function () {
     var DEFAULTS = {
-        visuraTablesSelector: '.document-land-map-content .imm-tables',
+        visuraTablesSelector: '[data-visura-group-tables]',
         assetTableSelector: '[data-cadastral-asset-table]',
-        ownerAssessmentTarget: '.document-land-map-content .persona-header',
+        ownerAssessmentTarget: '[data-owner-assessment-target]',
         documentUrlTemplate: '/documents/{id}',
         omiValuationUrl: '/omi/valuation',
         categoryColumnIndex: 6,
@@ -37,11 +37,8 @@
         }
     };
 
-    var pageDataSource = document.querySelector('[data-subject-page-json]');
-    var pageData = {};
-    if (pageDataSource) {
-        try { pageData = JSON.parse(pageDataSource.textContent || '{}') || {}; } catch (error) { pageData = {}; }
-    }
+    function initialize(pageData) {
+    pageData = pageData || {};
     var PAGE_DATA_KEYS = {
         '[data-cadastral-asset-enrichment-config]': 'enrichment_config',
         '[data-land-map-omi-estimates]': 'omi_estimates',
@@ -83,7 +80,7 @@
     function addSubjectFinancialAssessment() {
         if (!assessment) return;
         var target = document.querySelector(config.ownerAssessmentTarget);
-        var body = target && (target.matches('.persona-header') ? target.querySelector('.card-body') : target);
+        var body = target;
         if (!body || body.querySelector('[data-owner-financial-assessment]')) return;
 
         var section = document.createElement('section');
@@ -169,19 +166,13 @@
     function addDistinctMunicipalityCard() {
         var source = document.querySelector('[data-distinct-municipality-count]');
         if (!source) return;
-        var rows = Array.from(document.querySelectorAll(config.visuraTablesSelector.replace(/\.imm-tables$/, ' .row.g-4.mb-4')));
-        var row = rows.find(function (candidate) {
-            return Array.from(candidate.children).some(function (column) { return column.textContent.indexOf(labels.municipalityGroups) !== -1; });
-        });
+        var row = document.querySelector('[data-subject-stats-row]');
         if (!row || row.querySelector('[data-distinct-municipality-card]')) return;
-        var firstColumn = Array.from(row.children).find(function (column) {
-            var label = column.querySelector('.card-body small.text-muted');
-            return label && label.textContent.trim() === labels.municipalityGroups;
-        });
+        var firstColumn = row.querySelector('[data-subject-group-count]');
         if (!firstColumn) return;
         var column = firstColumn.cloneNode(true);
-        var value = column.querySelector('.card-body h4');
-        var label = column.querySelector('.card-body small.text-muted');
+        var value = column.querySelector('h4');
+        var label = column.querySelector('small');
         if (!value || !label) return;
         column.dataset.distinctMunicipalityCard = 'true';
         value.textContent = source.dataset.distinctMunicipalityCount;
@@ -226,9 +217,9 @@
         row.appendChild(cell);
     }
     function addValueColumnsToVisura(present) {
-        document.querySelectorAll(config.visuraTablesSelector).forEach(function (wrapper, groupIndex) {
-            var group = estimates[groupIndex] || {};
-            wrapper.querySelectorAll('table.cat-compact-table').forEach(function (table) {
+        document.querySelectorAll(config.visuraTablesSelector).forEach(function (wrapper) {
+            var group = estimates[Number(wrapper.dataset.visuraGroupIndex)] || {};
+            wrapper.querySelectorAll('table').forEach(function (table) {
                 var kind = table.dataset.landMapKind;
                 if (!kind || table.dataset.valueColumnsAdded) return;
                 var header = table.querySelector('thead tr');
@@ -300,9 +291,9 @@
         return link;
     }
     function linkBuildingCategoriesToOmi() {
-        document.querySelectorAll(config.visuraTablesSelector).forEach(function (wrapper, groupIndex) {
-            var entries = (estimates[groupIndex] || {}).buildings || [];
-            var table = Array.from(wrapper.querySelectorAll('table.cat-compact-table')).find(function (item) { return item.dataset.landMapKind === 'buildings'; });
+        document.querySelectorAll(config.visuraTablesSelector).forEach(function (wrapper) {
+            var entries = (estimates[Number(wrapper.dataset.visuraGroupIndex)] || {}).buildings || [];
+            var table = wrapper.querySelector('[data-cadastral-table-kind="buildings"] table');
             if (!table) return;
             var rows = Array.from(table.querySelectorAll('tbody tr'));
             if (rows.length !== entries.length) return;
@@ -336,10 +327,9 @@
         });
     }
     function tagTables() {
-        var kinds = {11: 'buildings', 12: 'buildings', 9: 'lands'};
-        document.querySelectorAll(config.visuraTablesSelector + ' table.cat-compact-table').forEach(function (table) {
-            var kind = kinds[table.querySelectorAll('thead th').length];
-            if (kind && !table.dataset.landMapKind) table.dataset.landMapKind = kind;
+        document.querySelectorAll(config.visuraTablesSelector + ' [data-cadastral-table-kind] table').forEach(function (table) {
+            var marker = table.closest('[data-cadastral-table-kind]');
+            if (marker && !table.dataset.landMapKind) table.dataset.landMapKind = marker.dataset.cadastralTableKind;
         });
     }
 
@@ -392,24 +382,26 @@
         return details;
     }
     function propertyLabel(table, row) {
-        var heads = Array.from(table.querySelectorAll('thead th')).map(function (th) { return th.textContent.trim(); });
+        var columns = table.dataset.landMapKind === 'buildings'
+            ? {address: 0, municipality: 1, sheet: 2, parcel: 3, subunit: 4}
+            : {municipality: 0, sheet: 1, parcel: 2};
         function value(name) {
-            var index = heads.indexOf(name);
-            if (index < 0 || !row.cells[index]) return '';
+            var index = columns[name];
+            if (index === undefined || !row.cells[index]) return '';
             var copy = row.cells[index].cloneNode(true);
             copy.querySelectorAll('a, button, i').forEach(function (node) { node.remove(); });
             var text = copy.textContent.replace(/\s+/g, ' ').trim();
             return text === '—' ? '' : text;
         }
-        return [value('Indirizzo') || value('Comune'), value('Fog.') && 'Fg ' + value('Fog.'), value('Part.') && 'Part. ' + value('Part.'), value('Sub.') && 'Sub. ' + value('Sub.')].filter(Boolean).join(' · ');
+        return [value('address') || value('municipality'), value('sheet') && 'Fg ' + value('sheet'), value('parcel') && 'Part. ' + value('parcel'), value('subunit') && 'Sub. ' + value('subunit')].filter(Boolean).join(' · ');
     }
     function addOwnershipHistoryToVisura() {
         if (!histories.length) return;
-        document.querySelectorAll(config.visuraTablesSelector).forEach(function (wrapper, groupIndex) {
-            var group = histories[groupIndex] || {};
+        document.querySelectorAll(config.visuraTablesSelector).forEach(function (wrapper) {
+            var group = histories[Number(wrapper.dataset.visuraGroupIndex)] || {};
             var items = [];
             var withoutHistory = 0;
-            wrapper.querySelectorAll('table.cat-compact-table').forEach(function (table) {
+            wrapper.querySelectorAll('table').forEach(function (table) {
                 var entries = group[table.dataset.landMapKind] || [];
                 Array.from(table.querySelectorAll('tbody tr')).forEach(function (row, index) {
                     var entry = entries[index];
@@ -418,10 +410,8 @@
                 });
             });
             if (!items.length) return;
-            var body = null;
-            for (var node = wrapper.nextElementSibling; node && node.tagName !== 'H2' && !node.classList.contains('imm-tables'); node = node.nextElementSibling) {
-                if (node.classList.contains('card') && node.querySelector('.ownership-timeline')) { body = node.querySelector('.card-body'); break; }
-            }
+            var groupBody = wrapper.closest('[data-visura-group-body]');
+            var body = groupBody && groupBody.querySelector('[data-visura-ownership-timeline-body]');
             if (!body) {
                 var card = document.createElement('div');
                 card.className = 'card border-0 shadow-sm mb-4';
@@ -470,19 +460,19 @@
     }
     function expandOwnershipTimelines() {
         if (!histories.length) return;
-        document.querySelectorAll(config.visuraTablesSelector).forEach(function (wrapper, groupIndex) {
-            var group = histories[groupIndex] || {};
+        document.querySelectorAll(config.visuraTablesSelector).forEach(function (wrapper) {
+            var group = histories[Number(wrapper.dataset.visuraGroupIndex)] || {};
             var hasHistory = ['buildings', 'lands'].some(function (kind) {
                 return (group[kind] || []).some(function (row) { return row && (row.sources || []).length; });
             });
             if (!hasHistory) return;
-            for (var node = wrapper.nextElementSibling; node && !node.classList.contains('imm-tables'); node = node.nextElementSibling) {
-                node.querySelectorAll('.ownership-timeline .tl-body.d-none').forEach(function (body) {
-                    body.classList.remove('d-none');
-                    var chevron = body.previousElementSibling && body.previousElementSibling.querySelector('.tl-chevron');
-                    if (chevron) chevron.classList.add('open');
-                });
-            }
+            var groupBody = wrapper.closest('[data-visura-group-body]');
+            if (!groupBody) return;
+            groupBody.querySelectorAll('.ownership-timeline .tl-body.d-none').forEach(function (body) {
+                body.classList.remove('d-none');
+                var chevron = body.previousElementSibling && body.previousElementSibling.querySelector('.tl-chevron');
+                if (chevron) chevron.classList.add('open');
+            });
         });
     }
     function enhance() {
@@ -497,4 +487,18 @@
     }
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', enhance, {once: true});
     else enhance();
+    }
+
+    var pageDataSource = document.querySelector('[data-subject-page-json-url]');
+    if (pageDataSource && pageDataSource.dataset.subjectPageJsonUrl) {
+        fetch(pageDataSource.dataset.subjectPageJsonUrl, {credentials: 'same-origin', headers: {Accept: 'application/json'}})
+            .then(function (response) {
+                if (!response.ok) throw new Error('Subject page data unavailable');
+                return response.json();
+            })
+            .then(initialize)
+            .catch(function () { initialize({}); });
+    } else {
+        initialize({});
+    }
 })();

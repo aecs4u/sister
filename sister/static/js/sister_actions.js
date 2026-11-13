@@ -50,6 +50,11 @@
 
   EVENTS.forEach(function (name) { document.addEventListener(name, dispatch); });
 
+  document.addEventListener('focusin', function (event) {
+    var el = event.target.closest && event.target.closest('[data-select-on-focus]');
+    if (el && typeof el.select === 'function') el.select();
+  });
+
   // data-confirm="message" on a <form> (or a submit button) asks before sending; replaces onsubmit="return confirm(...)".
   document.addEventListener('submit', function (event) {
     var form = event.target;

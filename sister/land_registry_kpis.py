@@ -946,6 +946,28 @@ def _owner_assessment(
     omi_missing_reasons: dict[tuple[int, str, int], str] = {}
     omi_missing_affrancation_asset_keys: set[str] = set()
     omi_breakdown_accumulators: dict[tuple[str, str, str, str], dict[str, Any]] = {}
+    # the same figures per sheet (comune + sezione + foglio) and per parcel (+ particella); every asset adds to one of each
+    location_accumulators: dict[str, dict[tuple[str, ...], dict[str, Any]]] = {"municipality": {}, "sheet": {}, "parcel": {}}
+
+    def location_buckets(identity: dict[str, Any]) -> list[dict[str, Any]]:
+        municipality = str(identity.get("municipality") or identity.get("municipality_code") or "").strip()
+        section = str(identity.get("section") or "").strip()
+        sheet = str(identity.get("sheet") or "").strip()
+        parcel = str(identity.get("parcel") or "").strip()
+        place = " · ".join(part for part in (municipality, f"Sez. {section}" if section else "") if part)
+        buckets = []
+        for view_key, key, label in (
+            ("municipality", (municipality,), municipality or "Comune non indicato"),
+            ("sheet", (municipality, section, sheet), " · ".join(p for p in (place, f"Fg {sheet}" if sheet else "Foglio non indicato") if p)),
+            ("parcel", (municipality, section, sheet, parcel), " · ".join(
+                p for p in (place, f"Fg {sheet}" if sheet else "", f"P.lla {parcel}" if parcel else "Particella non indicata") if p
+            )),
+        ):
+            buckets.append(location_accumulators[view_key].setdefault(key, {
+                "label": label, "sort": key, "valued_assets": set(), "missing_assets": set(),
+                "missing_reasons": {}, "value_low": Decimal(0), "value_high": Decimal(0),
+            }))
+        return buckets
 
     for asset in assets:
         asset_key = (asset["group_index"], asset["table_kind"], asset["row_index"])
@@ -992,6 +1014,7 @@ def _owner_assessment(
                 "value_low": Decimal(0),
                 "value_high": Decimal(0),
             })
+            location_targets = location_buckets(asset_identity)
             bucket = accumulators.setdefault(bucket_key, {
                 "kind": kind,
                 "label": right_label,
@@ -1008,8 +1031,9 @@ def _owner_assessment(
             bucket["shares"].add(_quota_label(right))
             if share is None:
                 unknown_quota_assets.add(asset_key)
-                breakdown_bucket["missing_assets"].add(asset_key)
-                breakdown_bucket["missing_reasons"][asset_key] = "Quota non interpretabile"
+                for target in (breakdown_bucket, *location_targets):
+                    target["missing_assets"].add(asset_key)
+                    target["missing_reasons"][asset_key] = "Quota non interpretabile"
                 continue
             if cadastral_value is not None:
                 cadastral_share += cadastral_value * share
@@ -1080,8 +1104,9 @@ def _owner_assessment(
                 if not reasons:
                     reasons.append(factor_reason or "Coefficiente non disponibile")
                 reason = "; ".join(reasons)
-                breakdown_bucket["missing_assets"].add(asset_key)
-                breakdown_bucket["missing_reasons"][asset_key] = reason
+                for target in (breakdown_bucket, *location_targets):
+                    target["missing_assets"].add(asset_key)
+                    target["missing_reasons"][asset_key] = reason
                 if kind == "enfiteusi" and asset["table_kind"] == "buildings":
                     omi_missing_reasons[asset_key] = reason
                     if "Importo di affrancazione non disponibile" in reason and asset_anchor_key:
@@ -1101,9 +1126,10 @@ def _owner_assessment(
             bucket["value_low"] += attributed_low
             bucket["value_high"] += attributed_high
             bucket["valued_assets"].add(asset_key)
-            breakdown_bucket["value_low"] += attributed_low
-            breakdown_bucket["value_high"] += attributed_high
-            breakdown_bucket["valued_assets"].add(asset_key)
+            for target in (breakdown_bucket, *location_targets):
+                target["value_low"] += attributed_low
+                target["value_high"] += attributed_high
+                target["valued_assets"].add(asset_key)
             omi_total_low += attributed_low
             omi_total_high += attributed_high
             omi_total_seen = True
@@ -1163,6 +1189,29 @@ def _owner_assessment(
         for row in view_rows:
             row.pop("_low")
         omi_breakdown_views.append({"key": view_key, "label": view_label, "rows": view_rows})
+
+    def natural_order(text: str) -> tuple[int, int, str]:
+        """Sheets and parcels in numeric order (2 before 10), then lettered ones."""
+        match = re.match(r"\d+", text)
+        return (0, int(match.group(0)), text.casefold()) if match else (1, 0, text.casefold())
+
+    for view_key, view_label in (("municipality", "Comune"), ("sheet", "Foglio"), ("parcel", "Particella")):
+        located = sorted(
+            location_accumulators[view_key].values(),
+            key=lambda item: (
+                item["sort"][0].casefold(), *(natural_order(part) for part in item["sort"][1:]),
+            ),
+        )
+        omi_breakdown_views.append({"key": view_key, "label": view_label, "rows": [{
+            "label": item["label"],
+            "value": _format_value_range(item["value_low"], item["value_high"]) if item["valued_assets"] else "Non stimabile",
+            "valued_assets": len(item["valued_assets"]),
+            "unvalued_assets": len(item["missing_assets"]),
+            "unvalued_reasons": _reason_summary(item["missing_reasons"]),
+        } for item in located]})
+    # Comune, Foglio and Particella sit right after Provincia: they narrow it down before the right and quota views
+    view_order = ("province", "municipality", "sheet", "parcel", "right_type", "quote", "ownership_percentage")
+    omi_breakdown_views.sort(key=lambda view: view_order.index(view["key"]))
 
     rights_summary = []
     order = {"full": 0, "usufruct": 1, "bare": 2, "enfiteusi": 3, "other": 4}

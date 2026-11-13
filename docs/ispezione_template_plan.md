@@ -1,7 +1,8 @@
 # Ispezione ipotecaria page: show every extracted field — development plan
 
-Status: draft, 2026-11-12. Not started; waiting for the gate review in
-`docs/ispezione_template_proposal.md`.
+Status: Stage 1 implemented in `aecs4u-theme` (commit `9ff1a9e`, pushed to
+`origin/main`); SISTER's `uv.lock` locally pins that revision. Stage 2 is not
+started. No tests have been run for this change.
 
 ## Goal
 
@@ -59,6 +60,14 @@ Full field inventory (220 leaf paths, with per-version counts) is reproducible w
 | `allegati`, `pagine_documento` (1.2.0) | attachments with page ranges and evidence, full text per page | not imported | no |
 | `elenco_sintetico` (1.3.0) | office, request data and restrictions, selected subjects, update periods, formalities with successive formalities, cancellation and related-document flags | JSON only | no |
 
+Titles versus notes: a title (the notarial act, e.g. document 2295) arrives under a cover page reading "Ispezione
+… per titolo telematico" and "Nota di Trascrizione - Titolo telematico". SISTER's parser read that as a note; since
+2026-11-12 `_parse_ispezione_ipotecaria_pdf` returns `inspection_document_type = "titolo_telematico"` for it (4 of
+the 23 stored inspection PDFs). Still open: Ocular's 1.2.0 output for the same title says
+`document_kind: nota_dettaglio`. Since 2026-11-13 titles are stored with `document_type = titolo_telematico`
+(documents 2073, 2074, 2084, 2295) and fill the "Titolo Telematico (Atto Notarile)" catalogue category;
+`web._MORTGAGE_DOCUMENT_TYPES` keeps them on the inspection page and in the subject and parcel inspection lists.
+
 Two further defects on the same page:
 
 - The card is titled "Dati strutturati Ocular · Estrazione automatica" whatever the provider, so SISTER's native
@@ -77,8 +86,9 @@ Template work is in `../aecs4u-theme` (`catasto/ispezione_ipotecaria.html`); the
 | 3 | Render the `nota` fields that exist only in JSON: `convenzione`, printed `dati_riepilogativi`, `sezione_c_raw` texts and `regime` | theme template | S |
 | 4 | Render `elenco_sintetico`: request and restrictions, selected subjects, update periods, formalities table with nested successive formalities and flags | theme template (new macro in `components/`) | M |
 | 5 | Render `titolo` and `allegati`: act summary, parties, properties, evidence table with page references; `pagine_documento` as a collapsed per-page text | theme template (new macro) | M |
-| 6 | Generic fallback: recursive label/value macro for any key not handled by 1–5, so a new schema version never hides a field; raw JSON stays as last resort | theme `components/` | S |
+| 6 | Generic recursive label/value view of the full payload, so a new schema version never hides a field; it can repeat values summarized above, and raw JSON stays as the technical last resort | theme `components/` | S |
 | 7 | Extraction picker when a document has more than one: `database.list_document_extractions`, `?extraction=<id>` on the document route, default latest | `sister/database.py`, `sister/web.py`, theme template | M |
+| 7b | Treat a title as a title everywhere: heading and badges from `titolo_telematico`, the `titolo` section first, the note header only as "nota di riferimento" (the document type itself is done) | theme template | S |
 | 8 | Import the 1.2.0 title output for document 2295 (`sister import-ocular 2295 …/a2a0e1ca/final/structured.json`) after confirming the importer accepts a payload with an empty `nota` | data, `command_tools/import_ocular_extraction.py` if needed | S |
 | 9 | Tests: template rendering against anonymised fixtures for 1.0.0, 1.2.0 and 1.3.0 in `tests/fixtures/`; one test that fails when a fixture leaf path is not present in the rendered HTML | `tests/` | M |
 | 10 | Docs: `docs/data_extraction.md` section on ispezione extractions; CLAUDE.md line | docs | S |
@@ -107,6 +117,6 @@ Order: 1–3 (no data changes), then 6, then 4–5, then 7–8, with 9 growing a
 | Risk | Mitigation |
 |---|---|
 | Theme change affects other apps using `catasto/ispezione_ipotecaria.html` | New blocks render only when their keys exist; no context variable is renamed |
-| Long evidence and page-text blocks make the page heavy | Collapsed `<details>`, page text rendered only on demand |
-| Two models disagree on the same document | Picker shows one at a time; no merging |
+| Long evidence and page-text blocks make the page heavy; the full field/value view repeats some summarized values | Collapsed `<details>`; page text rendered only on demand in the dedicated Stage 2 section |
+| Two extractions exist for each of three documents and may differ | Picker shows one at a time; no merging |
 | Personal data in fixtures | Fixtures anonymised like `tests/fixtures/single_step/` |

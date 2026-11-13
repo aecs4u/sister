@@ -77,6 +77,8 @@ def test_admin_wallet_template_shows_balance_ledger_and_gift_management(main_mod
     monkeypatch.setattr(database, "list_subject_access", AsyncMock(return_value=[]))
     monkeypatch.setattr(database, "list_wallet_gift_coupons", AsyncMock(return_value=[]))
     monkeypatch.setattr(database, "list_wallet_gift_coupon_redemptions", AsyncMock(return_value=[]))
+    monkeypatch.setattr(database, "count_wallet_gift_coupons", AsyncMock(return_value=0))
+    monkeypatch.setattr(database, "count_wallet_gift_coupon_redemptions", AsyncMock(return_value=0))
     monkeypatch.setattr(purchases_billing, "credit_grants_enabled", lambda: True)
     monkeypatch.setattr(
         purchases_billing,
@@ -88,9 +90,18 @@ def test_admin_wallet_template_shows_balance_ledger_and_gift_management(main_mod
 
     assert response.status_code == 200
     assert "Portafogli e buoni regalo" in response.text
-    assert "9.00 credits" in response.text
+    assert "9,00 credits" in response.text
     assert "Crea un buono regalo" in response.text
     assert "/admin/wallet-gifts/create" in response.text
+
+    # The one-time code is shown once and never copied into links or hidden fields; other filters are kept.
+    follow = TestClient(main_module.app).get(
+        "/admin/wallets?gift_code=ONE-TIME-SECRET&status=gift_created&error=bad_amount&pagopa_search=rossi&billing_page=2"
+    )
+    assert follow.status_code == 200
+    assert follow.text.count("ONE-TIME-SECRET") == 1
+    assert 'name="pagopa_search" value="rossi"' in follow.text
+    assert 'name="status"' not in follow.text and 'name="error"' not in follow.text
 
 
 @pytest.mark.usefixtures("fresh_db")

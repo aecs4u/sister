@@ -86,10 +86,10 @@
                         <ul class="list-unstyled mb-0 mt-1">
                           {% for label in document.cadastral_group_usage_labels %}<li>{{ label }}</li>{% endfor %}
                         </ul>
-                        {% if document.has_extraction %}<div class="text-muted mt-1">Estrazione strutturata presente.</div>{% endif %}
+                        {% if document.has_extraction %}<div class="text-muted mt-1"><a href="/documents/{{ document.id }}" title="Apri la pagina del documento con i dati estratti">Estrazione strutturata</a> presente.</div>{% endif %}
                         {% elif document.has_extraction %}
                         <span class="badge text-bg-warning"><i class="fas fa-minus me-1" aria-hidden="true"></i>No</span>
-                        <div class="text-muted mt-1">Estrazione strutturata disponibile, ma non usata nei gruppi mostrati.</div>
+                        <div class="text-muted mt-1"><a href="/documents/{{ document.id }}" title="Apri la pagina del documento con i dati estratti">Estrazione strutturata</a> disponibile, ma non usata nei gruppi mostrati.</div>
                         {% else %}
                         <span class="badge text-bg-light border text-dark"><i class="fas fa-minus me-1" aria-hidden="true"></i>No</span>
                         <div class="text-muted mt-1">Nessuna estrazione strutturata disponibile.</div>

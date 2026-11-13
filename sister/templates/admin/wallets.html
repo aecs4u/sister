@@ -4,10 +4,20 @@
 {% macro wallet_url(fragment='', overrides={}) -%}
     {% set state = namespace(params=[]) %}
     {% for key, value in request.query_params.items() %}
-        {% if key not in overrides %}{% set state.params = state.params + [(key, value)] %}{% endif %}
+        {% if key not in overrides and key not in ['status', 'error', 'gift_code'] %}{% set state.params = state.params + [(key, value)] %}{% endif %}
     {% endfor %}
-    {% for key, value in overrides.items() %}{% set state.params = state.params + [(key, value)] %}{% endfor %}
+    {% for key, value in overrides.items() %}{% if key not in ['status', 'error', 'gift_code'] and value is not none %}{% set state.params = state.params + [(key, value)] %}{% endif %}{% endfor %}
     /admin/wallets{% if state.params %}?{% for key, value in state.params %}{{ key|urlencode }}={{ value|urlencode }}{% if not loop.last %}&amp;{% endif %}{% endfor %}{% endif %}{% if fragment %}#{{ fragment }}{% endif %}
+{%- endmacro %}
+
+{% macro transaction_type_label(value) -%}
+    {% set labels = {'credit':'Accredito','debit':'Addebito','transfer_in':'Trasferimento in entrata','transfer_out':'Trasferimento in uscita','topup':'Ricarica','refund':'Rimborso','adjustment':'Rettifica','usage':'Utilizzo','bonus':'Bonus','expiry':'Scadenza'} %}
+    {{ labels.get(value, value|it_enum) }}
+{%- endmacro %}
+
+{% macro status_label(value) -%}
+    {% set labels = {'pending':'In attesa','completed':'Completato','failed':'Fallito','cancelled':'Annullato','reversed':'Stornato','reversal_required':'Storno richiesto','draft':'Bozza','open':'Aperta','paid':'Pagata','uncollectible':'Non riscuotibile','void':'Annullata'} %}
+    {{ labels.get(value, value|it_enum) }}
 {%- endmacro %}
 
 {% macro pagination(listing, page_name, fragment, label) -%}
@@ -20,18 +30,21 @@
     {% endif %}
 {%- endmacro %}
 
-{% macro listing_card(section_id, heading_id, heading, description, search_id, search_name, search_value, placeholder, search_label, listing, page_name, fragment, error, error_message, table_class='table table-striped table-hover align-middle mb-0') %}
+{% macro listing_card(section_id, heading_id, heading, description, search_id, search_name, search_value, placeholder, search_label, listing, page_name, fragment, error, error_message, table_class='table table-striped table-hover align-middle mb-0', show_search=true) %}
     <section class="card mb-4" id="{{ section_id }}" aria-labelledby="{{ heading_id }}">
         <div class="card-body border-bottom d-flex flex-wrap justify-content-between align-items-center gap-3">
             <div><h2 class="h5 mb-1" id="{{ heading_id }}">{{ heading }} <span class="badge text-bg-secondary">{{ listing.total }}</span></h2>
                 <p class="small text-muted mb-0">{{ description }}</p></div>
+            {% if show_search %}
             <form method="get" action="/admin/wallets#{{ fragment }}" class="d-flex flex-wrap gap-2">
-                {% for key, value in request.query_params.items() if key not in [search_name, page_name] %}<input type="hidden" name="{{ key }}" value="{{ value }}">{% endfor %}
+                {% for key, value in request.query_params.items() if key not in [search_name, page_name, 'status', 'error', 'gift_code'] %}<input type="hidden" name="{{ key }}" value="{{ value }}">{% endfor %}
                 <input type="hidden" name="{{ page_name }}" value="1">
                 <label class="visually-hidden" for="{{ search_id }}">{{ search_label }}</label>
                 <input class="form-control" id="{{ search_id }}" name="{{ search_name }}" value="{{ search_value }}" placeholder="{{ placeholder }}">
                 <button class="btn btn-outline-primary" type="submit">Cerca</button>
+                {% if search_value %}<a class="btn btn-outline-secondary" href="{{ wallet_url(fragment, {search_name: none, page_name: 1}) }}">Azzera</a>{% endif %}
             </form>
+            {% endif %}
         </div>
         {% if error %}<div class="alert alert-warning m-3 mb-0" role="status">{{ error_message }}</div>
         {% else %}<div class="table-responsive"><table class="{{ table_class }}">{{ caller() }}</table></div>
@@ -56,7 +69,17 @@
         </div>
     </div>
 
-    <div id="wallet-feedback" tabindex="-1">
+    <nav class="nav nav-pills flex-wrap gap-2 mb-4" aria-label="Sezioni wallet e buoni regalo">
+        <a class="nav-link" href="#wallet-list">Wallet</a>
+        <a class="nav-link" href="#pagopa-history">Storico pagoPA</a>
+        <a class="nav-link" href="#billing-ledger">Movimenti</a>
+        <a class="nav-link" href="#billing-invoices">Fatture</a>
+        <a class="nav-link" href="#gift-create">Crea buono</a>
+        <a class="nav-link" href="#gift-coupons">Buoni emessi</a>
+        <a class="nav-link" href="#gift-redemptions">Riscatti</a>
+    </nav>
+
+    <div id="wallet-feedback">
         {% if status == 'credits' %}<div class="alert alert-success" role="status">Crediti accreditati al wallet di <code>{{ selected_user }}</code>.</div>
         {% elif status == 'wallet_locked' %}<div class="alert alert-warning" role="status">Wallet bloccato: non può effettuare transazioni.</div>
         {% elif status == 'wallet_unlocked' %}<div class="alert alert-success" role="status">Wallet sbloccato.</div>
@@ -68,20 +91,39 @@
         {% if gift_code %}<div class="alert alert-warning" role="status"><label class="form-label fw-semibold" for="new-gift-code">Codice da consegnare all’utente</label>
             <div class="input-group"><input class="form-control font-monospace" id="new-gift-code" readonly value="{{ gift_code }}" data-select-on-focus>
             <button class="btn btn-outline-dark" type="button" data-click="sisterActions.copyValue" data-args='["new-gift-code"]'>Copia</button></div></div>{% endif %}
-        {% if error %}<div class="alert alert-danger" role="alert">{% set messages = {'bad_key':'Chiave utente non valida.','bad_amount':'Importo non valido.','bad_expiry':'La scadenza deve essere futura.','bad_redemptions':'Numero di riscatti non valido.','credits_off':'Il servizio wallet non è attivo.','wallet_not_found':'Wallet non trovato.','bad_wallet_action':'Operazione wallet non valida.','not_found':'Buono o riscatto non trovato.','gift_insufficient_balance':'Saldo insufficiente per annullare il riscatto.','gift_wallet_locked':'Sblocca il wallet prima di annullare il riscatto.','gift_not_reversible':'Questo riscatto non può essere annullato.','gift_already_reversed':'Il riscatto è già stato annullato.','gift_coupon_failed':'Non è stato possibile creare il buono. Controlla SECRET_KEY.'} %}{{ messages.get(error, 'Operazione non riuscita: ' ~ error) }}</div>{% endif %}
+        {% if error %}
+        {% set messages = {
+            'bad_key': 'Chiave utente non valida.',
+            'bad_amount': 'Importo non valido.',
+            'bad_expiry': 'La scadenza deve essere futura.',
+            'bad_redemptions': 'Numero di riscatti non valido.',
+            'credits_off': 'Il servizio wallet non è attivo.',
+            'wallet_not_found': 'Wallet non trovato.',
+            'bad_wallet_action': 'Operazione wallet non valida.',
+            'not_found': 'Buono o riscatto non trovato.',
+            'gift_insufficient_balance': 'Saldo insufficiente per annullare il riscatto.',
+            'gift_wallet_locked': 'Sblocca il wallet prima di annullare il riscatto.',
+            'gift_not_reversible': 'Questo riscatto non può essere annullato.',
+            'gift_already_reversed': 'Il riscatto è già stato annullato.',
+            'gift_coupon_failed': 'Non è stato possibile creare il buono. Controlla SECRET_KEY.'
+        } %}
+        <div class="alert alert-danger" role="alert">{{ messages.get(error, 'Operazione non riuscita: ' ~ error) }}</div>
+        {% endif %}
     </div>
 
-    <section class="card mb-4" aria-labelledby="wallet-search-heading">
+    <section class="card mb-4" id="wallet-search" aria-labelledby="wallet-search-heading">
         <div class="card-body">
             <div class="d-flex flex-wrap justify-content-between align-items-end gap-3">
-                <div><h2 class="h5" id="wallet-search-heading">Cerca il wallet di un utente</h2>
-                    <p class="small text-muted mb-0">Inserisci una chiave completa: <code>email:</code>, <code>id:</code> o <code>username:</code>.</p></div>
-                <form method="get" action="/admin/wallets#wallet-details-heading" class="d-flex flex-wrap gap-2">
-                    {% for key, value in request.query_params.items() if key not in ['q', 'wallet_tx_page'] %}<input type="hidden" name="{{ key }}" value="{{ value }}">{% endfor %}
+                <div><h2 class="h5" id="wallet-search-heading">Cerca o filtra i wallet</h2>
+                    <p class="small text-muted mb-0">Una chiave completa (<code>email:</code>, <code>id:</code> o <code>username:</code>) apre il dettaglio e filtra l’elenco; un testo parziale filtra l’elenco.</p></div>
+                <form method="get" action="/admin/wallets#wallet-search-heading" class="d-flex flex-wrap gap-2">
+                    {% for key, value in request.query_params.items() if key not in ['q', 'wallet_search', 'wallet_page', 'wallet_tx_page', 'status', 'error', 'gift_code'] %}<input type="hidden" name="{{ key }}" value="{{ value }}">{% endfor %}
+                    <input type="hidden" name="wallet_page" value="1">
                     <input type="hidden" name="wallet_tx_page" value="1">
                     <label class="visually-hidden" for="wallet-user-search">Chiave account</label>
-                    <input class="form-control" id="wallet-user-search" name="q" value="{{ query }}" placeholder="email:utente@example.it" autocomplete="off">
-                    <button class="btn btn-outline-primary" type="submit">Apri wallet</button>
+                    <input class="form-control" id="wallet-user-search" name="wallet_search" value="{{ wallet_search or query }}" placeholder="email:utente@example.it o testo da cercare" autocomplete="off">
+                    <button class="btn btn-outline-primary" type="submit">Cerca wallet</button>
+                    {% if wallet_search or query %}<a class="btn btn-outline-secondary" href="{{ wallet_url('wallet-search', {'q': none, 'wallet_search': none, 'wallet_page': 1, 'wallet_tx_page': 1}) }}">Azzera</a>{% endif %}
                 </form>
             </div>
         </div>
@@ -91,26 +133,26 @@
     <section class="card mb-4" id="wallet-details" aria-labelledby="wallet-details-heading">
         <div class="card-body border-bottom d-flex flex-wrap justify-content-between align-items-center gap-3">
             <div><h2 class="h5 mb-1" id="wallet-details-heading">Wallet <code>{{ selected_user }}</code></h2>
-                {% if wallet %}<p class="mb-0 text-muted">Saldo disponibile: <strong>{{ '%.2f'|format(wallet.balance) }} {{ wallet.currency }}</strong> · {{ 'Bloccato' if wallet.locked else 'Attivo' }} · ID <code>{{ wallet.id }}</code></p>
+                {% if wallet %}<p class="mb-0 text-muted">Saldo disponibile: <strong>{{ wallet.balance|it_amount }} {{ wallet.currency }}</strong> · Spesa cumulata per utilizzi completati: <strong>{{ wallet.spending_total|default(0)|it_amount }} {{ wallet.currency }}</strong> ({{ wallet.spending_count|default(0) }} utilizzi; rimborsi nei movimenti) · {{ 'Bloccato' if wallet.locked else 'Attivo' }} · ID <code>{{ wallet.id }}</code></p>
                 {% else %}<p class="mb-0 text-muted">Non esiste ancora un wallet per questo account.</p>{% endif %}</div>
             {% if wallet %}<form method="post" action="/admin/wallets/state">
                 {{ csrf_input() }}<input type="hidden" name="user_id" value="{{ selected_user }}">
-                {% if wallet.locked %}<button class="btn btn-outline-success" name="action" value="unlock" type="submit">Sblocca wallet</button>
-                {% else %}<button class="btn btn-outline-warning" name="action" value="lock" type="submit">Blocca wallet</button>{% endif %}
+                {% if wallet.locked %}<button class="btn btn-outline-success" name="action" value="unlock" type="submit" data-confirm="Sbloccare questo wallet?">Sblocca wallet</button>
+                {% else %}<button class="btn btn-outline-warning" name="action" value="lock" type="submit" data-confirm="Bloccare questo wallet? Le transazioni resteranno impedite finché non verrà sbloccato.">Blocca wallet</button>{% endif %}
             </form>{% endif %}
         </div>
         <div class="card-body">
             {% if wallet_enabled %}<h3 class="h6">Accredita crediti</h3>
             <form method="post" action="/admin/credits/grant" class="row g-2 align-items-end">
                 {{ csrf_input() }}<input type="hidden" name="user_id" value="{{ selected_user }}"><input type="hidden" name="return_to" value="wallets">
-                <div class="col-6 col-md-3"><label class="form-label" for="wallet-credit-amount">Crediti</label><input class="form-control" id="wallet-credit-amount" name="amount" inputmode="decimal" required></div>
+                <div class="col-6 col-md-3"><label class="form-label" for="wallet-credit-amount">Crediti</label><input class="form-control" id="wallet-credit-amount" name="amount" type="number" min="0.01" max="100000" step="0.01" inputmode="decimal" required></div>
                 <div class="col-12 col-md-6"><label class="form-label" for="wallet-credit-reason">Motivo</label><input class="form-control" id="wallet-credit-reason" name="reason" maxlength="200" required></div>
                 <div class="col-12 col-md-3"><button class="btn btn-primary w-100" type="submit">Accredita</button></div>
             </form>{% else %}<p class="mb-0 text-muted">Wallet non attivo. Configura un backend crediti.</p>{% endif %}
         </div>
         {% if wallet and wallet.transactions %}<div class="table-responsive">
-            <table class="table table-sm table-striped align-middle mb-0"><thead><tr><th>Data</th><th>Tipo</th><th>Importo</th><th>Saldo dopo</th><th>Descrizione</th><th>Riferimento</th></tr></thead><tbody>
-            {% for tx in wallet.transactions %}<tr><td class="text-nowrap">{{ tx.created_at|it_date }}</td><td>{{ tx.type }}</td><td>{{ '%.2f'|format(tx.amount) }}</td><td>{{ '%.2f'|format(tx.balance_after) }}</td><td>{{ tx.description }}</td><td><code>{{ tx.reference_id or tx.id }}</code></td></tr>{% endfor %}
+            <table class="table table-sm table-striped align-middle mb-0"><caption class="visually-hidden">Movimenti del wallet {{ selected_user }}</caption><thead><tr><th scope="col">Data</th><th scope="col">Tipo</th><th scope="col" class="text-end">Importo</th><th scope="col" class="text-end">Saldo dopo</th><th scope="col">Descrizione</th><th scope="col">Riferimento</th></tr></thead><tbody>
+            {% for tx in wallet.transactions %}<tr><td class="text-nowrap">{{ tx.created_at|it_date }}</td><td>{{ transaction_type_label(tx.type) }}</td><td class="text-end text-nowrap">{{ tx.amount|it_amount }} {{ wallet.currency }}</td><td class="text-end text-nowrap">{{ tx.balance_after|it_amount }} {{ wallet.currency }}</td><td>{{ tx.description }}</td><td><code>{{ tx.reference_id or tx.id }}</code></td></tr>{% endfor %}
             </tbody></table></div>{% elif wallet %}<div class="card-body text-muted">Nessun movimento registrato.</div>{% endif %}
         {% set wallet_transaction_page = wallet.transaction_page|default(1) %}
         {% if wallet and (wallet_transaction_page > 1 or wallet.transaction_has_more|default(false)) %}<nav class="p-3" aria-label="Pagine movimenti del wallet"><ul class="pagination pagination-sm mb-0">
@@ -121,26 +163,29 @@
     </section>
     {% endif %}
 
-    {% call listing_card('wallet-list', 'wallet-list-heading', 'Wallet di tutti gli utenti', 'Saldi e attività sono filtrabili e paginati; apri un account per vedere il relativo registro.', 'wallet-list-search', 'wallet_search', wallet_search, 'Cerca account', 'Cerca account', wallet_listing, 'wallet_page', 'wallet-list-heading', wallet_listing_error, 'Il registro wallet non è disponibile in questo momento; riprova più tardi.') %}
-            <thead><tr><th>Utente</th><th>Saldo</th><th>Stato</th><th>Movimenti</th><th>Ultimo movimento</th><th>Aggiornato</th><th></th></tr></thead><tbody>
+    {% call listing_card('wallet-list', 'wallet-list-heading', 'Wallet di tutti gli utenti', 'Saldi, spesa cumulata per utilizzi completati e attività sono filtrabili e paginati; i rimborsi restano nei movimenti.', 'wallet-list-search', 'wallet_search', wallet_search, 'Cerca account', 'Cerca account', wallet_listing, 'wallet_page', 'wallet-list-heading', wallet_listing_error, 'Il registro wallet non è disponibile in questo momento; riprova più tardi.', show_search=false) %}
+            <caption class="visually-hidden">Wallet di tutti gli utenti</caption>
+            <thead><tr><th scope="col">Utente</th><th scope="col" class="text-end">Saldo</th><th scope="col" class="text-end">Spesa cumulata</th><th scope="col">Stato</th><th scope="col">Movimenti</th><th scope="col">Ultimo movimento</th><th scope="col">Aggiornato</th><th scope="col">Azioni</th></tr></thead><tbody>
             {% for account in wallet_listing.rows %}<tr>
-                <td><code>{{ account.user_id }}</code></td>
-                <td class="text-nowrap">{{ '%.2f'|format(account.balance) }} {{ account.currency }}</td>
+                <th scope="row"><code>{{ account.user_id }}</code></th>
+                <td class="text-end text-nowrap">{{ account.balance|it_amount }} {{ account.currency }}</td>
+                <td class="text-end text-nowrap">{{ account.spending_total|it_amount }} {{ account.currency }}<small class="d-block text-muted">{{ account.spending_count }} utilizzi</small></td>
                 <td>{% if account.locked %}<span class="badge text-bg-warning">Bloccato</span>{% elif account.active %}<span class="badge text-bg-success">Attivo</span>{% else %}<span class="badge text-bg-secondary">Disattivato</span>{% endif %}</td>
                 <td>{{ account.transaction_count }}</td>
                 <td class="text-nowrap">{{ account.last_transaction_at|it_date if account.last_transaction_at else '—' }}</td>
                 <td class="text-nowrap">{{ account.updated_at|it_date }}</td>
                 <td class="text-end"><a class="btn btn-sm btn-outline-primary" href="{{ wallet_url('wallet-details-heading', {'q': account.lookup_key, 'wallet_tx_page': 1}) }}">Apri</a></td>
-            </tr>{% else %}<tr><td colspan="7" class="text-center text-muted py-4">Nessun wallet trovato.</td></tr>{% endfor %}
+            </tr>{% else %}<tr><td colspan="8" class="text-center text-muted py-4">Nessun wallet trovato.</td></tr>{% endfor %}
             </tbody>
     {% endcall %}
 
     {% call listing_card('pagopa-history', 'pagopa-history-heading', 'Storico pagamenti pagoPA', 'Registro storico importato. Gli importi e gli esiti originali non modificano il saldo dei wallet.', 'pagopa-history-search', 'pagopa_search', pagopa_search, 'Utente, riferimento, ufficio o esito', 'Cerca pagamenti pagoPA', pagopa_listing, 'pagopa_page', 'pagopa-history-heading', pagopa_listing_error, 'Lo storico pagoPA non è disponibile in questo momento; verifica la migrazione della tabella.') %}
-            <thead><tr><th>Versamento</th><th>Utente / riferimento</th><th>Modalità</th><th>Importo</th><th>Ufficio</th><th>Operazione</th><th>Validazione</th><th>Rifiuto</th><th>Esito</th><th>Note / documenti</th></tr></thead><tbody>
+            <caption class="visually-hidden">Storico pagamenti pagoPA</caption>
+            <thead><tr><th scope="col">Versamento</th><th scope="col">Utente / riferimento</th><th scope="col">Modalità</th><th scope="col" class="text-end">Importo</th><th scope="col">Ufficio</th><th scope="col">Operazione</th><th scope="col">Validazione</th><th scope="col">Rifiuto</th><th scope="col">Esito</th><th scope="col">Note / documenti</th></tr></thead><tbody>
             {% for payment in pagopa_listing.rows %}<tr>
                 <td class="text-nowrap">{{ payment.payment_date_source or (payment.payment_date|it_date if payment.payment_date else '—') }}</td>
                 <td><a href="{{ wallet_url('wallet-details-heading', {'q': payment.lookup_key, 'wallet_tx_page': 1}) }}"><code>{{ payment.user_id }}</code></a>{% if payment.payer_reference %}<br><small class="text-muted"><code>{{ payment.payer_reference }}</code></small>{% endif %}</td>
-                <td>{{ payment.payment_method }}</td><td class="text-nowrap">{{ '%.2f'|format(payment.amount) }} {{ payment.currency }}</td><td>{{ payment.office or '—' }}</td>
+                <td>{{ payment.payment_method }}</td><td class="text-end text-nowrap">{{ payment.amount|it_amount }} {{ payment.currency }}</td><td>{{ payment.office or '—' }}</td>
                 <td class="text-nowrap">{{ payment.operation_date_source or '—' }}</td><td class="text-nowrap">{{ payment.validation_date_source or '—' }}</td><td class="text-nowrap">{{ payment.rejection_date_source or '—' }}</td>
                 <td>{% if payment.payment_status == 'validated' %}<span class="badge text-bg-success">Validato</span>{% elif payment.payment_status == 'rejected' %}<span class="badge text-bg-danger">Rifiutato</span>{% else %}<span class="badge text-bg-secondary">Esito non registrato</span>{% endif %}</td>
                 <td>{% if payment.note %}{{ payment.note }}{% endif %}{% if payment.retry_available or payment.receipt_available %}<small class="d-block text-muted">{% if payment.retry_available %}Verifica / ripeti disponibile{% endif %}{% if payment.retry_available and payment.receipt_available %} · {% endif %}{% if payment.receipt_available %}Ricevuta XML/PDF disponibile{% endif %}</small>{% endif %}{% if not payment.note and not payment.retry_available and not payment.receipt_available %}—{% endif %}</td>
@@ -149,29 +194,31 @@
     {% endcall %}
 
     {% call listing_card('billing-ledger', 'billing-ledger-heading', 'Movimenti wallet', 'Registro billing_transactions del modulo aecs4u-billing.', 'billing-ledger-search', 'billing_search', billing_search, 'Utente, tipo o riferimento', 'Cerca movimenti', billing_listing, 'billing_page', 'billing-ledger-heading', billing_listing_error, 'Il registro dei movimenti wallet non è disponibile in questo momento; riprova più tardi.') %}
-            <thead><tr><th>Data</th><th>Utente</th><th>Tipo</th><th>Stato</th><th>Importo</th><th>Saldo prima</th><th>Saldo dopo</th><th>Descrizione</th><th>Riferimento</th></tr></thead><tbody>
+            <caption class="visually-hidden">Movimenti wallet</caption>
+            <thead><tr><th scope="col">Data</th><th scope="col">Utente</th><th scope="col">Tipo</th><th scope="col">Stato</th><th scope="col" class="text-end">Importo</th><th scope="col" class="text-end">Saldo prima</th><th scope="col" class="text-end">Saldo dopo</th><th scope="col">Descrizione</th><th scope="col">Riferimento</th></tr></thead><tbody>
             {% for tx in billing_listing.rows %}<tr>
                 <td class="text-nowrap">{{ tx.created_at|it_date }}</td>
                 <td><a href="{{ wallet_url('wallet-details-heading', {'q': tx.lookup_key, 'wallet_tx_page': 1}) }}"><code>{{ tx.user_id }}</code></a></td>
-                <td>{{ tx.type }}</td><td>{{ tx.status }}</td>
-                <td class="text-nowrap">{{ '%.2f'|format(tx.amount) }} {{ tx.currency }}</td>
-                <td class="text-nowrap">{{ '%.2f'|format(tx.balance_before) }}</td>
-                <td class="text-nowrap">{{ '%.2f'|format(tx.balance_after) }}</td>
+                <td>{{ transaction_type_label(tx.type) }}</td><td>{{ status_label(tx.status) }}</td>
+                <td class="text-end text-nowrap">{{ tx.amount|it_amount }} {{ tx.currency }}</td>
+                <td class="text-end text-nowrap">{{ tx.balance_before|it_amount }} {{ tx.currency }}</td>
+                <td class="text-end text-nowrap">{{ tx.balance_after|it_amount }} {{ tx.currency }}</td>
                 <td>{{ tx.description }}</td><td><code>{{ tx.reference_id or tx.id }}</code></td>
             </tr>{% else %}<tr><td colspan="9" class="text-center text-muted py-4">Nessun movimento billing trovato.</td></tr>{% endfor %}
             </tbody>
     {% endcall %}
 
     {% call listing_card('billing-invoices', 'billing-invoices-heading', 'Fatture', 'Registro billing_invoices del modulo aecs4u-billing.', 'billing-invoice-search', 'invoice_search', invoice_search, 'Utente, cliente, ID o stato', 'Cerca fatture', invoice_listing, 'invoice_page', 'billing-invoices-heading', invoice_listing_error, 'Il registro fatture non è disponibile in questo momento; verifica la migrazione delle tabelle billing.') %}
-            <thead><tr><th>Data</th><th>Utente / cliente</th><th>Fattura</th><th>Stato</th><th>Totale</th><th>Importo pagato</th><th>Importo dovuto</th><th>Documento</th></tr></thead><tbody>
+            <caption class="visually-hidden">Fatture</caption>
+            <thead><tr><th scope="col">Data</th><th scope="col">Utente / cliente</th><th scope="col">Fattura</th><th scope="col">Stato</th><th scope="col" class="text-end">Totale</th><th scope="col" class="text-end">Importo pagato</th><th scope="col" class="text-end">Importo dovuto</th><th scope="col">Documento</th></tr></thead><tbody>
             {% for invoice in invoice_listing.rows %}<tr>
                 <td class="text-nowrap">{{ invoice.created_at|it_date }}</td>
                 <td>{% if invoice.lookup_key %}<a href="{{ wallet_url('wallet-details-heading', {'q': invoice.lookup_key, 'wallet_tx_page': 1}) }}"><code>{{ invoice.user_id }}</code></a>{% else %}<code>{{ invoice.user_id }}</code>{% endif %}<br><small class="text-muted"><code>{{ invoice.customer_id }}</code></small></td>
-                <td><code>{{ invoice.number }}</code></td><td>{{ invoice.status }}</td>
-                <td class="text-nowrap">{{ '%.2f'|format(invoice.total) }} {{ invoice.currency|upper }}</td>
-                <td class="text-nowrap">{{ '%.2f'|format(invoice.amount_paid) }} {{ invoice.currency|upper }}</td>
-                <td class="text-nowrap">{{ '%.2f'|format(invoice.amount_due) }} {{ invoice.currency|upper }}</td>
-                <td class="text-nowrap">{% if invoice.hosted_invoice_url %}<a href="{{ invoice.hosted_invoice_url }}" target="_blank" rel="noopener">Apri</a>{% endif %}{% if invoice.invoice_pdf %}{% if invoice.hosted_invoice_url %} · {% endif %}<a href="{{ invoice.invoice_pdf }}" target="_blank" rel="noopener">PDF</a>{% endif %}{% if not invoice.hosted_invoice_url and not invoice.invoice_pdf %}—{% endif %}</td>
+                <td><code>{{ invoice.number }}</code></td><td>{{ status_label(invoice.status) }}</td>
+                <td class="text-end text-nowrap">{{ invoice.total|it_amount }} {{ invoice.currency|upper }}</td>
+                <td class="text-end text-nowrap">{{ invoice.amount_paid|it_amount }} {{ invoice.currency|upper }}</td>
+                <td class="text-end text-nowrap">{{ invoice.amount_due|it_amount }} {{ invoice.currency|upper }}</td>
+                <td class="text-nowrap">{% if invoice.hosted_invoice_url %}<a href="{{ invoice.hosted_invoice_url }}" target="_blank" rel="noopener noreferrer">Apri</a>{% endif %}{% if invoice.invoice_pdf %}{% if invoice.hosted_invoice_url %} · {% endif %}<a href="{{ invoice.invoice_pdf }}" target="_blank" rel="noopener noreferrer">PDF</a>{% endif %}{% if not invoice.hosted_invoice_url and not invoice.invoice_pdf %}—{% endif %}</td>
             </tr>{% else %}<tr><td colspan="8" class="text-center text-muted py-4">Nessuna fattura trovata.</td></tr>{% endfor %}
             </tbody>
     {% endcall %}
@@ -181,7 +228,7 @@
         <p class="small text-muted">Il codice viene mostrato una sola volta. Il database conserva solo il digest; importo e riscatti sono registrati e ogni riscatto accredita il wallet con un riferimento tracciabile.</p>
         <form method="post" action="/admin/wallet-gifts/create" class="row g-3 align-items-end">
             {{ csrf_input() }}
-            <div class="col-6 col-md-2"><label class="form-label" for="gift-amount">Crediti</label><input class="form-control" id="gift-amount" name="amount" inputmode="decimal" required></div>
+            <div class="col-6 col-md-2"><label class="form-label" for="gift-amount">Crediti</label><input class="form-control" id="gift-amount" name="amount" type="number" min="0.01" max="100000" step="0.01" inputmode="decimal" required></div>
             <div class="col-6 col-md-2"><label class="form-label" for="gift-redemptions">Riscatti massimi</label><input class="form-control" id="gift-redemptions" name="max_redemptions" type="number" min="1" max="10000" value="1" required></div>
             <div class="col-12 col-md-3"><label class="form-label" for="gift-expiry">Scade il (facoltativo)</label><input class="form-control" id="gift-expiry" name="expires_at" type="datetime-local"></div>
             <div class="col-12 col-md-3"><label class="form-label" for="gift-note">Nota</label><input class="form-control" id="gift-note" name="note" maxlength="500"></div>
@@ -190,10 +237,10 @@
     </div></section>
 
     <section class="card mb-4" id="gift-coupons" aria-labelledby="gift-coupons-heading"><div class="card-body border-bottom">
-        <h2 class="h5 mb-0" id="gift-coupons-heading">Buoni emessi <span class="badge text-bg-secondary">{{ coupons|length }}</span></h2>
-    </div><div class="table-responsive"><table class="table table-striped align-middle mb-0">
-        <thead><tr><th>Codice</th><th>Crediti</th><th>Riscatti</th><th>Stato</th><th>Scadenza</th><th>Nota</th><th class="text-end">Azioni</th></tr></thead><tbody>
-        {% for coupon in coupons %}<tr><td><code>…{{ coupon.code_hint }}</code></td><td>{{ '%.2f'|format(coupon.amount) }}</td><td>{{ coupon.redeemed_count }} / {{ coupon.max_redemptions }}</td>
+        <h2 class="h5 mb-0" id="gift-coupons-heading">Buoni emessi <span class="badge text-bg-secondary">{{ coupon_listing.total }}</span></h2>
+    </div><div class="table-responsive"><table class="table table-striped align-middle mb-0"><caption class="visually-hidden">Buoni regalo emessi</caption>
+        <thead><tr><th scope="col">Codice</th><th scope="col" class="text-end">Crediti</th><th scope="col">Riscatti</th><th scope="col">Stato</th><th scope="col">Scadenza</th><th scope="col">Nota</th><th scope="col" class="text-end">Azioni</th></tr></thead><tbody>
+        {% for coupon in coupon_listing.rows %}<tr><th scope="row"><code>…{{ coupon.code_hint }}</code></th><td class="text-end">{{ coupon.amount|it_amount }}</td><td>{{ coupon.redeemed_count }} / {{ coupon.max_redemptions }}</td>
             <td>{% if coupon.expired %}<span class="badge text-bg-secondary">Scaduto</span>{% elif coupon.status == 'active' %}<span class="badge text-bg-success">Attivo</span>{% elif coupon.status == 'frozen' %}<span class="badge text-bg-warning">Congelato</span>{% else %}<span class="badge text-bg-secondary">Revocato</span>{% endif %}</td>
             <td>{{ coupon.expires_at|it_date if coupon.expires_at else '—' }}</td><td>{{ coupon.note or '—' }}</td><td class="text-end text-nowrap">
                 <form method="post" action="/admin/wallet-gifts/{{ coupon.id }}/status" class="d-inline">{{ csrf_input() }}
@@ -202,21 +249,23 @@
                     {% if coupon.status != 'revoked' %}<button class="btn btn-sm btn-outline-danger" name="action" value="revoke" type="submit" data-confirm="Revocare questo buono?">Revoca</button>{% endif %}
                 </form></td></tr>
         {% else %}<tr><td colspan="7" class="text-center text-muted py-4">Nessun buono emesso.</td></tr>{% endfor %}
-    </tbody></table></div></section>
+    </tbody></table></div>{{ pagination(coupon_listing, 'coupon_page', 'gift-coupons-heading', 'buoni emessi') }}</section>
 
     <section class="card" id="gift-redemptions" aria-labelledby="gift-redemptions-heading"><div class="card-body border-bottom d-flex flex-wrap justify-content-between align-items-center gap-3">
-        <h2 class="h5 mb-0" id="gift-redemptions-heading">Riscatti e storno <span class="badge text-bg-secondary">{{ redemptions|length }}</span></h2>
+        <h2 class="h5 mb-0" id="gift-redemptions-heading">Riscatti e storno <span class="badge text-bg-secondary">{{ redemption_listing.total }}</span></h2>
         <form method="get" action="/admin/wallets#gift-redemptions-heading" class="d-flex gap-2">
-            {% for key, value in request.query_params.items() if key != 'gift_q' %}<input type="hidden" name="{{ key }}" value="{{ value }}">{% endfor %}
+            {% for key, value in request.query_params.items() if key not in ['gift_q', 'redemption_page', 'status', 'error', 'gift_code'] %}<input type="hidden" name="{{ key }}" value="{{ value }}">{% endfor %}
+            <input type="hidden" name="redemption_page" value="1">
             <label class="visually-hidden" for="gift-redemption-search">Cerca</label><input class="form-control" id="gift-redemption-search" name="gift_q" value="{{ gift_query }}" placeholder="Utente o codice buono"><button class="btn btn-outline-primary" type="submit">Cerca</button>
+            {% if gift_query %}<a class="btn btn-outline-secondary" href="{{ wallet_url('gift-redemptions-heading', {'gift_q': none, 'redemption_page': 1}) }}">Azzera</a>{% endif %}
         </form>
-    </div><div class="table-responsive"><table class="table table-striped align-middle mb-0">
-        <thead><tr><th>Data</th><th>Utente</th><th>Buono</th><th>Crediti</th><th>Stato</th><th>Movimento wallet</th><th class="text-end">Azioni</th></tr></thead><tbody>
-        {% for redemption in redemptions %}<tr><td>{{ redemption.redeemed_at|it_date }}</td><td><code>{{ redemption.user_id }}</code></td><td><code>…{{ redemption.code_hint }}</code></td><td>{{ '%.2f'|format(redemption.amount) }}</td>
-            <td>{{ redemption.status }}</td><td><code>{{ redemption.reversed_tx_id or redemption.wallet_tx_id or '—' }}</code></td><td class="text-end">
+    </div><div class="table-responsive"><table class="table table-striped align-middle mb-0"><caption class="visually-hidden">Riscatti dei buoni regalo</caption>
+        <thead><tr><th scope="col">Data</th><th scope="col">Utente</th><th scope="col">Buono</th><th scope="col" class="text-end">Crediti</th><th scope="col">Stato</th><th scope="col">Movimento wallet</th><th scope="col" class="text-end">Azioni</th></tr></thead><tbody>
+        {% for redemption in redemption_listing.rows %}<tr><td>{{ redemption.redeemed_at|it_date }}</td><td><code>{{ redemption.user_id }}</code></td><td><code>…{{ redemption.code_hint }}</code></td><td class="text-end">{{ redemption.amount|it_amount }}</td>
+            <td>{{ status_label(redemption.status) }}</td><td><code>{{ redemption.reversed_tx_id or redemption.wallet_tx_id or '—' }}</code></td><td class="text-end">
                 {% if redemption.status == 'completed' %}<form method="post" action="/admin/wallet-gifts/redemptions/{{ redemption.id }}/undo" data-confirm="Annullare il credito regalo? Sarà registrato un addebito inverso nel wallet.">{{ csrf_input() }}<button class="btn btn-sm btn-outline-danger" type="submit">Annulla riscatto</button></form>{% endif %}
             </td></tr>
         {% else %}<tr><td colspan="7" class="text-center text-muted py-4">Nessun riscatto registrato.</td></tr>{% endfor %}
-    </tbody></table></div></section>
+    </tbody></table></div>{{ pagination(redemption_listing, 'redemption_page', 'gift-redemptions-heading', 'riscatti') }}</section>
 </div>
 {% endblock %}
