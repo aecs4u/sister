@@ -57,6 +57,7 @@ from .db_models import (
     ActivityLogPayload,
     CadastralUnit,
     CalculationSnapshot,
+    CalculationSnapshotPayload,
     Document,
     DocumentContent,
     DocumentExtraction,
@@ -73,6 +74,7 @@ from .db_models import (
     PageVisitError,
     PageVisitFormElement,
     Property,
+    PropertyAsset,
     PropertyActualSize,
     PropertyAffrancationAmount,
     PropertyOmiOverride,
@@ -91,13 +93,16 @@ from .db_models import (
     SubjectAccess,
     SubjectFavorite,
     SubjectHolding,
+    SubjectHoldingProvince,
     SubjectNote,
+    SubjectProfile,
     SubjectPurchase,
     SubjectTag,
     WalletGiftCoupon,
     WalletGiftCouponRedemption,
 )
 from .provinces import province_code, province_name
+from .property_identity import IDENTITY_FIELDS, canonical_property_identity
 from .reference import (
     LOOKUP_TABLES,
     cadastre_type_code,
@@ -143,7 +148,7 @@ DATABASE_SCHEMA = os.getenv("DATABASE_SCHEMA", "sister")
 DATABASE_ISTAT_SCHEMA = os.getenv("DATABASE_ISTAT_SCHEMA", DATABASE_SCHEMA)
 # raw payloads (response JSON, XML tree, extraction JSON) live in their own schema; tests point it at a throwaway one
 DATABASE_ARCHIVE_SCHEMA = os.getenv("DATABASE_ARCHIVE_SCHEMA", "sister_archive")
-DATABASE_REVISION = "20261202_pagopa_payment_history"
+DATABASE_REVISION = "20261204_billing_transaction_self_reference"
 
 # ---------------------------------------------------------------------------
 # Engine and session
@@ -233,9 +238,14 @@ async def init_db() -> None:
             "document_favorite",
             "document_purchase",
             "subject_favorite",
+            "subject_profile",
+            "subject_access",
+            "subject_purchase",
             "subject_note",
             "subject_tag",
             "subject_holding",
+            "subject_holding_province",
+            "property_asset",
             "manual_property_valuation",
             "property_valuation_preference",
             "property_affrancation_amount",
@@ -310,7 +320,7 @@ async def init_db() -> None:
         archive_tables = await conn.run_sync(
             lambda sync_conn: set(inspect(sync_conn).get_table_names(schema=DATABASE_ARCHIVE_SCHEMA))
         )
-        missing_archive = sorted({"request_payload", "document_content"} - archive_tables)
+        missing_archive = sorted({"request_payload", "document_content", "calculation_snapshot_payload"} - archive_tables)
         if missing_archive:
             raise RuntimeError(
                 f"PostgreSQL archive schema {DATABASE_ARCHIVE_SCHEMA!r} is incomplete (missing: "
@@ -2490,8 +2500,8 @@ async def refresh_subject_holdings(codes: Optional[Iterable[str]] = None) -> int
     province_stmt = text(
         f"WITH latest AS ({latest.format(table='request_province')}) "
         "SELECT latest.code, latest.searched_at, sum(rp.buildings_count) AS buildings, sum(rp.land_parcels_count) AS land,"
-        " string_agg(DISTINCT coalesce(nullif(rp.province_code, ''), rp.province_name), ', ') AS provinces,"
-        " count(DISTINCT coalesce(nullif(rp.province_code, ''), rp.province_name)) AS province_count "
+        " array_agg(DISTINCT coalesce(nullif(rp.province_code, ''), rp.province_name) "
+        "ORDER BY coalesce(nullif(rp.province_code, ''), rp.province_name)) AS provinces "
         "FROM latest JOIN request_province rp ON rp.request_id = latest.id GROUP BY latest.code, latest.searched_at"
     )
     property_stmt = text(
@@ -2507,16 +2517,16 @@ async def refresh_subject_holdings(codes: Optional[Iterable[str]] = None) -> int
 
     now = datetime.now(timezone.utc)
     holdings: dict[str, dict[str, Any]] = {}
+    provinces_by_code: dict[str, list[str]] = {}
 
     def entry(code: str) -> dict[str, Any]:
         return holdings.setdefault(code, {"fiscal_code": code, "computed_at": now})
 
     for row in province_rows:
         item = entry(str(row["code"]))
+        provinces_by_code[str(row["code"])] = [str(value) for value in (row["provinces"] or []) if value]
         item.update(
-            provinces=row["provinces"] or None,
             searched_at=row["searched_at"],
-            province_count=row["province_count"],
             buildings=int(row["buildings"] or 0),
             land_parcels=int(row["land"] or 0),
         )
@@ -2569,6 +2579,12 @@ async def refresh_subject_holdings(codes: Optional[Iterable[str]] = None) -> int
         else:
             await session.execute(delete(SubjectHolding).where(SubjectHolding.fiscal_code.in_(wanted)))
         session.add_all(SubjectHolding(**item) for item in holdings.values())
+        await session.flush()
+        session.add_all(
+            SubjectHoldingProvince(fiscal_code=code, province=province)
+            for code, provinces in provinces_by_code.items()
+            for province in provinces
+        )
         await session.commit()
     return len(holdings)
 
@@ -2705,7 +2721,10 @@ def _subject_profile_ctes(istat: str) -> str:
         "    upper(subj.birth_province) AS birth_province,"
         "    CASE WHEN subj.birth_date IS NULL THEN NULL"
         "         ELSE date_part('year', age(current_date, subj.birth_date))::int END AS age,"
-        "    h.provinces, h.province_count, h.buildings, h.land_parcels AS land, h.properties, h.full_ownership,"
+        "    (SELECT string_agg(shp.province, ', ' ORDER BY shp.province) FROM subject_holding_province shp "
+        "      WHERE shp.fiscal_code = c.code) AS provinces,"
+        "    (SELECT count(*)::int FROM subject_holding_province shp WHERE shp.fiscal_code = c.code) AS province_count,"
+        "    h.buildings, h.land_parcels AS land, h.properties, h.full_ownership,"
         "    h.unvalued, h.unknown_share, round(h.cadastral_income_eur) AS rendita,"
         "    round(h.dominical_income_eur) AS reddito_dominicale, round(h.cadastral_value_eur) AS cadastral_value,"
         "    round(h.cadastral_value_share_eur) AS cadastral_value_share, h.searched_at,"
@@ -4482,6 +4501,14 @@ async def get_subject_access_codes(user_ids: "str | Iterable[str]", subject_type
         return {str(code) for code in result.scalars()}
 
 
+async def _ensure_subject_profile(session: AsyncSession, subject_type: str, subject_code: str) -> None:
+    await session.execute(
+        pg_insert(SubjectProfile)
+        .values(subject_type=subject_type, subject_code=subject_code)
+        .on_conflict_do_nothing()
+    )
+
+
 async def grant_subject_access(
     user_id: str, subject_type: str, subject_code: str, created_by: str, note: str | None = None
 ) -> bool:
@@ -4500,6 +4527,7 @@ async def grant_subject_access(
         "revoked_reason": None,
     }
     async with _get_session_factory()() as session:
+        await _ensure_subject_profile(session, subject_type, code)
         result = await session.execute(
             pg_insert(SubjectAccess)
             .values(user_id=keys[0], subject_type=subject_type, subject_code=code, **values)
@@ -4567,6 +4595,7 @@ async def complete_subject_purchase(
         )
         if existing.first() is not None:
             return "replay"
+        await _ensure_subject_profile(session, subject_type, code)
         owned = await session.execute(
             select(SubjectAccess.user_id).where(
                 func.lower(SubjectAccess.user_id).in_(keys),
@@ -4955,6 +4984,7 @@ async def set_subject_favorite(user_id: str, subject_type: str, subject_code: st
     """Idempotently add or remove a user's person or company profile favorite."""
     async with _get_session_factory()() as session:
         if favorite:
+            await _ensure_subject_profile(session, subject_type, subject_code)
             await session.execute(
                 text(
                     "INSERT INTO subject_favorite (user_id, subject_type, subject_code, created_at) "
@@ -5033,6 +5063,8 @@ async def set_subject_tags(kind: str, code: str, tags: Iterable[Any], user: Opti
     if len(wanted) > SUBJECT_TAGS_PER_SUBJECT:
         raise ValueError(f"al massimo {SUBJECT_TAGS_PER_SUBJECT} tag per profilo")
     async with _get_session_factory()() as session:
+        if wanted:
+            await _ensure_subject_profile(session, kind, code)
         await session.execute(
             text(
                 "DELETE FROM subject_tag WHERE subject_type = :kind AND subject_code = :code "
@@ -5060,6 +5092,8 @@ async def tag_subjects(kind: str, codes: Iterable[str], tag: str, user: Optional
     if not codes:
         return 0
     async with _get_session_factory()() as session:
+        for code in codes:
+            await _ensure_subject_profile(session, kind, code)
         result = await session.execute(
             text(
                 "INSERT INTO subject_tag (subject_type, subject_code, tag_key, tag, created_by, created_at) "
@@ -5127,6 +5161,7 @@ async def set_subject_note(user_id: str, subject_type: str, subject_code: str, n
     normalized_note = note.strip()
     async with _get_session_factory()() as session:
         if normalized_note:
+            await _ensure_subject_profile(session, subject_type, subject_code)
             await session.execute(
                 text(
                     "INSERT INTO subject_note "
@@ -5168,7 +5203,17 @@ async def get_calculation_snapshot(
     async with _get_session_factory()() as session:
         row = (
             await session.execute(
-                select(CalculationSnapshot).where(
+                select(CalculationSnapshotPayload.result)
+                .join(
+                    CalculationSnapshot,
+                    and_(
+                        CalculationSnapshot.scope_type == CalculationSnapshotPayload.scope_type,
+                        CalculationSnapshot.scope_id == CalculationSnapshotPayload.scope_id,
+                        CalculationSnapshot.viewer_key == CalculationSnapshotPayload.viewer_key,
+                        CalculationSnapshot.calculation_type == CalculationSnapshotPayload.calculation_type,
+                    ),
+                )
+                .where(
                     CalculationSnapshot.scope_type == scope_type,
                     CalculationSnapshot.scope_id == scope_id,
                     CalculationSnapshot.viewer_key == viewer_key,
@@ -5179,7 +5224,7 @@ async def get_calculation_snapshot(
                 )
             )
         ).scalar_one_or_none()
-    return row.result if row and isinstance(row.result, dict) else None
+    return row if isinstance(row, dict) else None
 
 
 async def set_calculation_snapshot(
@@ -5193,27 +5238,47 @@ async def set_calculation_snapshot(
     result: dict[str, Any],
 ) -> None:
     """Persist or replace the latest calculated result for one source, viewer and calculation."""
-    result_json = json.dumps(result, ensure_ascii=False, separators=(",", ":"), default=str)
+    result_data = json.loads(json.dumps(result, ensure_ascii=False, separators=(",", ":"), default=str))
     async with _get_session_factory()() as session:
         await session.execute(
-            text(
-                "INSERT INTO calculation_snapshot "
-                "(scope_type, scope_id, viewer_key, calculation_type, input_hash, algorithm_version, result, calculated_at) "
-                "VALUES (:scope_type, :scope_id, :viewer_key, :calculation_type, :input_hash, :algorithm_version, "
-                "CAST(:result AS jsonb), now()) "
-                "ON CONFLICT (scope_type, scope_id, viewer_key, calculation_type) DO UPDATE SET "
-                "input_hash = EXCLUDED.input_hash, algorithm_version = EXCLUDED.algorithm_version, "
-                "result = EXCLUDED.result, calculated_at = now()"
-            ),
-            {
-                "scope_type": scope_type,
-                "scope_id": scope_id,
-                "viewer_key": viewer_key,
-                "calculation_type": calculation_type,
-                "input_hash": input_hash,
-                "algorithm_version": algorithm_version,
-                "result": result_json,
-            },
+            pg_insert(CalculationSnapshot)
+            .values(
+                scope_type=scope_type,
+                scope_id=scope_id,
+                viewer_key=viewer_key,
+                calculation_type=calculation_type,
+                input_hash=input_hash,
+                algorithm_version=algorithm_version,
+                calculated_at=datetime.now(timezone.utc),
+            )
+            .on_conflict_do_update(
+                index_elements=[
+                    CalculationSnapshot.scope_type, CalculationSnapshot.scope_id,
+                    CalculationSnapshot.viewer_key, CalculationSnapshot.calculation_type,
+                ],
+                set_={
+                    "input_hash": input_hash,
+                    "algorithm_version": algorithm_version,
+                    "calculated_at": datetime.now(timezone.utc),
+                },
+            )
+        )
+        await session.execute(
+            pg_insert(CalculationSnapshotPayload)
+            .values(
+                scope_type=scope_type,
+                scope_id=scope_id,
+                viewer_key=viewer_key,
+                calculation_type=calculation_type,
+                result=result_data,
+            )
+            .on_conflict_do_update(
+                index_elements=[
+                    CalculationSnapshotPayload.scope_type, CalculationSnapshotPayload.scope_id,
+                    CalculationSnapshotPayload.viewer_key, CalculationSnapshotPayload.calculation_type,
+                ],
+                set_={"result": result_data},
+            )
         )
         await session.commit()
 
@@ -5381,11 +5446,39 @@ async def get_user_property_actual_sizes(user_id: str, asset_keys: Iterable[str]
     return {row.asset_key: row.actual_size_sqm for row in rows}
 
 
+async def _ensure_property_asset(
+    session: AsyncSession, asset_key: str, identity: dict[str, Any] | None = None
+) -> None:
+    """Register a hash and resolve it to typed cadastral fields when supplied."""
+    key = str(asset_key or "")
+    if not re.fullmatch(r"[a-f0-9]{64}", key):
+        raise ValueError("Invalid cadastral asset key")
+    normalized = canonical_property_identity(identity) if identity is not None else None
+    if identity is not None and (normalized is None or normalized.get("asset_key") != key):
+        raise ValueError("Cadastral identity does not match asset key")
+    await session.execute(pg_insert(PropertyAsset).values(asset_key=key).on_conflict_do_nothing())
+    if normalized is None:
+        return
+    row = (
+        await session.execute(select(PropertyAsset).where(PropertyAsset.asset_key == key).with_for_update())
+    ).scalar_one()
+    values = {field: normalized[field] or None for field in IDENTITY_FIELDS}
+    if row.identity_version == 0:
+        await session.execute(
+            update(PropertyAsset)
+            .where(PropertyAsset.asset_key == key, PropertyAsset.identity_version == 0)
+            .values(identity_version=1, **values)
+        )
+    elif row.identity_version != 1:
+        raise ValueError("Cadastral identity conflicts with the registered asset")
+
+
 async def ensure_user_property_omi_selections(
     user_id: str, defaults: Iterable[dict[str, Any]]
 ) -> None:
     """Persist or refresh automatic OMI guesses without replacing explicit user choices."""
     values = []
+    identities: dict[str, dict[str, Any] | None] = {}
     for item in defaults:
         asset_key = str(item.get("asset_key") or "")
         if not re.fullmatch(r"[a-f0-9]{64}", asset_key):
@@ -5405,9 +5498,12 @@ async def ensure_user_property_omi_selections(
             "is_manual": False,
             "legacy_zone_code": str(item.get("legacy_zone_code") or "").strip().upper() or None,
         })
+        identities[asset_key] = item.get("asset_identity")
     if not values:
         return
     async with _get_session_factory()() as session:
+        for item in values:
+            await _ensure_property_asset(session, item["asset_key"], identities.get(item["asset_key"]))
         await session.execute(
             text(
                 "INSERT INTO property_omi_selection "
@@ -5427,10 +5523,12 @@ async def ensure_user_property_omi_selections(
 
 
 async def set_user_property_omi_selection(
-    user_id: str, asset_key: str, zone_code: str | None, typology_code: int | None
+    user_id: str, asset_key: str, zone_code: str | None, typology_code: int | None,
+    identity: dict[str, Any] | None = None,
 ) -> None:
     """Save a user's selected OMI zone and typology and invalidate their cached totals."""
     async with _get_session_factory()() as session:
+        await _ensure_property_asset(session, asset_key, identity)
         await session.execute(
             text(
                 "INSERT INTO property_omi_selection "
@@ -5455,10 +5553,13 @@ async def set_user_property_omi_selection(
 
 
 async def set_user_property_actual_size(
-    user_id: str, asset_key: str, actual_size_sqm: Decimal | None
+    user_id: str, asset_key: str, actual_size_sqm: Decimal | None,
+    identity: dict[str, Any] | None = None,
 ) -> None:
     """Save a user's effective property size, or clear it to use the cadastral default again."""
     async with _get_session_factory()() as session:
+        if actual_size_sqm is not None or identity is not None:
+            await _ensure_property_asset(session, asset_key, identity)
         if actual_size_sqm is None:
             await session.execute(
                 text("DELETE FROM property_actual_size WHERE user_id = :user_id AND asset_key = :asset_key"),
@@ -5491,9 +5592,11 @@ async def set_user_manual_property_valuation(
     source_date: date | None,
     source_url: str | None,
     notes: str | None,
+    identity: dict[str, Any] | None = None,
 ) -> None:
     """Create or replace one user's provider valuation for one cadastral property."""
     async with _get_session_factory()() as session:
+        await _ensure_property_asset(session, asset_key, identity)
         await session.execute(
             text(
                 "INSERT INTO manual_property_valuation "
@@ -5522,7 +5625,9 @@ async def set_user_manual_property_valuation(
         await session.commit()
 
 
-async def set_user_property_valuation_preference(user_id: str, asset_key: str, source: str) -> bool:
+async def set_user_property_valuation_preference(
+    user_id: str, asset_key: str, source: str, identity: dict[str, Any] | None = None
+) -> bool:
     """Set a user's preferred source; return False if an external provider has no saved estimate."""
     async with _get_session_factory()() as session:
         if source != "omi":
@@ -5537,6 +5642,7 @@ async def set_user_property_valuation_preference(user_id: str, asset_key: str, s
             ).scalar_one_or_none()
             if exists is None:
                 return False
+        await _ensure_property_asset(session, asset_key, identity)
         await session.execute(
             text(
                 "INSERT INTO property_valuation_preference (user_id, asset_key, preferred_source, updated_at) "
@@ -5556,10 +5662,12 @@ async def set_user_property_valuation_preference(user_id: str, asset_key: str, s
 
 
 async def set_user_property_affrancation_amount(
-    user_id: str, asset_key: str, amount: Decimal | None
+    user_id: str, asset_key: str, amount: Decimal | None, identity: dict[str, Any] | None = None
 ) -> None:
     """Save an account-specific amount, or remove it to restore the automatic estimate."""
     async with _get_session_factory()() as session:
+        if amount is not None or identity is not None:
+            await _ensure_property_asset(session, asset_key, identity)
         if amount is None:
             await session.execute(
                 text(
@@ -5590,9 +5698,12 @@ async def set_user_property_omi_override(
     asset_key: str,
     value_min: Decimal | None,
     value_max: Decimal | None,
+    identity: dict[str, Any] | None = None,
 ) -> None:
     """Save or clear a user's custom OMI range for one cadastral property."""
     async with _get_session_factory()() as session:
+        if value_min is not None or identity is not None:
+            await _ensure_property_asset(session, asset_key, identity)
         if value_min is None:
             await session.execute(
                 text("DELETE FROM property_omi_override WHERE user_id = :user_id AND asset_key = :asset_key"),

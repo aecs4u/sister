@@ -177,6 +177,7 @@
                 omiReset.disabled = true;
                 errorBox.hidden = true;
                 save('/manual-property-valuations/' + encodeURIComponent(item.asset_key) + '/omi-override', {
+                    identity: item.identity,
                     value_min: omiMinInput.value,
                     value_max: omiMaxInput.value || null
                 }).catch(function (error) {
@@ -191,6 +192,7 @@
                 omiSave.disabled = true;
                 errorBox.hidden = true;
                 save('/manual-property-valuations/' + encodeURIComponent(item.asset_key) + '/omi-override', {
+                    identity: item.identity,
                     value_min: null,
                     value_max: null
                 }).catch(function (error) {
@@ -234,6 +236,7 @@
                 resetAmount.disabled = true;
                 errorBox.hidden = true;
                 save('/manual-property-valuations/' + encodeURIComponent(item.asset_key) + '/affrancation', {
+                    identity: item.identity,
                     amount: amountInput.value
                 }).catch(function (error) {
                     saveAmount.disabled = false;
@@ -247,6 +250,7 @@
                 saveAmount.disabled = true;
                 errorBox.hidden = true;
                 save('/manual-property-valuations/' + encodeURIComponent(item.asset_key) + '/affrancation', {
+                    identity: item.identity,
                     amount: null
                 }).catch(function (error) {
                     resetAmount.disabled = false;
@@ -267,7 +271,10 @@
 
         select.addEventListener('change', function () {
             if (!select.value) return;
-            save('/manual-property-valuations/' + encodeURIComponent(item.asset_key) + '/preference', {source: select.value})
+            save('/manual-property-valuations/' + encodeURIComponent(item.asset_key) + '/preference', {
+                source: select.value,
+                identity: item.identity
+            })
                 .catch(function (error) { showError(error.message); });
         });
 
@@ -320,6 +327,7 @@
             submit.disabled = true;
             errorBox.hidden = true;
             save('/manual-property-valuations/' + encodeURIComponent(item.asset_key), {
+                identity: item.identity,
                 provider: provider.value,
                 value_min: minimum.value,
                 value_max: maximum.value || null,

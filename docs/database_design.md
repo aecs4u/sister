@@ -1,6 +1,10 @@
 # Flat, normalised database design
 
-Status: the normalized schema is live in the `sister` database. Revision `20261028_istat_municipalities` moves
+Status: the normalized schema is live in the `sister` database. Revision `20261203_schema_identity_flatness` adds
+canonical subject/property identities, normalized holding provinces, and moves calculation result JSON to the archive.
+Revision `20261204_billing_transaction_self_reference` adds the validated self-reference from wallet transactions to
+their related transaction rows.
+Revision `20261028_istat_municipalities` moves
 municipality lookups to the shared ISTAT foreign table; its schema is configured by `DATABASE_ISTAT_SCHEMA` and
 defaults to `DATABASE_SCHEMA` (`sister`). The application reads its `numeric_code` keys.
 
@@ -11,15 +15,36 @@ ER diagram: `docs/schema_flat.svg` (regenerate with the command at the end).
 ## Rules
 
 - **Flat**: one typed column per fact. No JSON or text blobs in the working schema, no EAV tree, no `x_json` copy of
-  child rows, no 1:1 side tables, no polymorphic "one of these three parents" columns.
+  child rows, and no polymorphic "one of these three parents" columns. A 1:1 table is appropriate for a true subtype
+  (such as `mortgage_inspection` for `document_extraction`) or to keep an archive payload outside the working schema.
 - **Normalised**: every real-world thing exists once and is referenced by a typed key (ISTAT numeric code for
   municipalities; local keys for cadastral units, subjects, right kinds, and registry offices). Composite source text is split into typed columns: a share `1/2` is two
   integers, `R.Euro:1704,31` is a `numeric`, `dd/mm/yyyy` is a `date`, `RAVENNA (RA)` is a comune.
 - **Integrity in the database**: local relations have foreign keys and indexes; natural keys are unique
   (`NULLS NOT DISTINCT` where a part may be missing). The shared ISTAT foreign table is the municipality authority;
   PostgreSQL cannot enforce foreign keys to it.
-- **Raw payloads live elsewhere**: response JSON, the XML node tree, extraction JSON and document text moved to
-  `sister_archive`. All of it can be rebuilt from the stored `.p7m` files and `outputs/`.
+- **Raw payloads live elsewhere**: response JSON, the XML node tree, extraction JSON, calculation results and document
+  text live in `sister_archive`. Billing provider metadata remains in its billing-owned tables because that package
+  owns and evolves that contract; it is the documented JSON exception in the active schema.
+
+## Identity registries and derived province lists
+
+`subject_profile` is the parent identity for per-user favorites, notes, grants, purchases, and shared tags. Those
+relations retain their own lifecycle and audit columns while sharing one typed `(subject_type, subject_code)` key.
+`property_asset` is the canonical parent for per-user cadastral valuations, OMI selections, sizes and preferences.
+Its version 1 typed cadastral fields use the same hash algorithm as the UI asset key. Existing hashes are retained as
+version 0 unresolved identities because the original fields cannot be reconstructed from a one-way hash; the next
+identity-bearing save resolves each row, and the application rejects any identity whose hash does not match.
+
+`subject_holding_province` stores one province per row. The subject profile/archive query still returns a sorted,
+comma-separated province string for compatibility, and derives the count from the child rows. `calculation_snapshot`
+keeps searchable fingerprints and timestamps; the structured result is paired by the same composite key in
+`sister_archive.calculation_snapshot_payload`.
+
+`property` and `result_owner` use composite foreign keys so a result must belong to the same request as the row. When a
+subject record is present, its subject key must match the row's subject key. The natural cadastral-unit key remains
+SISTER-specific: the sibling domain package's `PropertyKey` omits cadastral type and section and is not interchangeable
+without changing identity semantics.
 
 ## What was wrong
 
@@ -137,6 +162,27 @@ table. PostgreSQL does not support foreign keys referencing foreign tables, so t
 not constrained to that relation. Foreign and historical birthplaces that have no current ISTAT row are retained in
 `subject.birth_municipality_text` and `subject.birth_province_code`. The previous local dimension is retained as
 `comune_pre_istat` only so the migration can be downgraded; application queries do not use it.
+
+## Other shared reference data
+
+The mapped `sister.municipalities`, `sister.provinces`, and `sister.regions` are already foreign tables, so there is no
+local municipality or region lookup table to replace. `territory_province` is the one direct local duplicate: its 110
+province codes and names match `sister.provinces`. Keep it as the local foreign-key target for courts, Conservatoria
+offices, and cadastral office listings; PostgreSQL cannot enforce those foreign keys against the foreign table. The old
+`comune_pre_istat` table is a rollback snapshot, not an active lookup. `court_municipality`,
+`conservatoria_municipality`, `request_province`, and `subject_holding_province` hold office coverage or SISTER result
+data, not reusable ISTAT dimensions.
+
+SISTER has no local OMI quote or OMI reference tables to replace. OMI quote reads use the separate `omi` database
+(`omi.zone_municipality`, `omi.zone_version`, `omi.quotation_fact`, and its reference tables). The local
+`property_omi_selection`, `property_omi_override`, `manual_property_valuation`, and `property_valuation_preference`
+tables contain per-user choices or values; they are not copies of OMI source data. Mapping OMI tables through FDW could
+be considered if SISTER needs cross-database SQL joins, but it would not replace these user-owned tables.
+
+The billing wallet transaction table has a real self-reference: `related_transaction_id` identifies another row in
+`billing_transactions`. Migration `20261204_billing_transaction_self_reference` enforces it. Purchase and coupon
+`wallet_tx_id` columns remain soft references because the configured wallet backend may be PostgreSQL, Redis, or
+in-memory storage; a PostgreSQL foreign key would reject valid IDs from the other backends.
 
 ## Databases that ran the first variant (including live)
 

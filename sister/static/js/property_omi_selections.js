@@ -160,7 +160,7 @@
         fetch('/manual-property-valuations/' + encodeURIComponent(estimate.asset_identity.asset_key) + '/actual-size', {
             method: 'PUT',
             headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({actual_size_sqm: value || null})
+            body: JSON.stringify({actual_size_sqm: value || null, asset_identity: estimate.asset_identity})
         }).then(function (response) {
             return response.json().catch(function () { return {}; }).then(function (result) {
                 if (!response.ok) throw new Error(result.detail || 'Salvataggio della superficie non riuscito.');
@@ -306,6 +306,7 @@
             method: 'PUT',
             headers: {'Content-Type': 'application/json'},
             body: JSON.stringify({
+                asset_identity: estimate.asset_identity,
                 comune_code: estimate.omi_comune,
                 zone_code: zoneSelect.value || null,
                 typology_code: typologySelect.value || null
@@ -544,7 +545,12 @@
                     return fetch('/manual-property-valuations/' + encodeURIComponent(estimate.asset_identity.asset_key) + '/omi-selection', {
                         method: 'PUT',
                         headers: {'Content-Type': 'application/json'},
-                        body: JSON.stringify({comune_code: estimate.omi_comune, zone_code: zone, typology_code: null})
+                        body: JSON.stringify({
+                            asset_identity: estimate.asset_identity,
+                            comune_code: estimate.omi_comune,
+                            zone_code: zone,
+                            typology_code: null
+                        })
                     }).then(function (response) { if (!response.ok) failed += 1; }, function () { failed += 1; });
                 });
             });
@@ -660,6 +666,7 @@
                         method: 'PUT',
                         headers: {'Content-Type': 'application/json'},
                         body: JSON.stringify({
+                            asset_identity: estimate.asset_identity,
                             comune_code: estimate.omi_comune,
                             zone_code: estimate.omi_zone_selected && estimate.omi_zona ? estimate.omi_zona : null,
                             typology_code: typology

@@ -1,12 +1,12 @@
 """SQLModel table definitions for the sister database (flat, normalised layout).
 
-The tables are the ones created by ``alembic/sql/20261024_flat_normalised/02_schema.sql`` (design and mapping from the old
-layout in ``docs/database_design.md``). Columns, primary keys and foreign keys are declared here for queries; the DDL
-(checks, unique keys, indexes) is the SQL file, which the test schema is built from, so the two cannot drift.
+The base tables come from ``alembic/sql/20261024_flat_normalised/02_schema.sql``; later Alembic revisions extend them
+as the application evolves (see ``docs/database_design.md``). Columns, primary keys and foreign keys are declared here
+for queries; checks, unique keys and indexes are defined by the base DDL and subsequent migrations.
 
 * ``Request`` holds the request and its response in one row (the old ``visura_requests`` + ``visura_responses``).
 * Dates are ``date``, amounts ``Decimal``, shares are numerator/denominator, places are ISTAT municipalities + ``CadastralUnit``.
-* Raw payloads (response JSON, extraction JSON, document text) are in the ``sister_archive`` schema.
+* Raw payloads (response JSON, extraction JSON, document text, calculation results) are in ``sister_archive``.
 
 Note: do NOT use ``from __future__ import annotations`` here, it breaks SQLAlchemy's annotation handling with SQLModel.
 """
@@ -50,7 +50,30 @@ class TerritoryProvince(SQLModel, table=True):
     name: str
 
 
-class Court(SQLModel, table=True):
+class _TerritoryOfficeFields(SQLModel):
+    """Fields shared by the court and land-registry office catalogs."""
+
+    source_id: Optional[str] = Field(default=None, unique=True)
+    code: Optional[str] = Field(default=None, unique=True)
+    name: str
+    province_code: Optional[str] = Field(default=None)
+    municipality_code: Optional[int] = Field(default=None)
+    address: Optional[str] = Field(default=None)
+    source_url: Optional[str] = Field(default=None)
+    source_updated_at: Optional[datetime] = Field(default=None)
+    created_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc),
+        sa_type=sa.DateTime(timezone=True),
+        sa_column_kwargs={"nullable": False, "server_default": sa.func.now()},
+    )
+    updated_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc),
+        sa_type=sa.DateTime(timezone=True),
+        sa_column_kwargs={"nullable": False, "server_default": sa.func.now()},
+    )
+
+
+class Court(_TerritoryOfficeFields, table=True):
     """Court catalog entry; municipality competence is stored separately."""
 
     __tablename__ = "court"
@@ -61,21 +84,7 @@ class Court(SQLModel, table=True):
     )
 
     id: Optional[int] = Field(default=None, primary_key=True)
-    source_id: Optional[str] = Field(default=None, unique=True)
-    code: Optional[str] = Field(default=None, unique=True)
-    name: str
     court_type: Optional[str] = Field(default=None)
-    province_code: Optional[str] = Field(default=None)
-    municipality_code: Optional[int] = Field(default=None)
-    address: Optional[str] = Field(default=None)
-    source_url: Optional[str] = Field(default=None)
-    source_updated_at: Optional[datetime] = Field(default=None)
-    created_at: datetime = Field(
-        sa_column=Column(sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now())
-    )
-    updated_at: datetime = Field(
-        sa_column=Column(sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now())
-    )
 
 
 class CourtMunicipality(SQLModel, table=True):
@@ -91,7 +100,7 @@ class CourtMunicipality(SQLModel, table=True):
     municipality_code: int = Field(primary_key=True)
 
 
-class ConservatoriaOffice(SQLModel, table=True):
+class ConservatoriaOffice(_TerritoryOfficeFields, table=True):
     """Conservatoria / land-registry public office catalog entry."""
 
     __tablename__ = "conservatoria_office"
@@ -102,20 +111,6 @@ class ConservatoriaOffice(SQLModel, table=True):
     )
 
     id: Optional[int] = Field(default=None, primary_key=True)
-    source_id: Optional[str] = Field(default=None, unique=True)
-    code: Optional[str] = Field(default=None, unique=True)
-    name: str
-    province_code: Optional[str] = Field(default=None)
-    municipality_code: Optional[int] = Field(default=None)
-    address: Optional[str] = Field(default=None)
-    source_url: Optional[str] = Field(default=None)
-    source_updated_at: Optional[datetime] = Field(default=None)
-    created_at: datetime = Field(
-        sa_column=Column(sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now())
-    )
-    updated_at: datetime = Field(
-        sa_column=Column(sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now())
-    )
 
 
 class ConservatoriaMunicipality(SQLModel, table=True):
@@ -212,6 +207,7 @@ class SubjectRecord(SQLModel, table=True):
     __tablename__ = "subject_record"
     __table_args__ = (
         sa.UniqueConstraint("fiscal_code", "denomination", "seat", name="uq_subject_record_identity"),
+        sa.UniqueConstraint("id", "subject_id", name="uq_subject_record_id_subject"),
         sa.Index("ix_subject_record_subject", "subject_id"),
         sa.Index("ix_subject_record_fiscal_code", "fiscal_code"),
     )
@@ -347,6 +343,10 @@ class RequestProvince(SQLModel, table=True):
 
 class RequestResult(SQLModel, table=True):
     __tablename__ = "request_result"
+    __table_args__ = (
+        sa.UniqueConstraint("request_id", "result_index", name="uq_request_result"),
+        sa.UniqueConstraint("id", "request_id", name="uq_request_result_id_request"),
+    )
 
     id: Optional[int] = Field(default=None, primary_key=True)
     request_id: int = Field(foreign_key="request.id")
@@ -356,14 +356,24 @@ class RequestResult(SQLModel, table=True):
 
 class Property(SQLModel, table=True):
     __tablename__ = "property"
+    __table_args__ = (
+        sa.ForeignKeyConstraint(
+            ["result_id", "request_id"], ["request_result.id", "request_result.request_id"],
+            name="fk_property_result_request",
+        ),
+        sa.ForeignKeyConstraint(
+            ["subject_record_id", "subject_id"], ["subject_record.id", "subject_record.subject_id"],
+            name="fk_property_subject_record_subject",
+        ),
+    )
 
     id: Optional[int] = Field(default=None, primary_key=True)
     request_id: int = Field(foreign_key="request.id")
-    result_id: Optional[int] = Field(default=None, foreign_key="request_result.id")
+    result_id: Optional[int] = Field(default=None)
     property_type: Optional[str] = Field(default=None)
     cadastral_unit_id: Optional[int] = Field(default=None, foreign_key="cadastral_unit.id")
     subject_id: Optional[int] = Field(default=None, foreign_key="subject.id")
-    subject_record_id: Optional[int] = Field(default=None, foreign_key="subject_record.id")
+    subject_record_id: Optional[int] = Field(default=None)
     address: Optional[str] = Field(default=None)
     partita: Optional[str] = Field(default=None)
     category: Optional[str] = Field(default=None, foreign_key="cadastral_category.code")
@@ -383,13 +393,23 @@ class Property(SQLModel, table=True):
 
 class ResultOwner(SQLModel, table=True):
     __tablename__ = "result_owner"
+    __table_args__ = (
+        sa.ForeignKeyConstraint(
+            ["result_id", "request_id"], ["request_result.id", "request_result.request_id"],
+            name="fk_result_owner_result_request",
+        ),
+        sa.ForeignKeyConstraint(
+            ["subject_record_id", "subject_id"], ["subject_record.id", "subject_record.subject_id"],
+            name="fk_result_owner_subject_record_subject",
+        ),
+    )
 
     id: Optional[int] = Field(default=None, primary_key=True)
     request_id: int = Field(foreign_key="request.id")
-    result_id: Optional[int] = Field(default=None, foreign_key="request_result.id")
+    result_id: Optional[int] = Field(default=None)
     owner_index: Optional[int] = Field(default=None)
     subject_id: Optional[int] = Field(default=None, foreign_key="subject.id")
-    subject_record_id: Optional[int] = Field(default=None, foreign_key="subject_record.id")
+    subject_record_id: Optional[int] = Field(default=None)
     right_id: Optional[int] = Field(default=None, foreign_key="ownership_right.id")
 
 
@@ -561,6 +581,10 @@ class SubjectAccess(SQLModel, table=True):
             "(subject_type = 'person' AND subject_code ~ '^[A-Z0-9]{16}$')",
             name="ck_subject_access_code",
         ),
+        sa.ForeignKeyConstraint(
+            ["subject_type", "subject_code"], ["subject_profile.subject_type", "subject_profile.subject_code"],
+            name="fk_subject_access_profile",
+        ),
     )
 
     user_id: str = Field(sa_column=Column(sa.String(), primary_key=True))
@@ -587,6 +611,10 @@ class SubjectPurchase(SQLModel, table=True):
             "(subject_type = 'company' AND subject_code ~ '^[0-9]{11}$') OR "
             "(subject_type = 'person' AND subject_code ~ '^[A-Z0-9]{16}$')",
             name="ck_subject_purchase_code",
+        ),
+        sa.ForeignKeyConstraint(
+            ["subject_type", "subject_code"], ["subject_profile.subject_type", "subject_profile.subject_code"],
+            name="fk_subject_purchase_profile",
         ),
         sa.CheckConstraint("status IN ('completed', 'refund_required', 'refunded')", name="ck_subject_purchase_status"),
         sa.Index(
@@ -725,9 +753,29 @@ class SubjectFavorite(SQLModel, table=True):
     __tablename__ = "subject_favorite"
     __table_args__ = (
         sa.CheckConstraint("subject_type IN ('company', 'person')", name="ck_subject_favorite_type"),
+        sa.ForeignKeyConstraint(
+            ["subject_type", "subject_code"], ["subject_profile.subject_type", "subject_profile.subject_code"],
+            name="fk_subject_favorite_profile",
+        ),
     )
 
     user_id: str = Field(sa_column=Column(sa.String(), primary_key=True))
+    subject_type: str = Field(sa_column=Column(sa.String(16), primary_key=True))
+    subject_code: str = Field(sa_column=Column(sa.String(16), primary_key=True))
+    created_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc),
+        sa_column=Column(sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
+    )
+
+
+class SubjectProfile(SQLModel, table=True):
+    """Canonical identity for profile metadata that exists independently of stored SISTER documents."""
+
+    __tablename__ = "subject_profile"
+    __table_args__ = (
+        sa.CheckConstraint("subject_type IN ('company', 'person')", name="ck_subject_profile_type"),
+    )
+
     subject_type: str = Field(sa_column=Column(sa.String(16), primary_key=True))
     subject_code: str = Field(sa_column=Column(sa.String(16), primary_key=True))
     created_at: datetime = Field(
@@ -750,8 +798,6 @@ class SubjectHolding(SQLModel, table=True):
     request_id: Optional[int] = Field(
         default=None, sa_column=Column(sa.BigInteger, sa.ForeignKey("request.id", ondelete="SET NULL"), nullable=True)
     )
-    provinces: Optional[str] = Field(default=None)
-    province_count: Optional[int] = Field(default=None)
     buildings: Optional[int] = Field(default=None)
     land_parcels: Optional[int] = Field(default=None)
     properties: Optional[int] = Field(default=None)
@@ -771,12 +817,28 @@ class SubjectHolding(SQLModel, table=True):
     )
 
 
+class SubjectHoldingProvince(SQLModel, table=True):
+    """One province in which the latest successful subject search found property."""
+
+    __tablename__ = "subject_holding_province"
+    __table_args__ = (
+        sa.ForeignKeyConstraint(["fiscal_code"], ["subject_holding.fiscal_code"], ondelete="CASCADE"),
+    )
+
+    fiscal_code: str = Field(sa_column=Column(sa.String(16), primary_key=True))
+    province: str = Field(sa_column=Column(sa.String(), primary_key=True))
+
+
 class SubjectNote(SQLModel, table=True):
     """A private note a user keeps on one person or company profile."""
 
     __tablename__ = "subject_note"
     __table_args__ = (
         sa.CheckConstraint("subject_type IN ('company', 'person')", name="ck_subject_note_type"),
+        sa.ForeignKeyConstraint(
+            ["subject_type", "subject_code"], ["subject_profile.subject_type", "subject_profile.subject_code"],
+            name="fk_subject_note_profile",
+        ),
     )
 
     user_id: str = Field(sa_column=Column(sa.String(), primary_key=True))
@@ -803,6 +865,10 @@ class SubjectTag(SQLModel, table=True):
     __tablename__ = "subject_tag"
     __table_args__ = (
         sa.CheckConstraint("subject_type IN ('company', 'person')", name="ck_subject_tag_type"),
+        sa.ForeignKeyConstraint(
+            ["subject_type", "subject_code"], ["subject_profile.subject_type", "subject_profile.subject_code"],
+            name="fk_subject_tag_profile",
+        ),
         sa.Index("ix_subject_tag_type_key", "subject_type", "tag_key"),
     )
 
@@ -830,6 +896,7 @@ class ManualPropertyValuation(SQLModel, table=True):
             name="ck_manual_property_valuation_range",
         ),
         sa.Index("ix_manual_property_valuation_asset", "asset_key"),
+        sa.ForeignKeyConstraint(["asset_key"], ["property_asset.asset_key"], name="fk_manual_property_valuation_asset"),
     )
 
     user_id: str = Field(primary_key=True)
@@ -854,7 +921,10 @@ class PropertyValuationPreference(SQLModel, table=True):
     """One user's preferred source for one cadastral property."""
 
     __tablename__ = "property_valuation_preference"
-    __table_args__ = (sa.Index("ix_property_valuation_preference_asset", "asset_key"),)
+    __table_args__ = (
+        sa.Index("ix_property_valuation_preference_asset", "asset_key"),
+        sa.ForeignKeyConstraint(["asset_key"], ["property_asset.asset_key"], name="fk_property_valuation_preference_asset"),
+    )
 
     user_id: str = Field(primary_key=True)
     asset_key: str = Field(primary_key=True)
@@ -872,6 +942,7 @@ class PropertyAffrancationAmount(SQLModel, table=True):
     __table_args__ = (
         sa.CheckConstraint("amount >= 0", name="ck_property_affrancation_amount_nonnegative"),
         sa.Index("ix_property_affrancation_amount_asset", "asset_key"),
+        sa.ForeignKeyConstraint(["asset_key"], ["property_asset.asset_key"], name="fk_property_affrancation_amount_asset"),
     )
 
     user_id: str = Field(primary_key=True)
@@ -892,6 +963,7 @@ class PropertyOmiOverride(SQLModel, table=True):
             "value_min > 0 AND value_max >= value_min", name="ck_property_omi_override_range"
         ),
         sa.Index("ix_property_omi_override_asset", "asset_key"),
+        sa.ForeignKeyConstraint(["asset_key"], ["property_asset.asset_key"], name="fk_property_omi_override_asset"),
     )
 
     user_id: str = Field(primary_key=True)
@@ -910,6 +982,7 @@ class PropertyOmiSelection(SQLModel, table=True):
     __tablename__ = "property_omi_selection"
     __table_args__ = (
         sa.CheckConstraint("typology_code IS NULL OR typology_code > 0", name="ck_property_omi_selection_typology"),
+        sa.ForeignKeyConstraint(["asset_key"], ["property_asset.asset_key"], name="fk_property_omi_selection_asset"),
     )
 
     user_id: str = Field(primary_key=True)
@@ -930,12 +1003,44 @@ class PropertyActualSize(SQLModel, table=True):
     __table_args__ = (
         sa.CheckConstraint("actual_size_sqm > 0", name="ck_property_actual_size_positive"),
         sa.Index("ix_property_actual_size_asset", "asset_key"),
+        sa.ForeignKeyConstraint(["asset_key"], ["property_asset.asset_key"], name="fk_property_actual_size_asset"),
     )
 
     user_id: str = Field(primary_key=True)
     asset_key: str = Field(primary_key=True)
     actual_size_sqm: Decimal = Field(sa_column=Column(sa.Numeric(12, 2), nullable=False))
     updated_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc),
+        sa_column=Column(sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
+    )
+
+
+class PropertyAsset(SQLModel, table=True):
+    """Canonical registry for cadastral identities referenced by per-user settings."""
+
+    __tablename__ = "property_asset"
+    __table_args__ = (
+        sa.CheckConstraint("asset_key ~ '^[a-f0-9]{64}$'", name="ck_property_asset_key_sha256"),
+        sa.CheckConstraint(
+            "(identity_version = 0 AND cadastre_type IS NULL AND municipality_code IS NULL AND municipality IS NULL "
+            "AND province IS NULL AND section IS NULL AND sheet IS NULL AND parcel IS NULL AND subunit IS NULL) OR "
+            "(identity_version = 1 AND cadastre_type IS NOT NULL AND sheet IS NOT NULL AND parcel IS NOT NULL "
+            "AND (municipality_code IS NOT NULL OR municipality IS NOT NULL))",
+            name="ck_property_asset_identity_version",
+        ),
+    )
+
+    asset_key: str = Field(sa_column=Column(sa.String(64), primary_key=True))
+    identity_version: int = Field(default=0, sa_column=Column(sa.SmallInteger, nullable=False, server_default="0"))
+    cadastre_type: Optional[str] = Field(default=None)
+    municipality_code: Optional[str] = Field(default=None)
+    municipality: Optional[str] = Field(default=None)
+    province: Optional[str] = Field(default=None)
+    section: Optional[str] = Field(default=None)
+    sheet: Optional[str] = Field(default=None)
+    parcel: Optional[str] = Field(default=None)
+    subunit: Optional[str] = Field(default=None)
+    created_at: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc),
         sa_column=Column(sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
     )
@@ -956,7 +1061,6 @@ class CalculationSnapshot(SQLModel, table=True):
     calculation_type: str = Field(sa_column=Column(sa.String(64), primary_key=True))
     input_hash: str = Field(sa_column=Column(sa.String(64), nullable=False))
     algorithm_version: str = Field(sa_column=Column(sa.String(40), nullable=False))
-    result: dict[str, Any] = Field(sa_column=Column(JSONB, nullable=False))
     calculated_at: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc),
         sa_column=Column(sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
@@ -1186,6 +1290,27 @@ class ActivityLogPayload(SQLModel, table=True):
     activity_id: int = Field(primary_key=True, foreign_key="activity_log.id")
     params: Optional[dict[str, Any]] = Field(default=None, sa_column=Column(JSONB))
     result: Optional[dict[str, Any]] = Field(default=None, sa_column=Column(JSONB))
+
+
+class CalculationSnapshotPayload(SQLModel, table=True):
+    """Structured calculation result kept outside the typed working schema."""
+
+    __tablename__ = "calculation_snapshot_payload"
+    __table_args__ = (
+        sa.ForeignKeyConstraint(
+            ["scope_type", "scope_id", "viewer_key", "calculation_type"],
+            ["calculation_snapshot.scope_type", "calculation_snapshot.scope_id", "calculation_snapshot.viewer_key",
+             "calculation_snapshot.calculation_type"],
+            ondelete="CASCADE",
+        ),
+        {"schema": "sister_archive"},
+    )
+
+    scope_type: str = Field(primary_key=True)
+    scope_id: str = Field(primary_key=True)
+    viewer_key: str = Field(primary_key=True)
+    calculation_type: str = Field(primary_key=True)
+    result: dict[str, Any] = Field(sa_column=Column(JSONB, nullable=False))
 
 
 # ---------------------------------------------------------------------------

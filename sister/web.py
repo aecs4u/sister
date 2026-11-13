@@ -3048,6 +3048,7 @@ async def _apply_user_manual_valuations(kpis: dict[str, Any] | None, user) -> di
                     legacy_zone_code = estimate.pop("_omi_legacy_zone_code", None)
                     guessed_selections.append({
                         "asset_key": identity["asset_key"],
+                        "asset_identity": identity,
                         "zone_code": estimate.get("omi_zona"),
                         "typology_code": typology_code,
                         "legacy_zone_code": legacy_zone_code,
@@ -7178,7 +7179,7 @@ async def _render_doc_from_db(
         )
         complete_data_url = f"/documents/{int(doc['id'])}/complete-data.json?k={complete_data_key}"
     if land_map_kind == "soggetto":
-        from .display import CATEGORY_DESCRIPTIONS
+        from .cadastral_categories import CATEGORY_DESCRIPTIONS
 
         subject_page_data_key = _cache_subject_page_data(
             _subject_page_data_payload(land_registry_kpis, land_registry_history, CATEGORY_DESCRIPTIONS),
@@ -10095,6 +10096,23 @@ def _manual_actual_size_decimal(value: Any) -> Decimal | None:
     return rounded if Decimal("0") < rounded < Decimal("10000000") else None
 
 
+def _validated_property_asset_identity(payload: dict[str, Any], asset_key: str) -> dict[str, str] | None:
+    """Validate the typed identity accompanying a per-user cadastral setting write."""
+    from fastapi import HTTPException
+
+    raw_identity = payload.get("identity") if "identity" in payload else payload.get("asset_identity")
+    if raw_identity is None:
+        return None
+    if not isinstance(raw_identity, dict):
+        raise HTTPException(status_code=422, detail="identity must be a JSON object")
+    from .property_identity import canonical_property_identity
+
+    identity = canonical_property_identity(raw_identity)
+    if identity is None or identity.get("asset_key") != asset_key:
+        raise HTTPException(status_code=422, detail="Cadastral identity does not match asset key")
+    return identity
+
+
 def _manual_valuation_source_url(provider: str, value: Any) -> str | None:
     if value is None or not str(value).strip():
         return None
@@ -10135,6 +10153,7 @@ async def web_manual_property_valuation(request: Request, asset_key: str, user=D
         raise HTTPException(status_code=400, detail="Expected a JSON body") from None
     if not isinstance(payload, dict):
         raise HTTPException(status_code=422, detail="Expected a JSON object")
+    identity = _validated_property_asset_identity(payload, asset_key)
 
     provider = str(payload.get("provider") or "").strip().lower()
     if provider not in _MANUAL_VALUATION_PROVIDERS:
@@ -10166,7 +10185,7 @@ async def web_manual_property_valuation(request: Request, asset_key: str, user=D
     from .database import set_user_manual_property_valuation
 
     await set_user_manual_property_valuation(
-        user_key, asset_key, provider, value_min, value_max, source_date, source_url, notes
+        user_key, asset_key, provider, value_min, value_max, source_date, source_url, notes, identity=identity
     )
     return JSONResponse({"ok": True, "asset_key": asset_key, "provider": provider})
 
@@ -10187,6 +10206,7 @@ async def web_property_affrancation_amount(request: Request, asset_key: str, use
         raise HTTPException(status_code=400, detail="Expected a JSON body") from None
     if not isinstance(payload, dict):
         raise HTTPException(status_code=422, detail="Expected a JSON object")
+    identity = _validated_property_asset_identity(payload, asset_key)
     raw_amount = payload.get("amount")
     amount = _manual_affrancation_decimal(raw_amount)
     if raw_amount is not None and str(raw_amount).strip() and amount is None:
@@ -10194,7 +10214,7 @@ async def web_property_affrancation_amount(request: Request, asset_key: str, use
 
     from .database import set_user_property_affrancation_amount
 
-    await set_user_property_affrancation_amount(user_key, asset_key, amount)
+    await set_user_property_affrancation_amount(user_key, asset_key, amount, identity=identity)
     return JSONResponse({"ok": True, "asset_key": asset_key, "amount": str(amount) if amount is not None else None})
 
 
@@ -10214,6 +10234,7 @@ async def web_property_omi_override(request: Request, asset_key: str, user=Depen
         raise HTTPException(status_code=400, detail="Expected a JSON body") from None
     if not isinstance(payload, dict):
         raise HTTPException(status_code=422, detail="Expected a JSON object")
+    identity = _validated_property_asset_identity(payload, asset_key)
 
     raw_min = payload.get("value_min")
     raw_max = payload.get("value_max")
@@ -10233,7 +10254,7 @@ async def web_property_omi_override(request: Request, asset_key: str, user=Depen
 
     from .database import set_user_property_omi_override
 
-    await set_user_property_omi_override(user_key, asset_key, value_min, value_max)
+    await set_user_property_omi_override(user_key, asset_key, value_min, value_max, identity=identity)
     return JSONResponse({
         "ok": True,
         "asset_key": asset_key,
@@ -10258,6 +10279,7 @@ async def web_property_omi_selection(request: Request, asset_key: str, user=Depe
         raise HTTPException(status_code=400, detail="Expected a JSON body") from None
     if not isinstance(payload, dict):
         raise HTTPException(status_code=422, detail="Expected a JSON object")
+    identity = _validated_property_asset_identity(payload, asset_key)
 
     comune_code = str(payload.get("comune_code") or "").strip().upper()
     is_cadastral_code = re.fullmatch(r"[A-Z0-9]{4}", comune_code)
@@ -10296,7 +10318,7 @@ async def web_property_omi_selection(request: Request, asset_key: str, user=Depe
 
     from .database import set_user_property_omi_selection
 
-    await set_user_property_omi_selection(user_key, asset_key, zone_code, typology_code)
+    await set_user_property_omi_selection(user_key, asset_key, zone_code, typology_code, identity=identity)
     return JSONResponse({
         "ok": True,
         "asset_key": asset_key,
@@ -10321,6 +10343,7 @@ async def web_property_actual_size(request: Request, asset_key: str, user=Depend
         raise HTTPException(status_code=400, detail="Expected a JSON body") from None
     if not isinstance(payload, dict):
         raise HTTPException(status_code=422, detail="Expected a JSON object")
+    identity = _validated_property_asset_identity(payload, asset_key)
 
     raw_size = payload.get("actual_size_sqm")
     actual_size_sqm = _manual_actual_size_decimal(raw_size)
@@ -10329,7 +10352,7 @@ async def web_property_actual_size(request: Request, asset_key: str, user=Depend
 
     from .database import set_user_property_actual_size
 
-    await set_user_property_actual_size(user_key, asset_key, actual_size_sqm)
+    await set_user_property_actual_size(user_key, asset_key, actual_size_sqm, identity=identity)
     return JSONResponse({
         "ok": True,
         "asset_key": asset_key,
@@ -10351,12 +10374,15 @@ async def web_manual_property_valuation_preference(request: Request, asset_key: 
         payload = await request.json()
     except (ValueError, UnicodeDecodeError):
         raise HTTPException(status_code=400, detail="Expected a JSON body") from None
-    source = str(payload.get("source") or "").strip().lower() if isinstance(payload, dict) else ""
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=422, detail="Expected a JSON object")
+    identity = _validated_property_asset_identity(payload, asset_key)
+    source = str(payload.get("source") or "").strip().lower()
     if source != "omi" and source not in _MANUAL_VALUATION_PROVIDERS:
         raise HTTPException(status_code=422, detail="source must be omi, immobiliare, idealista, or other")
     from .database import set_user_property_valuation_preference
 
-    saved = await set_user_property_valuation_preference(user_key, asset_key, source)
+    saved = await set_user_property_valuation_preference(user_key, asset_key, source, identity=identity)
     if not saved:
         raise HTTPException(status_code=422, detail="Inserisci prima una stima per la fonte scelta.")
     return JSONResponse({"ok": True, "asset_key": asset_key, "preferred_source": source})
@@ -13966,7 +13992,7 @@ async def _render_query_only_subject(
                 "subject_formalities": subject_formalities or [],
             },
         )
-    from .display import CATEGORY_DESCRIPTIONS
+    from .cadastral_categories import CATEGORY_DESCRIPTIONS
 
     subject_page_data_key = _cache_subject_page_data(
         _subject_page_data_payload(land_registry_kpis, [], CATEGORY_DESCRIPTIONS),

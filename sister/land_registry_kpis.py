@@ -11,11 +11,9 @@ Two different figures are produced, and the page must not blur them:
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import json
 import logging
 import re
-import unicodedata
 import unicodedata
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
@@ -25,6 +23,7 @@ from typing import Any
 from . import omi_quotes
 from .cadastral_values import building_cadastral_value, building_multiplier, land_cadastral_value, normalize_category
 from .omi_zones import omi_zone_ranking
+from .property_identity import canonical_property_identity
 from .result_parsers import (
     birth_date_from_codice_fiscale,
     clean_quota,
@@ -337,46 +336,16 @@ def _asset_identity(
     subunit: Any = "",
 ) -> dict[str, str] | None:
     """Build a stable cadastral identity for one property row and its user-entered valuations."""
-    def clean(value: Any) -> str:
-        if isinstance(value, dict):
-            value = value.get("_text") or value.get("value")
-        elif isinstance(value, list):
-            value = value[0] if value else ""
-            if isinstance(value, dict):
-                value = value.get("_text") or value.get("value")
-        text = str(value or "").strip()
-        return re.sub(r"\s+", " ", text)
-
-    identity = {
+    return canonical_property_identity({
         "cadastre_type": cadastre_type,
-        "municipality_code": clean(municipality_code).upper(),
-        "municipality": clean(municipality),
-        "province": clean(province).upper(),
-        "section": clean(section).upper(),
-        "sheet": clean(sheet).upper(),
-        "parcel": clean(parcel).upper(),
-        "subunit": clean(subunit).upper(),
-    }
-    if (
-        not (identity["municipality_code"] or identity["municipality"])
-        or not identity["sheet"]
-        or not identity["parcel"]
-    ):
-        return None
-
-    def token(value: str) -> str:
-        normalized = unicodedata.normalize("NFKD", value.casefold())
-        ascii_value = "".join(char for char in normalized if not unicodedata.combining(char))
-        return re.sub(r"[^a-z0-9]", "", ascii_value)
-
-    key_fields = (
-        identity["cadastre_type"], identity["municipality_code"] or token(identity["municipality"]),
-        "" if identity["municipality_code"] else token(identity["province"]),
-        token(identity["section"]), token(identity["sheet"]),
-        token(identity["parcel"]), token(identity["subunit"]),
-    )
-    identity["asset_key"] = hashlib.sha256("|".join(key_fields).encode("utf-8")).hexdigest()
-    return identity
+        "municipality_code": municipality_code,
+        "municipality": municipality,
+        "province": province,
+        "section": section,
+        "sheet": sheet,
+        "parcel": parcel,
+        "subunit": subunit,
+    })
 
 
 def _preferred_valuation_estimates(
