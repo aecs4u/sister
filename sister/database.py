@@ -3696,6 +3696,9 @@ async def get_subject_mortgage_formalities(
             cost_parts.append(f"{_amount_label(notes_cost)} € note")
         if titles_cost is not None:
             cost_parts.append(f"{_amount_label(titles_cost)} € titoli")
+        unattributed = _amount(costs.get("unattributed_cost"))
+        if unattributed is not None:
+            cost_parts.append(f"{_amount_label(unattributed)} € note non attribuite (estratto conto)")
 
         pending_request_ids: set[str] = set()
         if note_request.get("accepted") and not note_request.get("downloaded"):

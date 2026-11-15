@@ -1,7 +1,13 @@
 # Ispezione ipotecaria: guarded paid flow, structured storage, euro ledger — development plan
 
-Status: **plan for review, nothing implemented.** Branch `feature/ispezione-paid-flow` (from `main` at `97e69c0`).
-Written 2026-11-15.
+Status: **plan, revised after review (2026-11-15).** Branch `feature/ispezione-paid-flow` (from `main` at `97e69c0`).
+Implemented so far: the pagination of the formalità table (commit `80a3e48`, outside the five phases, done first on request).
+Started, uncommitted and untested: the formalità list parser `parse_formalita_list` in `result_parsers.py` (Phase 1).
+Nothing else in the five phases exists yet.
+
+Review changes: Richieste downloads are paid actions, not a free step (Phase 3); paid clicks are recorded before they are
+made and uncertain outcomes block a retry (Phase 3); the flow has its own API and the old paid paths are constrained
+(Phase 3); pending Richieste requests are typed rows (Phase 1); ambiguous charges stay on statement rows (Phase 4).
 
 ## Why
 
@@ -106,7 +112,8 @@ New tables (SQLModel in `db_models.py`, one Alembic revision, `DATABASE_REVISION
 | `mortgage_search` | `id`, `request_id` → `request`, `inspection_number`, `inspection_date`, `office`, `scope` (`office`/`national`), `subject_fiscal_code`, `requester_fiscal_code`, `motivation`, `convention_request_code`, `formalities_count`, `annotations_count` | one row per accepted inspection; unique (`inspection_number`, `inspection_date`) |
 | `mortgage_search_formality` | `id`, `search_id`, `ordinal`, `kind` (trascrizione/iscrizione/annotazione), `direction` (favore/contro), `formality_date`, `registro_particolare`, `registro_generale`, `public_official`, `repertory`, `repertory_date`, `act_description`, `location`, `electronic_note`, `electronic_title`, `portal_selection_value`, `note_document_id`, `title_document_id` | unique (`search_id`, `ordinal`) |
 | `mortgage_search_annotation` | `id`, `formality_id`, `ordinal`, `number`, `annotation_date`, `description`, `is_cancellation` | the *Documenti successivi correlati* lines |
-| `mortgage_search_charge` | `id`, `search_id`, `kind` (`inspection`/`note`/`title`), `quantity`, `unit_amount`, `amount`, `currency`, `charged_at`, `portal_request_id`, `basis` (`cost_page`/`richieste`/`receipt`/`tariff`), `receipt_id`, `wallet_tx_id` | one row per cost line; `basis='tariff'` marks an amount not read on the portal |
+| `mortgage_search_request` | `id`, `search_id`, `formality_id`, `kind` (`note`/`title`), `format`, `portal_request_id` (`idRichiesta`), `status` (`intended`, `requested`, `available`, `downloaded`, `failed`, `uncertain`), `requested_at`, `document_id`, `paid_action_id` | one row per note or titolo asked for the flow's formalità; unique (`portal_request_id`) |
+| `mortgage_search_charge` | `id`, `search_id`, `kind` (`inspection`/`note`/`title`), `quantity`, `unit_amount`, `amount`, `currency`, `charged_at`, `portal_request_id`, `basis` (`cost_page`/`richieste`/`receipt`/`tariff`), `receipt_id`, `wallet_tx_id` | one row per cost line **that the evidence ties to this inspection**; `basis` is `cost_page`, `receipt`, `statement_detail` or `tariff` (an amount not read on the portal); a charge that cannot be tied to an inspection is not stored here (see Phase 4) |
 
 Names follow the existing `mortgage_inspection*` tables (which stay per-note, from the PDF) and the memory rule: no abstract
 bases, discriminator columns.
@@ -118,6 +125,9 @@ Work:
   `ipotecaria_persona_fisica`; idempotent (replace by `request_id`).
 - `sister db backfill mortgage-searches` — projects requests 8038 and 8044 and any later one from their payloads.
 - `get_subject_mortgage_formalities` reads the tables; the JSON reader stays as fallback for one release, then goes.
+- `mortgage_search_request` makes a request that was accepted but not yet archived visible: the quote (Phase 2) counts a
+  formalità with a request in `requested`, `available`, `uncertain` or `downloaded` as **owned or pending**, never as new,
+  so it cannot be submitted a second time. Pending rows are listed on the panel with their `idRichiesta`.
 - Cross-subject query helper: `database.subjects_with_live_burdens(kind=…)` (live = no cancellation annotation), used in phase 5.
 
 Tests: parser fixture; projection on `fresh_db`; backfill twice gives the same rows; the subject panel renders the same HTML
@@ -133,7 +143,8 @@ quote_title_request(search_id, ordinal) -> Quote
 ```
 
 `Quote` = lines (`kind`, `quantity`, `unit_amount`, `amount`), `already_owned` (formalità whose `note_document_id` /
-`title_document_id` is set, or with a same-office document for the same RP/RG **and year**), `new_cost`, `blocked` with the
+`title_document_id` is set, with a same-office document for the same RP/RG **and year**, or with a
+`mortgage_search_request` in a non-failed status), `new_cost`, `blocked` with the
 reason (more than one titolo, no titolo telematico, XML). Ownership is matched on office + RP + RG + year, never RP alone.
 
 UI on the formalità panel (admins): checkboxes per row, *Richiedi note PDF* and *Richiedi titolo* open a confirmation that
@@ -159,15 +170,51 @@ A state machine in `sister/mortgage_flow.py`, driven by `browser.py`, one page l
 | `formalita` | *Elenco delle note* | no | stored (phase 1), quote shown (phase 2) |
 | `notes` | *Visualizza note*, PDF | **yes**, no cost page | the phase 2 confirmation; never without it |
 | `title` | *Visualizza titolo*, one note | **yes** | the phase 2 confirmation |
-| `richieste` | *Richieste* | no | downloads the rows of this flow by `idRichiesta`; free receipts too |
+| `richieste_list` | *Richieste* (read the list, update `mortgage_search_request` statuses) | no | — |
+| `richieste_save` | *Salva* / *Apri* of one row of this flow, by `idRichiesta` | **yes, until proven otherwise** | the quote of that row; a row listed at 0,00 € (receipts) is the only exception |
 
 - Each step saves its page (`page_visits`) and its result; the flow can be resumed from the last stored step while the
   portal still shows it, and otherwise reports where it stopped (the list is lost after *Visualizza note*: seen 12/11).
+- **Paid actions are recorded before they are made.** Table `mortgage_paid_action` (`id`, `search_id`, `step`, `quote`
+  with amount and items, `confirmed_by`, `confirmed_at`, `state`, `portal_request_ids`, `result`, `reconciled_at`):
+  1. `intended` is committed (with the quote and the confirming admin) **before** the click;
+  2. `clicked` right after it; `confirmed` only when the portal shows the effect (the row in Richieste, the *Accetta*
+     result page), reusing the `_confirm_request_submitted` rule;
+  3. if the app stops, the page closes, the session ends or the effect cannot be read, the action stays `intended` or
+     `clicked` and becomes `uncertain`. An `uncertain` action **blocks every retry of the same step** until it is
+     reconciled: against Richieste (the row exists), then against the statement (a charge of the quote's amount on the
+     day). Reconciliation sets `confirmed` or `not_executed` and is itself a recorded, admin-only operation.
+  The single-use token only stops the *app* from reusing a consent; this table is what stops the *portal action* from being
+  replayed. Resume continues from the last stored step and never re-clicks a step whose action is not `not_executed`.
 - A paid step needs a single-use confirmation token bound to the quote (amount + items); a different amount on the page
   than in the quote aborts before the click. Same pattern as the MCP `preview_query` → `submit_query` tokens.
 - A row is `requested` only when the portal shows it in Richieste (same rule as `_confirm_request_submitted`).
-- `query_forms.py` gets the `ipotecaria-persona-fisica` entry with `documents="always"`; CLI, `/forms`, API and MCP follow
-  from the table. `docs/query_forms.md` and a new `docs/mortgage_search_workflow.dot/.svg` are updated.
+- **Interfaces.** `query_forms.py` describes single-step queries, so it cannot carry per-step confirmation. It gets one
+  entry, `ipotecaria-persona-fisica`, for the **free part only** (form, preview, omonimi, formalità list, stopping *before*
+  *Accetta*; `documents="none"`). Everything paid goes through a dedicated flow API, the only way to spend:
+
+  | Operation | HTTP | Who | Effect |
+  |---|---|---|---|
+  | start | `POST /api/v1/mortgage-searches` | API key | runs the free steps, returns the search id and the preview amount |
+  | status | `GET /api/v1/mortgage-searches/{id}` | API key | step, stored formalità, pending requests, uncertain actions |
+  | quote | `POST /api/v1/mortgage-searches/{id}/quote` | API key | quote for *accept*, notes, a titolo or a *Salva*; returns a token |
+  | confirm | `POST /api/v1/mortgage-searches/{id}/confirm` | **admin role** | spends once: token + the quote's amount; one confirmation per paid step |
+  | reconcile | `POST /api/v1/mortgage-searches/{id}/actions/{action}/reconcile` | **admin role** | resolves an `uncertain` action |
+
+  `VisuraClient`, CLI (`sister mortgage start|status|quote|confirm|reconcile`) and the MCP tools (`ipotecaria_preview`,
+  `ipotecaria_confirm`, keeping the `preview_query` → explicit confirmation → submit shape) all call these operations.
+  There is no "accept all": a confirmation names one step.
+- **Closing the old paths.** The paid paths that exist today are changed in the same phase, otherwise they bypass D1:
+  - `auto_confirm` (`models.py:555,597`, `routes.py:539`, `client.py:308`, CLI `--yes` at `cli.py:596,916,972`,
+    `workflows.py:196` with `include_paid_steps`) is **ignored for ipotecaria**: the route answers *preview only* with the
+    quote and an error naming the confirm operation; `--yes` keeps its meaning for re-downloading an answered query only.
+  - `/api/v1/visura/ipotecaria` (`routes.py:516`) becomes a preview-only alias of *start*.
+  - `download_richieste_documents` is split: **list** (free) and **save**. The existing callers get the quote guard:
+    `routes.py:503` (`download-documents`: saves only rows already owned or at 0,00 €, lists the others), `web.py:4005`
+    (the PDF-pair batch job: the same rule), `web.py:6554` (*Scarica da Richieste*: the admin confirmation of Phase 2).
+    Until the statement *Dettaglio* shows what triggers a charge, **every *Salva* of a priced row is treated as paid.**
+  - Workflows keep their paid steps off for ipotecaria until they call the flow API.
+- `docs/query_forms.md`, `docs/mcp_server.md` and a new `docs/mortgage_search_workflow.dot/.svg` are updated.
 - `scripts/capture_page.py` stays as the manual fallback and gains `--parse` (runs the phase 1 parser on what it reads).
 
 This phase touches `utils.py` browser flows, which cannot be exercised without a live session: unit tests use saved pages
@@ -185,8 +232,12 @@ inspected, and is recorded in this document before the phase is called done.
 - `sister/ade_receipt.py`: parse *RICEVUTA PER ISPEZIONI DEL <date>* (quietanza, prospetto di liquidazione, payment method,
   one line per `Elementi` × `Importo`). Fixture: the 11/11 receipt, anonymised. Table `ade_receipt` (+ `ade_receipt_line`).
 - The Richieste step downloads free receipts; `sister documents import-receipts` handles files already on disk.
-- Reconciliation: each receipt line is matched to `mortgage_search_charge` rows of that date by kind and quantity; a match
-  sets `basis='receipt'` and `receipt_id`; what does not match is listed, never guessed.
+- Attribution rule: a statement row or receipt line is attached to an inspection **only when an identifier supports it**
+  (the *Dettaglio* naming the inspection or note, a receipt that names it, or a single inspection that day whose amount
+  equals the row exactly). Matching by date, kind and quantity alone proposes a candidate, never a link. Table
+  `ade_charge_allocation` (`statement_row_id`, `search_id` nullable, `amount`, `evidence`, `evidence_ref`): an ambiguous or
+  aggregated row (06/11, 13/11 today) has one allocation with `search_id` NULL and evidence `unattributed`, stays visible on
+  `/admin/wallets` and in the ledger, and is **not** added to any inspection's cost line.
 - Ledger writer `sister/ade_ledger.py`: one `usage` transaction per statement charge and one `topup` per *Ricarica
   castelletto* (linked to its validated pagoPA row), idempotent by the statement row key, running balance recomputed in
   date order (the scripts of 2026-11-13 and 2026-11-15, made permanent). The statement gives days, not times: within a day
@@ -196,7 +247,9 @@ inspected, and is recorded in this document before the phase is called done.
   difference**; app-credit wallets keep their list. Times shown in Europe/Rome (they are one hour early today).
 
 Tests: statement parser (14 rows, 147,20 / 144,80 / 2,40); receipt parser; reconciliation of the 11/11 receipt (6,40 +
-28,00 + 8,00 = 42,40 €) with the three 11/11 statement rows; ledger idempotency and ordering; a ledger total that differs
+28,00 + 8,00 = 42,40 €) with the three 11/11 statement rows (attributed: one inspection that day); the 13/11 32,00 € row
+stays unattributed; paid-action state machine (`intended` before the click, `uncertain` blocks a retry, reconcile frees it);
+the old `auto_confirm`/`--yes` paths refuse to spend; ledger idempotency and ordering; a ledger total that differs
 from the statement is reported, not hidden.
 
 ### Phase 5 — Subject page and housekeeping
@@ -218,7 +271,7 @@ from the statement is reported, not hidden.
 |---|---|---|---|---|
 | 1 Storage | — | M | drift between JSON and tables | golden render test; JSON fallback for one release |
 | 2 Price check | 1 | S | wrong "already owned" | match on office + RP + RG + year; shows the file it relies on |
-| 3 Flow | 1, 2 | L | a paid click without consent; portal layout changes | token bound to the quote; amount re-read before the click; saved-page tests; first run stops before paying |
+| 3 Flow | 1, 2 | L | a paid click without consent; a replayed click after a crash; a bypass through an old path; portal layout changes | token bound to the quote; paid action recorded before the click and `uncertain` blocks retries; old paths closed in the same change; amount re-read before the click; saved-page tests; first run stops before paying |
 | 4 Ledger | 1 | M | double entries | idempotency keys; receipts as the only source of "confirmed" |
 | 5 Page | 1 | M | regressions on a busy template | render tests; Playwright check of two subjects |
 
