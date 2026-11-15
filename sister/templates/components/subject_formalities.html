@@ -24,11 +24,13 @@
       {% endif %}
       {% for inspection in inspections %}
       {% set meta = inspection.inspection or {} %}
-      <div class="mb-4" data-subject-formalities-request="{{ meta.request_code or inspection.request_ref }}">
+      {% set pg = inspection.pagination %}
+      <div class="mb-4" id="{{ pg.anchor if pg else 'formalities-inspection-' ~ loop.index }}" data-subject-formalities-request="{{ meta.request_code or inspection.request_ref }}">
         <div class="d-flex flex-wrap gap-2 align-items-center mb-2">
           <strong>Ispezione {{ meta.number or '—' }}</strong>
           {% if meta.date %}<span class="text-muted">del {{ meta.date[8:10] }}/{{ meta.date[5:7] }}/{{ meta.date[:4] }}</span>{% endif %}
           {% if meta.office %}<span class="badge text-bg-light border">{{ meta.office }}</span>{% endif %}
+          {% if pg %}<span class="badge text-bg-light border">{{ pg.total }} formalità</span>{% endif %}
           {% if meta.request_code %}<span class="small text-muted">Richiesta {{ meta.request_code }}</span>{% endif %}
           {% if inspection.cost_summary %}<span class="small fw-semibold">{{ inspection.cost_summary }}</span>{% endif %}
         </div>
@@ -148,6 +150,28 @@
             </tbody>
           </table>
         </div>
+        {% if pg and (pg.pages > 1 or pg.all) %}
+        {% set q = (pg.query ~ '&') if pg.query else '' %}
+        <nav aria-label="Pagine delle formalità dell'ispezione {{ meta.number or '' }}" class="d-flex flex-wrap align-items-center gap-2 mt-2" data-formalities-pager="{{ pg.param }}">
+          <span class="small text-muted">{% if pg.all %}Tutte le {{ pg.total }} formalità{% else %}Formalità {{ pg.first }}–{{ pg.last }} di {{ pg.total }}{% endif %}</span>
+          {% if not pg.all %}
+          <ul class="pagination pagination-sm mb-0 ms-auto">
+            <li class="page-item{% if pg.page <= 1 %} disabled{% endif %}"><a class="page-link" href="?{{ q }}{{ pg.param }}={{ pg.page - 1 }}#{{ pg.anchor }}" aria-label="Pagina precedente">‹</a></li>
+            {% for n in range(1, pg.pages + 1) %}
+            {% if n == 1 or n == pg.pages or (n - pg.page)|abs <= 2 %}
+            <li class="page-item{% if n == pg.page %} active{% endif %}"><a class="page-link" href="?{{ q }}{{ pg.param }}={{ n }}#{{ pg.anchor }}"{% if n == pg.page %} aria-current="page"{% endif %}>{{ n }}</a></li>
+            {% elif (n - pg.page)|abs == 3 %}
+            <li class="page-item disabled"><span class="page-link">…</span></li>
+            {% endif %}
+            {% endfor %}
+            <li class="page-item{% if pg.page >= pg.pages %} disabled{% endif %}"><a class="page-link" href="?{{ q }}{{ pg.param }}={{ pg.page + 1 }}#{{ pg.anchor }}" aria-label="Pagina successiva">›</a></li>
+          </ul>
+          <a class="small" href="?{{ q }}{{ pg.param }}=all#{{ pg.anchor }}">Mostra tutte</a>
+          {% else %}
+          <a class="small ms-auto" href="?{{ pg.query }}#{{ pg.anchor }}">Mostra a pagine</a>
+          {% endif %}
+        </nav>
+        {% endif %}
       </div>
       {% endfor %}
       {% if is_admin and inspections|selectattr('page_visits')|list|length %}

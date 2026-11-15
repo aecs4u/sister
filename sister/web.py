@@ -12167,6 +12167,54 @@ def _hub_documents(ids: set[int], indexed_by_id: dict[int, dict]) -> list[dict]:
     return [_hub_document(item) for item in _collapse_to_logical_docs(rows)]
 
 
+FORMALITIES_PAGE_SIZE = 25
+FORMALITIES_SIZE_RANGE = (5, 100)
+
+
+def _paginate_formalities(inspections: list[dict], query_items: list[tuple[str, str]]) -> None:
+    """Show one page of each inspection's formalities on the subject page (the slice is made in place).
+
+    The page of inspection ``n`` (1 = the most recent) is ``?fp<n>=<page>``; ``fp<n>=all`` shows every row and ``fsize``
+    (5-100, default 25) is the page size of all of them. Counts that describe the whole inspection (the risk strip, the
+    document links merged onto the rows) are computed before this slice, so a page never changes them. Each inspection
+    gets ``pagination`` (page, pages, total, first, last, size, ``all``, ``param``, ``query``): ``query`` carries every
+    other parameter of the request, so a page link keeps the map view, the document and the other inspections' pages.
+    """
+    items = [(key, value) for key, value in query_items]
+    try:
+        size = int(dict(items).get("fsize") or FORMALITIES_PAGE_SIZE)
+    except ValueError:
+        size = FORMALITIES_PAGE_SIZE
+    size = max(FORMALITIES_SIZE_RANGE[0], min(FORMALITIES_SIZE_RANGE[1], size))
+    for number, inspection in enumerate(inspections, start=1):
+        rows = inspection.get("formalities") or []
+        param = f"fp{number}"
+        requested = dict(items).get(param, "1")
+        show_all = requested == "all"
+        total = len(rows)
+        pages = 1 if show_all else max(1, -(-total // size))
+        try:
+            page = 1 if show_all else max(1, min(pages, int(requested)))
+        except ValueError:
+            page = 1
+        first = 1 if show_all else (page - 1) * size + 1
+        last = total if show_all else min(total, page * size)
+        if not show_all:
+            inspection["formalities"] = rows[first - 1 : last]
+        inspection["pagination"] = {
+            "param": param,
+            "page": page,
+            "pages": pages,
+            "total": total,
+            "first": first if total else 0,
+            "last": last,
+            "size": size,
+            "all": show_all,
+            "anchor": f"formalities-inspection-{number}",
+            "query": urlencode([(key, value) for key, value in items if key != param]),
+        }
+
+
 def _extraction_has_details(extraction: dict | None) -> bool:
     """The readable extraction (``_hub_inspection_extraction``) says something beyond its own id."""
     if not extraction:
@@ -14098,6 +14146,8 @@ async def _web_subject_profile(
         )
     if subject_hub is not None and subject_formalities and not as_pdf:  # the PDF has no formalities table
         _merge_inspections_into_formalities(subject_hub, subject_formalities)
+    if subject_formalities and not as_pdf:
+        _paginate_formalities(subject_formalities, list(request.query_params.multi_items()))
     favorite_user_key = _favorite_user_key(user)
     subject_favorite_enabled = bool(favorite_user_key)
     subject_is_favorite = False
