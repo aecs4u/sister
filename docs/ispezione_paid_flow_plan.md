@@ -77,14 +77,13 @@ keys and delete rules, and indexes, a scoped `compare_metadata` check across all
 differences against the migrated local database. The standalone global `alembic check` also compares many pre-existing
 legacy and externally managed tables outside this plan, so it is not a plan-scoped drift result.
 
-Full verification on 2026-11-16: `.venv/bin/python -m pytest -p no:logfire -q --tb=short` completed with **1,966 passed,
-2 skipped, and 17 failed**; a `--lf --tb=no -q` rerun reproduced those failures. They were in manual-valuation asset
-fixtures, OMI database configuration/cache tests, persona-giuridica homonym handling, subject-access migration/model
-comparison, and web tests for 3D geocoding, admin activity, and theme language controls. Triage found that the admin
-activity failure came from its test double rejecting the new `/admin/wallets` activity queries (`admin.wallet.*` and
-`wallet.gift_coupon.*`), rather than a route failure. The test double now returns an empty result for those prefixes, and
-the focused admin-activity test passes. The full suite has not been rerun after this correction, so its current failure
-count is unknown; the other failures remain untriaged. The repository suite is not yet verified green.
+Full verification refreshed on 2026-11-16: `.venv/bin/python -m pytest -p no:logfire -q --tb=short` completed with
+**1,971 passed, 2 skipped, and 16 failed**. The failures are outside this paid-flow scope: one manual-valuation test has
+no matching `property_asset` fixture; two OMI quote tests see the configured local DSN/data; three OMI cache tests do not
+match current fixture behavior; six persona-giuridica homonym tests call a fake portal with an outdated signature; two
+subject-access migration tests find an FK/model diff; and two web tests disagree with current 3D-geocoding and theme
+language behavior. The earlier admin-activity test-double failure is now passing. The repository suite is not yet
+verified green; these 16 failures remain untriaged.
 
 New implementation findings (2026-11-16): the accept-result parser projects an inspection only when the portal result exposes both
 an inspection number and date; otherwise no identity is fabricated. An observed homonym page is treated as confirmation
@@ -259,7 +258,11 @@ stipulated 06/04/2026. It is the authoritative list of what AdE charged: one row
 | | **Totale** | **147,20** | **144,80** |
 
 Deposito castelletto on 15/11/2026: 2,40 €. Each row has a *Dettaglio* (`DettaglioEstrattoContoIpo.do`) that has not been
-read yet; it should say which inspections and notes a row covers.
+read yet; it should say which inspections and notes a row covers. A structural read of the saved statement HTML on
+2026-11-16 found that detail is posted through one form to `/Servizi/GestCont/EstrattoConto/DettaglioEstrattoContoIpo.do`:
+each movement is a radio input named `id`, alongside hidden `ufficio`, `chiaveConv`, period, year, and `profilo` fields.
+No form was submitted and the hidden values were not copied into this plan; a live authenticated check is still needed
+before implementing detail retrieval.
 
 What it corrects: the Richieste *Costo* column is a price, not a charge; the 13/11 charge has no request of that day, so
 it was triggered by opening or saving notes requested earlier (the app's *Scarica da Richieste* is the likely trigger and

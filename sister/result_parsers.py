@@ -12,9 +12,9 @@ import math
 import re
 import unicodedata
 from datetime import date, datetime
-from zoneinfo import ZoneInfo
 from decimal import Decimal, InvalidOperation
 from typing import Any
+from zoneinfo import ZoneInfo
 
 _SPACES = re.compile(r"\s+")
 _AMOUNT = re.compile(r"\d[\d.]*(?:,\d+)?")
