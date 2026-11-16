@@ -1,6 +1,8 @@
 (function () {
   'use strict';
 
+  function boot() {
+
   var CATEGORY_HEADERS = ['cat.', 'cat', 'categoria', 'categoria catastale', 'category'];
   var DESCRIPTION_HEADERS = ['descrizione categoria', 'category description'];
   var EMPTY_VALUES = ['', '—', '-', ':'];
@@ -79,4 +81,10 @@
   } else {
     populateCategoryDescriptions();
   }
+  }
+
+  // The page data is fetched by subject_cadastral_asset_enrichment.js, which publishes it as
+  // [data-subject-page-json] and fires this event; without a data URL there is nothing to wait for.
+  if (document.querySelector('[data-subject-page-json]') || !document.querySelector('[data-subject-page-json-url]')) boot();
+  else document.addEventListener('subject-page-data-ready', boot, {once: true});
 })();

@@ -321,3 +321,18 @@
     overflow: auto;
     font-size: .78rem;
 }
+
+/* Always-open label of a previously owned parcel (orange, like its marker) */
+.document-parcel-map-shell .leaflet-tooltip.document-map-prior-marker-label {
+    max-width: min(18rem, 65vw);
+    padding: .2rem .45rem;
+    border: 1px solid #fff;
+    border-radius: .35rem;
+    color: #fff;
+    background: rgba(124, 45, 18, .94);
+    box-shadow: 0 1px 5px rgba(0, 0, 0, .45);
+    font-size: .7rem;
+    font-weight: 700;
+    line-height: 1.25;
+    white-space: normal;
+}

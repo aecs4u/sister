@@ -1,8 +1,8 @@
-from datetime import date, datetime, timedelta, timezone
 import importlib.util
 import json
-from pathlib import Path
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
+from pathlib import Path
 
 import pytest
 from sqlalchemy import func, text, update
@@ -15,8 +15,8 @@ from sister.db_models import (
     MortgagePaidAction,
     MortgageSearch,
     MortgageSearchAnnotation,
-    MortgageSearchFormality,
     MortgageSearchFlow,
+    MortgageSearchFormality,
     MortgageSearchRequest,
     RequestPayload,
 )
@@ -157,6 +157,161 @@ async def test_mortgage_projection_is_idempotent_and_keeps_paid_actions(fresh_db
     assert len(json_fallback_render) == 1
     assert json_fallback_render[0]["formalities"][0]["registro_particolare"] == typed_render[0]["formalities"][0]["registro_particolare"]
     assert json_fallback_render[0]["cost_summary"] == ""
+
+
+def test_two_normalized_inspections_render_in_the_subject_formalities_panel():
+    inspections = (
+        ("T 91777", date(2026, 11, 11), "PALERMO (PA)", "8036", "11046", "TRASCRIZIONE", "COMPRAVENDITA"),
+        ("T 79390", date(2026, 11, 12), "RAVENNA (RA)", "14089", "21041", "ISCRIZIONE", "IPOTECA VOLONTARIA"),
+    )
+
+    import aecs4u_theme
+    from jinja2 import ChoiceLoader, Environment, FileSystemLoader
+
+    templates = Path(__file__).resolve().parents[1] / "sister" / "templates"
+    theme_templates = Path(aecs4u_theme.__file__).parent / "templates"
+    env = Environment(
+        loader=ChoiceLoader([FileSystemLoader(str(templates)), FileSystemLoader(str(theme_templates))]),
+        autoescape=True,
+    )
+    env.globals["csrf_input"] = lambda: ""
+    panel_template = env.from_string(
+        '{% from "components/subject_formalities.html" import subject_formalities_panel %}'
+        "{{ subject_formalities_panel(f) }}"
+    )
+    normalized_inspections = [
+        {
+            "inspection": {"number": number, "date": inspected_on.isoformat(), "office": office},
+            "formalities": [
+                {
+                    "numero": 1,
+                    "tipo": kind,
+                    "verso": "CONTRO",
+                    "data_formalita": inspected_on.isoformat(),
+                    "registro_particolare": rp,
+                    "registro_generale": rg,
+                    "causale": description,
+                    "immobili": office,
+                    "nota_disponibile_elettronica": True,
+                }
+            ],
+            "risk_summary": {"live_mortgages": int(kind == "ISCRIZIONE"), "live_pignoramenti": 0},
+            "note_request": {},
+        }
+        for number, inspected_on, office, rp, rg, kind, description in inspections
+    ]
+    html = panel_template.render(f=normalized_inspections)
+
+    assert "Ispezione T 91777" in html and "Ispezione T 79390" in html
+    assert "RP 8036 · RG 11046" in html and "RP 14089 · RG 21041" in html
+    assert html.count("Ultimo decreto di trasferimento") == 2
+
+
+@pytest.mark.usefixtures("fresh_db")
+async def test_typed_and_legacy_two_inspections_render_in_the_subject_formalities_panel():
+    from sister import database
+
+    code = "RSSMRA70A01H501Z"
+    inspections = (
+        ("T 91777", date(2026, 11, 11), "PALERMO (PA)", "8036", "11046", "TRASCRIZIONE", "COMPRAVENDITA"),
+        ("T 79390", date(2026, 11, 12), "RAVENNA (RA)", "14089", "21041", "ISCRIZIONE", "IPOTECA VOLONTARIA"),
+    )
+    async with database._get_session_factory()() as session:
+        for index, (number, inspected_on, office, rp, rg, kind, description) in enumerate(inspections):
+            request_pk = await database._upsert_request(
+                session, f"mortgage-panel-{index}", "ipotecaria_persona_fisica", None, None
+            )
+            session.add(
+                RequestPayload(
+                    request_id=request_pk,
+                    data=json.dumps(
+                        {
+                            "portal_capture": {
+                                "inspection": {
+                                    "number": number,
+                                    "date": inspected_on.isoformat(),
+                                    "office": office,
+                                    "scope": "office",
+                                    "subject_tax_code": code,
+                                }
+                            },
+                            "formalities": [
+                                {
+                                    "numero": 1,
+                                    "tipo": kind,
+                                    "verso": "CONTRO",
+                                    "data_formalita": inspected_on.isoformat(),
+                                    "registro_particolare": rp,
+                                    "registro_generale": rg,
+                                    "causale": description,
+                                    "immobili": office,
+                                    "nota_disponibile_elettronica": True,
+                                }
+                            ],
+                        }
+                    ),
+                )
+            )
+            search = MortgageSearch(
+                request_id=request_pk,
+                inspection_number=number,
+                inspection_date=inspected_on,
+                office=office,
+                scope="office",
+                subject_fiscal_code=code,
+                formalities_count=1,
+            )
+            session.add(search)
+            await session.flush()
+            session.add(
+                MortgageSearchFormality(
+                    search_id=search.id,
+                    ordinal=1,
+                    kind=kind.lower(),
+                    direction="contro",
+                    formality_date=inspected_on,
+                    registro_particolare=rp,
+                    registro_generale=rg,
+                    act_description=description,
+                    location=office,
+                    electronic_note=True,
+                )
+            )
+        await session.commit()
+
+    import aecs4u_theme
+    from jinja2 import ChoiceLoader, Environment, FileSystemLoader
+
+    templates = Path(__file__).resolve().parents[1] / "sister" / "templates"
+    theme_templates = Path(aecs4u_theme.__file__).parent / "templates"
+    env = Environment(
+        loader=ChoiceLoader([FileSystemLoader(str(templates)), FileSystemLoader(str(theme_templates))]),
+        autoescape=True,
+    )
+    env.globals["csrf_input"] = lambda: ""
+    panel_template = env.from_string(
+        '{% from "components/subject_formalities.html" import subject_formalities_panel %}'
+        "{{ subject_formalities_panel(f) }}"
+    )
+
+    typed_formalities = await database.get_subject_mortgage_formalities(code)
+    assert {item["inspection"]["number"] for item in typed_formalities} == {"T 91777", "T 79390"}
+    typed_html = panel_template.render(f=typed_formalities)
+
+    async with database._get_session_factory()() as session:
+        await session.execute(
+            text("UPDATE mortgage_search SET subject_fiscal_code = :other_code"),
+            {"other_code": "RSSMRA71A01H501Z"},
+        )
+        await session.commit()
+    legacy_formalities = await database.get_subject_mortgage_formalities(code)
+    assert {item["inspection"]["number"] for item in legacy_formalities} == {"T 91777", "T 79390"}
+    legacy_html = panel_template.render(f=legacy_formalities)
+
+    for html in (typed_html, legacy_html):
+        assert "Ispezione T 91777" in html and "Ispezione T 79390" in html
+        assert "RP 8036 · RG 11046" in html and "RP 14089 · RG 21041" in html
+        assert html.count("Ultimo decreto di trasferimento") == 2
 
 
 async def test_paid_quotes_apply_ownership_format_and_staleness_rules(fresh_db):

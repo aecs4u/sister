@@ -1497,6 +1497,7 @@ async def subject_land_registry_kpis(
     map_lookup: dict[str, Any] | None,
     *,
     include_assessment_context: bool = False,
+    include_market_valuation: bool = True,
     selection_user_id: str | None = None,
 ) -> dict[str, Any] | None:
     """Sum subject-visura areas and OMI ranges for mapped and unmapped building units."""
@@ -2414,7 +2415,9 @@ async def subject_land_registry_kpis(
             "effettive delle zone comunali. "
             "La fascia OMI complessiva resta nel riquadro Valore OMI fabbricati."
         )
-    kpis["market_valuation"] = await _market_valuation(buildings, mapped_buildings)
+    kpis["market_valuation"] = (
+        await _market_valuation(buildings, mapped_buildings) if include_market_valuation else []
+    )
     _label_missing_estimates(table_estimates)
     unvalued_reasons = _reason_summary({
         (group_index, row_index): estimate["missing"]

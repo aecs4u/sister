@@ -2180,7 +2180,8 @@ def db_backfill(
         "all",
         help="projections (risultati -> immobili/intestati), xml (documenti -> tabelle tipizzate), "
         "holdings (riepilogo immobili/valori per soggetto), names (nomi dei soggetti noti solo per codice), "
-        "history (storico delle proprieta'), mortgage-searches (ispezioni ipotecarie persona fisica) o all",
+        "history (storico delle proprieta'), mortgage-searches (ispezioni ipotecarie persona fisica), "
+        "mortgage-notes (note di trascrizione/iscrizione estratte dai PDF delle ispezioni) o all",
     ),
     force: bool = typer.Option(False, "--force", help="Rielabora anche i documenti gia' popolati"),
     limit: int = typer.Option(0, "--limit", help="Massimo di righe da elaborare (0 = tutte)"),
@@ -2193,8 +2194,8 @@ def db_backfill(
 
     from . import database, xml_ingest
 
-    if what not in {"all", "projections", "xml", "holdings", "names", "history", "mortgage-searches"}:
-        raise typer.BadParameter("usa projections, xml, holdings, names, history, mortgage-searches o all")
+    if what not in {"all", "projections", "xml", "holdings", "names", "history", "mortgage-searches", "mortgage-notes"}:
+        raise typer.BadParameter("usa projections, xml, holdings, names, history, mortgage-searches, mortgage-notes o all")
 
     async def _run():
         import getpass
@@ -2209,6 +2210,11 @@ def db_backfill(
             if what in {"all", "mortgage-searches"}:
                 result["mortgage_searches"] = await database.backfill_mortgage_searches(limit=limit or None)
                 console.print(f"Ispezioni ipotecarie: {result['mortgage_searches']}")
+            if what in {"all", "mortgage-notes"}:
+                from .mortgage_note_projection import backfill_mortgage_notes
+
+                result["mortgage_notes"] = await backfill_mortgage_notes(force=force, limit=limit or None)
+                console.print(f"Note ipotecarie: {result['mortgage_notes']}")
             if what in {"all", "xml"}:
                 result["xml"] = await xml_ingest.backfill_documents(force=force, limit=limit or None)
                 console.print(f"Documenti XML: {result['xml']}")

@@ -356,6 +356,52 @@ async def test_live_burdens_filter_uses_typed_formalities_and_cancellation_annot
     assert overview["with_live_burdens"] == 1
 
 
+def test_persons_index_render_exposes_live_burdens_card_and_column():
+    from pathlib import Path
+    from types import SimpleNamespace
+
+    from jinja2 import ChoiceLoader, DictLoader, Environment, FileSystemLoader
+
+    sister_root = Path(__file__).resolve().parents[1] / "sister"
+    templates = sister_root / "templates"
+    env = Environment(
+        loader=ChoiceLoader(
+            [
+                DictLoader(
+                    {
+                        "_base.html": "{% block extra_css %}{% endblock %}{% block content %}{% endblock %}{% block extra_js %}{% endblock %}",
+                        "_macros.html": (
+                            "{% macro metric_card(label, value, icon, color, href) %}"
+                            "<a href=\"{{ href }}\">{{ label }} {{ value }}</a>{% endmacro %}"
+                        ),
+                    }
+                ),
+                FileSystemLoader(str(templates)),
+            ]
+        ),
+        autoescape=True,
+    )
+    html = env.get_template("subject_index.html").render(
+        request=SimpleNamespace(url=SimpleNamespace(path="/persons")),
+        kind="person",
+        kind_label="Persone",
+        route="/persons",
+        code="",
+        error_message=None,
+        stats={"subjects": 2, "with_visura": 1, "with_live_burdens": 1, "buildings": 0, "land": 0, "value_share": 0},
+        overview={"total": 2, "widest": {}},
+        subject_tags=[],
+        tags_editable=False,
+        csp_nonce="test-nonce",
+    )
+    js = (sister_root / "static" / "js" / "subject_index.js").read_text(encoding="utf-8")
+
+    assert "Con formalità attive 1" in html
+    assert "f_live_burdens=%3E0" in html
+    assert 'data-route="/persons"' in html
+    assert 'numCol("Formalità attive", "live_burdens"' in js
+
+
 @pytest.mark.usefixtures("fresh_db")
 async def test_subject_overview_has_totals_widths_and_maxima():
     await _seed_people()

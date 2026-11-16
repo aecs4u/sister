@@ -4536,8 +4536,11 @@ async def get_document_structured_extraction(
         entry["properties"].append(
             {
                 "property_number": prop.property_number,
+                "cadastral_unit_id": prop.cadastral_unit_id,
                 "municipality_code": comune.cadastral_code if comune else None,
                 "municipality": _municipality_name(comune),
+                "province_code": (comune.province_abbreviation or "").strip().upper() if comune else None,
+                "province": _province_label(comune.province_abbreviation) if comune else None,
                 "cadastre_type": {"F": "fabbricati", "T": "terreni"}.get(unit.cadastre_type) if unit and unit.cadastre_type else None,
                 "urban_section": unit.section if unit else None,
                 "sheet": number(unit.sheet) if unit else None,
@@ -4666,6 +4669,32 @@ async def get_document_structured_extraction(
         "units": [units[key] for key in sorted(units, key=lambda k: (k is None, k or 0))],
         "parties": party_records,
     }
+
+
+async def get_units_current_data(unit_ids: list[int]) -> dict[int, dict]:
+    """Latest stored classamento of each cadastral unit (from any saved search): category, class, zone, consistency, rendita.
+
+    Used for properties known only from a mortgage note, so the page can show the values the portal last reported.
+    Units never listed by a search are absent.
+    """
+    ids = sorted({int(unit_id) for unit_id in unit_ids if unit_id is not None})
+    if not ids:
+        return {}
+    async with _get_session_factory()() as session:
+        rows = (
+            await session.execute(
+                text(
+                    "SELECT DISTINCT ON (cadastral_unit_id) cadastral_unit_id, category, cadastral_class, census_zone, "
+                    "consistency_value, consistency_unit, income_eur, dominical_income_eur, agricultural_income_eur, partita "
+                    "FROM property WHERE cadastral_unit_id = ANY(:ids) "
+                    "AND (income_eur IS NOT NULL OR dominical_income_eur IS NOT NULL "
+                    "OR agricultural_income_eur IS NOT NULL OR category IS NOT NULL) "
+                    "ORDER BY cadastral_unit_id, (income_eur IS NOT NULL) DESC, id DESC"
+                ),
+                {"ids": ids},
+            )
+        ).mappings().all()
+    return {int(row["cadastral_unit_id"]): dict(row) for row in rows}
 
 
 async def get_indexed_file_paths() -> dict[str, int]:

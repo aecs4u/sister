@@ -489,6 +489,18 @@
     else enhance();
     }
 
+    // The OMI selectors, manual valuations and category descriptions read the page data from an inline JSON node.
+    function publishPageData(data) {
+        if (!document.querySelector('[data-subject-page-json]')) {
+            var node = document.createElement('script');
+            node.type = 'application/json';
+            node.setAttribute('data-subject-page-json', '');
+            node.textContent = JSON.stringify(data || {});
+            document.body.appendChild(node);
+        }
+        document.dispatchEvent(new CustomEvent('subject-page-data-ready'));
+    }
+
     var pageDataSource = document.querySelector('[data-subject-page-json-url]');
     if (pageDataSource && pageDataSource.dataset.subjectPageJsonUrl) {
         fetch(pageDataSource.dataset.subjectPageJsonUrl, {credentials: 'same-origin', headers: {Accept: 'application/json'}})
@@ -496,8 +508,17 @@
                 if (!response.ok) throw new Error('Subject page data unavailable');
                 return response.json();
             })
-            .then(initialize)
-            .catch(function () { initialize({}); });
+            .then(function (data) {
+                try { initialize(data); } catch (error) { /* The table editors can still use the fetched data. */ }
+                publishPageData(data);
+            })
+            .catch(function () {
+                // Keep the table controls from waiting forever if optional enrichment fails.
+                // The authenticated page-data endpoint is the source of editable asset identities;
+                // an empty payload leaves those controls read-only where no identity is available.
+                publishPageData({});
+                try { initialize({}); } catch (error) { /* Keep the base visura usable. */ }
+            });
     } else {
         initialize({});
     }

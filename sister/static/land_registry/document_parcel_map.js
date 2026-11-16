@@ -101,6 +101,19 @@
         return parts.join(' · ') || String(item.reference || localized(container, 'feature_fallback', 'Elemento catastale'));
     }
 
+    // A marker placed at the parcel's address (ANNCSU house number, or the OpenStreetMap geocoder), not on its geometry.
+    function isAddressSource(item) {
+        return Boolean(item) && (item.position_source === 'osm_address' || item.position_source === 'anncsu');
+    }
+
+    function addressSourceText(item) {
+        var anncsu = item.position_source === 'anncsu';
+        if (item.geocode_label) return (anncsu ? 'ANNCSU: ' : 'OpenStreetMap: ') + item.geocode_label;
+        return anncsu
+            ? 'Posizione indicativa dal numero civico (ANNCSU)'
+            : 'Posizione indicativa da indirizzo geocodificato con OpenStreetMap';
+    }
+
     function listedParcelLabel(item, container) {
         var parts = [];
         var municipality = String(item.municipality || '').trim();
@@ -318,6 +331,16 @@
             var labels = {};
             try { labels = JSON.parse(container.dataset.labels || '{}'); } catch (_error) { labels = {}; }
             var listedOnly = container.dataset.listedOnly === 'true';
+            var priorOwnershipToggle = document.querySelector(
+                '[data-prior-ownership-map-toggle="' + container.id + '"]'
+            );
+            var mapLayerControl = container.closest('.document-parcel-map-card')
+                && container.closest('.document-parcel-map-card').querySelector('.leaflet-map-layer-control');
+            if (priorOwnershipToggle && mapLayerControl) {
+                var priorOwnershipLabel = priorOwnershipToggle.closest('label');
+                mapLayerControl.appendChild(priorOwnershipLabel);
+                priorOwnershipLabel.hidden = false;
+            }
             var instance = window.LandRegistryMap.create({
                 container: container,
                 apiBase: container.dataset.apiBase,
@@ -400,6 +423,17 @@
             var targets = new Map();
             var dataBounds = window.L.latLngBounds([]);
             var parcelBounds = window.L.latLngBounds([]);
+            var priorOwnershipBounds = window.L.latLngBounds([]);
+            var priorOwnershipLayer = window.L.layerGroup();
+            var priorOwnershipSeen = new Set();
+            var priorOwnershipMarkersSeen = new Set();
+            var priorOwnershipSheetsSeen = new Set();
+            var priorOwnershipUnmappedItems = new Map();
+            var priorOwnershipLoaded = false;
+            var priorOwnershipPromise = null;
+            // Declared inside applyData (it needs that scope); applyData publishes it here for the toggle's handler.
+            var loadPriorOwnershipMapFn = null;
+            var priorOwnershipLayerRender = null;
             var listedPositions = [];
             var listedPositionKeys = new Set();
             var listedLayers = {};
@@ -857,11 +891,9 @@
                     zIndexOffset: 1000
                 });
                 var popup = document.createElement('span');
-                var osmAddress = item && item.position_source === 'osm_address';
+                var osmAddress = isAddressSource(item);
                 popup.textContent = osmAddress
-                    ? label + ' · ' + (item.geocode_label
-                        ? 'OpenStreetMap: ' + item.geocode_label
-                        : 'Posizione indicativa da indirizzo geocodificato con OpenStreetMap')
+                    ? label + ' · ' + addressSourceText(item)
                     : (approximate
                         ? label + ' · ' + localized(container, 'approximate_location', 'Posizione indicativa: centro del foglio catastale')
                         : label);
@@ -1084,14 +1116,14 @@
                         'parcel',
                         item,
                         [markerLat, markerLng],
-                        item.position_source === 'osm_address'
+                        isAddressSource(item)
                     );
                     overviewParcelKeys.add(markerKey);
                 }
                 if (listedOnly && featureKeys.has(markerKey)) return;
                 parcelSheetKeys.add(parcelSheetKey(item));
                 var selected = Boolean(item.selected);
-                var osmAddress = item.position_source === 'osm_address';
+                var osmAddress = isAddressSource(item);
                 var osmLabelStackIndex = listedOnly && osmAddress
                     ? parcelPositionMarkers.filter(function (existing) {
                         if (!existing._documentMapOsmAddress) return false;
@@ -1121,9 +1153,7 @@
                 var popup = document.createElement('span');
                 popup.textContent = item.reference || localized(container, 'parcel_fallback', 'Particella');
                 if (osmAddress) {
-                    popup.textContent += ' · ' + (item.geocode_label
-                        ? 'OpenStreetMap: ' + item.geocode_label
-                        : 'Posizione indicativa da indirizzo geocodificato con OpenStreetMap');
+                    popup.textContent += ' · ' + addressSourceText(item);
                 }
                 marker.bindPopup(popup);
                 if (listedOnly) {
@@ -1246,6 +1276,211 @@
                 }
             }
 
+            var priorUnmappedDetails = null;
+            // The prior references that could not be placed (no geometry, no geocodable address) are named under the
+            // toggle, so "N riferimenti senza posizione" says which properties they are.
+            function renderPriorOwnershipUnmapped() {
+                if (!priorOwnershipToggle) return;
+                var unresolved = Array.from(priorOwnershipUnmappedItems.entries()).filter(function (entry) {
+                    return !priorOwnershipSeen.has(entry[0]);
+                }).map(function (entry) { return entry[1]; });
+                var label = priorOwnershipToggle.closest('label');
+                if (!label) return;
+                if (!priorUnmappedDetails) {
+                    priorUnmappedDetails = document.createElement('details');
+                    priorUnmappedDetails.className = 'small mb-2';
+                    priorUnmappedDetails.setAttribute('data-prior-map-unmapped', '');
+                    priorUnmappedDetails.appendChild(document.createElement('summary'));
+                    var list = document.createElement('ul');
+                    list.className = 'mb-0 mt-1';
+                    priorUnmappedDetails.appendChild(list);
+                    label.insertAdjacentElement('afterend', priorUnmappedDetails);
+                }
+                priorUnmappedDetails.hidden = !priorOwnershipToggle.checked || unresolved.length === 0;
+                priorUnmappedDetails.querySelector('summary').textContent =
+                    unresolved.length + ' immobili storici senza una posizione attendibile';
+                var items = priorUnmappedDetails.querySelector('ul');
+                items.replaceChildren();
+                unresolved.forEach(function (item) {
+                    var entry = document.createElement('li');
+                    entry.textContent = (item.reference || listedParcelLabel(item, container))
+                        + (item.category ? ' · cat. ' + item.category : '');
+                    items.appendChild(entry);
+                });
+            }
+
+            function priorOwnershipStatus(message) {
+                var status = priorOwnershipToggle
+                    && priorOwnershipToggle.closest('label')
+                    && priorOwnershipToggle.closest('label').querySelector('[data-prior-map-status]');
+                if (status) status.textContent = message || '';
+            }
+
+            function addPriorOwnershipData(data) {
+                (Array.isArray(data.unmapped_parcels) ? data.unmapped_parcels : []).forEach(function (item) {
+                    var key = parcelMapKey(item);
+                    if (key && !priorOwnershipUnmappedItems.has(key)) priorOwnershipUnmappedItems.set(key, item);
+                });
+                var sheetFeatures = data.sheet_features && Array.isArray(data.sheet_features.features)
+                    ? data.sheet_features.features : [];
+                var freshSheets = sheetFeatures.filter(function (feature) {
+                    var key = parcelSheetKey(feature.properties || {});
+                    if (!key || priorOwnershipSheetsSeen.has(key)) return false;
+                    priorOwnershipSheetsSeen.add(key);
+                    return true;
+                });
+                if (freshSheets.length) {
+                    var sheets = window.L.geoJSON({ type: 'FeatureCollection', features: freshSheets }, {
+                        style: {
+                            color: '#9a3412', weight: 2, dashArray: '4 5',
+                            fillColor: '#fdba74', fillOpacity: 0.04
+                        },
+                        onEachFeature: function (feature, layer) {
+                            var label = listedSheetLabel(feature.properties || {}, container);
+                            var popup = document.createElement('span');
+                            popup.textContent = 'Foglio associato a immobili precedentemente posseduti · ' + label;
+                            layer.bindPopup(popup);
+                            layer.bindTooltip(label, {
+                                sticky: true,
+                                className: 'document-map-prior-parcel-label',
+                                opacity: 1
+                            });
+                        }
+                    });
+                    priorOwnershipLayer.addLayer(sheets);
+                    var sheetBounds = sheets.getBounds();
+                    if (sheetBounds.isValid()) priorOwnershipBounds.extend(sheetBounds);
+                }
+                var features = data.parcel_features && Array.isArray(data.parcel_features.features)
+                    ? data.parcel_features.features : [];
+                var freshFeatures = features.filter(function (feature) {
+                    var key = parcelMapKey(feature.properties || {});
+                    if (!key || priorOwnershipSeen.has(key)) return false;
+                    priorOwnershipSeen.add(key);
+                    return true;
+                });
+                if (freshFeatures.length) {
+                    var collection = { type: 'FeatureCollection', features: freshFeatures };
+                    var polygons = window.L.geoJSON(collection, {
+                        style: {
+                            color: '#c2410c', weight: 3, dashArray: '7 3',
+                            fillColor: '#fb923c', fillOpacity: 0.28
+                        },
+                        onEachFeature: function (feature, layer) {
+                            var properties = feature.properties || {};
+                            var label = listedParcelLabel(properties, container);
+                            var popup = document.createElement('span');
+                            popup.textContent = 'Posseduto in passato · ' + label;
+                            layer.bindPopup(popup);
+                            // Open label on the outline (like the marker case); past a few dozen it falls back to hover
+                            // only, as an always-open label per parcel is slow in Leaflet.
+                            var openLabel = false;
+                            layer.bindTooltip(label, openLabel ? {
+                                permanent: true,
+                                direction: 'center',
+                                className: 'document-map-prior-marker-label',
+                                opacity: 1,
+                                interactive: false
+                            } : {
+                                sticky: true,
+                                className: 'document-map-prior-parcel-label',
+                                opacity: 1
+                            });
+                        }
+                    });
+                    priorOwnershipLayer.addLayer(polygons);
+                    var polygonBounds = window.L.geoJSON(collection).getBounds();
+                    if (polygonBounds.isValid()) priorOwnershipBounds.extend(polygonBounds);
+                }
+
+                (Array.isArray(data.parcel_markers) ? data.parcel_markers : []).forEach(function (item) {
+                    var key = parcelMapKey(item);
+                    // A parcel drawn as an outline still gets its marker (and label), so it can be told apart when small.
+                    if (!key || priorOwnershipMarkersSeen.has(key)) return;
+                    var latitude = Number(item.latitude);
+                    var longitude = Number(item.longitude);
+                    if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return;
+                    priorOwnershipSeen.add(key);
+                    priorOwnershipMarkersSeen.add(key);
+                    var marker = window.L.circleMarker([latitude, longitude], {
+                        radius: 7, color: '#7c2d12', weight: 2,
+                        fillColor: '#f97316', fillOpacity: 1
+                    });
+                    var label = listedParcelLabel(item, container);
+                    var popup = document.createElement('span');
+                    popup.textContent = 'Posseduto in passato · ' + label;
+                    marker.bindPopup(popup);
+                    // Always open, like the labels of the current parcels: a bare orange dot says nothing about which
+                    // former property it is. At most a handful of prior parcels are located, so no label budget is needed.
+                    marker.bindTooltip(label, {
+                        permanent: true,
+                        direction: 'top',
+                        offset: [0, -8],
+                        className: 'document-map-prior-marker-label',
+                        opacity: 1,
+                        interactive: false
+                    });
+                    priorOwnershipLayer.addLayer(marker);
+                    priorOwnershipBounds.extend([latitude, longitude]);
+                });
+            }
+
+            function fitAllVisibleParcels() {
+                var bounds = window.L.latLngBounds([]);
+                if (parcelBounds.isValid()) bounds.extend(parcelBounds);
+                if (priorOwnershipToggle && priorOwnershipToggle.checked && priorOwnershipBounds.isValid()) {
+                    bounds.extend(priorOwnershipBounds);
+                }
+                if (bounds.isValid()) instance.map.fitBounds(bounds, { padding: [32, 32], maxZoom: 18 });
+            }
+
+            function loadPriorOwnershipMap() {
+                if (!priorOwnershipToggle || priorOwnershipLoaded || priorOwnershipPromise) {
+                    return priorOwnershipPromise || Promise.resolve();
+                }
+                var priorDataUrl = priorOwnershipToggle.dataset.priorMapUrl;
+                if (!priorDataUrl) return Promise.resolve();
+                priorOwnershipStatus('Caricamento…');
+                priorOwnershipPromise = (async function () {
+                    var nextUrl = new URL(priorDataUrl, window.location.href);
+                    var increment = await fetchMapData(nextUrl.toString());
+                    addPriorOwnershipData(increment);
+                    while (increment.done === false && increment.next !== undefined && increment.next !== null) {
+                        nextUrl.searchParams.set('after', increment.next);
+                        increment = await fetchMapData(nextUrl.toString());
+                        addPriorOwnershipData(increment);
+                        await new Promise(function (resolve) {
+                            window.requestAnimationFrame(function () { window.setTimeout(resolve, 0); });
+                        });
+                    }
+                    priorOwnershipLoaded = true;
+                    var unmappedCount = Array.from(priorOwnershipUnmappedItems.keys())
+                        .filter(function (key) { return !priorOwnershipSeen.has(key); }).length;
+                    renderPriorOwnershipUnmapped();
+                    if (!priorOwnershipBounds.isValid()) {
+                        priorOwnershipStatus('Nessuna posizione catastale disponibile per questi riferimenti.');
+                    } else {
+                        priorOwnershipStatus(unmappedCount
+                            ? unmappedCount + ' riferimenti senza posizione disponibile'
+                            : '');
+                        if (priorOwnershipToggle.checked) fitAllVisibleParcels();
+                    }
+                    if (fitAllButton) {
+                        fitAllButton.disabled = !parcelBounds.isValid()
+                            && !(priorOwnershipToggle.checked && priorOwnershipBounds.isValid());
+                    }
+                })().catch(function () {
+                    priorOwnershipStatus('Impossibile caricare i riferimenti storici.');
+                    priorOwnershipToggle.checked = false;
+                    instance.map.removeLayer(priorOwnershipLayer);
+                }).finally(function () {
+                    priorOwnershipPromise = null;
+                });
+                return priorOwnershipPromise;
+            }
+            loadPriorOwnershipMapFn = loadPriorOwnershipMap;
+            priorOwnershipLayerRender = renderPriorOwnershipUnmapped;
+
 
             refreshFoundCounts();
             updateUnmappedParcelList();
@@ -1273,9 +1508,7 @@
             if (fitAllButton) {
                 fitAllButton.disabled = !parcelBounds.isValid();
                 fitAllButton.addEventListener('click', function () {
-                    if (parcelBounds.isValid()) {
-                        instance.map.fitBounds(parcelBounds, { padding: [32, 32], maxZoom: 18 });
-                    }
+                    fitAllVisibleParcels();
                 });
             }
 
@@ -1314,15 +1547,38 @@
                 toggle.addEventListener('change', applyLayerState);
             });
 
+            if (priorOwnershipToggle && priorOwnershipToggle.dataset.priorOwnershipMapToggle === container.id) {
+                priorOwnershipToggle.addEventListener('change', function () {
+                    if (priorOwnershipToggle.checked) {
+                        priorOwnershipLayer.addTo(instance.map);
+                        if (loadPriorOwnershipMapFn) loadPriorOwnershipMapFn();
+                    } else {
+                        instance.map.removeLayer(priorOwnershipLayer);
+                    }
+                    if (priorOwnershipLayerRender) priorOwnershipLayerRender();
+                    if (fitAllButton) {
+                        fitAllButton.disabled = !parcelBounds.isValid()
+                            && !(priorOwnershipToggle.checked && priorOwnershipBounds.isValid());
+                    }
+                });
+            }
+
             // The view and the layers of the page's first map live in the URL (`?map=lat,lng,zoom&layers=l-sheets,c-parcels`:
             // `l-` listed, `c-` cadastral layers), so a link reproduces what is on screen. The other query parameters stay.
             if (!window.documentParcelMapUrlOwner) window.documentParcelMapUrlOwner = container.id;
             if (window.documentParcelMapUrlOwner === container.id) {
                 urlToggles = [];
-                document.querySelectorAll('[data-document-map-layer], [data-land-registry-layer-map]').forEach(function (toggle) {
+                document.querySelectorAll('[data-document-map-layer], [data-land-registry-layer-map], [data-prior-ownership-map-toggle]').forEach(function (toggle) {
+                    var priorOwnership = toggle.dataset.priorOwnershipMapToggle !== undefined;
                     var listed = toggle.dataset.documentMapLayer !== undefined;
-                    if ((listed ? toggle.dataset.documentMapLayer : toggle.dataset.landRegistryLayerMap) !== container.id) return;
-                    urlToggles.push({ toggle: toggle, name: (listed ? 'l-' : 'c-') + toggle.dataset.layerKey });
+                    var owner = priorOwnership
+                        ? toggle.dataset.priorOwnershipMapToggle
+                        : (listed ? toggle.dataset.documentMapLayer : toggle.dataset.landRegistryLayerMap);
+                    if (owner !== container.id) return;
+                    urlToggles.push({
+                        toggle: toggle,
+                        name: (priorOwnership || listed ? 'l-' : 'c-') + toggle.dataset.layerKey
+                    });
                 });
                 var urlParams = new URLSearchParams(window.location.search);
                 var layersParam = urlParams.get('layers');

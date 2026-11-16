@@ -2,6 +2,8 @@
 (function () {
     'use strict';
 
+    function boot() {
+
     var pageDataSource = document.querySelector('[data-subject-page-json]');
     if (!pageDataSource) return;
 
@@ -473,7 +475,9 @@
 
                 var byKey = estimatesByAssetKey(nextEstimates);
                 document.querySelectorAll('tr[data-omi-asset-key]').forEach(function (row) {
-                    var estimate = byKey[row.dataset.omiAssetKey];
+                    var estimateGroup = nextEstimates[Number(row.dataset.omiEstimateGroup)] || {};
+                    var estimate = (estimateGroup.buildings || [])[Number(row.dataset.omiEstimateRow)] ||
+                        byKey[row.dataset.omiAssetKey];
                     if (!estimate) return;
                     var estimateCell = row.querySelector('[data-omi-cell="estimate"]');
                     if (estimateCell) fillEstimateCell(estimateCell, estimate);
@@ -689,7 +693,11 @@
     }
 
     function addSelections() {
-        document.querySelectorAll('.document-land-map-content .imm-tables').forEach(function (wrapper, groupIndex) {
+        document.querySelectorAll('[data-visura-group-tables]').forEach(function (wrapper, wrapperIndex) {
+            var groupIndex = wrapper.hasAttribute('data-extracted-prior-ownership-tables') &&
+                /^\d+$/.test(wrapper.dataset.visuraGroupIndex || '')
+                ? Number(wrapper.dataset.visuraGroupIndex)
+                : wrapperIndex;
             var group = estimates[groupIndex] || {};
             var entries = group.buildings || [];
             var table = Array.from(wrapper.querySelectorAll('table.cat-compact-table')).find(function (item) {
@@ -744,6 +752,8 @@
                 var cells = buildCells(estimate);
                 if (estimate.asset_identity && estimate.asset_identity.asset_key) {
                     row.dataset.omiAssetKey = estimate.asset_identity.asset_key;
+                    row.dataset.omiEstimateGroup = String(groupIndex);
+                    row.dataset.omiEstimateRow = String(rowIndex);
                 }
                 if (targetCell && targetHead && targetHead.textContent.trim() === 'Stima OMI indicativa') {
                     targetCell.dataset.omiCell = 'estimate';
@@ -756,4 +766,10 @@
 
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', addSelections, {once: true});
     else addSelections();
+    }
+
+    // The page data is fetched by subject_cadastral_asset_enrichment.js, which publishes it as
+    // [data-subject-page-json] and fires this event; without a data URL there is nothing to wait for.
+    if (document.querySelector('[data-subject-page-json]') || !document.querySelector('[data-subject-page-json-url]')) boot();
+    else document.addEventListener('subject-page-data-ready', boot, {once: true});
 })();

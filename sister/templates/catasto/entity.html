@@ -15,6 +15,8 @@
 {% set subject_documents = subject_documents|default([], true) %}
 {% set subject_fiscal_code = subject_fiscal_code|default('', true) %}
 {% set subject_route_prefix = subject_route_prefix|default('/persons') %}
+{% set prior_ownership_map_available = prior_ownership_map_available|default(false) %}
+{% set prior_ownership_map_url = prior_ownership_map_url|default('', true) %}
 {% set subject_document_id = subject_document_id|default(none) %}
 {% set subject_portfolio = subject_portfolio|default(none) %}
 {% set complete_subject_report = (subject_fiscal_code|length > 0) or (doc and doc.query_only|default(false, true)) %}
@@ -113,6 +115,200 @@
         {% endif %}
     </div>
 </div>
+{%- endmacro %}
+
+{% macro prior_ownership_map_toggle(map_id='document-parcel-map') -%}
+{% if prior_ownership_map_available and prior_ownership_map_url and subject_fiscal_code and land_registry_map and land_registry_map.listed_only %}
+<label class="small d-flex align-items-center gap-2 mb-2" hidden>
+    <input class="form-check-input mt-0" type="checkbox" id="show-prior-properties-{{ map_id }}"
+           data-prior-ownership-map-toggle="{{ map_id }}" data-layer-key="prior-properties"
+           data-prior-map-url="{{ prior_ownership_map_url }}">
+    <span>Mostra anche gli immobili precedentemente posseduti</span>
+    <span class="text-muted" data-prior-map-status role="status" aria-live="polite"></span>
+</label>
+{% endif %}
+{%- endmacro %}
+
+{# `doc.xml_parsed` comes from DocumentContent; subject_hub/formalities carry extraction rows loaded from SISTER PostgreSQL before render. This template only presents those persisted records. #}
+{% macro extracted_prior_ownership_group(profile, formalities, fiscal_code) -%}
+{% if profile and fiscal_code %}
+{% set candidates = namespace(items=[], ids=[]) %}
+{% for document in profile.subject_inspections|default([], true) %}
+{% set document_id = document.id|default('', true)|string %}
+{% if document_id and document_id not in candidates.ids %}
+{% set candidates.ids = candidates.ids + [document_id] %}
+{% set candidates.items = candidates.items + [document] %}
+{% endif %}
+{% endfor %}
+{% for search in formalities|default([], true) %}
+{% for item in search.formalities|default([], true) %}
+{% for entry in item.archive_documents|default([], true) %}
+{% set document = entry.document|default({}, true) %}
+{% set document_id = document.id|default('', true)|string %}
+{% if document_id and document_id not in candidates.ids %}
+{% set candidates.ids = candidates.ids + [document_id] %}
+{% set candidates.items = candidates.items + [document] %}
+{% endif %}
+{% endfor %}
+{% endfor %}
+{% endfor %}
+{% set history = namespace(items=[]) %}
+{% for document in candidates.items %}
+{% set extraction = document.extraction|default({}, true) %}
+{% set subject_is_contro = namespace(value=false) %}
+{% for party in extraction.parties|default([], true) %}
+{% if party.role|default('', true)|lower == 'contro' and party.fiscal_code|default('', true)|upper == fiscal_code|upper %}
+{% set subject_is_contro.value = true %}
+{% endif %}
+{% endfor %}
+{% if subject_is_contro.value and extraction.kind_label|default('') == 'Nota di trascrizione' and extraction.properties|default([], true)|length %}
+{% set history.items = history.items + [document] %}
+{% endif %}
+{% endfor %}
+{% if history.items %}
+{% set rows = namespace(items=[]) %}
+{% for document in history.items %}
+{% for property in document.extraction.properties %}
+{% set cadastre = 'F' if (property.cadastre_type or '')|lower in ('f', 'fabbricati') else 'T' if (property.cadastre_type or '')|lower in ('t', 'terreni') else (property.cadastre_type or '') %}
+{% set sheet = property.sheet|string if property.sheet is not none else '' %}
+{% set rows.items = rows.items + [{'group': (property.municipality or 'Comune non indicato') ~ '|' ~ cadastre ~ '|' ~ sheet.zfill(5), 'municipality': property.municipality or 'Comune non indicato', 'code': property.municipality_code, 'cadastre': cadastre, 'sheet': sheet, 'property': property, 'document': document, 'extraction': document.extraction}] %}
+{% endfor %}
+{% endfor %}
+<section class="container-fluid py-3 visura-groups" aria-labelledby="extracted-prior-ownership-heading" data-extracted-prior-ownership>
+    <h2 class="h4 mb-2" id="extracted-prior-ownership-heading"><i class="fas fa-clock-rotate-left text-info me-2" aria-hidden="true"></i>Immobili precedentemente posseduti</h2>
+    <p class="small text-muted">Riferimenti estratti dalle note di trascrizione in cui il soggetto risulta tra le parti «contro». Sono dati storici riportati negli atti e non indicano la titolarità catastale attuale. Il classamento proviene dall'ultima ricerca salvata, quando disponibile.</p>
+    {% for group in rows.items|groupby('group') %}
+    {% set first = group.list[0] %}
+    {% set doc_ids = group.list|map(attribute='document.id')|unique|list %}
+    {% set prior_omi_index = (prior_ownership_omi_indexes|default({}, true)).get(group.grouper) %}
+    {% set current_omi_group_count = land_registry_kpis.table_estimates|length if land_registry_kpis is defined and land_registry_kpis else 0 %}
+    <details class="visura-group" data-extracted-prior-ownership-group="{{ group.grouper }}"{% if loop.first %} open{% endif %}>
+        <summary class="visura-group-summary">
+            <h3 class="h5 mb-0">
+                <i class="fas fa-map-marker-alt me-1 text-info" aria-hidden="true"></i>{{ first.municipality }}
+                {% if first.code %}<span class="small text-muted font-monospace ms-1" title="Codice catastale del comune">{{ first.code }}</span>{% endif %}
+                {% if first.cadastre %}<span class="badge bg-secondary ms-2" title="Catasto {{ 'Fabbricati' if first.cadastre == 'F' else 'Terreni' if first.cadastre == 'T' else first.cadastre }}">{{ first.cadastre }}</span>{% endif %}
+                <span class="badge bg-light text-dark border ms-1">{{ group.list|length }} immobili</span>
+                {% if first.sheet %}<span class="badge bg-light text-dark border ms-1" title="Foglio {{ first.sheet }}">Fg {{ first.sheet }}</span>{% endif %}
+                <span class="badge bg-info-subtle text-info-emphasis border border-info-subtle ms-1" title="Dati storici dalle note di trascrizione">Posseduto in passato</span>
+            </h3>
+        </summary>
+        <div class="visura-group-body">
+            <div class="mb-1 small text-muted fw-semibold">
+                {{ 'Fabbricati (Catasto Fabbricati)' if first.cadastre == 'F' else 'Terreni (Catasto Terreni)' if first.cadastre == 'T' else 'Immobili' }} <span class="badge bg-secondary">{{ group.list|length }}</span>
+            </div>
+            <div class="imm-tables" data-extracted-prior-ownership-tables{% if prior_omi_index is not none %} data-visura-group-tables data-visura-group-index="{{ current_omi_group_count + prior_omi_index }}"{% endif %}>
+            <div data-cadastral-table-kind="{{ 'buildings' if first.cadastre == 'F' else 'lands' }}">
+            <p class="cat-table-scroll-hint small text-muted text-end mb-1">Scorri orizzontalmente per vedere tutte le colonne.</p>
+            <div class="cat-table-wrap mb-3" role="region" tabindex="0" aria-label="Immobili precedentemente posseduti a {{ first.municipality }}, foglio {{ first.sheet or '—' }}: tabella scorrevole orizzontalmente">
+                {% if first.cadastre == 'F' %}
+                <table class="cat-compact-table" id="prior-ownership-{{ loop.index }}">
+                    <caption class="visually-hidden">Fabbricati precedentemente posseduti, estratti dalle note di trascrizione</caption>
+                    <thead><tr>
+                        <th>Indirizzo</th><th>Comune</th><th>Fog.</th><th>Part.</th><th>Sub.</th><th>Zona</th>
+                        <th>Cat.</th><th>Descrizione categoria</th><th>Classe</th><th>Consistenza</th><th>Reddito</th><th>Partita</th>
+                    </tr></thead>
+                    <tbody>
+                    {% for row in group.list|sort(attribute='extraction.title_date', reverse=true) %}
+                    {% set property = row.property %}
+                    {% set current = property.get('current') or {} %}
+                    {% set category = current.get('category') or property.category %}
+                    <tr>
+                        <td>{{ property.address or '—' }}<a class="d-block small" href="/documents/{{ row.document.id }}" data-extracted-prior-ownership-document="{{ row.document.id }}">Nota {{ row.extraction.registration or ('Doc. ' ~ row.document.id) }}</a></td>
+                        <td>{{ row.municipality }}</td>
+                        <td class="font-monospace">{{ property.sheet if property.sheet is not none else '—' }}</td>
+                        <td class="font-monospace">{{ property.parcel if property.parcel is not none else '—' }}</td>
+                        <td class="font-monospace">{{ property.subunit if property.subunit is not none else '—' }}</td>
+                        <td>{{ current.get('zone') or '—' }}</td>
+                        <td><span class="cat-categoria">{% if category %}{{ category if '/' in category else (category[:1] ~ '/' ~ category[1:]) }}{% else %}—{% endif %}</span></td>
+                        <td class="small">{{ (category_description(category) if category_description is defined else '') or property.nature|default('—', true)|capitalize }}</td>
+                        <td>{{ current.get('cadastral_class') or '—' }}</td>
+                        <td class="text-nowrap">{% if current.get('consistency') %}{{ current.get('consistency') }}{% elif property.room_count %}{{ property.room_count }} vani{% elif property.area_sqm %}{{ property.area_sqm }} m²{% else %}—{% endif %}</td>
+                        <td class="text-nowrap">{{ current.get('income')|it_money if current.get('income') is not none else '—' }}</td>
+                        <td class="font-monospace small text-muted">{{ current.get('partita') or '—' }}</td>
+                    </tr>
+                    {% endfor %}
+                    </tbody>
+                </table>
+                {% else %}
+                <table class="cat-compact-table" id="prior-ownership-{{ loop.index }}">
+                    <caption class="visually-hidden">Terreni precedentemente posseduti, estratti dalle note di trascrizione</caption>
+                    <thead><tr>
+                        <th>Comune</th><th>Fg.</th><th>Part.</th><th>Qualità</th><th>Classe</th><th>Superficie</th>
+                        <th>Reddito dom.</th><th>Reddito agr.</th><th>Partita</th>
+                    </tr></thead>
+                    <tbody>
+                    {% for row in group.list|sort(attribute='extraction.title_date', reverse=true) %}
+                    {% set property = row.property %}
+                    {% set current = property.get('current') or {} %}
+                    <tr>
+                        <td>{{ row.municipality }}<a class="d-block small" href="/documents/{{ row.document.id }}" data-extracted-prior-ownership-document="{{ row.document.id }}">Nota {{ row.extraction.registration or ('Doc. ' ~ row.document.id) }}</a></td>
+                        <td class="font-monospace">{{ property.sheet if property.sheet is not none else '—' }}</td>
+                        <td class="font-monospace">{{ property.parcel if property.parcel is not none else '—' }}</td>
+                        <td>{{ property.nature or property.category or '—' }}</td>
+                        <td>{{ current.get('cadastral_class') or '—' }}</td>
+                        <td>{% if property.area_sqm %}{{ property.area_sqm }} m²{% else %}{{ current.get('consistency') or '—' }}{% endif %}</td>
+                        <td class="text-nowrap">{{ current.get('dominical_income')|it_money if current.get('dominical_income') is not none else (current.get('income')|it_money if current.get('income') is not none else '—') }}</td>
+                        <td class="text-nowrap">{{ current.get('agricultural_income')|it_money if current.get('agricultural_income') is not none else '—' }}</td>
+                        <td class="font-monospace small text-muted">{{ current.get('partita') or '—' }}</td>
+                    </tr>
+                    {% endfor %}
+                    </tbody>
+                </table>
+                {% endif %}
+            </div>
+            </div>
+            </div>
+            <div class="card border-0 shadow-sm mb-4">
+                <div class="card-header bg-transparent border-bottom py-2 px-3">
+                    <h4 class="h6 mb-0 text-muted"><i class="fas fa-history me-2" aria-hidden="true"></i>Cessioni
+                        <span class="badge bg-info ms-2" style="font-size:.65rem">{{ doc_ids|length }} {{ 'nota' if doc_ids|length == 1 else 'note' }}</span>
+                    </h4>
+                </div>
+                <div class="card-body py-3 px-3">
+                    <div class="ownership-timeline" style="--tl-color: #17a2b8" aria-label="Cronologia delle cessioni">
+                        {% for doc_id in doc_ids %}
+                        {% set row = (group.list|selectattr('document.id', 'equalto', doc_id)|first) %}
+                        {% set extraction = row.extraction %}
+                        {% set act = ((extraction.title_description or extraction.title_type or 'Atto') ~ (' del ' ~ extraction.title_date if extraction.title_date else '') ~ (' · Rep. ' ~ extraction.title_repertory_number if extraction.title_repertory_number else '') ~ (' · ' ~ extraction.title_notary if extraction.title_notary else '')) %}
+                        <div class="tl-node">
+                            <div class="tl-dot"></div>
+                            <div class="tl-card">
+                                <div class="tl-header">
+                                    <span class="badge bg-light text-dark border" style="font-size:.68rem">#{{ loop.revindex }}</span>
+                                    {% if extraction.registration %}<span class="badge bg-light text-dark border" style="font-size:.68rem">{{ extraction.registration }}</span>{% endif %}
+                                    <span class="tl-desc" title="{{ act }}">{{ act }}</span>
+                                    <span class="tl-date-tag">{{ extraction.title_date }}</span>
+                                    <i class="fas fa-chevron-down tl-chevron"></i>
+                                </div>
+                                <div class="tl-body d-none">
+                                    {% for party in extraction.parties|default([], true) %}
+                                    {% set ceding = party.role == 'Contro' %}
+                                    <div class="tl-owner-row {{ 'tl-owner-ended' if ceding else 'tl-owner-active' }}">
+                                        <div class="row align-items-center g-1">
+                                            <div class="col-md-5">
+                                                <span class="tl-owner-name">{{ party.name }}</span>
+                                                <span class="badge {{ 'bg-secondary' if ceding else 'bg-success' }} ms-1" style="font-size:.63rem">{{ 'Cedente' if ceding else 'Acquirente' }}</span>
+                                                {% if party.fiscal_code %}<div class="tl-owner-cf">{{ party.fiscal_code }}</div>{% endif %}
+                                            </div>
+                                            <div class="col-md-4">{% if party.right %}<span class="badge bg-secondary me-1">{{ party.right|replace('_', ' ')|capitalize }}</span>{% endif %}</div>
+                                            <div class="col-md-3 text-end">{% if party.share %}<span class="badge bg-info tl-owner-share"><i class="fas fa-chart-pie me-1"></i> per {{ party.share }}</span>{% endif %}</div>
+                                        </div>
+                                    </div>
+                                    {% endfor %}
+                                </div>
+                            </div>
+                        </div>
+                        {% endfor %}
+                    </div>
+                </div>
+            </div>
+        </div>
+    </details>
+    {% endfor %}
+</section>
+{% endif %}
+{% endif %}
 {%- endmacro %}
 
 {% macro manual_property_valuation_panel(kpis) -%}
@@ -331,6 +527,7 @@
     <div class="document-land-map-content">
         {% if subject_portfolio and not subject_documents %}{{ subject_portfolio_summary(subject_portfolio) }}{% endif %}
         {{ super() }}
+        {{ extracted_prior_ownership_group(subject_hub, subject_formalities, subject_fiscal_code) }}
         {% if land_map_kind == 'soggetto' %}{{ manual_property_valuation_panel(land_registry_kpis) }}{% endif %}
         {{ subject_document_archive(subject_archive) }}
         {{ subject_formalities_panel(
@@ -352,6 +549,7 @@
         {{ market_valuation_summary(land_registry_kpis) }}
         {{ adjusted_omi_summary(land_registry_kpis) }}
         {% endif %}
+        {{ prior_ownership_map_toggle() }}
         {{ document_parcel_map(land_registry_map, labels=subject_map_labels) }}
         {{ optional_data_notice(land_registry_map) }}
     </aside>
@@ -359,6 +557,7 @@
 {% else %}
 {% if subject_portfolio and not subject_documents %}{{ subject_portfolio_summary(subject_portfolio) }}{% endif %}
 {{ super() }}
+{{ extracted_prior_ownership_group(subject_hub, subject_formalities, subject_fiscal_code) }}
 {% if land_map_kind == 'soggetto' %}{{ manual_property_valuation_panel(land_registry_kpis) }}{% endif %}
 {{ subject_document_archive(subject_archive) }}
 {{ subject_formalities_panel(
@@ -371,6 +570,7 @@
 {% if subject_ownership_history_rows %}{% include "catasto/_ownership_history.html" %}{% endif %}
 {% if land_map_slot == 'content' %}
 <div class="container-fluid py-3">
+    {{ prior_ownership_map_toggle() }}
     {{ document_parcel_map(land_registry_map, labels=subject_map_labels) }}
     {{ optional_data_notice(land_registry_map) }}
 </div>
@@ -383,6 +583,7 @@
 {% block after_query %}
 {{ super() }}
 {% if land_map_slot == 'after_query' %}
+{{ prior_ownership_map_toggle() }}
 {{ document_parcel_map(land_registry_map, labels=subject_map_labels) }}
 {{ optional_data_notice(land_registry_map) }}
 {% endif %}
@@ -397,11 +598,11 @@
 {% endif %}
 {{ cadastral_table_scripts() }}
 {% if subject_page_data_url %}<span hidden data-subject-page-json-url="{{ subject_page_data_url }}"></span>{% endif %}
-<script src="/static/js/cadastral_category_descriptions.js?v=20261112a" defer></script>
+<script src="/static/js/cadastral_category_descriptions.js?v=20261116a" defer></script>
 {% if land_registry_map and land_registry_map.available %}
 <script src="/static/vendor/leaflet/leaflet.js" data-document-map-script defer></script>
 <script src="/land-registry/static/consumer-map.js" data-document-map-script defer></script>
-<script src="/land-registry/static/document_parcel_map.js?v=20261109-labels" data-document-map-script defer></script>
+<script src="/land-registry/static/document_parcel_map.js?v=20261116-prior-ownership" data-document-map-script defer></script>
 <script src="/static/js/document_parcel_map_errors.js?v=20261113a" defer></script>
 {% endif %}
 {# PDF export: the page's own print layout rendered by headless Chromium (/documents/<id>/pdf). #}
@@ -412,11 +613,11 @@
 <script src="/static/js/document_visura.js?v=20261027a" defer></script>
 <script src="/static/js/subject_visura_page.js?v=20261113a" defer></script>
 {% if land_registry_kpis or land_registry_history %}
-<script src="/static/js/subject_cadastral_asset_enrichment.js?v=20261113a" defer></script>
+<script src="/static/js/subject_cadastral_asset_enrichment.js?v=20261116b" defer></script>
 {% endif %}
 {% if manual_valuation_enabled %}
-<script src="/static/js/manual_property_valuations.js?v=20261112a" defer></script>
+<script src="/static/js/manual_property_valuations.js?v=20261116a" defer></script>
 {% endif %}
-{% if land_registry_kpis %}<script src="/static/js/property_omi_selections.js?v=20261112a" defer></script>{% endif %}
+{% if land_registry_kpis or prior_ownership_omi_indexes %}<script src="/static/js/property_omi_selections.js?v=20261116b" defer></script>{% endif %}
 {% endif %}
 {% endblock %}

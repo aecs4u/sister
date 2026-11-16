@@ -119,7 +119,7 @@
     if (kind) table.dataset.landMapKind = kind;
   });
 
-  document.querySelectorAll('[data-visura-group-tables] table').forEach(table => {
+  document.querySelectorAll('[data-visura-group-tables] table, [data-extracted-prior-ownership] table').forEach(table => {
     const bar = element('div', 'd-flex gap-2 mb-2 no-print');
     const filter = element('input', 'form-control form-control-sm');
     filter.type = 'search';

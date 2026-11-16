@@ -2,6 +2,8 @@
 (function () {
     'use strict';
 
+    function boot() {
+
     var root = document.querySelector('[data-manual-property-valuations-root]');
     var pageDataSource = document.querySelector('[data-subject-page-json]');
     if (!root || !pageDataSource) return;
@@ -425,4 +427,10 @@
     } else {
         waitForAssessment();
     }
+    }
+
+    // The page data is fetched by subject_cadastral_asset_enrichment.js, which publishes it as
+    // [data-subject-page-json] and fires this event; without a data URL there is nothing to wait for.
+    if (document.querySelector('[data-subject-page-json]') || !document.querySelector('[data-subject-page-json-url]')) boot();
+    else document.addEventListener('subject-page-data-ready', boot, {once: true});
 })();

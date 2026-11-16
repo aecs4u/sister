@@ -127,11 +127,33 @@ def _subject_page_data_payload(
     kpis: dict | None,
     ownership_history: list[dict] | None,
     category_descriptions: dict,
+    prior_ownership_omi: dict | None = None,
 ) -> dict:
     assessment = (kpis or {}).get("owner_assessment") or {}
+    prior_ownership_omi = prior_ownership_omi or {}
+    omi_estimates = list((kpis or {}).get("table_estimates") or [])
+    omi_estimates.extend(prior_ownership_omi.get("estimates") or [])
+    omi_options = dict((kpis or {}).get("omi_options_by_comune") or {})
+    for code, extra in (prior_ownership_omi.get("options") or {}).items():
+        if code not in omi_options:
+            omi_options[code] = extra
+            continue
+        merged = dict(omi_options[code])
+        zones = {str(zone.get("code")): zone for zone in merged.get("zones") or [] if zone.get("code")}
+        zones.update({str(zone.get("code")): zone for zone in extra.get("zones") or [] if zone.get("code")})
+        merged["zones"] = [zones[key] for key in sorted(zones)]
+        for field in ("typologies_by_zone", "defaults_by_category"):
+            values = dict(merged.get(field) or {})
+            for key, nested in (extra.get(field) or {}).items():
+                if isinstance(nested, dict) and isinstance(values.get(key), dict):
+                    values[key] = {**values[key], **nested}
+                else:
+                    values[key] = nested
+            merged[field] = values
+        omi_options[code] = merged
     return {
-        "omi_estimates": (kpis or {}).get("table_estimates") or [],
-        "omi_options": (kpis or {}).get("omi_options_by_comune") or {},
+        "omi_estimates": omi_estimates,
+        "omi_options": omi_options,
         "owner_assessment": assessment,
         "ownership_history": ownership_history or [],
         "enrichment_config": {
@@ -144,6 +166,206 @@ def _subject_page_data_payload(
         },
         "manual_property_valuations": (kpis or {}).get("manual_valuation_assets") or [],
         "category_descriptions": category_descriptions or {},
+    }
+
+
+def _prior_ownership_table_rows(profile: dict | None, formalities: list[dict] | None, fiscal_code: str) -> list[dict]:
+    """Rows rendered in the extracted prior-ownership tables, in their template sort order."""
+    if not profile or not fiscal_code:
+        return []
+
+    documents: list[dict] = []
+    document_ids: set[str] = set()
+
+    def add_document(document: dict | None) -> None:
+        document = document or {}
+        document_id = str(document.get("id") or "")
+        if document_id and document_id not in document_ids:
+            document_ids.add(document_id)
+            documents.append(document)
+
+    for document in profile.get("subject_inspections") or []:
+        add_document(document)
+    for search in formalities or []:
+        for item in search.get("formalities") or []:
+            for entry in item.get("archive_documents") or []:
+                add_document(entry.get("document"))
+
+    grouped: dict[str, list[dict]] = {}
+    normalized_code = fiscal_code.strip().upper()
+    for document in documents:
+        extraction = document.get("extraction") or {}
+        is_subject_contro = any(
+            str(party.get("role") or "").strip().casefold() == "contro"
+            and str(party.get("fiscal_code") or "").strip().upper() == normalized_code
+            for party in extraction.get("parties") or []
+        )
+        if not is_subject_contro or extraction.get("kind_label") != "Nota di trascrizione":
+            continue
+        for property_row in extraction.get("properties") or []:
+            municipality = property_row.get("municipality") or "Comune non indicato"
+            raw_cadastre = str(property_row.get("cadastre_type") or "")
+            cadastre = "F" if raw_cadastre.strip().casefold() in {"f", "fabbricati"} else (
+                "T" if raw_cadastre.strip().casefold() in {"t", "terreni"} else raw_cadastre
+            )
+            sheet = str(property_row["sheet"]) if property_row.get("sheet") is not None else ""
+            group_key = f"{municipality}|{cadastre}|{sheet.zfill(5)}"
+            grouped.setdefault(group_key, []).append({
+                "document": document,
+                "extraction": extraction,
+                "property": property_row,
+                "municipality": municipality,
+                "municipality_code": property_row.get("municipality_code") or "",
+                "cadastre": cadastre,
+                "sheet": sheet,
+                "group_key": group_key,
+            })
+
+    rows = []
+    for group_key in sorted(grouped, key=str.casefold):
+        rows.extend(sorted(
+            grouped[group_key],
+            key=lambda row: str(row["extraction"].get("title_date") or ""),
+            reverse=True,
+        ))
+    return rows
+
+
+def _prior_ownership_map_parcels(
+    profile: dict | None, fiscal_code: str, formalities: list[dict] | None = None
+) -> list[dict]:
+    """Map-ready parcel identities from extracted notes where the subject is a party ``contro``."""
+    from .provinces import province_code
+
+    parcels: dict[tuple[str, ...], dict] = {}
+    for row in _prior_ownership_table_rows(profile, formalities, fiscal_code):
+        prop = row["property"]
+        province = str(prop.get("province_code") or province_code(prop.get("province")) or "").strip().upper()
+        municipality_code = str(row.get("municipality_code") or "").strip().upper()
+        sheet = str(prop.get("sheet") or "").strip()
+        parcel = str(prop.get("parcel") or "").strip()
+        section = str(prop.get("section") or "").strip()
+        cadastre = row.get("cadastre")
+        if not all((province, municipality_code, sheet, parcel)) or cadastre not in {"F", "T"}:
+            continue
+        identity = (province, municipality_code, section, sheet, parcel, cadastre)
+        parcels.setdefault(identity, {
+            "province": prop.get("province") or province,
+            "province_code": province,
+            "municipality": row["municipality"],
+            "municipality_code": municipality_code,
+            "section": section,
+            "sheet": sheet,
+            "parcel": parcel,
+            "is_building": cadastre == "F",
+            "map_address": str(prop.get("address") or "").strip(),
+            "units": [{
+                "property_type": "building" if cadastre == "F" else "land",
+                "category": prop.get("category") or prop.get("nature") or "",
+                "subunit": prop.get("subunit"),
+            }],
+        })
+    return list(parcels.values())
+
+
+async def _prior_ownership_omi_data(
+    profile: dict | None, formalities: list[dict] | None, fiscal_code: str, user
+) -> dict:
+    """Calculate per-row OMI controls for extracted past properties through the standard subject estimator."""
+    rows = _prior_ownership_table_rows(profile, formalities, fiscal_code)
+    if not rows:
+        return {"estimates": [], "options": {}, "indexes": {}}
+
+    from .land_registry_kpis import _subject_group_table_sort_key, subject_land_registry_kpis
+
+    groups_by_key: dict[str, dict] = {}
+    for row in rows:
+        key = row["group_key"]
+        group = groups_by_key.setdefault(key, {
+            "key": key,
+            "municipality": row["municipality"],
+            "municipality_code": row["municipality_code"],
+            "cadastre": row["cadastre"],
+            "sheet": row["sheet"],
+            "rows": [],
+            "xml": {
+                "Descrizione": row["municipality"],
+                "CodiceComune": row["municipality_code"],
+                "ImmobileFabbricatiS": [],
+                "ImmobileTerreniS": [],
+            },
+        })
+        group["rows"].append(row)
+
+    ordered_groups = [groups_by_key[key] for key in sorted(groups_by_key, key=str.casefold)]
+
+    def as_number(value):
+        if value is None or value == "":
+            return None
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+
+    for group in ordered_groups:
+        for row in group["rows"]:
+            prop = row["property"]
+            current = prop.get("current") or {}
+            identifier = {
+                "CodiceComune": prop.get("municipality_code") or "",
+                "Comune": prop.get("municipality") or "",
+                "Provincia": prop.get("province") or "",
+                "SezUrbana": prop.get("section") or "",
+                "Foglio": prop.get("sheet"),
+                "ParticellaNum": prop.get("parcel"),
+                "Subalterno": prop.get("subunit"),
+            }
+            cadastral_row = {"DatiIdentificativi": {"IdentificativoDefinitivo": identifier}}
+            if group["cadastre"] == "F":
+                consistency = None
+                consistency_value = current.get("consistency_value")
+                consistency_unit = current.get("consistency_unit")
+                if consistency_value is not None and consistency_unit:
+                    consistency = {"Valore": str(consistency_value), "Unita": consistency_unit}
+                elif prop.get("room_count") is not None:
+                    consistency = {"Valore": str(prop["room_count"]), "Unita": "VANI"}
+                cadastral_row["DatiClassamentoF"] = {
+                    "Categoria": current.get("category") or prop.get("category") or "",
+                    "Consistenza": consistency,
+                    "RenditaEuro": current.get("income"),
+                }
+                cadastral_row["SuperficieF"] = {"Totale": as_number(prop.get("area_sqm"))}
+                group["xml"]["ImmobileFabbricatiS"].append(cadastral_row)
+            else:
+                cadastral_row["DatiClassamentoT"] = {"ClassamentoT": [{
+                    "Qualita": prop.get("nature") or prop.get("category") or "",
+                    "SuperficieMQ": as_number(prop.get("area_sqm")),
+                    "RedditoDominicaleEuro": current.get("dominical_income", current.get("income")),
+                    "RedditoAgrarioEuro": current.get("agricultural_income"),
+                }]}
+                group["xml"]["ImmobileTerreniS"].append(cadastral_row)
+
+    try:
+        result = await subject_land_registry_kpis(
+            {"VisuraSoggetto": {"GruppoUnitaImmobiliari": [group["xml"] for group in ordered_groups]}},
+            None,
+            include_market_valuation=False,
+            selection_user_id=_favorite_user_key(user),
+        )
+    except Exception as exc:  # OMI is optional; extracted ownership remains visible without it.
+        logger.warning("Prior-ownership OMI data unavailable: %s", type(exc).__name__)
+        return {"estimates": [], "options": {}, "indexes": {}}
+    if not result:
+        return {"estimates": [], "options": {}, "indexes": {}}
+
+    # The shared estimator sorts groups by municipality and sheet. Map that order back to the template's
+    # municipality/cadastre/sheet grouping so each historical table receives its matching row estimates.
+    sorted_groups = sorted(ordered_groups, key=lambda group: _subject_group_table_sort_key(group["xml"]))
+    indexes = {group["key"]: index for index, group in enumerate(sorted_groups)}
+    return {
+        "estimates": result.get("table_estimates") or [],
+        "options": result.get("omi_options_by_comune") or {},
+        "indexes": indexes,
     }
 
 
@@ -6813,16 +7035,25 @@ async def _geocode_address(query: str) -> dict[str, Any] | None:
         if delay > 0:
             await asyncio.sleep(delay)
         _GEOCODE_LAST_REQUEST_AT = time.monotonic()
-        try:
-            async with httpx.AsyncClient(timeout=6.0, headers={"User-Agent": "sister/1 (info@aecs4u.com)"}) as client:
-                response = await client.get(
-                    _NOMINATIM_URL, params={"q": query, "format": "jsonv2", "limit": 1, "countrycodes": "it"}
-                )
-                response.raise_for_status()
-                rows = response.json()
-        except Exception as exc:
-            logger.warning("Geocoding unavailable: %s", type(exc).__name__)
-            return None  # not cached: a network error should not stick
+        rows = None
+        # Nominatim often answers a read timeout under load; one patient retry keeps a real address off the
+        # "senza posizione" list (the finished map is remembered, so a miss would stick until a restart).
+        for attempt in range(2):
+            try:
+                async with httpx.AsyncClient(
+                    timeout=12.0 if attempt else 8.0, headers={"User-Agent": "sister/1 (info@aecs4u.com)"}
+                ) as client:
+                    response = await client.get(
+                        _NOMINATIM_URL, params={"q": query, "format": "jsonv2", "limit": 1, "countrycodes": "it"}
+                    )
+                    response.raise_for_status()
+                    rows = response.json()
+                break
+            except Exception as exc:
+                logger.warning("Geocoding unavailable (attempt %d): %s", attempt + 1, type(exc).__name__)
+                if attempt:
+                    return None  # not cached: a network error should not stick
+                await asyncio.sleep(1.0)
         hit = None
         if rows:
             try:
@@ -7271,6 +7502,19 @@ async def _render_doc_from_db(
         doc["land_registry_map"] = hub_map or doc.get("land_registry_map")
     complete_data_url = None
     subject_page_data_url = None
+    prior_ownership_omi = {"estimates": [], "options": {}, "indexes": {}}
+    prior_ownership_map_available = False
+    prior_ownership_map_url = ""
+    if land_map_kind == "soggetto" and subject_hub:
+        prior_ownership_omi = await _prior_ownership_omi_data(
+            subject_hub, subject_formalities or [], subject_fiscal_code or "", user
+        )
+        prior_map_parcels = _prior_ownership_map_parcels(
+            subject_hub, subject_fiscal_code or "", subject_formalities or []
+        )
+        prior_ownership_map_available = bool(prior_map_parcels)
+        if prior_map_parcels:
+            prior_ownership_map_url = _hub_data_url(subject_hub, _hub_map_key(prior_map_parcels)) + "&prior=1"
     if land_map_kind == "soggetto" and doc.get("id") and doc.get("xml_parsed"):
         complete_data_key = _cache_complete_data(
             int(doc["id"]),
@@ -7283,7 +7527,9 @@ async def _render_doc_from_db(
         from .cadastral_categories import CATEGORY_DESCRIPTIONS
 
         subject_page_data_key = _cache_subject_page_data(
-            _subject_page_data_payload(land_registry_kpis, land_registry_history, CATEGORY_DESCRIPTIONS),
+            _subject_page_data_payload(
+                land_registry_kpis, land_registry_history, CATEGORY_DESCRIPTIONS, prior_ownership_omi
+            ),
             user,
             document_id=doc.get("id"),
             subject_code=subject_fiscal_code if subject_hub else None,
@@ -7318,6 +7564,9 @@ async def _render_doc_from_db(
         ) if land_map_kind == "soggetto" else None,
         complete_data_url=complete_data_url,
         subject_page_data_url=subject_page_data_url,
+        prior_ownership_omi_indexes=prior_ownership_omi["indexes"],
+        prior_ownership_map_available=prior_ownership_map_available,
+        prior_ownership_map_url=prior_ownership_map_url,
         document_favorites_enabled=document_favorites_enabled,
         subject_document_id=doc.get("id") if subject_fiscal_code else None,
         manual_valuation_enabled=bool(_favorite_user_key(user)),
@@ -7827,6 +8076,12 @@ async def _google_maps_context_uncached(doc: dict, *, refresh_only: bool = False
                     classamento = property_row.get("DatiClassamentoF") or {}
                     if isinstance(classamento, dict):
                         item["Categoria"] = classamento.get("Categoria") or ""
+                    address_value = property_row.get("IndirizzoImm") or next(
+                        (entry.get("IndirizzoImm") for entry in as_items(property_row.get("DatiIndirizzo"))
+                         if entry.get("IndirizzoImm")), "")
+                    if isinstance(address_value, dict):
+                        address_value = address_value.get("_text") or ""
+                    item["Indirizzo"] = str(address_value or "").strip()
                     if not item.get("CodiceComune") and group.get("CodiceComune"):
                         item["CodiceComune"] = group["CodiceComune"]
                     if not item.get("Comune") and group.get("Descrizione"):
@@ -7976,6 +8231,7 @@ async def _google_maps_context_uncached(doc: dict, *, refresh_only: bool = False
             "parcel": candidate_parcel,
             "subunits": [candidate_subunit] if candidate_subunit else [],
             "category": candidate_category,
+            "address": parcel_field(candidate, "address", "Indirizzo"),
             "reference": parcel_field(candidate, "reference") or " · ".join(
                 part for part in (
                     f"{candidate_municipality} ({candidate_code.upper()})" if candidate_code else candidate_municipality,
@@ -8035,6 +8291,7 @@ async def _google_maps_context_uncached(doc: dict, *, refresh_only: bool = False
             "sheet": item["sheet"],
             "parcel": item["parcel"],
             "category": item.get("category", ""),
+            "address": item.get("address", ""),
         }
 
     context: dict[str, Any] = {
@@ -11279,9 +11536,65 @@ def _omi_zone_features_for_properties(
     return list(selected.values())
 
 
+async def _address_position_marker(item: dict[str, Any], address: str, queries: list[str]) -> dict[str, Any] | None:
+    """Approximate marker for a parcel the cadastre has no geometry for: ANNCSU house number first, then the geocoder."""
+    from .anncsu import anncsu_position
+
+    source, place = "", None
+    if address:
+        place = await anncsu_position(str(item.get("municipality_code") or ""), address)
+        source = "anncsu"
+    if not place:
+        for query in queries:
+            place = await _geocode_address(query)
+            if place:
+                source = "osm_address"
+                break
+    if not place:
+        return None
+    try:
+        latitude, longitude = float(place["lat"]), float(place["lng"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    if not (-90 <= latitude <= 90 and -180 <= longitude <= 180):
+        return None
+    return {
+        "latitude": latitude,
+        "longitude": longitude,
+        "reference": item.get("reference") or "Particella",
+        "municipality": item.get("municipality") or "",
+        "municipality_code": item.get("municipality_code") or "",
+        "province": item.get("province") or "",
+        "section": item.get("section") or "",
+        "sheet": item.get("sheet") or "",
+        "parcel": item.get("parcel") or "",
+        "category": item.get("category") or "",
+        "position_source": source,
+        "geocode_label": str(place.get("label") or ""),
+        "selected": False,
+    }
+
+
 async def _parcel_map_payload(lookup: dict[str, Any]) -> dict[str, Any]:
     """The JSON the parcel map script fetches: markers, parcel and sheet outlines, parcels without a position."""
     unmapped_parcels = [dict(item) for item in lookup.get("unmapped_parcel_items") or []]
+    if lookup.get("listed_only") and any(item.get("address") for item in unmapped_parcels):
+        # No cadastral geometry: place the parcel at its address (ANNCSU, else geocoder), marked as approximate.
+        located, remaining = [], []
+        for item in unmapped_parcels:
+            address = str(item.get("address") or "")
+            marker = await _address_position_marker(
+                item, address,
+                _hub_map_geocode_queries(address, item.get("municipality"), item.get("province")) if address else [],
+            ) if address else None
+            if marker:
+                located.append(marker)
+            else:
+                remaining.append(item)
+        if located:
+            lookup["parcel_markers"] = [*(lookup.get("parcel_markers") or []), *located]
+            unmapped_parcels = remaining
+            lookup["unmapped_parcel_items"] = remaining
     parcel_fit_points = []
     # Owned-parcel maps retain unmapped cadastral references for sheet matching, but must not place them
     # at a municipality centroid: that would look like an actual parcel position.
@@ -11332,9 +11645,9 @@ async def _parcel_map_payload(lookup: dict[str, Any]) -> dict[str, Any]:
 
 
 async def _subject_parcel_map_data(
-    code: str, code_pattern: str, key: str | None, after: int, *, profile: dict | None = None
+    code: str, code_pattern: str, key: str | None, after: int, *, profile: dict | None = None, prior: bool = False
 ):
-    """Map data of a subject page without a document behind it, as increments (``after`` = chunks already drawn).
+    """Subject map data as increments; ``prior`` selects parcels from extracted historical inspection notes.
 
     The page names the data it was built with (``k``). If the service no longer has it (restart, eviction) the map is
     rebuilt from the subject's saved search, so a page left open never ends on "map not loaded". A lookup that failed
@@ -11353,17 +11666,22 @@ async def _subject_parcel_map_data(
             profile = await _subject_query_profile(normalized_code, [], [], 1)
         if profile is None:
             raise HTTPException(status_code=404, detail="Nessuna ricerca per soggetto archiviata")
-        parcels = _hub_map_parcels(profile)
+        parcels = _prior_ownership_map_parcels(profile, normalized_code) if prior else _hub_map_parcels(profile)
         if not parcels:
             return JSONResponse({**_empty_map_payload(), "next": 0, "done": True, "progress": 1.0}, headers=headers)
         key = _hub_map_key(parcels)
         if key not in _HUB_MAP_DATA and key not in _HUB_MAP_TASKS:
-            _HUB_MAP_TASKS[key] = asyncio.create_task(_build_hub_map(key, parcels, _hub_data_url(profile, key)))
+            data_url = _hub_data_url(profile, key)
+            if prior:
+                data_url += "&prior=1"
+            _HUB_MAP_TASKS[key] = asyncio.create_task(_build_hub_map(key, parcels, data_url))
             await asyncio.sleep(0)  # let the task register its progress before the first poll
     return JSONResponse(await _hub_map_increment(key, max(0, after)), headers=headers)
 
 
-async def _granted_subject_parcel_map(code: str, kind: str, pattern: str, key: str | None, after: int, user):
+async def _granted_subject_parcel_map(
+    code: str, kind: str, pattern: str, key: str | None, after: int, user, *, prior: bool = False
+):
     from fastapi import HTTPException
 
     from .database import has_subject_access
@@ -11378,21 +11696,25 @@ async def _granted_subject_parcel_map(code: str, kind: str, pattern: str, key: s
     )
     if profile is None:
         raise HTTPException(status_code=404, detail="Nessuna ricerca per soggetto archiviata")
-    return await _subject_parcel_map_data(normalized_code, pattern, key, after, profile=profile)
+    return await _subject_parcel_map_data(normalized_code, pattern, key, after, profile=profile, prior=prior)
 
 
 @router.get("/persons/{fiscal_code}/parcel-map.json", response_class=JSONResponse)
-async def web_person_parcel_map_data(fiscal_code: str, k: str | None = None, after: int = 0, user=Depends(_require_auth)):
+async def web_person_parcel_map_data(
+    fiscal_code: str, k: str | None = None, after: int = 0, user=Depends(_require_auth), prior: bool = False
+):
     if not _is_admin(user):
-        return await _granted_subject_parcel_map(fiscal_code, "person", r"[A-Z0-9]{16}", k, after, user)
-    return await _subject_parcel_map_data(fiscal_code, r"[A-Z0-9]{16}", k, after)
+        return await _granted_subject_parcel_map(fiscal_code, "person", r"[A-Z0-9]{16}", k, after, user, prior=prior)
+    return await _subject_parcel_map_data(fiscal_code, r"[A-Z0-9]{16}", k, after, prior=prior)
 
 
 @router.get("/companies/{fiscal_code}/parcel-map.json", response_class=JSONResponse)
-async def web_company_parcel_map_data(fiscal_code: str, k: str | None = None, after: int = 0, user=Depends(_require_auth)):
+async def web_company_parcel_map_data(
+    fiscal_code: str, k: str | None = None, after: int = 0, user=Depends(_require_auth), prior: bool = False
+):
     if not _is_admin(user):
-        return await _granted_subject_parcel_map(fiscal_code, "company", r"\d{11}", k, after, user)
-    return await _subject_parcel_map_data(fiscal_code, r"\d{11}", k, after)
+        return await _granted_subject_parcel_map(fiscal_code, "company", r"\d{11}", k, after, user, prior=prior)
+    return await _subject_parcel_map_data(fiscal_code, r"\d{11}", k, after, prior=prior)
 
 
 async def _backfill_document_metadata(
@@ -12907,6 +13229,103 @@ def _merge_inspections_into_formalities(hub: dict, formalities: list[dict]) -> i
     return len(moved)
 
 
+async def _attach_current_unit_values(summaries: list[dict]) -> None:
+    """Add the last stored classamento and the IMU cadastral value to the properties extracted from mortgage notes."""
+    from .cadastral_values import building_cadastral_value, land_cadastral_value
+    from .database import get_units_current_data
+
+    properties = [p for summary in summaries for p in summary.get("properties") or [] if p.get("cadastral_unit_id")]
+    if not properties:
+        return
+    try:
+        current = await get_units_current_data([p["cadastral_unit_id"] for p in properties])
+    except Exception as exc:  # noqa: BLE001 - the history stays readable without the values
+        logger.warning("Current cadastral data unavailable for mortgage-note properties: %s", type(exc).__name__)
+        return
+    for prop in properties:
+        data = current.get(int(prop["cadastral_unit_id"]))
+        if not data:
+            continue
+        income = data.get("income_eur")
+        category = data.get("category") or prop.get("category")
+        value = None
+        if income is not None:
+            value = building_cadastral_value(income, category)
+        elif data.get("dominical_income_eur") is not None:
+            value = land_cadastral_value(data["dominical_income_eur"])
+        prop["current"] = {
+            "category": data.get("category") or "",
+            "cadastral_class": data.get("cadastral_class") or "",
+            "zone": data.get("census_zone") or "",
+            "consistency": (
+                f"{str(data['consistency_value']).rstrip('0').rstrip('.')} {data['consistency_unit']}"
+                if data.get("consistency_value") is not None and data.get("consistency_unit")
+                else ""
+            ),
+            "income": income if income is not None else data.get("dominical_income_eur"),
+            "dominical_income": data.get("dominical_income_eur"),
+            "agricultural_income": data.get("agricultural_income_eur"),
+            "partita": data.get("partita") or "",
+            "consistency_value": data.get("consistency_value"),
+            "consistency_unit": data.get("consistency_unit"),
+            "cadastral_value": value.value if value else None,
+        }
+    await _attach_omi_estimates(properties)
+
+
+async def _attach_omi_estimates(properties: list[dict]) -> None:
+    """Indicative OMI range of buildings extracted from mortgage notes, on the comune-wide zone bands.
+
+    The notes carry no position, so the OMI zone is unknown and the range spans the zones that quote the category (the
+    same fallback the cadastral groups use for an unmapped parcel). The area is the note's own m², else the last stored
+    consistency in m², else the vani times the national m²/vano mean; never a cadastral surface.
+    """
+    from . import omi_quotes
+    from .land_registry_kpis import _consistency_area_vani, _format_value_range
+
+    codes = sorted({p["municipality_code"] for p in properties if p.get("municipality_code")})
+    if not codes:
+        return
+    try:
+        quotes_by_code = dict(zip(codes, await asyncio.gather(*(omi_quotes.omi_comune_quotes(code) for code in codes))))
+    except Exception as exc:  # noqa: BLE001 - optional reference figures
+        logger.warning("OMI quotes unavailable for mortgage-note properties: %s", type(exc).__name__)
+        return
+    from decimal import Decimal
+
+    for prop in properties:
+        current = prop.setdefault("current", {})
+        quotes = quotes_by_code.get(prop.get("municipality_code"))
+        category = current.get("category") or prop.get("category")
+        if not quotes or not category:
+            continue
+        area, basis = None, ""
+        if prop.get("area_sqm"):
+            area, basis = float(prop["area_sqm"]), "superficie indicata nella nota"
+        elif current.get("consistency_unit") == "MQ" and current.get("consistency_value"):
+            area, basis = float(current["consistency_value"]), "consistenza in m² dell'ultima ricerca"
+        elif current.get("consistency_unit") == "VANI" and current.get("consistency_value"):
+            estimate = _consistency_area_vani({"Valore": str(current["consistency_value"]), "Unita": "VANI"}, category)
+            if estimate:
+                area, basis = estimate[0], f"{estimate[1]:g} vani × {estimate[2]:.1f} m²/vano (media nazionale)"
+        if not area:
+            continue
+        quote_range, _reason = omi_quotes.select_quote_range_across_zones(quotes, category)
+        if not quote_range:
+            continue
+        low, high, mid = (area * quote_range[k] for k in ("prezzo_min", "prezzo_max", "prezzo_mid"))
+        typology = quote_range.get("cod_tipologia")
+        current["omi_zone"] = f"Intero comune ({quote_range['zone_count']} zone)"
+        current["omi_typology"] = omi_quotes.OMI_TYPOLOGY_LABELS.get(int(typology), f"Tipologia {typology}") if typology else ""
+        current["omi_price"] = f"€ {quote_range['prezzo_min']:,.0f} – {quote_range['prezzo_max']:,.0f}".replace(",", ".")
+        current["omi_range"] = _format_value_range(Decimal(round(low)), Decimal(round(high)))
+        current["omi_note"] = (
+            f"Stima OMI indicativa · fascia dell'intero comune ({quote_range['zone_count']} zone), zona non nota · "
+            f"{area:.0f} m² ({basis}) × € {quote_range['prezzo_min']:,.0f}–{quote_range['prezzo_max']:,.0f}/m² · "
+            f"punto medio € {mid:,.0f} · non è una perizia"
+        )
+
+
 def _hub_inspection_extraction(extraction: dict | None) -> dict | None:
     """Readable mortgage extraction details for the person and parcel views."""
     if not extraction:
@@ -12954,6 +13373,17 @@ def _hub_inspection_extraction(extraction: dict | None) -> dict | None:
             properties.append(
                 {
                     "reference": reference,
+                    "municipality": location,
+                    "municipality_code": prop.get("municipality_code") or "",
+                    "province": prop.get("province") or "",
+                    "province_code": prop.get("province_code") or "",
+                    "cadastral_unit_id": prop.get("cadastral_unit_id"),
+                    "cadastre_type": cadastre,
+                    "section": prop.get("urban_section") or "",
+                    "sheet": prop.get("sheet"),
+                    "parcel": prop.get("parcel"),
+                    "subunit": prop.get("subunit"),
+                    "category": prop.get("nature") or "",
                     "address": " ".join(part for part in (prop.get("address"), prop.get("civic_number")) if part),
                     "nature": prop.get("nature_description") or prop.get("nature") or "",
                     "room_count": prop.get("room_count"),
@@ -13612,6 +14042,7 @@ async def _subject_query_profile(
             summary = _hub_inspection_extraction(extraction)
             for document in inspection_instances[document_id]:
                 document["extraction"] = summary
+        await _attach_current_unit_values([d["extraction"] for d in subject_inspections if d.get("extraction")])
 
     ordered = sorted(
         parcels.values(),
@@ -14222,33 +14653,21 @@ async def _build_hub_map(map_key: str, parcels: list[dict], data_url: str) -> di
         # Geocoded points are explicitly approximate and are added only when the parcel
         # has no cadastral polygon/centroid from the cadastral source.
         for item, source, queries in address_fallbacks:
-            place = None
-            for query in queries:
-                place = await _geocode_address(query)
-                if place:
-                    break
-            if not place:
+            marker = await _address_position_marker(
+                {
+                    **item,
+                    "municipality": item.get("municipality") or source.get("municipality") or "",
+                    "municipality_code": item.get("municipality_code") or source.get("municipality_code") or "",
+                    "province": item.get("province") or source.get("province") or "",
+                    "section": item.get("section") or source.get("section") or "",
+                    "sheet": item.get("sheet") or source.get("sheet") or "",
+                    "parcel": item.get("parcel") or source.get("parcel") or "",
+                },
+                str((source or {}).get("map_address") or ""),
+                queries,
+            )
+            if not marker:
                 continue
-            try:
-                latitude, longitude = float(place["lat"]), float(place["lng"])
-            except (KeyError, TypeError, ValueError):
-                continue
-            if not (-90 <= latitude <= 90 and -180 <= longitude <= 180):
-                continue
-            marker = {
-                "latitude": latitude,
-                "longitude": longitude,
-                "reference": item.get("reference") or "Particella",
-                "municipality": item.get("municipality") or source.get("municipality") or "",
-                "municipality_code": item.get("municipality_code") or source.get("municipality_code") or "",
-                "province": item.get("province") or source.get("province") or "",
-                "section": item.get("section") or source.get("section") or "",
-                "sheet": item.get("sheet") or source.get("sheet") or "",
-                "parcel": item.get("parcel") or source.get("parcel") or "",
-                "position_source": "osm_address",
-                "geocode_label": str(place.get("label") or ""),
-                "selected": False,
-            }
             lookup.setdefault("parcel_markers", []).append(marker)
             fallback_payload = _empty_map_payload()
             fallback_payload["parcel_markers"].append(marker)
@@ -14693,8 +15112,17 @@ async def _render_query_only_subject(
         )
     from .cadastral_categories import CATEGORY_DESCRIPTIONS
 
+    prior_ownership_omi = await _prior_ownership_omi_data(
+        profile, subject_formalities or [], profile["code"], user
+    )
+    prior_map_parcels = _prior_ownership_map_parcels(profile, profile["code"], subject_formalities or [])
+    prior_ownership_map_available = bool(prior_map_parcels)
+    prior_ownership_map_url = (
+        _hub_data_url(profile, _hub_map_key(prior_map_parcels)) + "&prior=1" if prior_map_parcels else ""
+    )
+
     subject_page_data_key = _cache_subject_page_data(
-        _subject_page_data_payload(land_registry_kpis, [], CATEGORY_DESCRIPTIONS),
+        _subject_page_data_payload(land_registry_kpis, [], CATEGORY_DESCRIPTIONS, prior_ownership_omi),
         user,
         subject_code=profile["code"],
         subject_kind="company" if route_prefix == "/companies" else "person",
@@ -14722,6 +15150,9 @@ async def _render_query_only_subject(
         ),
         land_registry_kpis=land_registry_kpis,
         subject_page_data_url=f"/subject-page-data/{subject_page_data_key}.json",
+        prior_ownership_omi_indexes=prior_ownership_omi["indexes"],
+        prior_ownership_map_available=prior_ownership_map_available,
+        prior_ownership_map_url=prior_ownership_map_url,
         manual_valuation_enabled=bool(_favorite_user_key(user)),
         land_registry_map=land_registry_map,
         **_land_map_layout("soggetto", theme),

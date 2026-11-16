@@ -41,30 +41,36 @@ Status: **implementation in progress, updated with executor and verification fin
   merge repeated acts by office + RP + RG + year and treat an observed cancellation annotation as canceled across those
   repeated rows. The risk strip shows the latest dated transfer decree in each inspection. `/health` now reports an
   expired session as not auth-ready. Targeted regressions cover expired session readiness, typed projection, the
-  live-burdens filter, and panel rendering. A running `/persons` render is still pending; related note-extraction, health,
-  and entity-template work is detailed under Phase 5 below.
+  live-burdens filter, and panel rendering. Template tests verify the `/persons` active-burdens card, metric link, and
+  JavaScript column mapping, and render two normalized inspections together in one formalities panel. Typed-first and
+  legacy JSON projection behavior are covered separately by the database-backed reader regression. A running `/persons`
+  render is still pending; related note-extraction, health, and entity-template work is detailed under Phase 5 below.
 
 Focused verification on 2026-11-16: the mortgage-flow, AdE ledger, browser-dispatch, parser, formalities-panel,
 persons-index, service-worker, wallet, web-auth, CLI, client-contract, entity-template, query-form, parser-utility,
-workflow, and MCP-wrapper tests passed **655 tests** with two optional configuration/schema warnings. This run includes
-the anonymized formalità fixture, reusable live-burden query, and MCP wrapper regression. A separate test for invalid
-subject-profile rejection in the legacy formalities-download route passed (1 passed). Coverage includes the
-checkbox-to-register association guard and mismatch-before-click case, saved AdE statement page shape, exact `idRichiesta`
-forwarding, refusal to start an unconfirmed MCP preview, and the absence of any MCP paid-confirmation tool. The MCP
-test fakes the SDK registration boundary; the optional package is not installed here, so stdio transport and SDK
-serialization remain unchecked. The admin quote panel has a direct template render test, and all paid-flow web routes
-are asserted admin-only. `ruff check` passes for the two changed test files; a broader check still reports import-order
-and unused-import findings in existing modules. The repository suite was previously run with 1,966 passed,
-2 skipped, and 17 failed; it has not been rerun after the subsequent fixes, so it is still not verified green. Live
-portal behavior and running-service browser renders remain unchecked.
+workflow, and MCP-wrapper tests plus the invalid-profile route guard passed **671 tests** with two optional
+configuration/schema warnings. This run includes the anonymized formalità fixture, reusable live-burden query, MCP wrapper
+regression, and the expanded database-backed two-inspection render through both typed-first and legacy JSON reads.
+Coverage includes the rendered `/persons` live-burdens card/column, checkbox-to-register association guard and
+mismatch-before-click case, saved AdE statement page shape, exact `idRichiesta` forwarding, refusal to start an
+unconfirmed MCP preview, and the absence of any MCP paid-confirmation tool. An earlier isolated rerun of the
+database-backed panel regression was skipped because the PostgreSQL fixture reported an `OperationalError`; it ran and
+passed as part of this broader suite. The updated mortgage-search and persons-index test files pass local `ruff check`,
+and `git diff --check` is clean. The MCP test fakes the SDK registration boundary;
+the optional package is not installed here, so stdio transport and SDK serialization remain unchecked. The admin quote
+panel has a direct template render test, and all paid-flow web routes are asserted admin-only. The latest full-suite
+result and failure categories are recorded below; the repository suite is still not verified green. Paid-flow portal
+behavior and running-service page renders remain unchecked.
 
 Read-only Playwright checks on 2026-11-16: direct navigation to `/persons/MSSLNE82D48Z211J`,
 `/persons/LRNBBR74A61Z149H`, and `/admin/wallets` redirected to `/auth/login` with the requested path in `next_url`; the
-page title was `Accesso — SISTER`. The available browser context has no signed-in SISTER session, so the subject panels
-and wallet panel were not rendered. No credentials were entered. This confirms the login gate only, not the page content
-or its rendering on the running service. A read-only navigation to the AdE statement service URL
-`/Servizi/SceltaServizio.do?tipo=/T/TM/SUEC_` redirected to `/Servizi/login.jsp` (`Uscita`), so this browser context also
-has no authenticated AdE session and could not fetch a statement or inspect the date-selection form. No portal form was
+page title was `Accesso — SISTER`. The browser had no signed-in SISTER session, so the subject panels and wallet panel
+were not rendered. No credentials were entered. This confirms the login gate only, not the page content or its rendering
+on the running service. After the user reported an AdE-only sign-in, a read-only navigation to
+`/Servizi/SceltaServizio.do?tipo=/T/TM/SUEC_` still ended at `/Servizi/login.jsp` (`Uscita`). Its page heading said
+`Utente non abilitato, per accedere ai servizi occorre essere registrati.` The statement and date-selection form were
+unavailable. The user reported this as an AdE-only signed-in session; the page indicates that this browser identity cannot
+access the SISTER service, but does not identify which registration or entitlement step is missing. No portal form was
 submitted.
 
 Runtime probe on 2026-11-16: the local service at `127.0.0.1:8025` responds to `/health` with HTTP 200, but the
@@ -77,8 +83,9 @@ keys and delete rules, and indexes, a scoped `compare_metadata` check across all
 differences against the migrated local database. The standalone global `alembic check` also compares many pre-existing
 legacy and externally managed tables outside this plan, so it is not a plan-scoped drift result.
 
-Full verification refreshed on 2026-11-16: `.venv/bin/python -m pytest -p no:logfire -q --tb=short` completed with
-**1,971 passed, 2 skipped, and 16 failed**. The failures are outside this paid-flow scope: one manual-valuation test has
+Full verification refreshed on 2026-11-16 after the template-render regressions:
+`.venv/bin/python -m pytest -p no:logfire -q --tb=short` completed with
+**1,974 passed, 2 skipped, and 16 failed**. The failures are outside this paid-flow scope: one manual-valuation test has
 no matching `property_asset` fixture; two OMI quote tests see the configured local DSN/data; three OMI cache tests do not
 match current fixture behavior; six persona-giuridica homonym tests call a fake portal with an outdated signature; two
 subject-access migration tests find an FK/model diff; and two web tests disagree with current 3D-geocoding and theme
@@ -261,8 +268,10 @@ Deposito castelletto on 15/11/2026: 2,40 €. Each row has a *Dettaglio* (`Detta
 read yet; it should say which inspections and notes a row covers. A structural read of the saved statement HTML on
 2026-11-16 found that detail is posted through one form to `/Servizi/GestCont/EstrattoConto/DettaglioEstrattoContoIpo.do`:
 each movement is a radio input named `id`, alongside hidden `ufficio`, `chiaveConv`, period, year, and `profilo` fields.
-No form was submitted and the hidden values were not copied into this plan; a live authenticated check is still needed
-before implementing detail retrieval.
+No form was submitted and the hidden values were not copied into this plan. The follow-up read-only browser attempt on
+2026-11-16 reached the AdE `Uscita` page with an explicit “Utente non abilitato” message, so statement-detail retrieval
+still needs a browser identity enabled for the SISTER service before it can be verified or implemented against a live
+page.
 
 What it corrects: the Richieste *Costo* column is a price, not a charge; the 13/11 charge has no request of that day, so
 it was triggered by opening or saving notes requested earlier (the app's *Scarica da Richieste* is the likely trigger and

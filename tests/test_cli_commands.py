@@ -406,6 +406,14 @@ def test_db_backfill_runs_both_projections_and_xml_and_records_activity(monkeypa
     monkeypatch.setattr(database, "refresh_subject_holdings", fake_holdings)
     monkeypatch.setattr(database, "record_activity", fake_activity)
 
+    async def fake_mortgage_notes(*, force, limit):
+        calls["mortgage_notes"] = (force, limit)
+        return {"candidates": 1, "projected": 1}
+
+    from sister import mortgage_note_projection
+
+    monkeypatch.setattr(mortgage_note_projection, "backfill_mortgage_notes", fake_mortgage_notes)
+
     result = runner.invoke(app, ["db", "backfill", "--force", "--limit", "12"])
 
     assert result.exit_code == 0, result.output
@@ -417,6 +425,7 @@ def test_db_backfill_runs_both_projections_and_xml_and_records_activity(monkeypa
     assert calls["activity"][1]["result"] == {
         "projections": 3,
         "mortgage_searches": {"responses": 2, "searches": 2, "formalities": 4, "annotations": 1, "document_requests": 0},
+        "mortgage_notes": {"candidates": 1, "projected": 1},
         "xml": 5,
         "names": {"nameless": 0},
         "history": {"answers": 0},
