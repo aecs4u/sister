@@ -75,6 +75,20 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      # The app refuses to start unless the database is at DATABASE_REVISION (sister/database.py::init_db), which
+      # Cloud Run reports only as "failed to listen on PORT". Migrate first, with the image that is about to be deployed.
+      - name: Apply database migrations
+        run: |
+          DB_DSN=$(gcloud secrets versions access latest \
+            --secret=SISTER_DATABASE_URL --project=${{ env.GCP_PROJECT_ID }})
+          echo "::add-mask::${DB_DSN}"
+          docker run --rm --entrypoint alembic \
+            -e ENVIRONMENT=production \
+            -e SISTER_DATABASE_DSN_NEON="${DB_DSN}" \
+            -e DATABASE_DSN="${DB_DSN}" \
+            "${{ env.IMAGE_BASE }}:sha-${{ steps.img.outputs.sha_short }}" \
+            upgrade head
+
       - name: Deploy to Cloud Run
         run: |
           gcloud run deploy ${{ env.SERVICE_NAME }} \
