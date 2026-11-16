@@ -8,6 +8,8 @@ import time
 import unicodedata
 import weakref
 from datetime import datetime
+from decimal import Decimal, InvalidOperation
+from typing import Any
 
 from aecs4u_auth.browser import PageLogger as _BasePageLogger
 from bs4 import BeautifulSoup
@@ -1806,6 +1808,51 @@ async def _known_richieste_ids(request_ids: set[str]) -> set[str]:
     }
 
 
+class RichiesteDownloadResult(list):
+    """Downloaded document rows plus priced Richieste rows held for explicit consent."""
+
+    def __init__(self, documents=(), *, blocked_paid=()):
+        super().__init__(documents)
+        self.blocked_paid = list(blocked_paid)
+
+
+def _is_free_receipt_row(meta: dict) -> bool:
+    """Only an explicitly zero-cost receipt is safe to save without paid-step consent."""
+    if "ricevuta" not in str(meta.get("oggetto") or "").casefold():
+        return False
+    raw_cost = re.sub(r"[^0-9,.-]", "", str(meta.get("costo") or ""))
+    if not raw_cost:
+        return False
+    if "," in raw_cost:
+        raw_cost = raw_cost.replace(".", "").replace(",", ".")
+    try:
+        return Decimal(raw_cost) == Decimal("0")
+    except InvalidOperation:
+        return False
+
+
+def _parse_richieste_cost(value: Any) -> Decimal | None:
+    raw = re.sub(r"[^0-9,.-]", "", str(value or ""))
+    if not raw:
+        return None
+    if "," in raw:
+        raw = raw.replace(".", "").replace(",", ".")
+    try:
+        return Decimal(raw).quantize(Decimal("0.01"))
+    except InvalidOperation:
+        return None
+
+
+def _paid_save_cost_matches(meta: dict, expected_amount: Decimal, expected_row_cost: str) -> bool:
+    current_text = str(meta.get("costo") or "").strip()
+    if current_text != str(expected_row_cost or "").strip():
+        return False
+    current_amount = _parse_richieste_cost(current_text)
+    if current_amount is None:
+        return not current_text
+    return current_amount == expected_amount
+
+
 # Richieste categories that hold a document with a Salva link. The page opens on "espletate" of the first day in the
 # list only; SISTER moves a request to "prelevate" as soon as its document has been picked up, so a request placed
 # in a run that did not save the file is only visible there.
@@ -1828,6 +1875,8 @@ async def _download_richieste_documents(
     skip_known: bool = False,
     request_ids: set[str] | None = None,
     parse_mortgage_notes: bool = False,
+    _paid_request_authorization: dict | None = None,
+    _paid_click_callback=None,
 ) -> list[dict]:
     """Navigate to the Richieste page, extract metadata, download and rename files.
 
@@ -1850,11 +1899,11 @@ async def _download_richieste_documents(
 
     if await richieste_link.count() == 0:
         log.warning("Link Richieste non trovato")
-        return []
+        return RichiesteDownloadResult()
 
     href = await richieste_link.get_attribute("href")
     if not href:
-        return []
+        return RichiesteDownloadResult()
 
     if not href.startswith("http"):
         href = "https://sister3.agenziaentrate.gov.it" + href
@@ -1871,6 +1920,23 @@ async def _download_richieste_documents(
         for raw_value in (request_ids or set())
         if re.fullmatch(r"[A-Za-z0-9_-]{1,64}", value := str(raw_value).strip())
     }
+    paid_request_id = ""
+    paid_expected_amount = None
+    paid_expected_row_cost = ""
+    if _paid_request_authorization is not None:
+        paid_request_id = str(_paid_request_authorization.get("portal_request_id") or "").strip()
+        paid_expected_row_cost = str(_paid_request_authorization.get("expected_row_cost") or "").strip()
+        try:
+            paid_expected_amount = Decimal(str(_paid_request_authorization.get("amount"))).quantize(Decimal("0.01"))
+        except (InvalidOperation, TypeError, ValueError) as exc:
+            raise ValueError("paid_save_quote_amount_invalid") from exc
+        if (
+            not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", paid_request_id)
+            or request_ids != {paid_request_id}
+            or paid_expected_amount <= 0
+            or _paid_click_callback is None
+        ):
+            raise ValueError("paid_save_authorization_invalid")
     explicit_request_filter = bool(request_ids)
     views = _RICHIESTE_VIEWS if (since or skip_known or request_ids) else ("",)
     richieste_meta: list[dict] = []
@@ -1903,7 +1969,45 @@ async def _download_richieste_documents(
                  len(richieste_meta))
 
     if not richieste_meta:
-        return []
+        return RichiesteDownloadResult()
+
+    known_ids = await _known_richieste_ids(
+        {str(meta.get("id_richiesta") or "") for meta in richieste_meta if meta.get("id_richiesta")}
+    )
+    blocked_paid = []
+    safe_meta = []
+    for meta in richieste_meta:
+        if meta.get("id_richiesta") in known_ids:
+            continue
+        if paid_request_id and meta.get("id_richiesta") == paid_request_id:
+            if not _paid_save_cost_matches(meta, paid_expected_amount, paid_expected_row_cost):
+                blocked_paid.append(
+                    {
+                        "id_richiesta": paid_request_id,
+                        "oggetto": meta.get("oggetto") or "",
+                        "costo": meta.get("costo") or "",
+                        "reason": "paid_quote_amount_changed",
+                    }
+                )
+            else:
+                safe_meta.append(meta)
+            continue
+        if _is_free_receipt_row(meta):
+            safe_meta.append(meta)
+            continue
+        blocked_paid.append(
+            {
+                "id_richiesta": meta.get("id_richiesta") or None,
+                "oggetto": meta.get("oggetto") or "",
+                "richiesta_del": meta.get("richiesta_del") or "",
+                "costo": meta.get("costo") or "",
+                "reason": "paid_confirmation_required",
+            }
+        )
+    richieste_meta = safe_meta
+    if not richieste_meta:
+        log.warning("Salva bloccato: %d righe Richieste richiedono conferma del passaggio a pagamento", len(blocked_paid))
+        return RichiesteDownloadResult(blocked_paid=blocked_paid)
 
     # Documents live under SISTER_FILES_BASE (what the web UI reads); fall back to <outputs>/documents
     docs_dir = os.getenv("SISTER_FILES_BASE") or os.path.join(OUTPUTS_DIR, "documents")
@@ -1929,16 +2033,34 @@ async def _download_richieste_documents(
             if meta["vista"] != current_view:
                 await _open_richieste_view(page, meta["vista"])
                 current_view = meta["vista"]
-            # Find and click the salva link for this idRichiesta
-            link = page.locator(f"a[href*='idRichiesta={id_richiesta}'][href*='salva']")
-            if await link.count() == 0:
-                link = page.locator(f"a[href*='{id_richiesta}']")
-            if await link.count() == 0:
-                log.warning("Link salva non trovato per idRichiesta=%s", id_richiesta)
-                continue
+            if paid_request_id:
+                live_rows = _parse_richieste_table(await page.content(), include_pending=True)
+                live_row = next((row for row in live_rows if row.get("id_richiesta") == paid_request_id), None)
+                if (
+                    live_row is None
+                    or not live_row.get("salva_href")
+                    or not _paid_save_cost_matches(live_row, paid_expected_amount, paid_expected_row_cost)
+                ):
+                    raise ValueError("paid_save_row_changed_before_click")
+                anchors = page.locator(f"a[href*='idRichiesta={paid_request_id}']")
+                hrefs = await anchors.evaluate_all("elements => elements.map(element => element.href)")
+                save_indexes = [index for index, href in enumerate(hrefs) if "salva" in str(href).casefold()]
+                if len(save_indexes) != 1:
+                    raise ValueError("paid_save_link_missing_or_ambiguous")
+                link = anchors.nth(save_indexes[0])
+            else:
+                # Find and click the salva link for this idRichiesta.
+                link = page.locator(f"a[href*='idRichiesta={id_richiesta}'][href*='salva']")
+                if await link.count() == 0:
+                    link = page.locator(f"a[href*='{id_richiesta}']")
+                if await link.count() == 0:
+                    log.warning("Link salva non trovato per idRichiesta=%s", id_richiesta)
+                    continue
 
             async with page.expect_download(timeout=60000) as download_info:
                 await link.first.click()
+                if paid_request_id:
+                    await _paid_click_callback()
             download = await download_info.value
             orig_filename = download.suggested_filename or f"DOC_{id_richiesta}.dat"
 
@@ -2061,10 +2183,10 @@ async def _download_richieste_documents(
         log.warning("Errore salvataggio documenti in DB: %s", e)
 
     log.info("[green]%d/%d documenti scaricati[/green] da Richieste", len(downloaded), len(richieste_meta))
-    return downloaded
+    return RichiesteDownloadResult(downloaded, blocked_paid=blocked_paid)
 
 
-def _parse_richieste_table(html_content: str) -> list[dict]:
+def _parse_richieste_table(html_content: str, *, include_pending: bool = False) -> list[dict]:
     """Parse the ConsultazioneRichieste table HTML into structured metadata.
 
     Returns a list of dicts with keys:
@@ -2095,39 +2217,138 @@ def _parse_richieste_table(html_content: str) -> list[dict]:
         formato = tds[2].get_text(strip=True)
         costo = tds[3].get_text(strip=True) if len(tds) > 3 else ""
 
-        # Find "salva" link
+        # Find the exact request ID on any row action; only Salva means the document is currently available.
         salva_href = ""
         id_richiesta = ""
         for td in tds:
             for a in td.find_all("a"):
                 href = a.get("href", "")
-                if "salva" in href:
-                    salva_href = href
-                    # Extract idRichiesta from URL
+                if not id_richiesta:
                     import urllib.parse
 
                     parsed_url = urllib.parse.urlparse(href)
                     params = urllib.parse.parse_qs(parsed_url.query)
                     id_richiesta = params.get("idRichiesta", [""])[0]
+                if "salva" in href.casefold():
+                    salva_href = href
                     break
             if salva_href:
                 break
 
-        if not salva_href:
+        if not id_richiesta:
+            id_match = re.search(r"[?&]idRichiesta=([A-Za-z0-9_-]{1,64})", str(tr), flags=re.IGNORECASE)
+            if id_match:
+                id_richiesta = id_match.group(1)
+
+        if not salva_href and (not include_pending or not id_richiesta):
             continue
 
-        results.append(
-            {
-                "richiesta_del": richiesta_del,
-                "oggetto": oggetto,
-                "formato": formato,
-                "costo": costo,
-                "salva_href": salva_href,
-                "id_richiesta": id_richiesta,
-            }
-        )
+        parsed_row = {
+            "richiesta_del": richiesta_del,
+            "oggetto": oggetto,
+            "formato": formato,
+            "costo": costo,
+            "salva_href": salva_href,
+            "id_richiesta": id_richiesta,
+        }
+        if include_pending:
+            parsed_row.update(status="available" if salva_href else "requested", row_text=tr.get_text(" ", strip=True))
+        results.append(parsed_row)
 
     return results
+
+
+def _richieste_register_pair(row: dict) -> tuple[str, str] | None:
+    """Extract RP/RG only when the Richieste row labels both register numbers explicitly."""
+    text = str(row.get("row_text") or row.get("oggetto") or "")
+    rp = re.search(r"(?:registro\s+particolare|\bR\.?P\.?)\s*(?:n(?:umero)?\.?\s*)?[:#-]?\s*0*(\d+)", text, re.IGNORECASE)
+    rg = re.search(r"(?:registro\s+generale|\bR\.?G\.?)\s*(?:n(?:umero)?\.?\s*)?[:#-]?\s*0*(\d+)", text, re.IGNORECASE)
+    if not rp or not rg:
+        return None
+    return rp.group(1).lstrip("0") or "0", rg.group(1).lstrip("0") or "0"
+
+
+async def _read_richieste_request_row(page, request_id: str, page_logger=None) -> dict:
+    """Read one exact Richieste row without opening or saving its document, then restore the prior page when possible."""
+    request_id = str(request_id or "").strip()
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", request_id):
+        raise ValueError("invalid_portal_request_id")
+    before_url = str(getattr(page, "url", "") or "")
+    try:
+        before_html = await page.content()
+    except Exception:
+        before_html = ""
+    try:
+        before_values = [
+            str(value)
+            for value in await page.locator("input[name='noteSelezionate']").evaluate_all(
+                "elements => elements.map(element => element.value)"
+            )
+        ]
+    except Exception:
+        before_values = []
+
+    richieste_link = page.locator("a:has-text('Richieste')")
+    if await richieste_link.count() == 0:
+        await _navigate_to_scelta_servizio(page, page_logger)
+        richieste_link = page.locator("a:has-text('Richieste')")
+    if await richieste_link.count() == 0:
+        raise RuntimeError("richieste_link_missing")
+    href = await richieste_link.get_attribute("href")
+    if not href:
+        raise RuntimeError("richieste_link_href_missing")
+    if not href.startswith("http"):
+        href = "https://sister3.agenziaentrate.gov.it" + href
+    await page.goto(href, timeout=30000)
+    await page.wait_for_load_state("networkidle", timeout=30000)
+    if page_logger is not None:
+        await page_logger.log(page, "richieste_quote")
+
+    matches: list[dict] = []
+    seen_ids: set[str] = set()
+    for view in _RICHIESTE_VIEWS:
+        await _open_richieste_view(page, view)
+        if page_logger is not None:
+            await page_logger.log(page, f"richieste_quote_{view}")
+        for row in _parse_richieste_table(await page.content(), include_pending=True):
+            found_id = str(row.get("id_richiesta") or "")
+            if found_id != request_id or found_id in seen_ids:
+                continue
+            seen_ids.add(found_id)
+            matches.append({**row, "vista": view})
+
+    restored = False
+    for _ in range(len(_RICHIESTE_VIEWS) + 3):
+        try:
+            current_html = await page.content()
+            current_values = [
+                str(value)
+                for value in await page.locator("input[name='noteSelezionate']").evaluate_all(
+                    "elements => elements.map(element => element.value)"
+                )
+            ]
+        except Exception:
+            current_html = ""
+            current_values = []
+        if (before_values and current_values == before_values) or (before_html and current_html == before_html):
+            restored = True
+            break
+        if not hasattr(page, "go_back"):
+            break
+        try:
+            await page.go_back(wait_until="networkidle", timeout=30000)
+        except Exception:
+            break
+    if restored and page_logger is not None:
+        await page_logger.log(page, "richieste_quote_return")
+
+    unique = {row["id_richiesta"]: row for row in matches}
+    return {
+        "row": next(iter(unique.values())) if len(unique) == 1 else None,
+        "ambiguous": len(unique) > 1,
+        "page_restored": restored,
+        "page_visits": page_logger.page_visits if page_logger is not None else [],
+    }
 
 
 def _filename_token(value: str) -> str:
@@ -3071,6 +3292,7 @@ async def _save_documents_to_db(documents: list[dict]) -> None:
                 )
                 existing_row = existing.first()
                 if existing_row:
+                    doc["document_id"] = int(existing_row.id)
                     if doc_type == "elenco_immobili":
                         existing_document = await session.get(Document, int(existing_row.id))
                         if existing_document is not None:
@@ -3125,7 +3347,9 @@ async def _save_documents_to_db(documents: list[dict]) -> None:
                         "d": reference_date,
                     },
                 )
-                if existing.fetchone():
+                existing_row = existing.fetchone()
+                if existing_row:
+                    doc["document_id"] = int(existing_row.id)
                     log.debug(
                         "Documento duplicato saltato: %s F.%s P.%s Sub.%s", doc_type, foglio, particella, subalterno
                     )
@@ -3169,6 +3393,7 @@ async def _save_documents_to_db(documents: list[dict]) -> None:
             )
             session.add(row)
             await session.flush()  # get row.id before creating children
+            doc["document_id"] = int(row.id)
             if xml_content:
                 session.add(DocumentContent(document_id=row.id, content=xml_content.replace("\x00", "")))
                 await session.flush()
@@ -5013,6 +5238,7 @@ async def run_ispezione_ipotecaria(
             "total_results": 0,
             "cost": None,
             "error": "NESSUNA CORRISPONDENZA TROVATA",
+            "page_visits": page_logger.page_visits,
         }
 
     # Handle cost confirmation
@@ -5028,6 +5254,7 @@ async def run_ispezione_ipotecaria(
             "cost": {"text": cost_result.get("cost_text"), "value": cost_result.get("cost_value")},
             "confirmed": False,
             "error": cost_result.get("error", "Cost confirmation required"),
+            "page_visits": page_logger.page_visits,
         }
 
     # Extract results after confirmation
@@ -5047,6 +5274,7 @@ async def run_ispezione_ipotecaria(
         "total_results": len(results),
         "cost": {"text": cost_result.get("cost_text"), "value": cost_result.get("cost_value")},
         "confirmed": True,
+        "page_visits": page_logger.page_visits,
     }
 
 

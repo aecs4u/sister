@@ -88,16 +88,31 @@ def _apply_table_migrations(engine, schema: str, istat_schema: str) -> None:
         "20261128_subject_access.py",
         "20261129_subject_purchases.py",
         "20261130_wallet_gift_coupons.py",
+        "20261202_pagopa_payment_history.py",
+        "20261203_schema_identity_flatness.py",
+        "20261204_billing_transaction_self_reference.py",
+        "20261205_mortgage_search_tables.py",
+        "20261206_ade_statement_ledger.py",
+        "20261207_mortgage_charge_allocation.py",
     ):
         path = migration_dir / name
         spec = importlib.util.spec_from_file_location(f"_{path.stem}_migration", path)
         migration = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(migration)
         migrations.append(migration)
+    previous_archive_schema = os.environ.get("DATABASE_ARCHIVE_SCHEMA")
+    os.environ["DATABASE_ARCHIVE_SCHEMA"] = schema + "_archive"
+    try:
+        with engine.begin() as conn:
+            with Operations.context(MigrationContext.configure(conn, opts={"sister_schema": schema, "istat_schema": istat_schema})):
+                for migration in migrations:
+                    migration.upgrade()
+    finally:
+        if previous_archive_schema is None:
+            os.environ.pop("DATABASE_ARCHIVE_SCHEMA", None)
+        else:
+            os.environ["DATABASE_ARCHIVE_SCHEMA"] = previous_archive_schema
     with engine.begin() as conn:
-        with Operations.context(MigrationContext.configure(conn, opts={"sister_schema": schema, "istat_schema": istat_schema})):
-            for migration in migrations:
-                migration.upgrade()
         conn.execute(
             text(
                 """CREATE TABLE sister_request_jobs (

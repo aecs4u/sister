@@ -193,7 +193,11 @@ def prepare_workflow(payload: dict) -> WorkflowPlan:
         if _DEPTH_ORDER.get(STEP_METADATA.get(name, {}).get("depth", "standard"), 1) <= max_depth
         and (
             not STEP_METADATA.get(name, {}).get("paid")
-            or (workflow.include_paid_steps and workflow.auto_confirm)
+            or (
+                workflow.include_paid_steps
+                and workflow.auto_confirm
+                and name not in {"ispezione_ipotecaria", "portfolio_ipotecaria"}
+            )
         )
     ]
 

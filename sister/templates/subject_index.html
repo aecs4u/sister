@@ -55,9 +55,10 @@
     {% endif %}
 
     {# The cards open the table already filtered: the filter is in the URL, so the view can be bookmarked or shared. #}
-    <div class="row row-cols-2 row-cols-lg-5 g-3 mb-3">
+    <div class="row row-cols-2 row-cols-lg-3 row-cols-xl-6 g-3 mb-3">
         <div class="col">{{ metric_card(kind_label, stats.subjects, "fa-users" if is_person else "fa-building", "primary", route ~ "/") }}</div>
         <div class="col">{{ metric_card("Con visura archiviata", stats.with_visura, "fa-file-alt", "info", route ~ "/?f_visure=%3E0") }}</div>
+        <div class="col">{{ metric_card("Con formalità attive", stats.with_live_burdens, "fa-exclamation-triangle", "danger", route ~ "/?f_live_burdens=%3E0") }}</div>
         <div class="col">{{ metric_card("Fabbricati", stats.buildings, "fa-building", "success", route ~ "/?f_buildings=%3E0&sort=buildings&dir=desc") }}</div>
         <div class="col">{{ metric_card("Terreni", stats.land, "fa-seedling", "warning", route ~ "/?f_land=%3E0&sort=land&dir=desc") }}</div>
         <div class="col">{{ metric_card("Valore pro quota (milioni €)", (stats.value_share / 1000000)|round|int, "fa-euro-sign", "danger", route ~ "/?sort=cadastral_value_share&dir=desc") }}</div>

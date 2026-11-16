@@ -3,8 +3,8 @@
 Sources (both local PostgreSQL databases, read with short-lived asyncpg connections):
 
 * ``omi`` (``omi`` schema, the normalised tables): ``zone_version`` / ``quotation_fact`` for the quotes of every
-  published semester, ``municipality_version`` / ``sales_record`` / ``sales_measure`` for the number of normalised
-  transactions (NTN).
+  published semester, ``zone_quote_benchmark_summary`` / ``zone_quote_benchmark_sample`` for persisted, indexed
+  comparison distributions, and ``municipality_version`` / ``sales_record`` / ``sales_measure`` for NTN.
 * ``aecs4u-stats`` (``STATS_POSTGRES_DSN``): ISTAT resident population (``istat``), MEF IRPEF income (``mef_irpef``),
   ISTAT house price index (``serving.istat_house_price_index``) and the Eurostat NUTS3 series (``eurostat``).
 
@@ -43,7 +43,8 @@ _retry_at: dict[str, float] = {}
 
 _OMI_SQL = """
 WITH zz AS MATERIALIZED (
-    SELECT z.zone_version_id AS zona_id, p.year AS anno, p.semester AS semestre, z.zone_name AS zona,
+    SELECT z.zone_version_id AS zona_id, zm.zone_municipality_id AS municipality_id,
+           pr.province_id, r.region_id, p.year AS anno, p.semester AS semestre, z.zone_name AS zona,
            z.market_band AS fascia, z.zone_description AS zona_descrizione, z.zone_link AS link_zona,
            zm.municipality_name AS comune, pr.province_name AS provincia, r.region_name AS regione,
            administrative.code_value AS cod_comune_amm, cadastral.code_value AS cod_comune_catastale,
@@ -67,6 +68,7 @@ sel AS MATERIALIZED (
     WHERE UPPER(zz.zona) = $2 OR zz.period = bounds.newest OR zz.period = bounds.zone_newest
 )
 SELECT zz.anno, zz.semestre, zz.zona, zz.fascia, zz.zona_descrizione, zz.link_zona, zz.comune, zz.provincia,
+       zz.municipality_id, zz.province_id, zz.region_id,
        zz.regione, zz.cod_comune_amm, zz.cod_comune_istat, pt.source_code AS cod_tipologia, pt.type_name AS tipologia,
        cs.status_code AS stato_conservazione, ps.state_code AS stato_prevalente,
        f.purchase_min::float8 AS prezzo_min, f.purchase_max::float8 AS prezzo_max,
@@ -79,6 +81,49 @@ LEFT JOIN omi.conservation_status cs ON cs.conservation_status_id = f.conservati
 LEFT JOIN omi.prevalent_state ps ON ps.prevalent_state_id = f.prevalent_state_id
 LEFT JOIN omi.surface_class sp ON sp.surface_class_id = f.purchase_surface_id
 LEFT JOIN omi.surface_class sr ON sr.surface_class_id = f.rental_surface_id
+"""
+
+_OMI_BENCHMARK_SQL = """
+WITH target AS (
+    SELECT $1::bigint AS municipality_id, $2::bigint AS province_id, $3::bigint AS region_id
+),
+matched AS (
+    SELECT b.*, t.municipality_id, t.province_id, t.region_id
+    FROM omi.zone_quote_benchmark_summary b
+    CROSS JOIN target t
+    WHERE b.period_year = $4 AND b.period_semester = $5
+      AND b.property_type_code = $6::integer
+      AND b.conservation_status_code = upper($7)
+      AND b.market_band = upper(trim($8))
+      AND ((b.measure = 'sale' AND b.surface_class_code = $9)
+        OR (b.measure = 'rent' AND b.surface_class_code = $10))
+      AND ((b.scope_code = 'comune' AND b.scope_id = t.municipality_id)
+        OR (b.scope_code = 'provincia' AND b.scope_id = t.province_id)
+        OR (b.scope_code = 'regione' AND b.scope_id = t.region_id)
+        OR (b.scope_code = 'italia' AND b.scope_id = 0))
+)
+SELECT b.measure, b.scope_code AS scope, b.sample_unit, b.sample_count,
+       b.mean_value, b.median_value AS median, b.q1_value AS q1, b.q3_value AS q3,
+       r.below_count, r.equal_count
+FROM matched b
+LEFT JOIN LATERAL (
+    SELECT count(*) FILTER (WHERE s.sample_value <
+               CASE WHEN b.measure = 'sale' THEN $11::float8 ELSE $12::float8 END)::integer AS below_count,
+           count(*) FILTER (WHERE s.sample_value =
+               CASE WHEN b.measure = 'sale' THEN $11::float8 ELSE $12::float8 END)::integer AS equal_count
+    FROM omi.zone_quote_benchmark_sample s
+    WHERE s.period_year = b.period_year
+      AND s.period_semester = b.period_semester
+      AND s.property_type_code = b.property_type_code
+      AND s.conservation_status_code = b.conservation_status_code
+      AND s.market_band = b.market_band
+      AND s.measure = b.measure
+      AND s.surface_class_code = b.surface_class_code
+      AND s.scope_code = b.scope_code
+      AND s.scope_id = b.scope_id
+) r ON true
+ORDER BY CASE b.measure WHEN 'sale' THEN 1 ELSE 2 END,
+         CASE b.scope_code WHEN 'comune' THEN 1 WHEN 'provincia' THEN 2 WHEN 'regione' THEN 3 ELSE 4 END
 """
 
 # NTN by year from the normalised sales tables. The comune is matched on the code OMI publishes with the transaction
@@ -521,6 +566,92 @@ def _zone_comparison(
     }
 
 
+def build_zone_benchmarks(
+    rows: list[Any] | None,
+    selected_sale_mid: Any,
+    selected_rent_mid: Any,
+    *,
+    fascia: str,
+    period: str,
+    tipologia: str,
+    stato: str,
+) -> dict[str, Any]:
+    """Render stored OMI sale/rent distributions on separate, unit-correct scales."""
+    result: dict[str, Any] = {
+        "available": rows is not None,
+        "fascia": fascia,
+        "period": period,
+        "tipologia": tipologia,
+        "stato": stato,
+        "sale": {"unit": "€/m²", "selected_mid": parse_number(selected_sale_mid), "rows": []},
+        "rent": {"unit": "€/m²/mese", "selected_mid": parse_number(selected_rent_mid), "rows": []},
+    }
+    if rows is None:
+        return result
+
+    labels = {
+        "comune": ("Comune", "zone"),
+        "provincia": ("Provincia", "zone"),
+        "regione": ("Regione", "comuni"),
+        "italia": ("Italia", "comuni"),
+    }
+    entries_by_measure: dict[str, list[dict[str, Any]]] = {"sale": [], "rent": []}
+    for row in rows:
+        measure = str(row["measure"])
+        scope = str(row["scope"])
+        if measure not in entries_by_measure or scope not in labels:
+            continue
+        count = int(row["sample_count"] or 0)
+        q1, median, q3 = parse_number(row["q1"]), parse_number(row["median"]), parse_number(row["q3"])
+        mean = parse_number(row["mean_value"])
+        if count <= 0 or q1 is None or median is None or q3 is None or mean is None:
+            continue
+        label, sample_label = labels[scope]
+        below = int(row["below_count"] or 0)
+        equal = int(row["equal_count"] or 0)
+        selected = result[measure]["selected_mid"]
+        percentile = ((below + equal / 2) / count) * 100 if selected is not None else None
+        entries_by_measure[measure].append({
+            "scope": scope,
+            "label": label,
+            "n": count,
+            "sample_label": sample_label,
+            "q1": q1,
+            "mean": mean,
+            "median": median,
+            "q3": q3,
+            "percentile": percentile,
+            "delta_eur": selected - mean if selected is not None else None,
+            "delta_pct": pct_change(selected, mean) if selected is not None else None,
+        })
+
+    for measure, entries in entries_by_measure.items():
+        selected = result[measure]["selected_mid"]
+        if not entries:
+            result[measure].update({"available": False, "rows": []})
+            continue
+        values = [value for entry in entries for value in (entry["q1"], entry["mean"], entry["median"], entry["q3"])]
+        if selected is not None:
+            values.append(selected)
+        low, high = min(values), max(values)
+        padding = max((high - low) * 0.06, abs(high or low) * 0.02, 1.0)
+        scale_min = max(0.0, low - padding)
+        scale_max = high + padding
+        if scale_max <= scale_min:
+            scale_max = scale_min + 1.0
+
+        def position(value: float) -> float:
+            return round(min(max((value - scale_min) / (scale_max - scale_min) * 100, 0), 100), 2)
+
+        for entry in entries:
+            entry["plot_q1"] = position(entry["q1"])
+            entry["plot_mean"] = position(entry["mean"])
+            entry["plot_q3"] = position(entry["q3"])
+            entry["plot_zone"] = position(selected) if selected is not None else None
+        result[measure].update({"available": True, "scale_min": scale_min, "scale_max": scale_max, "rows": entries})
+    return result
+
+
 def _annual_means(typology: dict[str, Any]) -> dict[str, dict[int, float]]:
     """Calendar-year mean of the main typology's sale and rent midpoints (for the cross-source comparison)."""
     sale: dict[int, list[float]] = {}
@@ -652,15 +783,43 @@ def _istat_numeric_code(cod_istat: Any) -> str | None:
         return None
 
 
-async def _fetch_omi(comune: str, zona: str) -> tuple[list[Any], list[Any]]:
+async def _fetch_omi(comune: str, zona: str) -> tuple[list[Any], list[Any], list[Any] | None]:
     istat = float(comune) if comune.isdigit() else None
     connection = await _connect(omi_dsn() or "")
+    benchmark_rows: list[Any] | None = []
     try:
         rows = await connection.fetch(_OMI_SQL, comune, zona, istat)
         ntn = await connection.fetch(_NTN_SQL, comune) if rows else []
+        if rows and zona:
+            selected = build_zone_overview(rows, zona)
+            typologies = selected.get("typologies", [])
+            if selected.get("zone_found") and typologies:
+                main = typologies[0]
+                point = main["series"][-1]
+                target_row = next((row for row in rows if
+                    (row["zona"] or "").strip().upper() == zona.upper()
+                    and int(row["anno"]) == point["anno"] and int(row["semestre"]) == point["semestre"]
+                    and str(row["cod_tipologia"]) == str(main["code"])
+                    and (row["stato_conservazione"] or "").strip().upper() == main["state"]
+                ), None)
+                if target_row is not None:
+                    if _backing_off("omi-benchmarks"):
+                        benchmark_rows = None
+                    else:
+                        try:
+                            benchmark_rows = await connection.fetch(
+                                _OMI_BENCHMARK_SQL,
+                                target_row["municipality_id"], target_row["province_id"], target_row["region_id"],
+                                point["anno"], point["semestre"], int(main["code"]), main["state"],
+                                target_row["fascia"], target_row["superficie_nl_compravendita"],
+                                target_row["superficie_nl_locazione"], point["mid"], point["affitto_mid"],
+                            )
+                        except Exception as exc:
+                            _back_off("omi-benchmarks", exc)
+                            benchmark_rows = None
     finally:
         await connection.close()
-    return list(rows), list(ntn)
+    return list(rows), list(ntn), list(benchmark_rows) if benchmark_rows is not None else None
 
 
 def _ntn_summary(rows: list[Any]) -> dict[str, Any]:
@@ -838,15 +997,20 @@ def _write_cached(key: tuple[str, str], payload: dict[str, Any]) -> None:
 
 def _is_fresh(payload: dict[str, Any]) -> bool:
     age = time.time() - float(payload.get("saved_at", 0))
+    if "benchmarks" not in payload:
+        return False
+    if payload.get("benchmarks") is None:
+        return age < CONTEXT_RETRY_SECONDS
     return age < (cache_ttl_seconds() if payload.get("context") is not None else CONTEXT_RETRY_SECONDS)
 
 
 async def _fetch_payload(code: str, zone: str) -> dict[str, Any]:
-    """Raw OMI rows, NTN and stats context, as plain JSON-able data (what the cache stores)."""
-    rows, ntn_rows = await _fetch_omi(code, zone)
+    """Raw OMI rows, benchmarks, NTN and stats context as plain JSON-able data (what the cache stores)."""
+    rows, ntn_rows, benchmark_rows = await _fetch_omi(code, zone)
     payload: dict[str, Any] = {
         "format": CACHE_FORMAT, "saved_at": time.time(),
         "rows": [_jsonable(dict(row)) for row in rows], "ntn": [_jsonable(dict(row)) for row in ntn_rows],
+        "benchmarks": [_jsonable(dict(row)) for row in benchmark_rows] if benchmark_rows is not None else None,
         "context": None,
     }
     if rows:
@@ -869,6 +1033,19 @@ def _assemble(payload: dict[str, Any], zone: str, code: str, stale: bool) -> dic
     context = payload.get("context")
     overview["context"] = context
     if overview.get("zone_found"):
+        main = overview.get("typologies", [None])[0]
+        point = main["series"][-1] if main and main.get("series") else {}
+        raw_target = next((row for row in payload["rows"] if
+            (row.get("zona") or "").strip().upper() == zone.upper()
+            and row.get("anno") == point.get("anno") and row.get("semestre") == point.get("semestre")
+            and str(row.get("cod_tipologia")) == str(main.get("code"))
+            and (row.get("stato_conservazione") or "").strip().upper() == main.get("state")
+        ), {}) if main else {}
+        overview["benchmarks"] = build_zone_benchmarks(
+            payload.get("benchmarks"), point.get("mid"), point.get("affitto_mid"),
+            fascia=raw_target.get("fascia") or overview.get("fascia", ""), period=point.get("periodo", ""),
+            tipologia=main.get("label", "") if main else "", stato=main.get("state", "") if main else "",
+        )
         annual = (overview.get("annual") or {}).get("sale", {})
         overview["comparison_chart"] = build_comparison(annual, context)
         overview["affordability"] = build_affordability(annual, (context or {}).get("income", []))

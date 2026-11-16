@@ -72,6 +72,7 @@
     <nav class="nav nav-pills flex-wrap gap-2 mb-4" aria-label="Sezioni wallet e buoni regalo">
         <a class="nav-link" href="#wallet-list">Wallet</a>
         <a class="nav-link" href="#pagopa-history">Storico pagoPA</a>
+        <a class="nav-link" href="#ade-ledger">Conto AdE (euro)</a>
         <a class="nav-link" href="#billing-ledger">Movimenti</a>
         <a class="nav-link" href="#billing-invoices">Fatture</a>
         <a class="nav-link" href="#gift-create">Crea buono</a>
@@ -87,7 +88,8 @@
         {% elif status == 'gift_freeze' %}<div class="alert alert-success" role="status">Buono congelato; non può essere riscattato.</div>
         {% elif status == 'gift_activate' %}<div class="alert alert-success" role="status">Buono riattivato.</div>
         {% elif status == 'gift_revoke' %}<div class="alert alert-success" role="status">Buono revocato.</div>
-        {% elif status == 'gift_undone' %}<div class="alert alert-success" role="status">Riscatto annullato con un movimento inverso nel wallet.</div>{% endif %}
+        {% elif status == 'gift_undone' %}<div class="alert alert-success" role="status">Riscatto annullato con un movimento inverso nel wallet.</div>
+        {% elif status == 'ade_allocation_created' %}<div class="alert alert-success" role="status">Attribuzione AdE registrata con il riferimento all’evidenza fornito.</div>{% endif %}
         {% if gift_code %}<div class="alert alert-warning" role="status"><label class="form-label fw-semibold" for="new-gift-code">Codice da consegnare all’utente</label>
             <div class="input-group"><input class="form-control font-monospace" id="new-gift-code" readonly value="{{ gift_code }}" data-select-on-focus>
             <button class="btn btn-outline-dark" type="button" data-click="sisterActions.copyValue" data-args='["new-gift-code"]'>Copia</button></div></div>{% endif %}
@@ -105,7 +107,8 @@
             'gift_wallet_locked': 'Sblocca il wallet prima di annullare il riscatto.',
             'gift_not_reversible': 'Questo riscatto non può essere annullato.',
             'gift_already_reversed': 'Il riscatto è già stato annullato.',
-            'gift_coupon_failed': 'Non è stato possibile creare il buono. Controlla SECRET_KEY.'
+            'gift_coupon_failed': 'Non è stato possibile creare il buono. Controlla SECRET_KEY.',
+            'ade_allocation_failed': 'Attribuzione AdE non registrata. Verifica importo, riferimento e documenti di supporto.'
         } %}
         <div class="alert alert-danger" role="alert">{{ messages.get(error, 'Operazione non riuscita: ' ~ error) }}</div>
         {% endif %}
@@ -192,6 +195,74 @@
             </tr>{% else %}<tr><td colspan="10" class="text-center text-muted py-4">Nessun pagamento pagoPA trovato.</td></tr>{% endfor %}
             </tbody>
     {% endcall %}
+
+    <section class="card mb-4" id="ade-ledger" aria-labelledby="ade-ledger-heading">
+        <div class="card-body border-bottom">
+            <h2 class="h5 mb-1" id="ade-ledger-heading">Conto AdE (euro)</h2>
+            <p class="small text-muted mb-0">Movimenti ricostruiti dallo statement AdE. Questo saldo è separato dai crediti SISTER e non li modifica.</p>
+        </div>
+        {% if ade_ledger_error %}<div class="alert alert-warning m-3" role="status">Registro AdE non disponibile. Verifica la migrazione del ledger.</div>
+        {% else %}
+        <div class="card-body border-bottom">
+            <div class="row g-3">
+                <div class="col-6 col-lg-2"><div class="small text-muted">Ricariche</div><strong>{{ ade_ledger_data.total_credit|it_amount }} €</strong></div>
+                <div class="col-6 col-lg-2"><div class="small text-muted">Addebiti</div><strong>{{ ade_ledger_data.total_debit|it_amount }} €</strong></div>
+                <div class="col-6 col-lg-2"><div class="small text-muted">Saldo ricostruito</div><strong>{{ ade_ledger_data.balance|it_amount }} €</strong></div>
+                <div class="col-6 col-lg-2"><div class="small text-muted">Addebiti da attribuire</div><strong>{{ ade_ledger_data.unattributed_total|it_amount }} €</strong></div>
+                <div class="col-12 col-lg-4"><div class="small text-muted">Confronto con lo statement più recente</div>
+                    {% if ade_ledger_data.statement_balance is not none %}
+                        {% if ade_ledger_data.balance_difference == 0 %}<strong class="text-success">Saldo {{ ade_ledger_data.statement_balance|it_amount }} € · quadrato</strong>
+                        {% else %}<strong class="text-warning">Saldo statement {{ ade_ledger_data.statement_balance|it_amount }} € · differenza {{ ade_ledger_data.balance_difference|it_amount }} €</strong>{% endif %}
+                    {% else %}<strong>Statement senza saldo finale importato</strong>{% endif %}</div>
+            </div>
+        </div>
+        <div class="table-responsive"><table class="table table-striped align-middle mb-0">
+            <caption class="visually-hidden">Movimenti del conto AdE in euro</caption>
+            <thead><tr><th scope="col">Data</th><th scope="col">Causale</th><th scope="col">Ufficio</th><th scope="col" class="text-end">Movimento</th><th scope="col" class="text-end">Saldo dopo</th><th scope="col">PagoPA</th><th scope="col">Attribuzione</th><th scope="col">Azioni</th></tr></thead>
+            <tbody>{% for entry in ade_ledger_data.entries %}<tr>
+                <td class="text-nowrap">{{ entry.posted_on|it_date }}</td><td>{{ entry.description }}</td><td>{{ entry.office or '—' }}</td>
+                <td class="text-end text-nowrap">{% if entry.entry_type == 'topup' %}+{% else %}−{% endif %}{{ entry.amount|it_amount }} €</td>
+                <td class="text-end text-nowrap">{{ entry.balance_after|it_amount }} €</td>
+                <td>{% if entry.pagopa_payment_id %}Validato #{{ entry.pagopa_payment_id }}{% elif entry.entry_type == 'topup' %}Non collegato{% else %}—{% endif %}</td>
+                <td>{% if entry.entry_type == 'topup' %}—{% elif entry.unattributed_amount > 0 %}{{ entry.unattributed_amount|it_amount }} € non attribuiti{% else %}Attribuito{% endif %}
+                    {% for allocation in entry.allocations %}<small class="d-block text-muted">{{ allocation.amount|it_amount }} € · {% if allocation.search_id %}ispezione #{{ allocation.search_id }}{% else %}senza ispezione{% endif %} · {{ allocation.evidence }}</small>{% endfor %}</td>
+                {% if entry.entry_type == 'usage' and entry.unattributed_amount > 0 %}<td class="text-end">
+                    <details><summary class="small">Attribuisci</summary>
+                        <form method="post" action="/admin/ade-ledger/allocations" class="text-start mt-2" style="min-width: 18rem">
+                            {{ csrf_input() }}<input type="hidden" name="statement_key" value="{{ entry.statement_key }}">
+                            <label class="form-label small" for="ade-amount-{{ loop.index }}">Importo</label>
+                            <input class="form-control form-control-sm mb-2" id="ade-amount-{{ loop.index }}" name="amount" type="number" min="0.01" max="{{ entry.unattributed_amount }}" step="0.01" value="{{ entry.unattributed_amount }}" required>
+                            <label class="form-label small" for="ade-search-{{ loop.index }}">Ispezione ID</label>
+                            <input class="form-control form-control-sm mb-2" id="ade-search-{{ loop.index }}" name="search_id" type="number" min="1" required>
+                            <label class="form-label small" for="ade-evidence-{{ loop.index }}">Tipo di evidenza</label>
+                            <select class="form-select form-select-sm mb-2" id="ade-evidence-{{ loop.index }}" name="evidence" required>
+                                <option value="statement_detail">Dettaglio statement</option>
+                                <option value="receipt">Riga ricevuta</option>
+                                <option value="single_inspection_amount">Unica ispezione e importo coincidente</option>
+                            </select>
+                            <label class="form-label small" for="ade-receipt-line-{{ loop.index }}">Riga ricevuta (per evidenza ricevuta)</label>
+                            <select class="form-select form-select-sm mb-2" id="ade-receipt-line-{{ loop.index }}" name="receipt_line_id">
+                                <option value="">Seleziona se applicabile</option>
+                                {% for line in ade_ledger_data.receipt_lines if line.receipt_date == entry.posted_on %}<option value="{{ line.id }}">#{{ line.id }} · {{ line.element }} · {{ line.amount|it_amount }} €</option>{% endfor %}
+                            </select>
+                            <label class="form-label small" for="ade-evidence-ref-{{ loop.index }}">Riferimento evidenza</label>
+                            <input class="form-control form-control-sm mb-2" id="ade-evidence-ref-{{ loop.index }}" name="evidence_ref" maxlength="256" required>
+                            <button class="btn btn-sm btn-primary" type="submit">Registra attribuzione</button>
+                        </form>
+                    </details>
+                </td>{% else %}<td>—</td>{% endif %}
+            </tr>{% else %}<tr><td colspan="8" class="text-center text-muted py-4">Nessun movimento AdE importato.</td></tr>{% endfor %}</tbody>
+        </table></div>
+        {% if ade_ledger_data.receipts %}<div class="card-body border-top">
+            <h3 class="h6">Quietanze importate</h3>
+            <ul class="mb-0">{% for receipt in ade_ledger_data.receipts %}<li>{{ receipt.receipt_date|it_date }} · {{ receipt.amount|it_amount }} € · {{ receipt.source_filename }}</li>{% endfor %}</ul>
+        </div>{% endif %}
+        {% if ade_ledger_data.imports %}<div class="card-body border-top">
+            <h3 class="h6">Statement importati</h3>
+            <ul class="mb-0">{% for imported in ade_ledger_data.imports %}<li>{{ imported.period_start|it_date }} – {{ imported.period_end|it_date }} · {{ imported.total_credit|it_amount }} € entrate · {{ imported.total_debit|it_amount }} € uscite · {{ imported.source_filename }}</li>{% endfor %}</ul>
+        </div>{% endif %}
+        {% endif %}
+    </section>
 
     {% call listing_card('billing-ledger', 'billing-ledger-heading', 'Movimenti wallet', 'Registro billing_transactions del modulo aecs4u-billing.', 'billing-ledger-search', 'billing_search', billing_search, 'Utente, tipo o riferimento', 'Cerca movimenti', billing_listing, 'billing_page', 'billing-ledger-heading', billing_listing_error, 'Il registro dei movimenti wallet non è disponibile in questo momento; riprova più tardi.') %}
             <caption class="visually-hidden">Movimenti wallet</caption>

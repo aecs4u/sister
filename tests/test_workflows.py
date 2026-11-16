@@ -1173,3 +1173,23 @@ def test_portfolio_workflow_defaults_to_both_catasti_for_a_subject():
 
     assert person["tipo_catasto"] == "E"
     assert parcel["tipo_catasto"] == "T"
+
+
+def test_workflows_keep_mortgage_inspections_out_until_the_paid_flow_is_used():
+    from sister.workflows import prepare_workflow
+
+    plan = prepare_workflow(
+        {
+            "preset": "due-diligence",
+            "depth": "full",
+            "provincia": "Roma",
+            "comune": "ROMA",
+            "foglio": "1",
+            "particella": "2",
+            "include_paid_steps": True,
+            "auto_confirm": True,
+        }
+    )
+
+    assert "ispezione_ipotecaria" not in plan.steps
+    assert "portfolio_ipotecaria" not in plan.steps

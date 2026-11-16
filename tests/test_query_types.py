@@ -520,7 +520,7 @@ class TestIspezioneIpotecariaEndpoint:
         assert payload["request_id"].startswith("ipotecaria_nota_")
 
     @pytest.mark.asyncio
-    async def test_auto_confirm_true_propagates(self, main_module):
+    async def test_auto_confirm_true_does_not_authorize_paid_inspection(self, main_module):
         service = main_module.VisuraService()
         service.processing = True
         request = main_module.IspezioneIpotecariaInput(
@@ -530,7 +530,9 @@ class TestIspezioneIpotecariaEndpoint:
         response = await main_module.richiedi_ispezione_ipotecaria(request, service)
         payload = json.loads(response.body)
 
-        assert payload["auto_confirm"] is True
+        assert payload["auto_confirm"] is False
+        assert payload["paid_step"] == "accept"
+        assert "admin" in payload["message"].casefold()
 
     @pytest.mark.asyncio
     async def test_queue_position_reported(self, main_module):

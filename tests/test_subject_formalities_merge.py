@@ -37,6 +37,11 @@ def _formalities():
         {
             "request_ref": "r1",
             "inspection": {"number": "T 91777", "date": "2026-11-11", "office": "PALERMO"},
+            "risk_summary": {
+                "live_mortgages": 1,
+                "live_pignoramenti": 0,
+                "latest_transfer_date": "2026-02-01",
+            },
             "note_request": {},
             "formalities": [
                 {"numero": 1, "tipo": "TRASCRIZIONE", "registro_particolare": "8036", "registro_generale": "11046",
@@ -88,3 +93,26 @@ def test_panel_shows_the_archived_documents_under_the_row():
     assert 'data-mortgage-extraction-document="10"' in html
     assert "Altre ispezioni ipotecarie del soggetto (1)" in hub_html
     assert "2 documenti sono riportati" in hub_html and 'href="/documents/10"' not in hub_html
+    assert "Ultimo decreto di trasferimento 2026-02-01" in html
+
+
+def test_admin_formalities_panel_exposes_paid_quote_controls():
+    formalities = _formalities()
+    formalities[0]["search_id"] = 904
+    formalities[0]["formalities"][0].update({
+        "nota_disponibile_elettronica": True,
+        "presenza_titolo_telematico": True,
+        "note_request_status": None,
+    })
+    theme_root = Path(aecs4u_theme.__file__).parent / "templates"
+    env = Environment(
+        loader=ChoiceLoader([FileSystemLoader(str(TEMPLATES)), FileSystemLoader(str(theme_root))]), autoescape=True
+    )
+    env.globals["csrf_input"] = lambda: ""
+    html = env.from_string(
+        '{% from "components/subject_formalities.html" import subject_formalities_panel %}{{ subject_formalities_panel(f, is_admin=true) }}'
+    ).render(f=formalities)
+    assert 'data-mortgage-quote-root' in html
+    assert 'data-mortgage-quote data-kind="note"' in html
+    assert 'data-mortgage-formality-select' in html
+    assert 'data-mortgage-quote data-kind="title"' in html

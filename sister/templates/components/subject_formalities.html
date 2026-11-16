@@ -1,7 +1,7 @@
 {% from "components/subject_hub.html" import doc_chip, inspection_extraction_details %}
 {% macro subject_formalities_panel(
   inspections, subject_code='', route_prefix='/persons', is_admin=false,
-  downloaded_count=none, download_error=''
+  downloaded_count=none, download_error='', blocked_count=none
 ) -%}
 {% if inspections %}
 <section class="container-fluid py-3" aria-labelledby="subject-formalities-heading">
@@ -14,7 +14,11 @@
         Riepilogo estratto dal portale SISTER. Quando disponibile, ogni riga collega alla nota PDF archiviata.
       </p>
       {% if downloaded_count is not none %}
+      {% if blocked_count and blocked_count|int > 0 %}
+      <div class="alert alert-warning py-2 small" role="status">Scaricati {{ downloaded_count }} documenti da Richieste. Bloccati {{ blocked_count }} elementi con *Salva*: serve la conferma del passaggio a pagamento. Ricarica la pagina per vedere i documenti archiviati.</div>
+      {% else %}
       <div class="alert alert-success py-2 small" role="status">Scaricati {{ downloaded_count }} documenti da Richieste. Ricarica la pagina per vedere le note archiviate.</div>
+      {% endif %}
       {% elif download_error == 'session_unavailable' %}
       <div class="alert alert-warning py-2 small" role="status">Sessione SISTER non disponibile. Accedi al portale e riprova.</div>
       {% elif download_error == 'download_failed' %}
@@ -22,10 +26,22 @@
       {% elif download_error == 'no_requests' %}
       <div class="alert alert-warning py-2 small" role="status">Non risultano ID di richiesta da scaricare.</div>
       {% endif %}
+      {% if is_admin and route_prefix == '/persons' and subject_code|length == 16 %}
+      <form method="post" action="/admin/mortgage-searches/start" class="row g-2 align-items-end mb-3">
+        {{ csrf_input() }}
+        <input type="hidden" name="subject_fiscal_code" value="{{ subject_code }}">
+        <div class="col-sm-6 col-md-4">
+          <label class="form-label small mb-1" for="mortgage-search-province">Provincia dell'ufficio SISTER</label>
+          <input class="form-control form-control-sm" id="mortgage-search-province" name="province" required maxlength="80" placeholder="es. Ravenna">
+        </div>
+        <div class="col-auto"><button class="btn btn-sm btn-outline-primary" type="submit">Avvia anteprima ispezione</button></div>
+        <div class="col-12"><small class="text-muted">L'anteprima non conferma i costi. Ogni passaggio a pagamento richiede una conferma admin separata.</small></div>
+      </form>
+      {% endif %}
       {% for inspection in inspections %}
       {% set meta = inspection.inspection or {} %}
       {% set pg = inspection.pagination %}
-      <div class="mb-4" id="{{ pg.anchor if pg else 'formalities-inspection-' ~ loop.index }}" data-subject-formalities-request="{{ meta.request_code or inspection.request_ref }}">
+      <div class="mb-4" id="{{ pg.anchor if pg else 'formalities-inspection-' ~ loop.index }}" data-subject-formalities-request="{{ meta.request_code or inspection.request_ref }}"{% if is_admin and inspection.search_id %} data-mortgage-quote-root data-search-id="{{ inspection.search_id }}"{% endif %}>
         <div class="d-flex flex-wrap gap-2 align-items-center mb-2">
           <strong>Ispezione {{ meta.number or '—' }}</strong>
           {% if meta.date %}<span class="text-muted">del {{ meta.date[8:10] }}/{{ meta.date[5:7] }}/{{ meta.date[:4] }}</span>{% endif %}
@@ -57,14 +73,22 @@
         </div>
         {% endif %}
         {% if inspection.risk_summary %}
-        <div class="alert alert-light border py-2 mb-2" role="status" aria-label="Riepilogo dei rischi dalle formalità più recenti">
+        <div class="alert alert-light border py-2 mb-2" role="status" aria-label="Riepilogo dei rischi di questa ispezione">
           <div class="d-flex flex-wrap align-items-center gap-2">
-            <strong class="small">Dall'ispezione più recente:</strong>
+            <strong class="small">Da questa ispezione:</strong>
             <span class="badge text-bg-danger">Ipoteche non cancellate {{ inspection.risk_summary.live_mortgages }}</span>
             <span class="badge text-bg-warning">Pignoramenti non cancellati {{ inspection.risk_summary.live_pignoramenti }}</span>
-            <span class="badge text-bg-secondary">Decreti di trasferimento 2026 {{ inspection.risk_summary.decreti_trasferimento_2026 }}</span>
+            <span class="badge text-bg-secondary">Ultimo decreto di trasferimento {{ inspection.risk_summary.latest_transfer_date or "non rilevato" }}</span>
           </div>
           <div class="small text-muted mt-1">Conteggi basati sulle formalità e sulle annotazioni collegate archiviate.</div>
+        </div>
+        {% endif %}
+        {% if is_admin and inspection.search_id %}
+        <div class="d-flex flex-wrap align-items-center gap-2 mb-2">
+          <button class="btn btn-sm btn-outline-primary" type="button" data-mortgage-quote data-kind="note">
+            Preventivo note PDF selezionate
+          </button>
+          <div class="small text-muted" data-mortgage-quote-result role="status" aria-live="polite" hidden></div>
         </div>
         {% endif %}
         <div class="table-responsive">
@@ -72,6 +96,7 @@
             <caption class="visually-hidden">Formalità registrate nell'ispezione {{ meta.number or '' }}</caption>
             <thead>
               <tr>
+                {% if is_admin and inspection.search_id %}<th scope="col">Preventivo</th>{% endif %}
                 <th scope="col">Data</th>
                 <th scope="col">Formalità e registri</th>
                 <th scope="col">Pubblico ufficiale e repertorio</th>
@@ -84,6 +109,16 @@
             <tbody>
               {% for item in inspection.formalities %}
               <tr data-formality-number="{{ item.numero }}">
+                {% if is_admin and inspection.search_id %}
+                <td class="text-nowrap">
+                  <label class="visually-hidden" for="formalita-{{ inspection.search_id }}-{{ item.numero }}">Seleziona la formalità {{ item.numero }} per le note PDF</label>
+                  <input id="formalita-{{ inspection.search_id }}-{{ item.numero }}" type="checkbox" data-mortgage-formality-select value="{{ item.numero }}"
+                         {% if item.nota_disponibile_elettronica and not item.note_document_id and item.note_request_status not in ['requested', 'available', 'downloaded', 'uncertain'] %}checked{% endif %}>
+                  {% if item.presenza_titolo_telematico %}
+                  <button class="btn btn-sm btn-link px-1" type="button" data-mortgage-quote data-kind="title" data-ordinal="{{ item.numero }}" aria-label="Preventivo titolo per la formalità {{ item.numero }}">Titolo</button>
+                  {% endif %}
+                </td>
+                {% endif %}
                 <td class="text-nowrap">{{ item.data_formalita_display or item.data_formalita or '—' }}</td>
                 <td>
                   <strong>{{ item.tipo or 'Formalità' }} {{ item.verso or '' }}</strong>

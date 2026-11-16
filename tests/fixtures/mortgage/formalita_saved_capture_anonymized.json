@@ -1,0 +1,24 @@
+{
+  "source_note": "Text-only fixture derived from a saved portal capture; all identity, property, register, date, and selection values are synthetic.",
+  "text": "1 TRASCRIZIONE A FAVORE del 01/01/2000 - Registro Particolare 51001 Registro Generale 62001\nPubblico ufficiale NOTAIO ESEMPIO Repertorio 73001 del 01/01/2000\nATTO ANONIMIZZATO\nImmobili siti in COMUNE ESEMPIO (XX)\nNota disponibile in formato elettronico\nDocumenti successivi correlati:\n1 - Annotazione n. 84001 del 01/01/2000 (ANNOTAZIONE DI CANCELLAZIONE)\n2 TRASCRIZIONE A FAVORE del 01/01/2000 - Registro Particolare 51002 Registro Generale 62002\nPubblico ufficiale NOTAIO ESEMPIO Repertorio 73002 del 01/01/2000\nATTO ANONIMIZZATO\nImmobili siti in COMUNE ESEMPIO (XX)\nNota disponibile in formato elettronico\nDocumenti successivi correlati:\n2 - Annotazione n. 84002 del 01/01/2000 (ANNOTAZIONE DI CANCELLAZIONE)\n3 TRASCRIZIONE A FAVORE del 01/01/2000 - Registro Particolare 51003 Registro Generale 62003\nPubblico ufficiale NOTAIO ESEMPIO Repertorio 73003 del 01/01/2000\nATTO ANONIMIZZATO\nImmobili siti in COMUNE ESEMPIO (XX)\nNota disponibile in formato elettronico\n4 ISCRIZIONE CONTRO del 01/01/2000 - Registro Particolare 51004 Registro Generale 62004\nPubblico ufficiale NOTAIO ESEMPIO Repertorio 73004 del 01/01/2000\nATTO ANONIMIZZATO\nImmobili siti in COMUNE ESEMPIO (XX)\nNota disponibile in formato elettronico - Presenza titolo telematico\nDocumenti successivi correlati:\n3 - Annotazione n. 84003 del 01/01/2000 (ANNOTAZIONE DI AGGIORNAMENTO)\n5 ISCRIZIONE A FAVORE del 01/01/2000 - Registro Particolare 51005 Registro Generale 62005\nPubblico ufficiale NOTAIO ESEMPIO Repertorio 73005 del 01/01/2000\nATTO ANONIMIZZATO\nImmobili siti in COMUNE ESEMPIO (XX)\nNota disponibile in formato elettronico\nDocumenti successivi correlati:\n4 - Annotazione n. 84004 del 01/01/2000 (ANNOTAZIONE DI CANCELLAZIONE)\n6 ISCRIZIONE CONTRO del 01/01/2000 - Registro Particolare 51006 Registro Generale 62006\nPubblico ufficiale NOTAIO ESEMPIO Repertorio 73006 del 01/01/2000\nATTO ANONIMIZZATO\nImmobili siti in COMUNE ESEMPIO (XX)\nNota disponibile in formato elettronico - Presenza titolo telematico\n7 ISCRIZIONE CONTRO del 01/01/2000 - Registro Particolare 51007 Registro Generale 62007\nPubblico ufficiale NOTAIO ESEMPIO Repertorio 73007 del 01/01/2000\nATTO ANONIMIZZATO\nImmobili siti in COMUNE ESEMPIO (XX)\nNota disponibile in formato elettronico - Presenza titolo telematico\nDocumenti successivi correlati:\n5 - Annotazione n. 84005 del 01/01/2000 (ANNOTAZIONE DI AGGIORNAMENTO)\n8 TRASCRIZIONE CONTRO del 01/01/2000 - Registro Particolare 51008 Registro Generale 62008\nPubblico ufficiale NOTAIO ESEMPIO Repertorio 73008 del 01/01/2000\nATTO ANONIMIZZATO\nImmobili siti in COMUNE ESEMPIO (XX)\nNota disponibile in formato elettronico\nDocumenti successivi correlati:\n6 - Annotazione n. 84006 del 01/01/2000 (ANNOTAZIONE DI CANCELLAZIONE)\n9 ISCRIZIONE CONTRO del 01/01/2000 - Registro Particolare 51009 Registro Generale 62009\nPubblico ufficiale NOTAIO ESEMPIO Repertorio 73009 del 01/01/2000\nATTO ANONIMIZZATO\nImmobili siti in COMUNE ESEMPIO (XX)\nNota disponibile in formato elettronico - Presenza titolo telematico\nDocumenti successivi correlati:\n7 - Annotazione n. 84007 del 01/01/2000 (ANNOTAZIONE DI AGGIORNAMENTO)\n10 TRASCRIZIONE CONTRO del 01/01/2000 - Registro Particolare 51010 Registro Generale 62010\nPubblico ufficiale NOTAIO ESEMPIO Repertorio 73010 del 01/01/2000\nATTO ANONIMIZZATO\nImmobili siti in COMUNE ESEMPIO (XX)\nNota disponibile in formato elettronico\n11 TRASCRIZIONE CONTRO del 01/01/2000 - Registro Particolare 51011 Registro Generale 62011\nPubblico ufficiale NOTAIO ESEMPIO Repertorio 73011 del 01/01/2000\nATTO ANONIMIZZATO\nImmobili siti in COMUNE ESEMPIO (XX)\nNota disponibile in formato elettronico\nDocumenti successivi correlati:\n8 - Annotazione n. 84008 del 01/01/2000 (ANNOTAZIONE DI AGGIORNAMENTO)\n12 TRASCRIZIONE CONTRO del 01/01/2000 - Registro Particolare 51012 Registro Generale 62012\nPubblico ufficiale NOTAIO ESEMPIO Repertorio 73012 del 01/01/2000\nATTO ANONIMIZZATO\nImmobili siti in COMUNE ESEMPIO (XX)\nNota disponibile in formato elettronico\nDocumenti successivi correlati:\n9 - Annotazione n. 84009 del 01/01/2000 (ANNOTAZIONE DI CANCELLAZIONE)\nDocumenti in formato elaborabile\n",
+  "selection_values": [
+    "elenco-51001-0-62001-1",
+    "elenco-51002-0-62002-2",
+    "elenco-51003-0-62003-3",
+    "elenco-51004-0-62004-4",
+    "elenco-51005-0-62005-5",
+    "elenco-51006-0-62006-6",
+    "elenco-51007-0-62007-7",
+    "elenco-51008-0-62008-8",
+    "elenco-51009-0-62009-9",
+    "elenco-51010-0-62010-10",
+    "elenco-51011-0-62011-11",
+    "elenco-51012-0-62012-12"
+  ],
+  "expected": {
+    "formalities": 12,
+    "matched_selection_values": 12,
+    "annotations": 9,
+    "cancellations": 5
+  }
+}

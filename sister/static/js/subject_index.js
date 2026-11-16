@@ -189,6 +189,7 @@
     numCol("Valore pro quota €", "cadastral_value_share", true, {formatter: valueCell("cadastral_value_share"),
         headerTooltip: "Valore catastale ridotto alla quota del soggetto; * = quota mancante, contata per intero; n.v. = immobili senza valore"});
     numCol("Non valutati", "unvalued", false, {headerTooltip: "Immobili di cui non si può calcolare il valore catastale"});
+    numCol("Formalità attive", "live_burdens", false, {headerTooltip: "Ipoteche e pignoramenti senza annotazioni di cancellazione nelle ispezioni archiviate"});
     numCol("Visure", "visure", false);
     numCol("Ricerche", "searches", false);
     textCol("Dati del", "searched_at", false, {headerFilterPlaceholder: "data…",

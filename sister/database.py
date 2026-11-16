@@ -69,14 +69,20 @@ from .db_models import (
     MortgageInspection,
     MortgageInspectionParty,
     MortgageInspectionProperty,
+    MortgageSearch,
+    MortgageSearchAnnotation,
+    MortgageSearchCharge,
+    MortgageSearchFlow,
+    MortgageSearchFormality,
+    MortgageSearchRequest,
     OwnershipRight,
     PageVisit,
     PageVisitError,
     PageVisitFormElement,
     Property,
-    PropertyAsset,
     PropertyActualSize,
     PropertyAffrancationAmount,
+    PropertyAsset,
     PropertyOmiOverride,
     PropertyOmiSelection,
     PropertyValuationPreference,
@@ -101,8 +107,8 @@ from .db_models import (
     WalletGiftCoupon,
     WalletGiftCouponRedemption,
 )
-from .provinces import province_code, province_name
 from .property_identity import IDENTITY_FIELDS, canonical_property_identity
+from .provinces import province_code, province_name
 from .reference import (
     LOOKUP_TABLES,
     cadastre_type_code,
@@ -124,6 +130,7 @@ from .result_parsers import (
     format_it_date,
     format_share,
     identifier_kind,
+    is_cancellation_annotation,
     land_area_m2,
     normalize_category,
     normalize_class,
@@ -148,7 +155,7 @@ DATABASE_SCHEMA = os.getenv("DATABASE_SCHEMA", "sister")
 DATABASE_ISTAT_SCHEMA = os.getenv("DATABASE_ISTAT_SCHEMA", DATABASE_SCHEMA)
 # raw payloads (response JSON, XML tree, extraction JSON) live in their own schema; tests point it at a throwaway one
 DATABASE_ARCHIVE_SCHEMA = os.getenv("DATABASE_ARCHIVE_SCHEMA", "sister_archive")
-DATABASE_REVISION = "20261204_billing_transaction_self_reference"
+DATABASE_REVISION = "20261207_mortgage_charge_allocation"
 
 # ---------------------------------------------------------------------------
 # Engine and session
@@ -263,6 +270,13 @@ async def init_db() -> None:
             "activity_log",
             "document_extraction",
             "mortgage_inspection",
+            "mortgage_search",
+            "mortgage_search_formality",
+            "mortgage_search_annotation",
+            "mortgage_search_flow",
+            "mortgage_paid_action",
+            "mortgage_search_request",
+            "mortgage_search_charge",
             "parcel_geometry_cache",
             "sister_request_jobs",
             "sezioni_extraction_jobs",
@@ -1180,6 +1194,11 @@ async def _replace_projection(session: AsyncSession, request_pk: int, tipo_catas
     await _persist_projection(session, request_pk, tipo_catasto, data, unit)
     await _persist_provinces(session, request_pk, data)
     await _link_documents(session, request_pk, data)
+    request_type = (
+        await session.execute(select(Request.request_type).where(Request.id == request_pk))
+    ).scalar_one_or_none()
+    if request_type == "ipotecaria_persona_fisica":
+        await _project_mortgage_search(session, request_pk, data)
 
 
 async def _identical_previous(session: AsyncSession, request_pk: int, data: Optional[dict]):
@@ -1206,6 +1225,266 @@ async def _identical_previous(session: AsyncSession, request_pk: int, data: Opti
 def _search_is_national(data: Optional[dict], scope: Optional[str]) -> bool:
     ambito = str((data or {}).get("ambito") or scope or "NAZIONALE").strip().upper()
     return ambito in ("", "NAZIONALE", "NONE")
+
+
+def _mortgage_date(value: Any) -> date | None:
+    if isinstance(value, date) and not isinstance(value, datetime):
+        return value
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    for fmt in ("%Y-%m-%d", "%d/%m/%Y"):
+        try:
+            return datetime.strptime(raw[:10], fmt).date()
+        except ValueError:
+            continue
+    return None
+
+
+def _mortgage_text(value: Any) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, dict):
+        value = value.get("value") or value.get("text") or value.get("label")
+    result = clean(value)
+    return result or None
+
+
+def _mortgage_register_pair(value: dict) -> tuple[str, str] | None:
+    registers = value.get("registers") if isinstance(value.get("registers"), dict) else {}
+    rp = _mortgage_text(
+        value.get("registro_particolare") or value.get("rp") or registers.get("registro_particolare") or registers.get("rp")
+    )
+    rg = _mortgage_text(
+        value.get("registro_generale") or value.get("rg") or registers.get("registro_generale") or registers.get("rg")
+    )
+    return (rp, rg) if rp and rg else None
+
+
+def _mortgage_datetime(value: Any) -> datetime | None:
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    try:
+        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
+async def _project_mortgage_search(session: AsyncSession, request_pk: int, data: Optional[dict]) -> int | None:
+    """Project an archived persona-fisica search while retaining paid-flow history on repeated runs."""
+    if not isinstance(data, dict):
+        return None
+    capture = data.get("portal_capture") if isinstance(data.get("portal_capture"), dict) else {}
+    inspection = capture.get("inspection") if isinstance(capture.get("inspection"), dict) else {}
+    formalities = data.get("formalities")
+    if not isinstance(formalities, list) or not inspection:
+        return None
+
+    inspection_number = _mortgage_text(inspection.get("number"))
+    inspection_date = _mortgage_date(inspection.get("date"))
+    subject_code = fiscal_code_key(inspection.get("subject_tax_code"))
+    if not inspection_number or not inspection_date or not subject_code:
+        logger.warning("Skipping typed mortgage projection for request %s: inspection identity is incomplete", request_pk)
+        return None
+
+    office = _mortgage_text(inspection.get("office")) or ""
+    values = {
+        "request_id": request_pk,
+        "inspection_number": inspection_number,
+        "inspection_date": inspection_date,
+        "office": office,
+        "scope": "office" if office and not _search_is_national(data, "PROVINCIALE") else "national",
+        "subject_fiscal_code": subject_code,
+        "requester_fiscal_code": fiscal_code_key(inspection.get("requester_tax_code")) or None,
+        "motivation": _mortgage_text(inspection.get("motivation")),
+        "convention_request_code": _mortgage_text(inspection.get("request_code")) or _mortgage_text(inspection.get("convention")),
+        "formalities_count": int(inspection.get("formalities_count") or len(formalities)),
+        "annotations_count": int(inspection.get("annotations_count") or 0),
+    }
+    search_id = (
+        await session.execute(
+            pg_insert(MortgageSearch)
+            .values(**values)
+            .on_conflict_do_update(
+                constraint="uq_mortgage_search_request",
+                set_={key: value for key, value in values.items() if key != "request_id"},
+            )
+            .returning(MortgageSearch.id)
+        )
+    ).scalar_one()
+    await session.execute(
+        update(MortgageSearchFlow)
+        .where(MortgageSearchFlow.request_id == request_pk)
+        .values(search_id=search_id, state="accepted", current_step="formalita", updated_at=datetime.now(timezone.utc))
+    )
+
+    formality_ids_by_register: dict[tuple[str, str], tuple[int, int]] = {}
+    for ordinal, item in enumerate(formalities, start=1):
+        if not isinstance(item, dict):
+            continue
+        raw_kind = str(item.get("tipo") or "").strip().casefold()
+        kind = raw_kind if raw_kind in {"trascrizione", "iscrizione", "annotazione"} else "annotazione"
+        raw_direction = str(item.get("verso") or "").strip().casefold()
+        direction = {
+            "a favore": "favore",
+            "contro": "contro",
+            "a favore e contro": "favore_e_contro",
+        }.get(raw_direction, raw_direction or None)
+        fields = {
+            "search_id": search_id,
+            "ordinal": int(item.get("numero") or ordinal),
+            "kind": kind,
+            "direction": direction,
+            "formality_date": _mortgage_date(item.get("data_formalita")),
+            "registro_particolare": _mortgage_text(item.get("registro_particolare")),
+            "registro_generale": _mortgage_text(item.get("registro_generale")),
+            "public_official": _mortgage_text(item.get("pubblico_ufficiale")),
+            "repertory": _mortgage_text(item.get("repertorio")),
+            "repertory_date": _mortgage_date(item.get("data_repertorio")),
+            "act_description": _mortgage_text(item.get("causale") or item.get("descrizione")),
+            "location": _mortgage_text(item.get("immobili")),
+            "electronic_note": bool(item.get("nota_disponibile_elettronica")),
+            "electronic_title": bool(item.get("presenza_titolo_telematico")),
+            "portal_selection_value": _mortgage_text(item.get("portal_selection_value")),
+        }
+        formality_id = (
+            await session.execute(
+                pg_insert(MortgageSearchFormality)
+                .values(**fields)
+                .on_conflict_do_update(
+                    constraint="uq_mortgage_search_formality_ordinal",
+                    set_={key: value for key, value in fields.items() if key not in {"search_id", "ordinal"}},
+                )
+                .returning(MortgageSearchFormality.id)
+            )
+        ).scalar_one()
+
+        rp = _mortgage_text(item.get("registro_particolare"))
+        rg = _mortgage_text(item.get("registro_generale"))
+        if rp and rg:
+            formality_ids_by_register[(rp, rg)] = (int(formality_id), int(fields["ordinal"]))
+
+        related = item.get("documenti_correlati")
+        if not isinstance(related, list):
+            related = []
+        for ann_ordinal, annotation in enumerate(related, start=1):
+            if not isinstance(annotation, dict):
+                continue
+            description = _mortgage_text(annotation.get("descrizione")) or _mortgage_text(annotation.get("tipo"))
+            annotation_date = _mortgage_date(annotation.get("data"))
+            annotation_number = _mortgage_text(annotation.get("numero"))
+            annotation_fields = {
+                "formality_id": formality_id,
+                "ordinal": ann_ordinal,
+                "number": annotation_number,
+                "annotation_date": annotation_date,
+                "description": description,
+                "is_cancellation": is_cancellation_annotation(description),
+            }
+            await session.execute(
+                pg_insert(MortgageSearchAnnotation)
+                .values(**annotation_fields)
+                .on_conflict_do_update(
+                    constraint="uq_mortgage_search_annotation_ordinal",
+                    set_={key: value for key, value in annotation_fields.items() if key not in {"formality_id", "ordinal"}},
+                )
+            )
+
+    async def project_document_request(document: Any, kind: str) -> None:
+        if not isinstance(document, dict):
+            return
+        pair = _mortgage_register_pair(document)
+        linked = formality_ids_by_register.get(pair) if pair else None
+        if linked is None:
+            return
+        formality_id, _ = linked
+        document_id = document.get("document_id")
+        try:
+            document_id = int(document_id) if document_id is not None else None
+        except (TypeError, ValueError):
+            document_id = None
+        if document_id is not None:
+            exists = await session.get(Document, document_id)
+            if exists is None:
+                document_id = None
+        portal_request_id = _mortgage_text(document.get("portal_request_id") or document.get("request_id"))
+        if not portal_request_id and document_id is None:
+            return
+        raw_status = str(document.get("status") or "").strip().casefold()
+        status = raw_status if raw_status in {"requested", "available", "downloaded", "failed", "uncertain"} else (
+            "downloaded" if document_id is not None else "requested"
+        )
+        fields = {
+            "search_id": search_id,
+            "formality_id": formality_id,
+            "kind": kind,
+            "format": _mortgage_text(document.get("format")) or ("PDF" if kind == "note" else None),
+            "portal_request_id": portal_request_id,
+            "status": status,
+            "requested_at": _mortgage_datetime(document.get("requested_at") or document.get("timestamp")),
+            "document_id": document_id,
+        }
+        existing = None
+        if portal_request_id:
+            existing = (
+                await session.execute(
+                    select(MortgageSearchRequest).where(MortgageSearchRequest.portal_request_id == portal_request_id)
+                )
+            ).scalar_one_or_none()
+        elif document_id is not None:
+            existing = (
+                await session.execute(
+                    select(MortgageSearchRequest).where(
+                        MortgageSearchRequest.search_id == search_id,
+                        MortgageSearchRequest.formality_id == formality_id,
+                        MortgageSearchRequest.kind == kind,
+                        MortgageSearchRequest.document_id == document_id,
+                    )
+                )
+            ).scalar_one_or_none()
+        if existing is None:
+            session.add(MortgageSearchRequest(**fields))
+        else:
+            for key, value in fields.items():
+                if key not in {"search_id", "formality_id"}:
+                    setattr(existing, key, value)
+        if document_id is not None:
+            link_column = "note_document_id" if kind == "note" else "title_document_id"
+            await session.execute(
+                update(MortgageSearchFormality).where(MortgageSearchFormality.id == formality_id).values(
+                    **{link_column: document_id}
+                )
+            )
+
+    note_request = capture.get("pdf_note_request") if isinstance(capture.get("pdf_note_request"), dict) else {}
+    for document in note_request.get("documents") or []:
+        await project_document_request(document, "note")
+
+    title_requests = capture.get("title_requests") if isinstance(capture.get("title_requests"), dict) else {}
+    title_candidates = []
+    single_request = title_requests.get("single_request")
+    if isinstance(single_request, dict):
+        title_candidates.append(single_request)
+    for candidate in title_requests.get("single_attempts") or []:
+        if isinstance(candidate, dict):
+            status = str(candidate.get("status") or candidate.get("outcome") or "").casefold()
+            if status in {"requested", "accepted", "available", "downloaded"} or candidate.get("document"):
+                title_candidates.append(candidate)
+    xml_attempt = title_requests.get("xml_attempt")
+    if isinstance(xml_attempt, dict):
+        status = str(xml_attempt.get("status") or xml_attempt.get("outcome") or "").casefold()
+        if status in {"requested", "accepted", "available", "downloaded"} or xml_attempt.get("document"):
+            title_candidates.append(xml_attempt)
+    for candidate in title_candidates:
+        document = candidate.get("document") if isinstance(candidate.get("document"), dict) else candidate
+        # Attempts without a portal request ID or an archived document are not promoted to a request.
+        await project_document_request(document, "title")
+    await session.flush()
+    return int(search_id)
 
 
 async def _request_scope(session: AsyncSession, request_pk: int) -> Optional[str]:
@@ -1527,6 +1806,49 @@ async def backfill_projections(
     return stats
 
 
+async def backfill_mortgage_searches(
+    request_refs: Optional[list[str]] = None, *, batch: int = 50, limit: int | None = None
+) -> dict[str, int]:
+    """Project archived persona-fisica inspections without rebuilding unrelated result/property projections."""
+    session_factory = _get_session_factory()
+    async with session_factory() as session:
+        stmt = (
+            select(Request.id, Request.request_ref, RequestPayload.data)
+            .join(RequestPayload, RequestPayload.request_id == Request.id)
+            .where(Request.request_type == "ipotecaria_persona_fisica")
+            .order_by(Request.responded_at, Request.id)
+        )
+        if request_refs:
+            stmt = stmt.where(Request.request_ref.in_(request_refs))
+        if limit is not None and int(limit) > 0:
+            stmt = stmt.limit(int(limit))
+        rows = (await session.execute(stmt)).all()
+
+    stats = {"responses": 0, "searches": 0, "formalities": 0, "annotations": 0, "document_requests": 0}
+    batch_size = max(1, int(batch))
+    for start in range(0, len(rows), batch_size):
+        async with session_factory() as session:
+            for request_pk, _request_ref, raw_payload in rows[start : start + batch_size]:
+                data = _decode_payload(raw_payload)
+                search_id = await _project_mortgage_search(session, request_pk, data)
+                if search_id is None:
+                    continue
+                stats["responses"] += 1
+                stats["searches"] += 1
+                stats["formalities"] += len(data.get("formalities") or [])
+                stats["annotations"] += sum(
+                    len(item.get("documenti_correlati") or [])
+                    for item in data.get("formalities") or []
+                    if isinstance(item, dict)
+                )
+            await session.commit()
+    async with session_factory() as session:
+        stats["document_requests"] = (
+            await session.execute(select(func.count()).select_from(MortgageSearchRequest))
+        ).scalar_one()
+    return stats
+
+
 async def _resolve_subject(session: AsyncSession, fields: dict[str, Any]) -> Optional[int]:
     """Create/enrich the subject for normalised owner fields (the birth place becomes a ``comune``)."""
     fields = dict(fields)
@@ -1704,7 +2026,13 @@ async def save_response(
         # An answer identical to the previous answer of the same query (cache_key) is not stored again: the request keeps its
         # date and points at the request that holds the content; only the history periods are extended.
         observed_at = datetime.now(timezone.utc)
+        request_type = (
+            await session.execute(select(Request.request_type).where(Request.id == request_pk))
+        ).scalar_one_or_none()
         digest, previous = await _identical_previous(session, request_pk, data if success else None)
+        if request_type == "ipotecaria_persona_fisica":
+            # Identical-looking inspections are still separate accepted portal transactions.
+            previous = None
         await session.execute(delete(RequestPayload).where(RequestPayload.request_id == request_pk))
         if previous is not None:
             await session.execute(
@@ -2671,7 +2999,7 @@ def _subject_profile_ctes(istat: str) -> str:
 
     ``:length`` (16 persons / 11 companies) and ``:code`` (one subject, or NULL for all) are bind parameters. Columns of
     ``p``: code, name, gender, birth_date, birth_place, birth_province, age, the stored ``subject_holding`` figures
-    (provinces … cadastral_value_share, searched_at), searches, visure, last_seen, ``tags`` (``text[]`` or NULL, see
+    (provinces … cadastral_value_share, searched_at), searches, visure, live_burdens, last_seen, ``tags`` (``text[]`` or NULL, see
     :func:`normalize_tag`), ``name_inferred`` / ``name_records`` (see below). A name that only repeats the code is
     NULL; a real name is preferred over such a row, and a missing one is built from surname and first name, else (a code
     with registry records, e.g. a company found by a ``persona_giuridica`` search) the first record's denomination.
@@ -2689,7 +3017,30 @@ def _subject_profile_ctes(istat: str) -> str:
         "  WHERE d.document_type = 'visura_soggetto' AND length(btrim(s.fiscal_code)) = :length"
         "  AND (CAST(:code AS text) IS NULL OR upper(btrim(s.fiscal_code)) = CAST(:code AS text))"
         "  AND (CAST(:codes AS text[]) IS NULL OR upper(btrim(s.fiscal_code)) = ANY(CAST(:codes AS text[]))) GROUP BY 1"
-        "), codes AS (SELECT code FROM req UNION SELECT code FROM docs"
+        "), mortgage_annotations AS ("
+        "  SELECT f.id AS formality_id, bool_or(a.is_cancellation) AS has_cancellation"
+        "  FROM mortgage_search_formality f LEFT JOIN mortgage_search_annotation a ON a.formality_id = f.id"
+        "  GROUP BY f.id"
+        "), mortgage_formality_state AS ("
+        "  SELECT upper(btrim(ms.subject_fiscal_code)) AS code, ms.office,"
+        "         coalesce(f.registro_particolare, 'row:' || f.id::text) AS rp_key,"
+        "         coalesce(f.registro_generale, 'row:' || f.id::text) AS rg_key,"
+        "         coalesce(extract(year FROM f.formality_date), 0) AS act_year,"
+        "         bool_or(lower(f.kind) = 'iscrizione') AS is_mortgage,"
+        "         bool_or(lower(coalesce(f.act_description, '')) LIKE '%pignoramento%') AS is_pignoramento,"
+        "         bool_or(coalesce(ma.has_cancellation, false)) AS has_cancellation"
+        "  FROM mortgage_search ms JOIN mortgage_search_formality f ON f.search_id = ms.id"
+        "  LEFT JOIN mortgage_annotations ma ON ma.formality_id = f.id"
+        "  WHERE length(btrim(ms.subject_fiscal_code)) = :length"
+        "  AND (CAST(:code AS text) IS NULL OR upper(btrim(ms.subject_fiscal_code)) = CAST(:code AS text))"
+        "  AND (CAST(:codes AS text[]) IS NULL OR upper(btrim(ms.subject_fiscal_code)) = ANY(CAST(:codes AS text[])))"
+        "  GROUP BY 1, 2, 3, 4, 5"
+        "), mortgage_burdens AS ("
+        "  SELECT code,"
+        "         count(*) FILTER (WHERE is_mortgage AND NOT has_cancellation) AS live_mortgages,"
+        "         count(*) FILTER (WHERE is_pignoramento AND NOT has_cancellation) AS live_pignoramenti"
+        "  FROM mortgage_formality_state GROUP BY code"
+        "), codes AS (SELECT code FROM req UNION SELECT code FROM docs UNION SELECT code FROM mortgage_burdens"
         "), reqs AS (SELECT code, count(*) AS searches, max(responded_at) AS last_search FROM req GROUP BY code"
         "), subj AS ("
         "  SELECT DISTINCT ON (upper(btrim(s.fiscal_code))) upper(btrim(s.fiscal_code)) AS code, s.name, s.last_name,"
@@ -2728,6 +3079,7 @@ def _subject_profile_ctes(istat: str) -> str:
         "    h.unvalued, h.unknown_share, round(h.cadastral_income_eur) AS rendita,"
         "    round(h.dominical_income_eur) AS reddito_dominicale, round(h.cadastral_value_eur) AS cadastral_value,"
         "    round(h.cadastral_value_share_eur) AS cadastral_value_share, h.searched_at,"
+        "    coalesce(mb.live_mortgages, 0) + coalesce(mb.live_pignoramenti, 0) AS live_burdens,"
         "    coalesce(reqs.searches, 0) AS searches, coalesce(docs.visure, 0) AS visure,"
         "    greatest(reqs.last_search, docs.last_doc) AS last_seen,"
         "    (SELECT array_agg(t.tag ORDER BY t.tag_key) FROM subject_tag t"
@@ -2735,8 +3087,47 @@ def _subject_profile_ctes(istat: str) -> str:
         "  FROM codes c LEFT JOIN subj ON subj.code = c.code LEFT JOIN rec ON rec.code = c.code"
         "  LEFT JOIN subject_holding h ON h.fiscal_code = c.code"
         "  LEFT JOIN reqs ON reqs.code = c.code LEFT JOIN docs ON docs.code = c.code"
+        "  LEFT JOIN mortgage_burdens mb ON mb.code = c.code"
         ") "
     )
+
+
+async def subjects_with_live_burdens(
+    kind: str = "any",
+    *,
+    allowed_codes: Iterable[str] | None = None,
+) -> list[str]:
+    """Return subject codes with uncancelled typed mortgage/pignoramento formalities.
+
+    Repeated acts are grouped by office, RP, RG, and year, matching the `/persons` live-burden count. `kind` may be
+    `mortgage`, `pignoramento`, or `any`; an act is excluded when any matching typed row carries a cancellation
+    annotation.
+    """
+    if kind not in {"mortgage", "pignoramento", "any"}:
+        raise ValueError("kind must be 'mortgage', 'pignoramento', or 'any'")
+    codes = None if allowed_codes is None else sorted({str(code).strip().upper() for code in allowed_codes if str(code).strip()})
+    stmt = text(
+        "WITH mortgage_formality_state AS ("
+        "  SELECT upper(btrim(ms.subject_fiscal_code)) AS code, ms.office,"
+        "         coalesce(f.registro_particolare, 'row:' || f.id::text) AS rp_key,"
+        "         coalesce(f.registro_generale, 'row:' || f.id::text) AS rg_key,"
+        "         coalesce(extract(year FROM f.formality_date), 0) AS act_year,"
+        "         bool_or(lower(f.kind) = 'iscrizione') AS is_mortgage,"
+        "         bool_or(lower(coalesce(f.act_description, '')) LIKE '%pignoramento%') AS is_pignoramento,"
+        "         bool_or(coalesce(a.is_cancellation, false)) AS has_cancellation"
+        "  FROM mortgage_search ms JOIN mortgage_search_formality f ON f.search_id = ms.id"
+        "  LEFT JOIN mortgage_search_annotation a ON a.formality_id = f.id"
+        "  WHERE length(btrim(ms.subject_fiscal_code)) IN (11, 16)"
+        "    AND (CAST(:codes AS text[]) IS NULL OR upper(btrim(ms.subject_fiscal_code)) = ANY(CAST(:codes AS text[])))"
+        "  GROUP BY 1, 2, 3, 4, 5"
+        ") SELECT code FROM mortgage_formality_state"
+        " WHERE NOT has_cancellation"
+        "   AND ((:kind IN ('mortgage', 'any') AND is_mortgage)"
+        "     OR (:kind IN ('pignoramento', 'any') AND is_pignoramento))"
+        " GROUP BY code ORDER BY code"
+    )
+    async with _get_session_factory()() as session:
+        return list((await session.execute(stmt, {"kind": kind, "codes": codes})).scalars().all())
 
 
 def _subject_kind_params(kind: str, code: Optional[str] = None) -> dict[str, Any]:
@@ -2777,6 +3168,7 @@ def _profile_from_row(row: Any, kind: str) -> dict[str, Any]:
         "searched_at": stamp(row["searched_at"]),
         "searches": int(row["searches"] or 0),
         "visure": int(row["visure"] or 0),
+        "live_burdens": int(row["live_burdens"] or 0),
         "last_seen": stamp(row["last_seen"]),
         "tags": list(row["tags"] or []),
         # a code with several registry records keeps no name of its own (it would be arbitrary): the list shows the first
@@ -2815,7 +3207,7 @@ async def list_subject_profiles(kind: str = "person", code: Optional[str] = None
 
 SUBJECT_NUMBER_FIELDS = (
     "age", "province_count", "properties", "buildings", "land", "full_ownership", "rendita", "reddito_dominicale",
-    "cadastral_value", "cadastral_value_share", "unvalued", "visure", "searches",
+    "cadastral_value", "cadastral_value_share", "unvalued", "live_burdens", "visure", "searches",
 )
 SUBJECT_DATE_FIELDS = ("birth_date", "searched_at", "last_seen")
 SUBJECT_TEXT_FIELDS = ("name", "fiscal_code", "provinces", "birth_place", "gender", "favorite_label")
@@ -2847,6 +3239,29 @@ def _number_condition(column: str, term: str, key: str, params: dict[str, Any]) 
         return None
     params[key] = Decimal(match.group(2))
     return f"{column} {match.group(1) or '='} :{key}"
+
+
+def _number_filter_requires_positive(term: str) -> bool:
+    """Whether every value matching a numeric filter is strictly positive."""
+    value = re.sub(r"[\s.]", "", str(term or "")).replace(",", ".")
+    range_match = re.fullmatch(r"(-?\d+(?:\.\d+)?)-(\d+(?:\.\d+)?)", value)
+    if range_match:
+        try:
+            return Decimal(range_match.group(1)) > 0
+        except Exception:
+            return False
+    match = re.fullmatch(r"(>=|<=|>|<|=)?(-?\d+(?:\.\d+)?)", value)
+    if not match:
+        return False
+    try:
+        operator, threshold = match.group(1) or "=", Decimal(match.group(2))
+    except Exception:
+        return False
+    if operator == ">":
+        return threshold >= 0
+    if operator in {">=", "="}:
+        return threshold > 0
+    return False
 
 
 SUBJECT_NO_TAG = "-"  # the ``tag`` filter value that selects the subjects without any tag
@@ -2941,8 +3356,16 @@ async def query_subject_profiles(
     ``favorite`` for the codes in ``favorites``.
     """
     params = _subject_kind_params(kind)
+    normalized_filters = dict(filters or {})
+    if _number_filter_requires_positive(normalized_filters.get("live_burdens", "")):
+        normalized_allowed = None if allowed_codes is None else {str(code).strip().upper() for code in allowed_codes}
+        active_codes = set(await subjects_with_live_burdens("any", allowed_codes=normalized_allowed))
+        if allowed_codes is None:
+            allowed_codes = active_codes
+        else:
+            allowed_codes = active_codes.intersection(normalized_allowed or set())
     params["codes"] = None if allowed_codes is None else sorted({str(code).strip().upper() for code in allowed_codes})
-    where, where_params = _subject_where(q, filters or {}, favorites, name_status, tag)
+    where, where_params = _subject_where(q, normalized_filters, favorites, name_status, tag)
     params.update(where_params)
     order = _SUBJECT_SORT_SQL.get(sort, "last_seen")
     way = "ASC" if str(direction).lower() == "asc" else "DESC"
@@ -2984,6 +3407,7 @@ async def subject_overview(kind: str = "person", allowed_codes: Iterable[str] | 
     maxima = ", ".join(f"max({field}) AS max_{field}" for field in SUBJECT_NUMBER_FIELDS)
     stmt = text(
         f"WITH {_subject_profile_ctes(istat)} SELECT count(*) AS subjects, count(*) FILTER (WHERE visure > 0) AS with_visura,"
+        " count(*) FILTER (WHERE live_burdens > 0) AS with_live_burdens,"
         " coalesce(sum(buildings), 0) AS buildings, coalesce(sum(land), 0) AS land,"
         f" coalesce(sum(cadastral_value_share), 0) AS value_share, {widest('name')} AS w_name,"
         f" {widest('code')} AS w_fiscal_code, {widest('provinces')} AS w_provinces, {widest(place)} AS w_birth_place,"
@@ -2994,6 +3418,7 @@ async def subject_overview(kind: str = "person", allowed_codes: Iterable[str] | 
     return {
         "subjects": int(row["subjects"]),
         "with_visura": int(row["with_visura"]),
+        "with_live_burdens": int(row["with_live_burdens"]),
         "buildings": int(row["buildings"]),
         "land": int(row["land"]),
         "value_share": float(row["value_share"]),
@@ -3395,6 +3820,192 @@ async def find_subject_query_requests(fiscal_code: str, limit: int = 20) -> list
         ]
 
 
+async def _typed_mortgage_search_rows(session: AsyncSession, code: str) -> list[dict[str, Any]]:
+    searches = (
+        await session.execute(
+            select(MortgageSearch)
+            .where(MortgageSearch.subject_fiscal_code == code)
+            .order_by(MortgageSearch.inspection_date.desc(), MortgageSearch.id.desc())
+        )
+    ).scalars().all()
+    search_ids = [search.id for search in searches]
+    if not search_ids:
+        return []
+
+    formalities = (
+        await session.execute(
+            select(MortgageSearchFormality)
+            .where(MortgageSearchFormality.search_id.in_(search_ids))
+            .order_by(MortgageSearchFormality.search_id, MortgageSearchFormality.ordinal)
+        )
+    ).scalars().all()
+    formality_ids = [formality.id for formality in formalities]
+    annotations = (
+        await session.execute(
+            select(MortgageSearchAnnotation)
+            .where(MortgageSearchAnnotation.formality_id.in_(formality_ids))
+            .order_by(MortgageSearchAnnotation.formality_id, MortgageSearchAnnotation.ordinal)
+        )
+    ).scalars().all() if formality_ids else []
+    request_rows = (
+        await session.execute(
+            select(MortgageSearchRequest, MortgageSearchFormality)
+            .join(MortgageSearchFormality, MortgageSearchFormality.id == MortgageSearchRequest.formality_id)
+            .where(MortgageSearchRequest.search_id.in_(search_ids))
+            .order_by(MortgageSearchRequest.id)
+        )
+    ).all()
+    charges = (
+        await session.execute(
+            select(MortgageSearchCharge)
+            .where(MortgageSearchCharge.search_id.in_(search_ids))
+            .order_by(MortgageSearchCharge.id)
+        )
+    ).scalars().all()
+    document_ids = {row.document_id for row, _ in request_rows if row.document_id is not None}
+    document_names = dict(
+        (await session.execute(select(Document.id, Document.file_name).where(Document.id.in_(document_ids)))).all()
+    ) if document_ids else {}
+
+    formalities_by_search: dict[int, list[MortgageSearchFormality]] = {}
+    for formality in formalities:
+        formalities_by_search.setdefault(formality.search_id, []).append(formality)
+    annotations_by_formality: dict[int, list[MortgageSearchAnnotation]] = {}
+    for annotation in annotations:
+        annotations_by_formality.setdefault(annotation.formality_id, []).append(annotation)
+    requests_by_search: dict[int, list[tuple[MortgageSearchRequest, MortgageSearchFormality]]] = {}
+    for request_row, formality in request_rows:
+        requests_by_search.setdefault(request_row.search_id, []).append((request_row, formality))
+    charges_by_search: dict[int, list[MortgageSearchCharge]] = {}
+    for charge in charges:
+        charges_by_search.setdefault(charge.search_id, []).append(charge)
+
+    result = []
+    for search in searches:
+        request = await session.get(Request, search.request_id)
+        if request is None:
+            continue
+        items = []
+        for formality in formalities_by_search.get(search.id, []):
+            formality_requests = [
+                request_row
+                for request_row, linked_formality in requests_by_search.get(search.id, [])
+                if linked_formality.id == formality.id and request_row.kind == "note"
+            ]
+            related = [
+                {
+                    "numero": annotation.number,
+                    "data": annotation.annotation_date.isoformat() if annotation.annotation_date else "",
+                    "descrizione": annotation.description or "",
+                }
+                for annotation in annotations_by_formality.get(formality.id, [])
+            ]
+            direction = (formality.direction or "").replace("favore_e_contro", "A FAVORE E CONTRO").upper()
+            items.append(
+                {
+                    "numero": formality.ordinal,
+                    "tipo": formality.kind.upper(),
+                    "verso": direction,
+                    "data_formalita": formality.formality_date.isoformat() if formality.formality_date else "",
+                    "registro_particolare": formality.registro_particolare or "",
+                    "registro_generale": formality.registro_generale or "",
+                    "pubblico_ufficiale": formality.public_official or "",
+                    "repertorio": formality.repertory or "",
+                    "data_repertorio": formality.repertory_date.isoformat() if formality.repertory_date else "",
+                    "causale": formality.act_description or "",
+                    "immobili": formality.location or "",
+                    "nota_disponibile_elettronica": formality.electronic_note,
+                    "presenza_titolo_telematico": formality.electronic_title,
+                    "note_document_id": formality.note_document_id,
+                    "note_request_status": next(
+                        (row.status for row in formality_requests if row.status in {"requested", "available", "downloaded", "uncertain"}),
+                        None,
+                    ),
+                    "portal_selection_value": formality.portal_selection_value,
+                    "documenti_correlati": related,
+                }
+            )
+
+        note_documents, title_entries = [], []
+        for request_row, formality in requests_by_search.get(search.id, []):
+            document_name = document_names.get(request_row.document_id, "") if request_row.document_id else ""
+            entry = {
+                "portal_request_id": request_row.portal_request_id,
+                "request_id": request_row.portal_request_id,
+                "registro_particolare": formality.registro_particolare or "",
+                "registro_generale": formality.registro_generale or "",
+                "document_id": request_row.document_id,
+                "file_name": document_name,
+                "format": request_row.format,
+                "status": request_row.status,
+                "requested_at": request_row.requested_at.isoformat() if request_row.requested_at else None,
+            }
+            if request_row.kind == "note":
+                note_documents.append(entry)
+            else:
+                title_entries.append(
+                    {
+                        "request_id": request_row.portal_request_id or "",
+                        "formalita_numero": formality.ordinal,
+                        "status": request_row.status,
+                        "document": {
+                            "document_id": request_row.document_id,
+                            "file_name": document_name,
+                        } if request_row.document_id else None,
+                    }
+                )
+        costs = {}
+        for kind, key in (("inspection", "inspection_cost"), ("note", "notes_cost"), ("title", "titles_cost")):
+            # A cost page is a quote and a tariff is an estimate. Only itemized
+            # receipt or statement-detail evidence establishes an attributed
+            # amount here; the account statement remains authoritative for the
+            # posted debit itself.
+            amount = sum(
+                (
+                    charge.amount
+                    for charge in charges_by_search.get(search.id, [])
+                    if charge.kind == kind and charge.basis in {"receipt", "statement_detail"}
+                ),
+                Decimal("0"),
+            )
+            if amount:
+                costs[key] = amount
+        title_requests = {"requests": title_entries}
+        if title_entries:
+            title_requests["single_request"] = title_entries[0]
+        note_states = {"requested", "available", "downloaded", "uncertain"}
+        result.append(
+            {
+                "search_id": search.id,
+                "request_pk": search.request_id,
+                "request_ref": request.request_ref,
+                "recorded_at": request.responded_at or request.created_at,
+                "inspection": {
+                    "number": search.inspection_number,
+                    "date": search.inspection_date.isoformat(),
+                    "office": search.office,
+                    "scope": search.scope,
+                    "subject_tax_code": search.subject_fiscal_code,
+                    "requester_tax_code": search.requester_fiscal_code,
+                    "motivation": search.motivation,
+                    "request_code": search.convention_request_code,
+                },
+                "formalities": items,
+                "note_request": {
+                    "accepted": any(entry["status"] in note_states for entry in note_documents),
+                    "downloaded": bool(note_documents) and all(entry["document_id"] is not None for entry in note_documents),
+                    "selected_count": len(note_documents),
+                    "documents": note_documents,
+                },
+                "title_requests": title_requests,
+                "costs": costs,
+                "request_cost": costs.get("inspection_cost"),
+                "cost_evidence": "attributed_charge_rows",
+            }
+        )
+    return result
+
+
 async def get_subject_mortgage_formalities(
     fiscal_code: str, *, include_session_timeline: bool = False
 ) -> list[dict[str, Any]]:
@@ -3407,24 +4018,47 @@ async def get_subject_mortgage_formalities(
     code = fiscal_code_key(fiscal_code)
     if not code:
         return []
-    stmt = text(
-        "SELECT r.id AS request_pk, r.request_ref, coalesce(r.responded_at, r.created_at) AS recorded_at, "
-        "       p.data::jsonb #> '{portal_capture,inspection}' AS inspection, "
-        "       p.data::jsonb -> 'formalities' AS formalities, "
-        "       p.data::jsonb #> '{portal_capture,pdf_note_request}' AS note_request, "
-        "       p.data::jsonb #> '{portal_capture,title_requests}' AS title_requests, "
-        "       p.data::jsonb #> '{portal_capture,costs}' AS costs, "
-        "       p.data::jsonb -> 'cost' AS request_cost "
-        "FROM request r "
-        "JOIN sister_archive.request_payload p ON p.request_id = r.id "
-        "WHERE r.request_type = 'ipotecaria_persona_fisica' "
-        "  AND upper(btrim(p.data::jsonb #>> '{portal_capture,inspection,subject_tax_code}')) = :code "
-        "  AND CASE WHEN jsonb_typeof(p.data::jsonb -> 'formalities') = 'array' "
-        "           THEN jsonb_array_length(p.data::jsonb -> 'formalities') ELSE 0 END > 0 "
-        "ORDER BY coalesce(r.responded_at, r.created_at) DESC NULLS LAST, r.id DESC"
-    )
     async with _get_session_factory()() as session:
-        rows = (await session.execute(stmt, {"code": code})).mappings().all()
+        typed_rows = await _typed_mortgage_search_rows(session, code)
+        typed_request_pks = {row["request_pk"] for row in typed_rows}
+        archived_rows = (
+            await session.execute(
+                select(Request, RequestPayload.data)
+                .join(RequestPayload, RequestPayload.request_id == Request.id)
+                .where(Request.request_type == "ipotecaria_persona_fisica")
+                .order_by(Request.responded_at.desc().nullslast(), Request.id.desc())
+            )
+        ).all()
+        raw_rows = []
+        for request, raw_payload in archived_rows:
+            if request.id in typed_request_pks:
+                continue
+            payload = _decode_payload(raw_payload)
+            if not isinstance(payload, dict):
+                continue
+            capture = payload.get("portal_capture") if isinstance(payload.get("portal_capture"), dict) else {}
+            inspection = capture.get("inspection") if isinstance(capture.get("inspection"), dict) else {}
+            formalities = payload.get("formalities")
+            if fiscal_code_key(inspection.get("subject_tax_code")) != code or not isinstance(formalities, list) or not formalities:
+                continue
+            raw_rows.append(
+                {
+                    "request_pk": request.id,
+                    "request_ref": request.request_ref,
+                    "recorded_at": request.responded_at or request.created_at,
+                    "inspection": inspection,
+                    "formalities": formalities,
+                    "note_request": capture.get("pdf_note_request") or {},
+                    "title_requests": capture.get("title_requests") or {},
+                    # Legacy payloads do not distinguish an estimate, a quote,
+                    # and a posted charge. Keep their amounts in the archive,
+                    # but do not present them as attributed spend.
+                    "costs": {},
+                    "request_cost": None,
+                    "cost_evidence": "unverified_legacy_payload",
+                }
+            )
+        rows = [*typed_rows, *raw_rows]
 
     results: list[dict[str, Any]] = []
 
@@ -3472,9 +4106,10 @@ async def get_subject_mortgage_formalities(
             whole = whole[:-3]
         return f"{'.'.join(reversed(groups))},{fraction}"
 
-    def _risk_summary(items: list[dict[str, Any]]) -> dict[str, int]:
+    def _risk_summary(items: list[dict[str, Any]]) -> dict[str, Any]:
         seen: set[tuple[str, str]] = set()
-        mortgages = pignoramenti = transfers_2026 = 0
+        mortgages = pignoramenti = 0
+        latest_transfer_date: date | None = None
         for item in items:
             identity = (
                 str(item.get("registro_particolare") or item.get("numero") or "").strip(),
@@ -3487,17 +4122,37 @@ async def get_subject_mortgage_formalities(
             cause = " ".join(
                 str(item.get(key) or "") for key in ("causale", "descrizione", "atto")
             ).casefold()
-            if "iscrizione" in kind and not item.get("cancellata"):
+            annotations = item.get("documenti_correlati_display") or item.get("documenti_correlati") or []
+            if isinstance(annotations, dict):
+                annotations = [annotations]
+            has_cancellation = bool(item.get("cancellata") or item.get("has_cancellation_annotation")) or any(
+                bool(annotation.get("is_cancellation"))
+                or is_cancellation_annotation(
+                    " ".join(str(value) for value in annotation.values() if value is not None)
+                )
+                for annotation in annotations
+                if isinstance(annotation, dict)
+            )
+            if "iscrizione" in kind and not has_cancellation:
                 mortgages += 1
-            if "pignoramento" in cause and not item.get("cancellata"):
+            if "pignoramento" in cause and not has_cancellation:
                 pignoramenti += 1
             date_value = str(item.get("data_formalita") or item.get("data_formalita_display") or "")
-            if "decreto di trasferimento" in cause and re.search(r"(?:^2026|/2026$)", date_value):
-                transfers_2026 += 1
+            if "decreto di trasferimento" in cause:
+                transfer_date = None
+                try:
+                    transfer_date = date.fromisoformat(date_value[:10])
+                except ValueError:
+                    try:
+                        transfer_date = datetime.strptime(date_value[:10], "%d/%m/%Y").date()
+                    except ValueError:
+                        pass
+                if transfer_date is not None and (latest_transfer_date is None or transfer_date > latest_transfer_date):
+                    latest_transfer_date = transfer_date
         return {
             "live_mortgages": mortgages,
             "live_pignoramenti": pignoramenti,
-            "decreti_trasferimento_2026": transfers_2026,
+            "latest_transfer_date": latest_transfer_date.isoformat() if latest_transfer_date else "",
         }
 
     for row in rows:
@@ -3660,34 +4315,14 @@ async def get_subject_mortgage_formalities(
             parsed_formalities.append(normalized)
         if not parsed_formalities:
             continue
-        costs = _decoded(row["costs"], {})
+        has_attributed_charge_rows = row.get("cost_evidence") == "attributed_charge_rows"
+        costs = _decoded(row["costs"], {}) if has_attributed_charge_rows else {}
         if not isinstance(costs, dict):
             costs = {}
-        request_cost = _decoded(row["request_cost"], row["request_cost"])
         inspection_cost = _amount(
             costs.get("inspection_cost") or costs.get("inspection") or costs.get("ispezione")
-            or inspection.get("cost") or inspection.get("cost_value") or inspection.get("fee")
-            or request_cost
         )
-        notes_cost = _amount(
-            costs.get("notes_cost") or costs.get("notes") or costs.get("note") or costs.get("annotazioni")
-            or note_request.get("cost") or note_request.get("total_cost") or note_request.get("amount")
-        )
-        if notes_cost is None and note_documents:
-            document_costs = [_amount(document) for document in note_documents if isinstance(document, dict)]
-            if document_costs and all(value is not None for value in document_costs):
-                notes_cost = sum(document_costs, Decimal("0"))
-        if notes_cost is None:
-            unit_cost = _amount(
-                note_request.get("unit_cost") or note_request.get("cost_per_note")
-                or note_request.get("costo_unitario")
-            )
-            selected_count = note_request.get("selected_count") or len(note_documents)
-            try:
-                if unit_cost is not None and int(selected_count) > 0:
-                    notes_cost = unit_cost * int(selected_count)
-            except (TypeError, ValueError):
-                pass
+        notes_cost = _amount(costs.get("notes_cost") or costs.get("notes") or costs.get("note") or costs.get("annotazioni"))
         titles_cost = _amount(costs.get("titles_cost") or costs.get("titles") or costs.get("titoli"))
         cost_parts = []
         if inspection_cost is not None:
@@ -3696,10 +4331,6 @@ async def get_subject_mortgage_formalities(
             cost_parts.append(f"{_amount_label(notes_cost)} € note")
         if titles_cost is not None:
             cost_parts.append(f"{_amount_label(titles_cost)} € titoli")
-        unattributed = _amount(costs.get("unattributed_cost"))
-        if unattributed is not None:
-            cost_parts.append(f"{_amount_label(unattributed)} € note non attribuite (estratto conto)")
-
         pending_request_ids: set[str] = set()
         if note_request.get("accepted") and not note_request.get("downloaded"):
             pending_containers = [
@@ -3748,12 +4379,11 @@ async def get_subject_mortgage_formalities(
             "formalities": parsed_formalities,
             "note_request": note_request,
             "pending_request_ids": sorted(pending_request_ids),
-            "cost_summary": "Costo: " + " + ".join(cost_parts) if cost_parts else "",
+            "cost_summary": "Addebiti attribuiti: " + " + ".join(cost_parts) if cost_parts else "",
             "page_visits": page_visits,
         }
+        result["risk_summary"] = _risk_summary(parsed_formalities)
         results.append(result)
-    if results:
-        results[0]["risk_summary"] = _risk_summary(results[0]["formalities"])
     return results
 
 

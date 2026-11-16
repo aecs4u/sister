@@ -1023,6 +1023,39 @@ class VisuraService:
             return await self._add_single(request_type, request)
         return await self._add_single(request_type, request, force=True)
 
+    async def add_mortgage_flow_request(self, request: IspezioneIpotecariaRequest, *, started_by: str) -> dict:
+        """Persist a paid-flow row before queueing its preview-only portal request."""
+        from sqlmodel import select
+
+        from .database import _get_session_factory
+        from .db_models import Request as DatabaseRequest
+        from .mortgage_flow import create_flow_record
+
+        if request.search_type != "persona_fisica" or not request.fiscal_code:
+            raise ValueError("The guarded mortgage-search flow requires a persona-fisica codice fiscale")
+        request_type = f"ipotecaria_{request.search_type}"
+        async with self._queue_lock:
+            self._ensure_processing()
+            self._ensure_capacity(required_slots=1)
+            await self._persist_single_request(request_type, request)
+            async with _get_session_factory()() as session:
+                request_pk = (
+                    await session.execute(
+                        select(DatabaseRequest.id).where(DatabaseRequest.request_ref == request.request_id)
+                    )
+                ).scalar_one()
+            flow = await create_flow_record(
+                request_id=request_pk,
+                subject_fiscal_code=request.fiscal_code.upper(),
+                office=request.province,
+                scope="office",
+                started_by=started_by,
+                state_payload={"request_ref": request.request_id},
+            )
+            self._enqueue_request_nowait(request)
+            self.request_status[request.request_id] = "queued"
+        return {**flow, "request_ref": request.request_id, "queue_position": self.request_queue.qsize()}
+
     async def add_elenco_immobili_request(
         self, request: ElencoImmobiliRequest, force: bool = False
     ) -> str | SubmitResult:

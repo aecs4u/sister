@@ -155,6 +155,22 @@ def test_operational_routes_require_admin():
     assert found == admin_only
 
 
+def test_paid_mortgage_flow_routes_require_admin():
+    admin_routes = {
+        "/admin/mortgage-searches/start",
+        "/admin/mortgage-searches/{flow_id}",
+        "/admin/mortgage-searches/{flow_id}/quote",
+        "/admin/mortgage-searches/{flow_id}/confirm",
+        "/admin/mortgage-searches/{flow_id}/select-homonym",
+        "/admin/mortgage-searches/{flow_id}/actions/{action_id}/reconcile",
+    }
+    routes = {route.path: route for route in web.router.routes if getattr(route, "path", None) in admin_routes}
+
+    assert set(routes) == admin_routes
+    for path, route in routes.items():
+        assert web._require_admin in [dependency.call for dependency in route.dependant.dependencies], path
+
+
 def test_paid_query_routes_require_login_but_not_admin():
     paid_query_routes = {
         "/forms",
@@ -262,7 +278,7 @@ async def test_query_price_lookup_caches_upstream_failure_briefly(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_non_admin_can_quote_and_run_explicitly_paid_workflow_steps(monkeypatch):
+async def test_non_admin_workflow_quote_and_run_exclude_mortgage_paid_steps(monkeypatch):
     import json
     from types import SimpleNamespace
 
@@ -298,7 +314,9 @@ async def test_non_admin_can_quote_and_run_explicitly_paid_workflow_steps(monkey
     }
     plan = workflows.prepare_workflow(payload)
     paid_steps = [step for step in plan.steps if workflows.STEP_METADATA.get(step, {}).get("paid")]
-    assert paid_steps
+    assert paid_steps == []
+    assert "ispezione_ipotecaria" not in plan.steps
+    assert "portfolio_ipotecaria" not in plan.steps
     user = SimpleNamespace(id="buyer", role="user")
 
     class _JSONRequest:

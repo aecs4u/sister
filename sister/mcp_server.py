@@ -244,6 +244,14 @@ def create_server():
             "stale": stale,
             "status": result.get("status", "unknown"),
             "request_ids": ids,
+            **(
+                {
+                    "flow_id": result["flow_id"],
+                    "admin_review": f"/admin/mortgage-searches/{result['flow_id']}",
+                }
+                if result.get("flow_id") is not None
+                else {}
+            ),
             "message": (
                 "New request(s) accepted; some results were reused."
                 if new_request_sent and used_previous_result
@@ -253,6 +261,53 @@ def create_server():
             ),
             "force": force,
         }
+
+    @server.tool(title="Start a mortgage search preview", annotations=submit_action)
+    async def start_mortgage_search(
+        provincia: str,
+        codice_fiscale: str,
+        confirm_start: bool,
+    ) -> dict[str, Any]:
+        """Start only the persona-fisica preview; this tool cannot accept or confirm a paid step.
+
+        confirm_start must be true after the user asks to begin this exact preview. The eventual paid
+        confirmation is available only in SISTER's signed-in admin web session.
+        """
+        if not confirm_start:
+            return {"started": False, "error": "Preview start requires explicit user confirmation."}
+        from .fiscal_code import valid_codice_fiscale
+
+        if not valid_codice_fiscale(codice_fiscale):
+            return {"started": False, "error": "Invalid codice fiscale."}
+        async with _client() as client:
+            result = await client.mortgage_search_start(provincia=provincia, codice_fiscale=codice_fiscale)
+        return {"started": True, **result, "paid_confirmation_available_here": False}
+
+    @server.tool(title="Get mortgage search flow status", annotations=read_remote)
+    async def mortgage_search_status(flow_id: int) -> dict[str, Any]:
+        """Read the preview, typed formalità, pending requests, and paid-action recovery state."""
+        async with _client() as client:
+            return await client.mortgage_search_status(flow_id)
+
+    @server.tool(title="Quote a mortgage search step", annotations=read_remote)
+    async def mortgage_search_quote(
+        flow_id: int,
+        step: str = "accept",
+        ordinals: list[int] | None = None,
+        ordinal: int | None = None,
+        portal_request_id: str | None = None,
+        document_format: str = "PDF",
+    ) -> dict[str, Any]:
+        """Quote a step; this tool never confirms paid actions, which require the admin web session."""
+        async with _client() as client:
+            return await client.mortgage_search_quote(
+                flow_id,
+                step=step,
+                ordinals=ordinals,
+                ordinal=ordinal,
+                portal_request_id=portal_request_id,
+                format=document_format,
+            )
 
     @server.tool(title="Get a SISTER request result", annotations=read_remote)
     async def get_request(request_id: str) -> dict[str, Any]:

@@ -1,0 +1,239 @@
+{% extends "_base.html" %}
+
+{% block title %}Flusso ispezione ipotecaria{% endblock %}
+
+{% block content %}
+<main class="container py-4" id="mortgage-search-flow" data-flow-id="{{ flow.id }}">
+  <div class="d-flex flex-wrap justify-content-between align-items-start gap-3 mb-4">
+    <div>
+      <h1 class="h3 mb-1">Ispezione ipotecaria persona fisica</h1>
+      <div class="text-muted">Flusso {{ flow.id }} · {{ flow.office }} · {{ flow.subject_fiscal_code }}</div>
+    </div>
+    <span class="badge text-bg-secondary">{{ flow.state }} · {{ flow.current_step }}</span>
+  </div>
+
+  {% if preview and preview.data and preview.data.cost %}
+  <section class="card border-0 shadow-sm mb-4" aria-labelledby="mortgage-preview-heading">
+    <div class="card-body">
+      <h2 class="h5" id="mortgage-preview-heading">Anteprima del portale</h2>
+      <p class="mb-1">Costo mostrato: <strong>{{ preview.data.cost.text or '—' }}</strong>
+        {% if preview.data.cost.value is not none %}<span class="text-muted">(€ {{ '%.2f'|format(preview.data.cost.value|float) }})</span>{% endif %}
+      </p>
+      {% if flow.state == 'preview' and quote and confirmation_token %}
+      <div class="alert alert-warning mt-3" role="alert">
+        La conferma esegue il click <em>Accetta</em> nel portale. Il costo viene ricontrollato sulla pagina prima del click.
+      </div>
+      <form method="post" action="/admin/mortgage-searches/{{ flow.id }}/confirm">
+        {{ csrf_input() }}
+        <input type="hidden" name="token" value="{{ confirmation_token }}">
+        <button class="btn btn-danger" type="submit">Accetta e registra € {{ '%.2f'|format(quote.amount|float) }}</button>
+      </form>
+      {% elif flow.state == 'preview' %}
+      <p class="alert alert-warning mt-3 mb-0" role="status">La quota non è disponibile: verifica che la sessione sia sulla pagina di anteprima e che sia configurata la chiave di firma.</p>
+      {% endif %}
+    </div>
+  </section>
+  {% elif preview %}
+  <div class="alert alert-info" role="status">{{ preview.error or (preview.data.error if preview.data else '') or 'Anteprima in elaborazione; aggiorna questa pagina tra poco.' }}</div>
+  {% else %}
+  <div class="alert alert-info" role="status">Anteprima in elaborazione; aggiorna questa pagina tra poco.</div>
+  {% endif %}
+
+  {% set portal_result = (flow.state_payload or {}).get('last_portal_result', {}) %}
+  {% if flow.current_step == 'omonimi' and portal_result.homonyms and portal_result.homonym_values %}
+  <section class="card border-warning shadow-sm mb-4" aria-labelledby="mortgage-homonym-heading">
+    <div class="card-body">
+      <h2 class="h5" id="mortgage-homonym-heading">Scegli il soggetto corretto</h2>
+      <p class="small text-muted">L'ispezione è già stata accettata. Seleziona il nominativo che corrisponde alla persona richiesta; questa scelta non ripete il passaggio a pagamento.</p>
+      {% if portal_result.result_readable is sameas false %}
+      <div class="alert alert-warning py-2" role="status">Il risultato non è ancora stato letto dopo la scelta precedente. Verifica il portale prima di riprovare.</div>
+      {% endif %}
+      <form method="post" action="/admin/mortgage-searches/{{ flow.id }}/select-homonym">
+        {{ csrf_input() }}
+        <fieldset>
+          <legend class="visually-hidden">Nominativi omonimi elencati dal portale</legend>
+          <div class="list-group mb-3">
+            {% for candidate in portal_result.homonyms %}
+            <label class="list-group-item d-flex gap-3 align-items-start">
+              <input class="form-check-input mt-1" type="radio" name="homonym_value" required value="{{ portal_result.homonym_values[loop.index0] }}">
+              <span>
+                <strong>{{ candidate.cognome or candidate.denominazione or 'Nominativo non disponibile' }}{% if candidate.nome %} {{ candidate.nome }}{% endif %}</strong>
+                {% if candidate.data_nascita or candidate.luogo_nascita %}<span class="d-block small text-muted">{{ candidate.data_nascita or '' }}{% if candidate.luogo_nascita %} · {{ candidate.luogo_nascita }}{% endif %}</span>{% endif %}
+                {% if candidate.sede %}<span class="d-block small text-muted">{{ candidate.sede }}</span>{% endif %}
+                <span class="d-block small">Codice fiscale: {{ candidate.codice_fiscale or 'non leggibile' }}</span>
+              </span>
+            </label>
+            {% endfor %}
+          </div>
+        </fieldset>
+        <button class="btn btn-outline-primary" type="submit">Continua con il soggetto selezionato</button>
+      </form>
+    </div>
+  </section>
+  {% endif %}
+
+  {% if flow.search_id and flow.current_step == 'formalita' and preview and preview.data and preview.data.formalities %}
+  <section class="card border-0 shadow-sm mb-4" aria-labelledby="mortgage-formalities-heading">
+    <div class="card-body">
+      <h2 class="h5" id="mortgage-formalities-heading">Formalità dell'ispezione</h2>
+      <p class="small text-muted">Le quote note e titolo sono stime basate sulle tariffe misurate. Ogni richiesta richiede una conferma separata.</p>
+      <form method="post" action="/admin/mortgage-searches/{{ flow.id }}/quote" class="mb-4">
+        {{ csrf_input() }}
+        <input type="hidden" name="step" value="notes">
+        <fieldset>
+          <legend class="h6">Note PDF</legend>
+          <div class="table-responsive">
+            <table class="table table-sm align-middle">
+              <thead><tr><th scope="col">Richiedi</th><th scope="col">Formalità</th><th scope="col">Registro</th><th scope="col">Disponibilità</th></tr></thead>
+              <tbody>
+                {% for item in preview.data.formalities %}
+                <tr>
+                  <td>
+                    {% if item.nota_disponibile_elettronica %}
+                    <input class="form-check-input" type="checkbox" name="ordinals" value="{{ item.numero }}" id="mortgage-note-{{ item.numero }}">
+                    <label class="visually-hidden" for="mortgage-note-{{ item.numero }}">Seleziona nota {{ item.numero }}</label>
+                    {% else %}<span class="text-muted">—</span>{% endif %}
+                  </td>
+                  <td>{{ item.numero }} · {{ item.tipo }} · {{ item.verso or '' }} · {{ item.data_formalita or '' }}</td>
+                  <td>RP {{ item.registro_particolare or '—' }} / RG {{ item.registro_generale or '—' }}</td>
+                  <td>{% if item.nota_disponibile_elettronica %}PDF disponibile{% else %}Nota elettronica non disponibile{% endif %}</td>
+                </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+          <button class="btn btn-outline-primary" type="submit">Mostra quota note selezionate</button>
+        </fieldset>
+      </form>
+
+      <div class="border-top pt-3">
+        <h3 class="h6">Titoli telematici</h3>
+        <div class="table-responsive">
+          <table class="table table-sm align-middle">
+            <thead><tr><th scope="col">Formalità</th><th scope="col">Registro</th><th scope="col">Disponibilità</th><th scope="col">Quota</th></tr></thead>
+            <tbody>
+              {% for item in preview.data.formalities %}
+              <tr>
+                <td>{{ item.numero }} · {{ item.tipo }} · {{ item.data_formalita or '' }}</td>
+                <td>RP {{ item.registro_particolare or '—' }} / RG {{ item.registro_generale or '—' }}</td>
+                <td>{% if item.presenza_titolo_telematico %}Titolo telematico presente{% else %}Nessun titolo telematico{% endif %}</td>
+                <td>
+                  {% if item.presenza_titolo_telematico %}
+                  <form method="post" action="/admin/mortgage-searches/{{ flow.id }}/quote">
+                    {{ csrf_input() }}
+                    <input type="hidden" name="step" value="title">
+                    <input type="hidden" name="ordinal" value="{{ item.numero }}">
+                    <button class="btn btn-sm btn-outline-primary" type="submit">Mostra quota</button>
+                  </form>
+                  {% else %}—{% endif %}
+                </td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </section>
+  {% endif %}
+
+  {% if admin_quote %}
+  {% set paid_quote = admin_quote.quote %}
+  <section class="card border-warning shadow-sm mb-4" aria-labelledby="mortgage-paid-quote-heading">
+    <div class="card-body">
+      <h2 class="h5" id="mortgage-paid-quote-heading">Conferma {{ paid_quote.step }}</h2>
+      {% if paid_quote.new_cost is not none %}
+      <p class="mb-1">{% if paid_quote.estimate %}Stima{% else %}Prezzo mostrato{% endif %}: <strong>€ {{ '%.2f'|format(paid_quote.new_cost|float) }}</strong> · {{ paid_quote.source }}{% if paid_quote.measured_on %} · rilevata il {{ paid_quote.measured_on }}{% endif %}</p>
+      {% else %}<p class="alert alert-warning py-2" role="status">La tariffa non consente una stima aggiornata per questa selezione.</p>{% endif %}
+      {% if paid_quote.lines %}
+      <ul>{% for line in paid_quote.lines %}<li>{{ line.quantity }} × {{ line.kind }} (ordinali {{ line.ordinals|join(', ') }}) · € {{ '%.2f'|format(line.amount|float) }}</li>{% endfor %}</ul>
+      {% endif %}
+      {% if paid_quote.already_owned %}
+      <h3 class="h6">Già richiesti o disponibili</h3>
+      <ul>{% for row in paid_quote.already_owned %}<li>Formalità {{ row.ordinal }} · {{ row.status or 'già presente' }}</li>{% endfor %}</ul>
+      {% endif %}
+      {% if paid_quote.blocked %}
+      <h3 class="h6">Non richiedibili</h3>
+      <ul>{% for row in paid_quote.blocked %}<li>{% if row.ordinal %}Formalità {{ row.ordinal }} · {% endif %}{{ row.reason }}</li>{% endfor %}</ul>
+      {% endif %}
+      {% if admin_quote.token %}
+      <p class="alert alert-warning" role="alert">La conferma esegue questo singolo passaggio del portale. Per una richiesta note/titolo il risultato deve mostrare una riga Richieste collegabile senza ambiguità ai registri selezionati.</p>
+      <form method="post" action="/admin/mortgage-searches/{{ flow.id }}/confirm">
+        {{ csrf_input() }}
+        <input type="hidden" name="token" value="{{ admin_quote.token }}">
+        <button class="btn btn-danger" type="submit">Conferma € {{ '%.2f'|format(paid_quote.amount|float) }}</button>
+      </form>
+      {% else %}<p class="mb-0 text-muted">Non è disponibile un token di conferma per questa selezione.</p>{% endif %}
+    </div>
+  </section>
+  {% endif %}
+
+  {% if flow.actions %}
+  <section class="card border-0 shadow-sm mb-4" aria-labelledby="mortgage-actions-heading">
+    <div class="card-body">
+      <h2 class="h5" id="mortgage-actions-heading">Azioni registrate</h2>
+      <div class="table-responsive">
+        <table class="table table-sm align-middle">
+          <thead><tr><th>Passaggio</th><th>Importo</th><th>Confermato da</th><th>Stato</th></tr></thead>
+          <tbody>
+            {% for action in flow.actions %}
+            <tr>
+              <td>{{ action.step }}</td>
+              <td>{% if action.quote.amount is defined %}€ {{ action.quote.amount }}{% else %}—{% endif %}</td>
+              <td>{{ action.confirmed_by }}</td>
+              <td>{{ action.state }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% for action in flow.actions if action.state == 'uncertain' %}
+      <form method="post" action="/admin/mortgage-searches/{{ flow.id }}/actions/{{ action.id }}/reconcile" class="border rounded p-3 mt-3">
+        {{ csrf_input() }}
+        <h3 class="h6">Riconciliazione passaggio {{ action.step }}</h3>
+        <div class="row g-2">
+          <div class="col-md-4">
+            <label class="form-label" for="resolution-{{ action.id }}">Esito</label>
+            <select class="form-select" id="resolution-{{ action.id }}" name="resolution" required>
+              <option value="not_executed">Non eseguito</option>
+              {% if flow.search_id %}<option value="confirmed">Confermato</option>{% endif %}
+            </select>
+          </div>
+          <div class="col-md-4"><label class="form-label" for="portal-request-{{ action.id }}">ID Richieste (se presente)</label><input class="form-control" id="portal-request-{{ action.id }}" name="portal_request_id" maxlength="64"></div>
+          <div class="col-md-4"><label class="form-label" for="statement-reference-{{ action.id }}">Riferimento estratto conto</label><input class="form-control" id="statement-reference-{{ action.id }}" name="statement_reference" maxlength="100"></div>
+          {% if action.step == 'richieste_save' %}<div class="col-md-4"><label class="form-label" for="document-id-{{ action.id }}">ID documento archiviato (per esito confermato)</label><input class="form-control" id="document-id-{{ action.id }}" name="document_id" type="number" min="1" value="{{ action.result.document_id if action.result and action.result.document_id else '' }}"></div>{% endif %}
+          <div class="col-12"><label class="form-label" for="evidence-{{ action.id }}">Evidenza controllata</label><textarea class="form-control" id="evidence-{{ action.id }}" name="explanation" required minlength="12" maxlength="1000"></textarea></div>
+          <div class="col-auto form-check ms-2"><input class="form-check-input" type="checkbox" name="richieste_checked" value="true" id="richieste-checked-{{ action.id }}" required><label class="form-check-label" for="richieste-checked-{{ action.id }}">Ho verificato Richieste</label></div>
+          <div class="col-auto form-check ms-2"><input class="form-check-input" type="checkbox" name="statement_checked" value="true" id="statement-checked-{{ action.id }}" required><label class="form-check-label" for="statement-checked-{{ action.id }}">Ho verificato l'estratto conto</label></div>
+          <div class="col-12"><button class="btn btn-sm btn-outline-danger" type="submit">Registra riconciliazione</button></div>
+        </div>
+      </form>
+      {% endfor %}
+    </div>
+  </section>
+  {% endif %}
+
+  {% if flow.pending_requests %}
+  <section class="card border-0 shadow-sm" aria-labelledby="mortgage-pending-heading">
+    <div class="card-body">
+      <h2 class="h5" id="mortgage-pending-heading">Richieste pendenti</h2>
+      <ul class="list-unstyled mb-0">
+        {% for row in flow.pending_requests %}
+        <li class="d-flex flex-wrap align-items-center gap-2 py-2 border-bottom">
+          <span>{{ row.kind }} · {{ row.status }} · {{ row.portal_request_id or 'ID non disponibile' }}</span>
+          {% if row.status == 'available' and row.portal_request_id %}
+          <form method="post" action="/admin/mortgage-searches/{{ flow.id }}/quote" class="ms-auto">
+            {{ csrf_input() }}
+            <input type="hidden" name="step" value="richieste_save">
+            <input type="hidden" name="portal_request_id" value="{{ row.portal_request_id }}">
+            <button class="btn btn-sm btn-outline-danger" type="submit">Mostra quota Salva</button>
+          </form>
+          {% endif %}
+        </li>
+        {% endfor %}
+      </ul>
+    </div>
+  </section>
+  {% endif %}
+</main>
+{% endblock %}

@@ -25,6 +25,11 @@ class FakeService:
         self.options: list[tuple[str, bool, dict]] = []
         self.request_queue: asyncio.Queue = asyncio.Queue()
 
+    async def add_mortgage_flow_request(self, request, *, started_by):
+        self.submissions.append(("add_mortgage_flow_request", request))
+        self.options.append(("add_mortgage_flow_request", False, {"started_by": started_by}))
+        return {"id": 1, "state": "preview", "current_step": "preview", "queue_position": 1}
+
     def __getattr__(self, name):
         if name.startswith("add_"):
 
@@ -78,12 +83,16 @@ LOCATION = dict(provincia="Trieste", comune="TRIESTE", foglio="9", particella="1
             "add_ispezione_ipotecaria_request",
         ),
         (
+            lambda c: c.mortgage_search_start(provincia="Trieste", codice_fiscale="RSSMRA85M01H501Z"),
+            "add_mortgage_flow_request",
+        ),
+        (
             lambda c: c.generic_search(search_type="indirizzo", provincia="Trieste", comune="TRIESTE",
                                        indirizzo="VIA ROMA"),
             "add_generic_request",
         ),
     ],
-    ids=["search", "intestati", "soggetto", "persona_giuridica", "elenco", "ipotecaria", "generic"],
+    ids=["search", "intestati", "soggetto", "persona_giuridica", "elenco", "ipotecaria", "ipotecaria-flow", "generic"],
 )
 async def test_client_submissions_are_accepted_by_the_server(fake_service, client, call, expected_add):
     response = await call(client)
@@ -149,6 +158,30 @@ async def test_invalid_payload_is_rejected_with_422(fake_service, client):
         await client.intestati(provincia="Trieste", comune="TRIESTE", foglio="9", particella="", tipo_catasto="T")
 
     assert exc.value.status_code == 422
+
+
+async def test_mortgage_search_quote_client_forwards_richieste_save_id(monkeypatch):
+    client = VisuraClient(base_url="http://sister.test", timeout=5)
+    captured = {}
+
+    async def fake_request(method, path, **kwargs):
+        captured.update(method=method, path=path, **kwargs)
+        return {"ok": True}
+
+    monkeypatch.setattr(client, "_request", fake_request)
+    result = await client.mortgage_search_quote(
+        12,
+        step="richieste_save",
+        portal_request_id="REQ-12",
+        format="PDF",
+    )
+
+    assert result == {"ok": True}
+    assert captured == {
+        "method": "POST",
+        "path": "/mortgage-searches/12/quote",
+        "json": {"step": "richieste_save", "format": "PDF", "portal_request_id": "REQ-12"},
+    }
 
 
 async def test_history_and_health_routes_exist(fake_service, client, main_module, monkeypatch):

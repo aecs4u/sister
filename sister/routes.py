@@ -256,12 +256,14 @@ async def health_check(service: VisuraService):
     from .web import optional_data_degradation_summary
 
     optional_data_degradations = optional_data_degradation_summary()
+    auth_status = service.auth_status
+    auth_ready = bool(service.auth_ready and auth_status.get("state") == "ready")
     return JSONResponse(
         {
-            "status": "healthy" if service.auth_ready and not optional_data_degradations["active_components"] else "degraded",
-            "auth": service.auth_status,
-            "auth_ready": service.auth_ready,
-            "authenticated": service.browser_manager.authenticated,
+            "status": "healthy" if auth_ready and not optional_data_degradations["active_components"] else "degraded",
+            "auth": auth_status,
+            "auth_ready": auth_ready,
+            "authenticated": auth_ready and service.browser_manager.authenticated,
             "queue_size": service.request_queue.qsize(),
             "pending_requests": len(service.pending_request_ids),
             "cached_responses": len(service.response_store),
@@ -501,11 +503,13 @@ async def download_documents(service: VisuraService, since: str = "", skip_known
     """
     try:
         documents = await service.download_richieste_documents(since=since, skip_known=skip_known)
+        blocked_paid = getattr(documents, "blocked_paid", [])
         return JSONResponse(
             {
-                "status": "completed",
+                "status": "partial" if blocked_paid else "completed",
                 "total_documents": len(documents),
                 "documents": [{k: v for k, v in d.items() if k != "parsed_data"} for d in documents],
+                "blocked_paid": blocked_paid,
             }
         )
     except Exception as e:
@@ -536,7 +540,9 @@ async def richiedi_ispezione_ipotecaria(
             parcel=request.parcel,
             note_number=request.note_number,
             note_year=request.note_year,
-            auto_confirm=request.auto_confirm,
+            # The legacy endpoint is a preview-only path. Paid confirmation now requires the
+            # dedicated flow and an authenticated admin session.
+            auto_confirm=False,
         )
 
         result = await service.add_ispezione_ipotecaria_request(
@@ -560,9 +566,13 @@ async def richiedi_ispezione_ipotecaria(
                 "tipo_ricerca": request.search_type,
                 "provincia": request.province,
                 "tipo_catasto": tipo_catasto,
-                "auto_confirm": request.auto_confirm,
+                "auto_confirm": False,
+                "paid_step": "accept",
                 "status": "queued",
-                "message": f"Ispezione ipotecaria ({request.search_type}) aggiunta alla coda",
+                "message": (
+                    f"Anteprima ispezione ipotecaria ({request.search_type}) aggiunta alla coda; "
+                    "la conferma a pagamento richiede la procedura admin dedicata"
+                ),
                 "queue_position": service.request_queue.qsize(),
             }
         )

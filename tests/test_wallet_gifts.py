@@ -1,6 +1,7 @@
 """Tracked wallet gift coupons and their redemption lifecycle."""
 
 import importlib.util
+from datetime import date
 from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
@@ -69,6 +70,7 @@ async def test_coupon_redemption_credits_wallet_and_admin_undo_posts_reversal(mo
 
 def test_admin_wallet_template_shows_balance_ledger_and_gift_management(main_module, monkeypatch):
     from fastapi.testclient import TestClient
+    from sister import ade_ledger
 
     admin = SimpleNamespace(id="wallet-admin", email="admin@example.test", role="admin", is_superuser=False)
     monkeypatch.setitem(main_module.app.dependency_overrides, web._require_admin, lambda: admin)
@@ -80,6 +82,37 @@ def test_admin_wallet_template_shows_balance_ledger_and_gift_management(main_mod
     monkeypatch.setattr(database, "count_wallet_gift_coupons", AsyncMock(return_value=0))
     monkeypatch.setattr(database, "count_wallet_gift_coupon_redemptions", AsyncMock(return_value=0))
     monkeypatch.setattr(purchases_billing, "credit_grants_enabled", lambda: True)
+    monkeypatch.setattr(
+        ade_ledger,
+        "get_ade_ledger_admin_data",
+        AsyncMock(
+            return_value={
+                "entries": [
+                    {
+                        "statement_key": "201~06/11/2026~RM~0~~",
+                        "posted_on": date(2026, 11, 6),
+                        "entry_type": "usage",
+                        "amount": Decimal("8.00"),
+                        "balance_after": Decimal("2.40"),
+                        "pagopa_payment_id": None,
+                        "linked_by": None,
+                        "description": "Per ogni nota visionata",
+                        "office": "RAVENNA (RA)",
+                        "unattributed_amount": Decimal("8.00"),
+                        "allocations": [],
+                    }
+                ],
+                "receipts": [],
+                "imports": [],
+                "total_credit": Decimal("147.20"),
+                "total_debit": Decimal("144.80"),
+                "balance": Decimal("2.40"),
+                "unattributed_total": Decimal("144.80"),
+                "statement_balance": Decimal("2.40"),
+                "balance_difference": Decimal("0.00"),
+            }
+        ),
+    )
     monkeypatch.setattr(
         purchases_billing,
         "wallet_admin_snapshot",
@@ -93,6 +126,10 @@ def test_admin_wallet_template_shows_balance_ledger_and_gift_management(main_mod
     assert "9,00 credits" in response.text
     assert "Crea un buono regalo" in response.text
     assert "/admin/wallet-gifts/create" in response.text
+    assert "Conto AdE (euro)" in response.text
+    assert "2,40 € · quadrato" in response.text
+    assert "Addebiti da attribuire" in response.text
+    assert "8,00 € non attribuiti" in response.text
 
     # The one-time code is shown once and never copied into links or hidden fields; other filters are kept.
     follow = TestClient(main_module.app).get(

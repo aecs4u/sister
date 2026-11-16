@@ -213,7 +213,7 @@ async def test_ispezione_ipotecaria_maps_search_type(manager, monkeypatch):
     assert kwargs["auto_confirm"] is False
 
 
-async def test_ispezione_ipotecaria_forwards_subject_and_note_identifiers(manager, monkeypatch):
+async def test_ispezione_ipotecaria_ignores_legacy_auto_confirm(manager, monkeypatch):
     fake = _fake(monkeypatch, "run_ispezione_ipotecaria")
     request = IspezioneIpotecariaRequest(
         request_id="ip_2",
@@ -233,7 +233,407 @@ async def test_ispezione_ipotecaria_forwards_subject_and_note_identifiers(manage
     assert kwargs["codice_fiscale"] == "RSSMRA85M01H501Z"
     assert kwargs["identificativo"] == "01234567890"
     assert (kwargs["numero_nota"], kwargs["anno_nota"]) == ("1234", "2020")
-    assert kwargs["auto_confirm"] is True
+    assert kwargs["auto_confirm"] is False
+
+
+async def test_paid_accept_rechecks_subject_and_cost_before_click(manager, monkeypatch):
+    class FakeLocator:
+        def __init__(self, page):
+            self.page = page
+            self.first = self
+
+        async def count(self):
+            return 1
+
+        async def click(self):
+            self.page.clicked = True
+            self.page.url = "https://sister.test/ElencoFormalita.do"
+
+    class FakePage:
+        def __init__(self):
+            self.url = "https://sister.test/Anteprima.do"
+            self.clicked = False
+
+        async def content(self):
+            return "<input type='hidden' value='RSSMRA70A01H501Z'>"
+
+        async def inner_text(self, selector):
+            if self.clicked:
+                return "Ispezione ipotecaria n. T1 12345 del 15/11/2026"
+            return "Costo: € 6,40 RSSMRA70A01H501Z"
+
+        def locator(self, selector):
+            return FakeLocator(self)
+
+        async def wait_for_load_state(self, *args, **kwargs):
+            return None
+
+    class FakePageLogger:
+        def __init__(self, flow_name):
+            self.page_visits = []
+
+        async def log(self, page, step):
+            self.page_visits.append({"step": step, "url": page.url})
+
+    page = FakePage()
+    monkeypatch.setattr(manager, "_get_authenticated_page", AsyncMock(return_value=page))
+    monkeypatch.setattr(utils, "PageLogger", FakePageLogger)
+    monkeypatch.setattr(utils, "_extract_cost_from_page", AsyncMock(return_value=("Costo: € 6,40", 6.4)))
+    clicked = []
+
+    async def clicked_callback():
+        clicked.append(True)
+
+    result = await manager.confirm_mortgage_accept(
+        expected_amount="6.40",
+        subject_fiscal_code="RSSMRA70A01H501Z",
+        office="RAVENNA (RA)",
+        scope="office",
+        clicked_callback=clicked_callback,
+    )
+
+    assert result["confirmed"] is True
+    assert result["next_step"] == "formalita"
+    assert result["portal_data"]["portal_capture"]["inspection"]["number"] == "T 12345"
+    assert clicked == [True]
+
+    changed_page = FakePage()
+    monkeypatch.setattr(manager, "_get_authenticated_page", AsyncMock(return_value=changed_page))
+    monkeypatch.setattr(utils, "_extract_cost_from_page", AsyncMock(return_value=("Costo: € 6,41", 6.41)))
+    with pytest.raises(ValueError, match="preview_amount_changed"):
+        await manager.confirm_mortgage_accept(
+            expected_amount="6.40",
+            subject_fiscal_code="RSSMRA70A01H501Z",
+            office="RAVENNA (RA)",
+            scope="office",
+            clicked_callback=clicked_callback,
+        )
+    assert changed_page.clicked is False
+
+
+async def test_paid_accept_homonym_selection_is_explicit_and_projects_result(manager, monkeypatch):
+    from sister import utils
+
+    values = [
+        "1#0#ROSSI#MARIO#RSSMRA70A01H501Z#RAVENNA#01/01/1970#RA",
+        "2#0#ROSSI#MARIO#RSSMRA70A01H501Z#RAVENNA#02/02/1970#RA",
+    ]
+    html = """<table>
+      <tr><th></th><th>Codice Fiscale</th><th>Cognome</th><th>Nome</th><th>Data di nascita</th><th>Luogo di nascita</th></tr>
+      <tr><td><input type="radio" name="omonimoSelezionato" value="1#0#ROSSI#MARIO#RSSMRA70A01H501Z#RAVENNA#01/01/1970#RA"></td><td>RSSMRA70A01H501Z</td><td>ROSSI</td><td>MARIO</td><td>01/01/1970</td><td>RAVENNA (RA)</td></tr>
+      <tr><td><input type="radio" name="omonimoSelezionato" value="2#0#ROSSI#MARIO#RSSMRA70A01H501Z#RAVENNA#02/02/1970#RA"></td><td>RSSMRA70A01H501Z</td><td>ROSSI</td><td>MARIO</td><td>02/02/1970</td><td>RAVENNA (RA)</td></tr>
+    </table>"""
+
+    class Radio:
+        def __init__(self, page, index):
+            self.page = page
+            self.index = index
+
+        async def check(self):
+            self.page.selected_index = self.index
+
+    class RadioList:
+        def __init__(self, page):
+            self.page = page
+
+        async def count(self):
+            return len(self.page.values)
+
+        async def evaluate_all(self, _script):
+            return self.page.values
+
+        def nth(self, index):
+            return Radio(self.page, index)
+
+    class Submit:
+        def __init__(self, page):
+            self.page = page
+            self.first = self
+
+        async def count(self):
+            return 1
+
+        async def click(self):
+            self.page.submitted = True
+            self.page.url = "https://sister.test/ElencoFormalita.do"
+
+    class Confirm:
+        def __init__(self, page):
+            self.page = page
+            self.first = self
+
+        async def count(self):
+            return 1
+
+        async def click(self):
+            self.page.clicked = True
+            self.page.url = "https://sister.test/ElencoOmonimi.do"
+
+    class Empty:
+        async def count(self):
+            return 0
+
+        async def evaluate_all(self, _script):
+            return []
+
+    class FakePage:
+        def __init__(self, current_values):
+            self.values = current_values
+            self.url = "https://sister.test/Anteprima.do"
+            self.clicked = False
+            self.selected_index = None
+            self.submitted = False
+
+        async def content(self):
+            if self.clicked:
+                return html
+            return "<input type='hidden' value='RSSMRA70A01H501Z'>"
+
+        async def inner_text(self, _selector):
+            if self.submitted:
+                return "Ispezione ipotecaria n. T1 12345 del 15/11/2026"
+            if self.clicked:
+                return "Elenco Omonimi"
+            return "Costo: € 6,40 RSSMRA70A01H501Z"
+
+        async def wait_for_load_state(self, *_args, **_kwargs):
+            return None
+
+        def locator(self, selector):
+            if "omonimoSelezionato" in selector:
+                return RadioList(self)
+            if "value='Conferma'" in selector:
+                return Confirm(self)
+            if "name='visura'" in selector:
+                return Submit(self)
+            return Empty()
+
+    class FakePageLogger:
+        def __init__(self, _flow_name):
+            self.page_visits = []
+
+        async def log(self, page, step):
+            self.page_visits.append({"step": step, "url": page.url})
+
+    page = FakePage(values)
+    monkeypatch.setattr(manager, "_get_authenticated_page", AsyncMock(return_value=page))
+    monkeypatch.setattr(utils, "PageLogger", FakePageLogger)
+    monkeypatch.setattr(utils, "_extract_cost_from_page", AsyncMock(return_value=("Costo: € 6,40", 6.4)))
+
+    async def clicked_callback():
+        page.paid_click_recorded = True
+
+    accepted = await manager.confirm_mortgage_accept(
+        expected_amount="6.40",
+        subject_fiscal_code="RSSMRA70A01H501Z",
+        office="RAVENNA (RA)",
+        scope="office",
+        clicked_callback=clicked_callback,
+    )
+
+    assert accepted["confirmed"] is True
+    assert accepted["next_step"] == "omonimi"
+    assert accepted["homonym_values"] == values
+    assert accepted["homonyms"][1]["data_nascita"] == "02/02/1970"
+    assert page.paid_click_recorded is True
+
+    result = await manager.select_mortgage_homonym(
+        expected_values=values,
+        selected_value=values[1],
+        subject_fiscal_code="RSSMRA70A01H501Z",
+        office="RAVENNA (RA)",
+        scope="office",
+    )
+
+    assert page.selected_index == 1
+    assert page.submitted is True
+    assert result["selected_homonym"]["data_nascita"] == "02/02/1970"
+    assert result["portal_data"]["portal_capture"]["inspection"]["number"] == "T 12345"
+    assert result["next_step"] == "formalita"
+    assert result["result_readable"] is True
+
+
+async def test_paid_note_request_revalidates_registers_and_maps_richieste_row(manager, monkeypatch):
+    class FakeCheckbox:
+        def __init__(self, page, index):
+            self.page = page
+            self.index = index
+
+        async def is_checked(self):
+            return self.page.checked[self.index]
+
+        async def check(self):
+            self.page.checked[self.index] = True
+
+        async def uncheck(self):
+            self.page.checked[self.index] = False
+
+    class FakeCheckboxes:
+        def __init__(self, page):
+            self.page = page
+
+        async def evaluate_all(self, _script):
+            return self.page.values
+
+        def nth(self, index):
+            return FakeCheckbox(self.page, index)
+
+    class FakeAction:
+        def __init__(self, page):
+            self.page = page
+            self.first = self
+
+        async def count(self):
+            return 1
+
+        async def click(self):
+            self.page.clicked = True
+            self.page.url = "https://sister.test/Richieste.do"
+
+    class Empty:
+        async def count(self):
+            return 0
+
+    richieste_html = """<table>
+      <tr><th>Richiesta del</th><th>Oggetto</th><th>Formato</th><th>Costo</th></tr>
+      <tr><td>16/11/2026 10:30</td><td>Nota · Registro Particolare 11 Registro Generale 22</td>
+      <td>PDF</td><td>4,00</td><td><a href="/Visure/DettaglioRichiesta.do?idRichiesta=REQ-11">Dettaglio</a></td></tr>
+    </table>"""
+
+    class FakePage:
+        def __init__(self):
+            self.values = ["elenco-11-0-22-1", "elenco-12-0-23-2"]
+            self.checked = [True, False]
+            self.url = "https://sister.test/ElencoFormalita.do"
+            self.clicked = False
+
+        def locator(self, selector):
+            if selector == "input[name='noteSelezionate']":
+                return FakeCheckboxes(self)
+            if "Visualizza note" in selector:
+                return FakeAction(self)
+            return Empty()
+
+        async def inner_text(self, _selector):
+            return """1 TRASCRIZIONE A FAVORE del 01/02/2017 - Registro Particolare 11 Registro Generale 22
+Nota disponibile in formato elettronico
+2 TRASCRIZIONE A FAVORE del 03/04/2018 - Registro Particolare 12 Registro Generale 23
+Nota disponibile in formato elettronico"""
+
+        async def content(self):
+            if self.clicked:
+                return richieste_html
+            return (
+                "<input name='noteSelezionate' value='elenco-11-0-22-1'>"
+                "<input name='noteSelezionate' value='elenco-12-0-23-2'>"
+            )
+
+        async def wait_for_load_state(self, *_args, **_kwargs):
+            return None
+
+        async def go_back(self, *_args, **_kwargs):
+            self.clicked = False
+            self.url = "https://sister.test/ElencoFormalita.do"
+
+    class FakePageLogger:
+        def __init__(self, _name):
+            self.page_visits = []
+
+        async def log(self, page, step):
+            self.page_visits.append({"step": step, "url": page.url})
+
+    page = FakePage()
+    monkeypatch.setattr(manager, "_get_authenticated_page", AsyncMock(return_value=page))
+    monkeypatch.setattr(utils, "PageLogger", FakePageLogger)
+    clicked = []
+
+    async def clicked_callback():
+        clicked.append(True)
+
+    result = await manager.request_mortgage_documents(
+        step="notes",
+        portal_items=[
+            {
+                "ordinal": 1,
+                "selection_value": "elenco-11-0-22-1",
+                "registro_particolare": "11",
+                "registro_generale": "22",
+            }
+        ],
+        clicked_callback=clicked_callback,
+    )
+
+    assert result["confirmed"] is True
+    assert result["requests"] == [{"ordinal": 1, "portal_request_id": "REQ-11", "status": "requested"}]
+    assert result["page_restored"] is True
+    assert result["next_step"] == "formalita"
+    assert page.checked == [True, False]
+    assert clicked == [True]
+
+    page.clicked = False
+    page.url = "https://sister.test/ElencoFormalita.do"
+    page.checked = [False, False]
+    with pytest.raises(ValueError, match="formalita_registers_changed_since_quote"):
+        await manager.request_mortgage_documents(
+            step="notes",
+            portal_items=[
+                {
+                    "ordinal": 1,
+                "selection_value": "elenco-12-0-23-2",
+                    "registro_particolare": "11",
+                    "registro_generale": "22",
+                }
+            ],
+            clicked_callback=clicked_callback,
+        )
+    assert page.clicked is False
+    assert clicked == [True]
+
+
+async def test_paid_richieste_save_uses_one_request_allowlist_and_requires_saved_document(manager, monkeypatch):
+    captured = {}
+    clicked = []
+
+    async def fake_authenticated_page():
+        return object()
+
+    async def fake_download(page, logger, **kwargs):
+        captured.update(kwargs)
+        await kwargs["_paid_click_callback"]()
+        return [
+            {
+                "id_richiesta": "REQ-444",
+                "document_id": 73,
+                "file_size": 1024,
+                "filename": "note-REQ-444.pdf",
+            }
+        ]
+
+    async def clicked_callback():
+        clicked.append(True)
+
+    monkeypatch.setattr(manager, "_get_authenticated_page", fake_authenticated_page)
+    monkeypatch.setattr(utils, "_download_richieste_documents", fake_download)
+    result = await manager.save_mortgage_request(
+        quote={
+            "step": "richieste_save",
+            "portal_request_id": "REQ-444",
+            "kind": "note",
+            "amount": "4.00",
+            "expected_row_cost": "4,00 €",
+        },
+        clicked_callback=clicked_callback,
+    )
+
+    assert result["confirmed"] is True
+    assert result["document_id"] == 73
+    assert captured["request_ids"] == {"REQ-444"}
+    assert captured["_paid_request_authorization"] == {
+        "portal_request_id": "REQ-444",
+        "amount": "4.00",
+        "expected_row_cost": "4,00 €",
+    }
+    assert clicked == [True]
 
 
 # ---------------------------------------------------------------------------

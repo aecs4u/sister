@@ -103,7 +103,10 @@ def variants(query: str) -> list[dict[str, str]]:
     return result
 
 
-_CLIENT_METHODS = ("search", "intestati", "soggetto", "persona_giuridica", "elenco_immobili", "generic_search")
+_CLIENT_METHODS = (
+    "search", "intestati", "soggetto", "persona_giuridica", "elenco_immobili", "generic_search",
+    "mortgage_search_start",
+)
 
 
 def _cli_command(query: str):
@@ -216,6 +219,12 @@ async def _submit_and_check(client, service, query, params):
 
     ((_, submitted),) = service.submissions
     request = submitted[0] if isinstance(submitted, list) else submitted
+    if query == "ipotecaria-persona-fisica":
+        received = {"provincia"} if getattr(request, "province", None) else set()
+        if getattr(request, "fiscal_code", None):
+            received.add("codice_fiscale")
+        assert set(params) - received == set(), f"{query}: lost on the way to the service: {sorted(set(params) - received)}"
+        return
     if hasattr(request, "params"):  # generic request: every input travels in params
         received = set(request.params) | {"provincia", "comune", "tipo_catasto"}
     else:
@@ -446,12 +455,13 @@ def test_an_input_of_another_mode_is_rejected_only_when_the_mode_is_explicit():
 def test_queries_that_request_documents_are_marked():
     from sister.query_forms import documents_note
 
-    assert {c: f.documents for c, f in QUERY_FORMS.items() if f.documents} == {
+    assert {c: f.documents for c, f in QUERY_FORMS.items() if f.documents in {"optional", "always"}} == {
         "search": "optional",
         "intestati": "optional",
         "visura-storica": "always",
         "soggetto-documento": "always",
     }
+    assert QUERY_FORMS["ipotecaria-persona-fisica"].documents == "none"
     assert "CAPTCHA" in documents_note(QUERY_FORMS["soggetto-documento"])
     assert documents_note(QUERY_FORMS["soggetto"]) == ""
 

@@ -38,6 +38,7 @@ from .database import get_response as load_stored_response  # noqa: F401
 from .models import (  # noqa: F401
     ElencoImmobiliInput,
     IspezioneIpotecariaInput,
+    IspezioneIpotecariaRequest,
     SezioniExtractionRequest,
     VisuraInput,
     VisuraIntestatiInput,
@@ -1168,6 +1169,199 @@ async def _richiedi_ispezione_ipotecaria(
     return await richiedi_ispezione_ipotecaria(
         request, service, force=force, reuse_cached=reuse_cached
     )
+
+
+@api_v1_router.post("/mortgage-searches", status_code=202)
+async def _start_mortgage_search(
+    request: IspezioneIpotecariaInput,
+    service: VisuraService = Depends(get_visura_service),
+    _: None = Depends(require_api_key_dependency),
+):
+    """Start the free preview stage of a guarded persona-fisica mortgage search."""
+    if request.search_type != "persona_fisica" or not request.fiscal_code:
+        raise HTTPException(status_code=422, detail="The guarded flow requires tipo_ricerca=persona_fisica and codice_fiscale")
+    from .mortgage_flow import MortgageFlowError
+
+    request_id = f"mortgage_flow_{uuid4().hex}"
+    portal_request = IspezioneIpotecariaRequest(
+        request_id=request_id,
+        search_type="persona_fisica",
+        province=request.province,
+        cadastre_type=request.cadastre_type or "T",
+        fiscal_code=request.fiscal_code.upper(),
+        auto_confirm=False,
+    )
+    try:
+        flow = await service.add_mortgage_flow_request(portal_request, started_by="service-api")
+    except (MortgageFlowError, RuntimeError, ValueError) as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return {
+        "flow_id": flow["id"],
+        "request_id": request_id,
+        "status": flow["state"],
+        "current_step": flow["current_step"],
+        "queue_position": flow["queue_position"],
+        "message": "Free preview queued; no paid step is confirmed by this operation.",
+    }
+
+
+@api_v1_router.get("/mortgage-searches/{flow_id}")
+async def _mortgage_search_status(
+    flow_id: int,
+    service: VisuraService = Depends(get_visura_service),
+    _: None = Depends(require_api_key_dependency),
+):
+    from .mortgage_flow import MortgageFlowError, flow_status
+
+    try:
+        result = await flow_status(flow_id)
+    except MortgageFlowError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    if result.get("request_ref"):
+        response = await service.get_response(result["request_ref"])
+        if response is not None:
+            result["preview"] = {
+                "success": response.success,
+                "data": response.data,
+                "error": response.error,
+                "timestamp": response.timestamp.isoformat() if response.timestamp else None,
+            }
+    return result
+
+
+@api_v1_router.post("/mortgage-searches/{flow_id}/quote")
+async def _mortgage_search_quote(
+    flow_id: int,
+    body: dict,
+    service: VisuraService = Depends(get_visura_service),
+    _: None = Depends(require_api_key_dependency),
+):
+    from decimal import Decimal, InvalidOperation
+
+    from .mortgage_flow import MortgageFlowError, flow_status, issue_confirmation_token
+
+    try:
+        flow = await flow_status(flow_id)
+    except MortgageFlowError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    step = str(body.get("step") or "").strip()
+    if step == "accept":
+        response = await service.get_response(flow.get("request_ref") or "")
+        data = response.data if response and isinstance(response.data, dict) else {}
+        cost = data.get("cost") if isinstance(data.get("cost"), dict) else {}
+        try:
+            amount = Decimal(str(cost.get("value"))).quantize(Decimal("0.01"))
+        except (InvalidOperation, TypeError, ValueError) as exc:
+            raise HTTPException(status_code=409, detail="preview_amount_unavailable") from exc
+        if not response or not response.success or data.get("confirmed") is not False or amount < 0:
+            raise HTTPException(status_code=409, detail="paid_accept_quote_requires_current_unaccepted_preview")
+        quote = {
+            "step": "accept",
+            "amount": str(amount),
+            "currency": "EUR",
+            "source": "cost_page",
+            "display": str(cost.get("text") or ""),
+        }
+    elif step == "richieste_save":
+        if flow.get("search_id") is None or flow.get("state") not in {"accepted", "running"}:
+            raise HTTPException(status_code=409, detail="accepted_search_required")
+        if flow.get("current_step") not in {"formalita", "richieste_list"}:
+            raise HTTPException(status_code=409, detail="flow_not_at_richieste_step")
+        portal_request_id = str(body.get("portal_request_id") or "").strip()
+        if not portal_request_id or len(portal_request_id) > 64:
+            raise HTTPException(status_code=422, detail="richieste_save_quote_requires_portal_request_id")
+        if not service.auth_ready:
+            raise HTTPException(status_code=503, detail="SISTER browser session unavailable for Richieste quote")
+        observed = await service.browser_manager.inspect_mortgage_request_row(portal_request_id)
+        portal_row = observed.get("row")
+        if not isinstance(portal_row, dict) or observed.get("ambiguous"):
+            raise HTTPException(status_code=409, detail="richieste_request_row_not_found_or_ambiguous")
+        from .ade_tariff import quote_richieste_save
+
+        try:
+            quote = await quote_richieste_save(flow["search_id"], portal_request_id, portal_row)
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        if not observed.get("page_restored") and flow.get("current_step") == "formalita":
+            from .mortgage_flow import update_flow_state
+
+            await update_flow_state(
+                flow_id,
+                state="running",
+                current_step="richieste_list",
+                state_payload={**(flow.get("state_payload") or {}), "last_richieste_quote_page_restored": False},
+            )
+        try:
+            token = issue_confirmation_token(flow_id, step, quote)
+        except (MortgageFlowError, RuntimeError) as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        return {
+            "flow_id": flow_id,
+            "quote": quote,
+            "executor_available": True,
+            "confirmable": True,
+            **token,
+        }
+    elif step in {"notes", "title"}:
+        if flow.get("search_id") is None:
+            raise HTTPException(status_code=409, detail="accepted_search_required")
+        if flow.get("state") not in {"accepted", "running"} or flow.get("current_step") != "formalita":
+            raise HTTPException(status_code=409, detail="flow_not_at_formalita_step")
+        from .ade_tariff import get_formality_portal_items, quote_note_request, quote_title_request
+
+        fmt = str(body.get("format") or "PDF").upper()
+        if step == "notes":
+            ordinals = body.get("ordinals")
+            if (
+                not isinstance(ordinals, list)
+                or not ordinals
+                or len(ordinals) > 100
+                or any(type(value) is not int or value <= 0 for value in ordinals)
+            ):
+                raise HTTPException(status_code=422, detail="notes_quote_requires_1_to_100_positive_integer_ordinals")
+            paid_quote = await quote_note_request(flow["search_id"], ordinals, fmt)
+        else:
+            ordinal = body.get("ordinal")
+            if type(ordinal) is not int or ordinal <= 0:
+                raise HTTPException(status_code=422, detail="title_quote_requires_a_positive_integer_ordinal")
+            paid_quote = await quote_title_request(flow["search_id"], ordinal, fmt)
+        public_quote = paid_quote.public_dict()
+        payable_ordinals = [ordinal for line in paid_quote.lines for ordinal in line.ordinals]
+        portal_items = await get_formality_portal_items(flow["search_id"], payable_ordinals)
+        if payable_ordinals and len(portal_items) != len(payable_ordinals):
+            public_quote["blocked"] = [
+                *public_quote["blocked"],
+                {"reason": "portal_selection_value_missing", "ordinals": payable_ordinals},
+            ]
+        public_quote["portal_items"] = portal_items
+        public_quote["amount"] = public_quote.get("new_cost")
+        quote = {"step": step, **public_quote}
+        token = None
+        if (
+            payable_ordinals
+            and len(portal_items) == len(payable_ordinals)
+            and not paid_quote.blocked
+            and paid_quote.new_cost is not None
+            and paid_quote.new_cost > 0
+        ):
+            try:
+                token = issue_confirmation_token(flow_id, step, quote)
+            except (MortgageFlowError, RuntimeError) as exc:
+                raise HTTPException(status_code=503, detail=str(exc)) from exc
+        return {
+            "flow_id": flow_id,
+            "quote": quote,
+            "executor_available": True,
+            "confirmable": token is not None,
+            **(token or {"token": None}),
+        }
+    else:
+        raise HTTPException(status_code=422, detail="unsupported_paid_step")
+    try:
+        token = issue_confirmation_token(flow_id, step, quote)
+    except (MortgageFlowError, RuntimeError) as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return {"flow_id": flow_id, "quote": quote, **token}
 
 
 async def _workflow_backend_request(method: str, path: str, **kwargs):

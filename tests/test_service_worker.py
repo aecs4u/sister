@@ -568,6 +568,30 @@ def test_auth_status_ready_carries_the_session_deadline(main_module):
     assert status["session_expires_at"].startswith("2026-11-11T10:30:00")
 
 
+async def test_health_does_not_report_expired_auth_as_ready(main_module, monkeypatch):
+    import json
+
+    from sister import routes, web
+
+    browser = FakeBrowser()
+    browser.authenticated = True
+    browser.session_lost_reason = lambda: "Sessione SISTER scaduta alle 10:30"
+    service = _service(main_module, browser)
+
+    async def _counts():
+        return {}
+
+    monkeypatch.setattr(routes, "count_responses", _counts)
+    monkeypatch.setattr(web, "optional_data_degradation_summary", lambda: {"active_components": []})
+    response = await routes.health_check(service)
+    payload = json.loads(response.body)
+
+    assert payload["status"] == "degraded"
+    assert payload["auth"]["state"] == "expired"
+    assert payload["auth_ready"] is False
+    assert payload["authenticated"] is False
+
+
 async def test_start_browser_reattaches_when_the_session_is_gone(main_module):
     browser = FakeBrowser()
     browser.session_lost_reason = lambda: "scaduta"

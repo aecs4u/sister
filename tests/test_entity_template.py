@@ -61,7 +61,8 @@ def test_property_document_template_renders_without_subject_fiscal_code():
     favorite_markup = rendered[rendered.index('data-favorite-id="1886"') :]
     favorite_button = favorite_markup[: favorite_markup.index(">")]
     assert "disabled" not in favorite_button
-    assert "var completeSubjectReport = false;" in rendered
+    assert 'href="/documents/1886/pdf"' in rendered
+    assert "data-drive-share-url" not in rendered
 
     notice_template = Environment(loader=loader, autoescape=True).from_string(
         '{% from "_doc_macros.html" import optional_data_notice %}'
@@ -98,7 +99,8 @@ def test_subject_actions_follow_heading_and_long_omi_note_is_compact():
 
     rendered = template.render(
         land_map_parent="catasto/visura_soggetto_archive.html",
-        land_map_slot="test",
+        land_map_slot="sidecar",
+        land_map_kind="visura",
         doc=None,
         subject_fiscal_code="RSSMRA85T10A562S",
         subject_route_prefix="/persons",

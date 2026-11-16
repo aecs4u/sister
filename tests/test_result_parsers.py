@@ -1,5 +1,8 @@
 """Pure parsers for the composite strings of SISTER result pages (values taken from tests/fixtures/single_step)."""
 
+import json
+from pathlib import Path
+
 import pytest
 
 from sister import result_parsers as rp
@@ -49,6 +52,110 @@ def test_parse_period():
     assert rp.parse_period("dal 01/01/2020 al 31/12/2023") == ("01/01/2020", "31/12/2023")
     assert rp.parse_period("dall'impianto al 31/12/2023") == ("", "31/12/2023")
     assert rp.parse_period("") == ("", "")
+
+
+def test_parse_formalita_list_and_cancellation_annotation():
+    page_text = """1 TRASCRIZIONE A FAVORE del 01/02/2017 - Registro Particolare 11 Registro Generale 22
+Pubblico ufficiale NOTAIO ROSSI Repertorio 123 del 01/02/2017
+ATTO TRA VIVI - COMPRAVENDITA
+Immobili siti in RAVENNA (RA)
+Nota disponibile in formato elettronico - Presenza titolo telematico
+Documenti successivi correlati:
+1 - ISCRIZIONE n. 55 del 03/04/2020 (ANNOTAZIONE DI CANCELLAZIONE)
+Documenti in formato elaborabile
+"""
+    rows = rp.parse_formalita_list(page_text, ["elenco-11-0-22-1"])
+    assert rows == [
+        {
+            "numero": 1,
+            "tipo": "TRASCRIZIONE",
+            "verso": "A FAVORE",
+            "data_formalita": "2017-02-01",
+            "registro_particolare": "11",
+            "registro_generale": "22",
+            "nota_disponibile_elettronica": True,
+            "presenza_titolo_telematico": True,
+            "documenti_correlati": [
+                {"tipo": "ISCRIZIONE", "numero": "55", "data": "2020-04-03", "descrizione": "ANNOTAZIONE DI CANCELLAZIONE"}
+            ],
+            "pubblico_ufficiale": "NOTAIO ROSSI",
+            "repertorio": "123",
+            "data_repertorio": "2017-02-01",
+            "immobili": "RAVENNA (RA)",
+            "causale": "ATTO TRA VIVI - COMPRAVENDITA",
+            "portal_selection_value": "elenco-11-0-22-1",
+        }
+    ]
+    assert rp.is_cancellation_annotation(rows[0]["documenti_correlati"][0]["descrizione"])
+    assert not rp.is_cancellation_annotation("ANNOTAZIONE DI RINNOVO")
+
+
+def test_parse_anonymized_saved_formalita_capture_and_checkbox_identities():
+    fixture_path = Path(__file__).parent / "fixtures/mortgage/formalita_saved_capture_anonymized.json"
+    fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
+
+    rows = rp.parse_formalita_list(fixture["text"], fixture["selection_values"])
+
+    assert len(rows) == fixture["expected"]["formalities"]
+    assert sum(bool(row.get("portal_selection_value")) for row in rows) == fixture["expected"]["matched_selection_values"]
+    assert sum(len(row.get("documenti_correlati") or []) for row in rows) == fixture["expected"]["annotations"]
+    assert sum(
+        rp.is_cancellation_annotation(annotation.get("descrizione"))
+        for row in rows
+        for annotation in row.get("documenti_correlati") or []
+    ) == fixture["expected"]["cancellations"]
+    assert all(row["registro_particolare"] and row["registro_generale"] for row in rows)
+
+
+def test_capture_page_parse_attaches_checkbox_values_without_browser_actions():
+    from scripts.capture_page import parse_capture_formalities
+
+    capture = {
+        "text": """1 TRASCRIZIONE A FAVORE del 01/02/2017 - Registro Particolare 11 Registro Generale 22
+Pubblico ufficiale NOTAIO ROSSI Repertorio 123 del 01/02/2017
+ATTO TRA VIVI - COMPRAVENDITA
+Nota disponibile in formato elettronico
+Documenti in formato elaborabile""",
+        "form_fields": [
+            {"name": "noteSelezionate", "type": "checkbox", "value": "elenco-11-0-22-1"},
+            {"name": "altro", "type": "text", "value": "ignored"},
+        ],
+    }
+
+    parsed = parse_capture_formalities(capture)
+
+    assert parsed == capture["parsed_formalities"]
+    assert parsed[0]["portal_selection_value"] == "elenco-11-0-22-1"
+
+
+def test_parse_mortgage_inspection_page_requires_portal_identity_and_normalizes_projection():
+    text = """Ispezione ipotecaria n. T1 91777 del 11/11/2026
+1 TRASCRIZIONE A FAVORE del 29/12/2011 - Registro Particolare 15128 Registro Generale 23828
+Pubblico ufficiale ROSSI Repertorio 123 del 01/01/2011
+COMPRAVENDITA
+Immobili siti in RAVENNA (RA)
+Nota disponibile in formato elettronico - Presenza titolo telematico
+Documenti in formato elaborabile
+"""
+    parsed = rp.parse_mortgage_inspection_page(
+        text,
+        ["x-15128-0-23828-x"],
+        subject_fiscal_code="rssmra70a01h501z",
+        office="RAVENNA (RA)",
+        requester_fiscal_code="RSSMRA70A01H501Z",
+        motivation="Esplorazione",
+    )
+
+    assert parsed["portal_capture"]["inspection"]["number"] == "T 91777"
+    assert parsed["portal_capture"]["inspection"]["date"] == "2026-11-11"
+    assert parsed["portal_capture"]["inspection"]["subject_tax_code"] == "RSSMRA70A01H501Z"
+    assert parsed["formalities"][0]["registro_particolare"] == "15128"
+    assert parsed["formalities"][0]["portal_selection_value"] == "x-15128-0-23828-x"
+    assert rp.parse_mortgage_inspection_page(
+        "A page without a T number and date",
+        subject_fiscal_code="RSSMRA70A01H501Z",
+        office="RAVENNA (RA)",
+    ) is None
 
 
 def test_parse_ubicazione_and_classamento():

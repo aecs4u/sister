@@ -1254,6 +1254,510 @@ class MortgageInspectionProperty(SQLModel, table=True):
     area_sqm: Optional[Decimal] = Field(default=None)
 
 
+class MortgageSearch(SQLModel, table=True):
+    """One accepted persona-fisica search in the SISTER mortgage registers."""
+
+    __tablename__ = "mortgage_search"
+    __table_args__ = (
+        sa.UniqueConstraint("request_id", name="uq_mortgage_search_request"),
+        sa.UniqueConstraint("inspection_number", "inspection_date", name="uq_mortgage_search_number_date"),
+        sa.CheckConstraint("scope IN ('office', 'national')", name="ck_mortgage_search_scope"),
+        sa.Index("ix_mortgage_search_subject_date", "subject_fiscal_code", "inspection_date"),
+    )
+
+    id: Optional[int] = Field(default=None, sa_column=Column(sa.BigInteger(), primary_key=True))
+    request_id: int = Field(
+        sa_column=Column(
+            sa.BigInteger(), sa.ForeignKey("request.id", name="fk_mortgage_search_request"), nullable=False
+        )
+    )
+    inspection_number: str = Field(sa_column=Column(sa.String(64), nullable=False))
+    inspection_date: date
+    office: str = Field(sa_column=Column(sa.String(255), nullable=False))
+    scope: str = Field(sa_column=Column(sa.String(16), nullable=False))
+    subject_fiscal_code: str = Field(sa_column=Column(sa.String(32), nullable=False))
+    requester_fiscal_code: Optional[str] = Field(default=None, sa_column=Column(sa.String(32), nullable=True))
+    motivation: Optional[str] = Field(default=None, sa_column=Column(sa.Text(), nullable=True))
+    convention_request_code: Optional[str] = Field(default=None, sa_column=Column(sa.String(128), nullable=True))
+    formalities_count: int = Field(default=0, nullable=False)
+    annotations_count: int = Field(default=0, nullable=False)
+
+
+class MortgageSearchFormality(SQLModel, table=True):
+    """Typed *Elenco sintetico delle formalità* row, linked to its archive search."""
+
+    __tablename__ = "mortgage_search_formality"
+    __table_args__ = (
+        sa.UniqueConstraint("search_id", "ordinal", name="uq_mortgage_search_formality_ordinal"),
+        sa.Index("ix_mortgage_search_formality_register", "registro_particolare", "registro_generale"),
+    )
+
+    id: Optional[int] = Field(default=None, sa_column=Column(sa.BigInteger(), primary_key=True))
+    search_id: int = Field(
+        sa_column=Column(
+            sa.BigInteger(), sa.ForeignKey("mortgage_search.id", name="fk_mortgage_search_formality_search"),
+            nullable=False,
+        )
+    )
+    ordinal: int = Field(nullable=False)
+    kind: str = Field(sa_column=Column(sa.String(24), nullable=False))
+    direction: Optional[str] = Field(default=None, sa_column=Column(sa.String(24), nullable=True))
+    formality_date: Optional[date] = Field(default=None)
+    registro_particolare: Optional[str] = Field(default=None, sa_column=Column(sa.String(64), nullable=True))
+    registro_generale: Optional[str] = Field(default=None, sa_column=Column(sa.String(64), nullable=True))
+    public_official: Optional[str] = Field(default=None, sa_column=Column(sa.Text(), nullable=True))
+    repertory: Optional[str] = Field(default=None, sa_column=Column(sa.String(128), nullable=True))
+    repertory_date: Optional[date] = Field(default=None)
+    act_description: Optional[str] = Field(default=None, sa_column=Column(sa.Text(), nullable=True))
+    location: Optional[str] = Field(default=None, sa_column=Column(sa.Text(), nullable=True))
+    electronic_note: bool = Field(default=False, nullable=False)
+    electronic_title: bool = Field(default=False, nullable=False)
+    portal_selection_value: Optional[str] = Field(default=None, sa_column=Column(sa.Text(), nullable=True))
+    note_document_id: Optional[int] = Field(
+        default=None,
+        sa_column=Column(
+            sa.BigInteger(), sa.ForeignKey("document.id", name="fk_mortgage_search_formality_note_document"),
+            nullable=True,
+        ),
+    )
+    title_document_id: Optional[int] = Field(
+        default=None,
+        sa_column=Column(
+            sa.BigInteger(), sa.ForeignKey("document.id", name="fk_mortgage_search_formality_title_document"),
+            nullable=True,
+        ),
+    )
+
+
+class MortgageSearchAnnotation(SQLModel, table=True):
+    """Annotation subsequent to a formality, including cancellation provenance."""
+
+    __tablename__ = "mortgage_search_annotation"
+    __table_args__ = (
+        sa.UniqueConstraint("formality_id", "ordinal", name="uq_mortgage_search_annotation_ordinal"),
+        sa.Index("ix_mortgage_search_annotation_cancellation", "is_cancellation"),
+    )
+
+    id: Optional[int] = Field(default=None, sa_column=Column(sa.BigInteger(), primary_key=True))
+    formality_id: int = Field(
+        sa_column=Column(
+            sa.BigInteger(),
+            sa.ForeignKey("mortgage_search_formality.id", name="fk_mortgage_search_annotation_formality"),
+            nullable=False,
+        )
+    )
+    ordinal: int = Field(nullable=False)
+    number: Optional[str] = Field(default=None, sa_column=Column(sa.String(64), nullable=True))
+    annotation_date: Optional[date] = Field(default=None)
+    description: Optional[str] = Field(default=None, sa_column=Column(sa.Text(), nullable=True))
+    is_cancellation: bool = Field(default=False, nullable=False)
+
+
+class MortgageSearchFlow(SQLModel, table=True):
+    """Durable state for a persona-fisica flow, including its pre-accept preview."""
+
+    __tablename__ = "mortgage_search_flow"
+    __table_args__ = (
+        sa.UniqueConstraint("request_id", name="uq_mortgage_search_flow_request"),
+        sa.CheckConstraint("scope IN ('office', 'national')", name="ck_mortgage_search_flow_scope"),
+        sa.CheckConstraint(
+            "state IN ('preview', 'accepted', 'running', 'complete', 'uncertain', 'failed', 'cancelled')",
+            name="ck_mortgage_search_flow_state",
+        ),
+        sa.Index("ix_mortgage_search_flow_subject_state", "subject_fiscal_code", "state"),
+    )
+
+    id: Optional[int] = Field(default=None, sa_column=Column(sa.BigInteger(), primary_key=True))
+    request_id: int = Field(
+        sa_column=Column(
+            sa.BigInteger(), sa.ForeignKey("request.id", name="fk_mortgage_search_flow_request"), nullable=False
+        )
+    )
+    search_id: Optional[int] = Field(
+        default=None,
+        sa_column=Column(
+            sa.BigInteger(), sa.ForeignKey("mortgage_search.id", name="fk_mortgage_search_flow_search"),
+            nullable=True,
+        ),
+    )
+    subject_fiscal_code: str = Field(sa_column=Column(sa.String(32), nullable=False))
+    office: str = Field(sa_column=Column(sa.String(255), nullable=False))
+    scope: str = Field(sa_column=Column(sa.String(16), nullable=False))
+    state: str = Field(default="preview", sa_column=Column(sa.String(24), nullable=False))
+    current_step: str = Field(default="preview", sa_column=Column(sa.String(32), nullable=False))
+    state_payload: dict[str, Any] = Field(
+        default_factory=dict,
+        sa_column=Column(JSONB, nullable=False, server_default=sa.text("'{}'::jsonb")),
+    )
+    started_by: str = Field(sa_column=Column(sa.String(255), nullable=False))
+    started_at: datetime = Field(sa_column=Column(sa.DateTime(timezone=True), nullable=False))
+    updated_at: datetime = Field(sa_column=Column(sa.DateTime(timezone=True), nullable=False))
+
+
+class MortgagePaidAction(SQLModel, table=True):
+    """Durable consent and outcome record for a single potentially chargeable portal action."""
+
+    __tablename__ = "mortgage_paid_action"
+    __table_args__ = (
+        sa.UniqueConstraint("token_digest", name="uq_mortgage_paid_action_token_digest"),
+        sa.CheckConstraint(
+            "state IN ('intended', 'clicked', 'confirmed', 'uncertain', 'not_executed')",
+            name="ck_mortgage_paid_action_state",
+        ),
+        sa.Index(
+            "uq_mortgage_paid_action_open_step",
+            "flow_id",
+            "step",
+            unique=True,
+            postgresql_where=sa.text("state IN ('intended', 'clicked', 'uncertain')"),
+        ),
+        sa.Index("ix_mortgage_paid_action_flow_state", "flow_id", "state"),
+    )
+
+    id: Optional[int] = Field(default=None, sa_column=Column(sa.BigInteger(), primary_key=True))
+    flow_id: int = Field(
+        sa_column=Column(
+            sa.BigInteger(), sa.ForeignKey("mortgage_search_flow.id", name="fk_mortgage_paid_action_flow"),
+            nullable=False,
+        )
+    )
+    search_id: Optional[int] = Field(
+        default=None,
+        sa_column=Column(
+            sa.BigInteger(), sa.ForeignKey("mortgage_search.id", name="fk_mortgage_paid_action_search"),
+            nullable=True,
+        ),
+    )
+    step: str = Field(sa_column=Column(sa.String(32), nullable=False))
+    quote: dict[str, Any] = Field(sa_column=Column(JSONB, nullable=False))
+    confirmed_by: str = Field(sa_column=Column(sa.String(255), nullable=False))
+    confirmed_at: datetime = Field(sa_column=Column(sa.DateTime(timezone=True), nullable=False))
+    state: str = Field(default="intended", sa_column=Column(sa.String(24), nullable=False))
+    token_digest: Optional[str] = Field(default=None, sa_column=Column(sa.String(64), nullable=True))
+    token_expires_at: Optional[datetime] = Field(default=None, sa_column=Column(sa.DateTime(timezone=True), nullable=True))
+    clicked_at: Optional[datetime] = Field(default=None, sa_column=Column(sa.DateTime(timezone=True), nullable=True))
+    portal_request_ids: list[str] = Field(
+        default_factory=list,
+        sa_column=Column(JSONB, nullable=False, server_default=sa.text("'[]'::jsonb")),
+    )
+    result: Optional[dict[str, Any]] = Field(default=None, sa_column=Column(JSONB, nullable=True))
+    reconciled_at: Optional[datetime] = Field(default=None, sa_column=Column(sa.DateTime(timezone=True), nullable=True))
+
+
+class MortgageSearchRequest(SQLModel, table=True):
+    """One note/title request as it moves from intent to availability and archival."""
+
+    __tablename__ = "mortgage_search_request"
+    __table_args__ = (
+        sa.UniqueConstraint("portal_request_id", name="uq_mortgage_search_request_portal_id"),
+        sa.CheckConstraint("kind IN ('note', 'title')", name="ck_mortgage_search_request_kind"),
+        sa.CheckConstraint(
+            "status IN ('intended', 'requested', 'available', 'downloaded', 'failed', 'uncertain')",
+            name="ck_mortgage_search_request_status",
+        ),
+        sa.Index("ix_mortgage_search_request_flow", "search_id", "kind", "status"),
+        sa.Index("ix_mortgage_search_request_formality", "formality_id", "kind", "status"),
+    )
+
+    id: Optional[int] = Field(default=None, sa_column=Column(sa.BigInteger(), primary_key=True))
+    search_id: int = Field(
+        sa_column=Column(
+            sa.BigInteger(), sa.ForeignKey("mortgage_search.id", name="fk_mortgage_search_request_search"),
+            nullable=False,
+        )
+    )
+    formality_id: int = Field(
+        sa_column=Column(
+            sa.BigInteger(), sa.ForeignKey("mortgage_search_formality.id", name="fk_mortgage_search_request_formality"),
+            nullable=False,
+        )
+    )
+    kind: str = Field(sa_column=Column(sa.String(16), nullable=False))
+    format: Optional[str] = Field(default=None, sa_column=Column(sa.String(16), nullable=True))
+    portal_request_id: Optional[str] = Field(default=None, sa_column=Column(sa.String(64), nullable=True))
+    status: str = Field(default="intended", sa_column=Column(sa.String(24), nullable=False))
+    requested_at: Optional[datetime] = Field(default=None, sa_column=Column(sa.DateTime(timezone=True), nullable=True))
+    document_id: Optional[int] = Field(
+        default=None,
+        sa_column=Column(
+            sa.BigInteger(), sa.ForeignKey("document.id", name="fk_mortgage_search_request_document"), nullable=True
+        ),
+    )
+    paid_action_id: Optional[int] = Field(
+        default=None,
+        sa_column=Column(
+            sa.BigInteger(), sa.ForeignKey("mortgage_paid_action.id", name="fk_mortgage_search_request_paid_action"),
+            nullable=True,
+        ),
+    )
+
+
+class MortgageSearchCharge(SQLModel, table=True):
+    """An inspection cost line only when the evidence ties the charge to this search."""
+
+    __tablename__ = "mortgage_search_charge"
+    __table_args__ = (
+        sa.CheckConstraint("kind IN ('inspection', 'note', 'title')", name="ck_mortgage_search_charge_kind"),
+        sa.CheckConstraint("basis IN ('cost_page', 'receipt', 'statement_detail', 'tariff')", name="ck_mortgage_search_charge_basis"),
+        sa.CheckConstraint("quantity > 0 AND unit_amount >= 0 AND amount >= 0", name="ck_mortgage_search_charge_amounts"),
+        sa.UniqueConstraint("allocation_id", name="uq_mortgage_search_charge_allocation"),
+        sa.ForeignKeyConstraint(
+            ["allocation_id"], ["ade_charge_allocation.id"],
+            name="fk_mortgage_search_charge_allocation_id_ade_charge_allocation", ondelete="RESTRICT",
+        ),
+        sa.Index("ix_mortgage_search_charge_search_kind", "search_id", "kind"),
+        sa.Index("ix_mortgage_search_charge_portal_request", "portal_request_id"),
+    )
+
+    id: Optional[int] = Field(default=None, sa_column=Column(sa.BigInteger(), primary_key=True))
+    search_id: int = Field(
+        sa_column=Column(
+            sa.BigInteger(), sa.ForeignKey("mortgage_search.id", name="fk_mortgage_search_charge_search"),
+            nullable=False,
+        )
+    )
+    kind: str = Field(sa_column=Column(sa.String(16), nullable=False))
+    quantity: int = Field(nullable=False)
+    unit_amount: Decimal = Field(sa_column=Column(sa.Numeric(12, 2), nullable=False))
+    amount: Decimal = Field(sa_column=Column(sa.Numeric(12, 2), nullable=False))
+    currency: str = Field(default="EUR", sa_column=Column(sa.String(3), nullable=False, server_default="EUR"))
+    charged_at: Optional[datetime] = Field(default=None, sa_column=Column(sa.DateTime(timezone=True), nullable=True))
+    portal_request_id: Optional[str] = Field(default=None, sa_column=Column(sa.String(64), nullable=True))
+    basis: str = Field(sa_column=Column(sa.String(24), nullable=False))
+    receipt_id: Optional[int] = Field(default=None, sa_column=Column(sa.BigInteger(), nullable=True))
+    wallet_tx_id: Optional[str] = Field(default=None, sa_column=Column(sa.String(128), nullable=True))
+    allocation_id: Optional[int] = Field(default=None, sa_column=Column(sa.BigInteger(), nullable=True))
+
+
+class AdeStatementImport(SQLModel, table=True):
+    """One immutable source file import of the AdE account statement."""
+
+    __tablename__ = "ade_statement_import"
+    __table_args__ = (
+        sa.UniqueConstraint("source_sha256", name="uq_ade_statement_import_sha256"),
+        sa.CheckConstraint("period_end >= period_start", name="ck_ade_statement_import_period"),
+    )
+
+    id: Optional[int] = Field(default=None, sa_column=Column(sa.BigInteger(), primary_key=True))
+    period_start: date
+    period_end: date
+    total_credit: Decimal = Field(sa_column=Column(sa.Numeric(12, 2), nullable=False))
+    total_debit: Decimal = Field(sa_column=Column(sa.Numeric(12, 2), nullable=False))
+    closing_balance: Optional[Decimal] = Field(default=None, sa_column=Column(sa.Numeric(12, 2), nullable=True))
+    source_filename: str = Field(sa_column=Column(sa.String(512), nullable=False))
+    source_sha256: str = Field(sa_column=Column(sa.String(64), nullable=False))
+    summary: dict[str, Any] = Field(
+        default_factory=dict,
+        sa_column=Column(JSONB, nullable=False, server_default=sa.text("'{}'::jsonb")),
+    )
+    imported_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc),
+        sa_column=Column(sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
+    )
+
+
+class AdeStatementRow(SQLModel, table=True):
+    """One posted credit or charge, keyed by the radio value from *Estratto conto consultazioni*."""
+
+    __tablename__ = "ade_statement_row"
+    __table_args__ = (
+        sa.CheckConstraint("currency = 'EUR'", name="ck_ade_statement_row_currency"),
+        sa.CheckConstraint("credit_amount IS NULL OR credit_amount >= 0", name="ck_ade_statement_row_credit"),
+        sa.CheckConstraint("debit_amount IS NULL OR debit_amount >= 0", name="ck_ade_statement_row_debit"),
+        sa.CheckConstraint(
+            "num_nonnulls(credit_amount, debit_amount) = 1", name="ck_ade_statement_row_one_side"
+        ),
+        sa.Index("ix_ade_statement_row_date", "posted_on"),
+    )
+
+    statement_key: str = Field(sa_column=Column(sa.String(256), primary_key=True))
+    import_id: int = Field(
+        sa_column=Column(
+            sa.BigInteger(),
+            sa.ForeignKey(
+                "ade_statement_import.id", name="fk_ade_statement_row_import_id_ade_statement_import",
+                ondelete="RESTRICT",
+            ),
+            nullable=False,
+        )
+    )
+    posted_on: date
+    office: Optional[str] = Field(default=None, sa_column=Column(sa.String(32), nullable=True))
+    description: str = Field(sa_column=Column(sa.Text(), nullable=False))
+    credit_amount: Optional[Decimal] = Field(default=None, sa_column=Column(sa.Numeric(12, 2), nullable=True))
+    debit_amount: Optional[Decimal] = Field(default=None, sa_column=Column(sa.Numeric(12, 2), nullable=True))
+    currency: str = Field(default="EUR", sa_column=Column(sa.String(3), nullable=False, server_default="EUR"))
+    row_data: dict[str, Any] = Field(
+        default_factory=dict,
+        sa_column=Column(JSONB, nullable=False, server_default=sa.text("'{}'::jsonb")),
+    )
+    detail_data: Optional[dict[str, Any]] = Field(default=None, sa_column=Column(JSONB, nullable=True))
+    detail_checked_at: Optional[datetime] = Field(default=None, sa_column=Column(sa.DateTime(timezone=True), nullable=True))
+
+
+class AdeLedgerEntry(SQLModel, table=True):
+    """Dedicated AdE account movement; never a SISTER app-credit transaction."""
+
+    __tablename__ = "ade_ledger_entry"
+    __table_args__ = (
+        sa.UniqueConstraint("statement_key", name="uq_ade_ledger_entry_statement_key"),
+        sa.UniqueConstraint("pagopa_payment_id", name="uq_ade_ledger_entry_pagopa_payment"),
+        sa.CheckConstraint("entry_type IN ('topup', 'usage')", name="ck_ade_ledger_entry_type"),
+        sa.CheckConstraint("amount > 0", name="ck_ade_ledger_entry_amount"),
+        sa.Index("ix_ade_ledger_entry_date", "posted_on", "sequence_no"),
+    )
+
+    id: Optional[int] = Field(default=None, sa_column=Column(sa.BigInteger(), primary_key=True))
+    statement_key: str = Field(
+        sa_column=Column(
+            sa.String(256),
+            sa.ForeignKey(
+                "ade_statement_row.statement_key", name="fk_ade_ledger_entry_statement_key_ade_statement_row",
+                ondelete="RESTRICT",
+            ),
+            nullable=False,
+        )
+    )
+    posted_on: date
+    sequence_no: int = Field(nullable=False)
+    entry_type: str = Field(sa_column=Column(sa.String(16), nullable=False))
+    amount: Decimal = Field(sa_column=Column(sa.Numeric(12, 2), nullable=False))
+    balance_after: Decimal = Field(sa_column=Column(sa.Numeric(12, 2), nullable=False))
+    pagopa_payment_id: Optional[int] = Field(
+        default=None,
+        sa_column=Column(
+            sa.BigInteger(),
+            sa.ForeignKey(
+                "pagopa_payment_history.id", name="fk_ade_ledger_entry_pagopa_payment_id_pagopa_payment_history",
+                ondelete="SET NULL",
+            ),
+            nullable=True,
+        ),
+    )
+    linked_by: Optional[str] = Field(default=None, sa_column=Column(sa.String(255), nullable=True))
+    linked_at: Optional[datetime] = Field(default=None, sa_column=Column(sa.DateTime(timezone=True), nullable=True))
+    updated_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc),
+        sa_column=Column(sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
+    )
+
+
+class AdeReceipt(SQLModel, table=True):
+    """An imported AdE quietanza; receipt evidence remains separate from SISTER credit wallets."""
+
+    __tablename__ = "ade_receipt"
+    __table_args__ = (
+        sa.UniqueConstraint("receipt_key", name="uq_ade_receipt_key"),
+        sa.UniqueConstraint("source_sha256", name="uq_ade_receipt_sha256"),
+        sa.CheckConstraint("amount >= 0", name="ck_ade_receipt_amount"),
+        sa.CheckConstraint("currency = 'EUR'", name="ck_ade_receipt_currency"),
+    )
+
+    id: Optional[int] = Field(default=None, sa_column=Column(sa.BigInteger(), primary_key=True))
+    receipt_key: str = Field(sa_column=Column(sa.String(256), nullable=False))
+    receipt_date: date
+    amount: Decimal = Field(sa_column=Column(sa.Numeric(12, 2), nullable=False))
+    currency: str = Field(default="EUR", sa_column=Column(sa.String(3), nullable=False, server_default="EUR"))
+    payment_method: Optional[str] = Field(default=None, sa_column=Column(sa.String(64), nullable=True))
+    source_filename: str = Field(sa_column=Column(sa.String(512), nullable=False))
+    source_sha256: str = Field(sa_column=Column(sa.String(64), nullable=False))
+    document_id: Optional[int] = Field(
+        default=None,
+        sa_column=Column(
+            sa.BigInteger(), sa.ForeignKey("document.id", name="fk_ade_receipt_document"), nullable=True
+        ),
+    )
+    receipt_data: dict[str, Any] = Field(
+        default_factory=dict,
+        sa_column=Column(JSONB, nullable=False, server_default=sa.text("'{}'::jsonb")),
+    )
+    imported_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc),
+        sa_column=Column(sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
+    )
+
+
+class AdeReceiptLine(SQLModel, table=True):
+    """Cost breakdown line from one imported quietanza."""
+
+    __tablename__ = "ade_receipt_line"
+    __table_args__ = (
+        sa.UniqueConstraint("receipt_id", "ordinal", name="uq_ade_receipt_line_ordinal"),
+        sa.CheckConstraint("quantity > 0 AND unit_amount >= 0 AND amount >= 0", name="ck_ade_receipt_line_amounts"),
+    )
+
+    id: Optional[int] = Field(default=None, sa_column=Column(sa.BigInteger(), primary_key=True))
+    receipt_id: int = Field(
+        sa_column=Column(
+            sa.BigInteger(),
+            sa.ForeignKey("ade_receipt.id", name="fk_ade_receipt_line_receipt_id_ade_receipt", ondelete="CASCADE"),
+            nullable=False,
+        )
+    )
+    ordinal: int = Field(nullable=False)
+    element: str = Field(sa_column=Column(sa.Text(), nullable=False))
+    quantity: int = Field(default=1, nullable=False)
+    unit_amount: Decimal = Field(sa_column=Column(sa.Numeric(12, 2), nullable=False))
+    amount: Decimal = Field(sa_column=Column(sa.Numeric(12, 2), nullable=False))
+
+
+class AdeChargeAllocation(SQLModel, table=True):
+    """Evidence-backed assignment of an AdE statement debit to an inspection, or an explicit unattributed amount."""
+
+    __tablename__ = "ade_charge_allocation"
+    __table_args__ = (
+        sa.CheckConstraint("amount > 0", name="ck_ade_charge_allocation_amount"),
+        sa.CheckConstraint(
+            "evidence IN ('statement_detail', 'receipt', 'single_inspection_amount', 'unattributed')",
+            name="ck_ade_charge_allocation_evidence",
+        ),
+        sa.UniqueConstraint("statement_key", "evidence_ref", name="uq_ade_charge_allocation_evidence"),
+        sa.UniqueConstraint("receipt_line_id", name="uq_ade_charge_allocation_receipt_line"),
+        sa.Index("ix_ade_charge_allocation_search", "search_id"),
+    )
+
+    id: Optional[int] = Field(default=None, sa_column=Column(sa.BigInteger(), primary_key=True))
+    statement_key: str = Field(
+        sa_column=Column(
+            sa.String(256),
+            sa.ForeignKey(
+                "ade_statement_row.statement_key", name="fk_ade_charge_allocation_statement_key_ade_statement_row",
+                ondelete="RESTRICT",
+            ),
+            nullable=False,
+        )
+    )
+    search_id: Optional[int] = Field(
+        default=None,
+        sa_column=Column(
+            sa.BigInteger(),
+            sa.ForeignKey(
+                "mortgage_search.id", name="fk_ade_charge_allocation_search_id_mortgage_search", ondelete="RESTRICT"
+            ),
+            nullable=True,
+        ),
+    )
+    receipt_line_id: Optional[int] = Field(
+        default=None,
+        sa_column=Column(
+            sa.BigInteger(),
+            sa.ForeignKey(
+                "ade_receipt_line.id", name="fk_ade_charge_allocation_receipt_line_id_ade_receipt_line",
+                ondelete="RESTRICT",
+            ),
+            nullable=True,
+        ),
+    )
+    amount: Decimal = Field(sa_column=Column(sa.Numeric(12, 2), nullable=False))
+    evidence: str = Field(sa_column=Column(sa.String(32), nullable=False))
+    evidence_ref: str = Field(sa_column=Column(sa.String(256), nullable=False))
+    created_by: str = Field(sa_column=Column(sa.String(255), nullable=False))
+    created_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc),
+        sa_column=Column(sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
+    )
+
+
 # ---------------------------------------------------------------------------
 # Archive (schema sister_archive): raw payloads kept out of the working tables
 # ---------------------------------------------------------------------------

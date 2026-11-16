@@ -41,6 +41,22 @@ chiavi API nella configurazione condivisa o nel repository.
 | `get_request` | Legge stato e risultato di una richiesta tramite ID. |
 | `search_history` | Cerca le risposte conservate applicando filtri catastali. |
 | `sister_health` | Controlla la raggiungibilità e lo stato dell'API. |
+| `start_mortgage_search` | Avvia, dopo conferma esplicita, solo l'anteprima gratuita di un'ispezione ipotecaria persona fisica. |
+| `mortgage_search_status` | Legge anteprima, formalità tipizzate, richieste pendenti e azioni da riconciliare. |
+| `mortgage_search_quote` | Prepara un preventivo e, se confermabile, un token breve; lo strumento non conferma mai un passaggio a pagamento. |
+
+### Ispezione ipotecaria persona fisica
+
+`start_mortgage_search` richiede `confirm_start=true` e restituisce l'ID del flusso. Avvia soltanto l'anteprima: non
+conferma *Accetta*, note, titoli o *Salva* in Richieste. `mortgage_search_quote` prepara il preventivo *Accetta* dal costo
+mostrato dal portale, stima note (`step="notes"`, `ordinals=[...]`) o un titolo (`step="title"`, `ordinal=...`) con la
+tariffa misurata, e quota *Salva* per un preciso `idRichiesta` (`step="richieste_save"`, `portal_request_id=...`) dopo
+aver letto la relativa riga. Quando confermabile, la risposta include un token breve legato al preventivo; il tool non
+usa mai quel token per confermare l'azione. La conferma a pagamento e la riconciliazione di un esito incerto richiedono la
+sessione web SISTER autenticata come admin.
+Il token non può essere usato da CLI o MCP per esprimere il consenso dell'admin. Anche `preview_query` e `submit_query`
+espongono l'alias CLI `ipotecaria-persona-fisica`; l'esito contiene `flow_id` e `admin_review`, così il flusso può essere
+consultato con `mortgage_search_status`.
 
 ### Flusso di invio
 

@@ -97,13 +97,16 @@ def test_paid_inspection_commands_warn_and_forward_parameters(monkeypatch, comma
     result = runner.invoke(app, command_args)
 
     assert result.exit_code == 0, result.output
-    assert "paid service" in result.output
+    assert "Preview only" in result.output
+    assert "signed-in admin" in result.output
+    assert "flow" in result.output
+    assert "does not authorize a payment" in result.output
     assert calls[0]["tipo_ricerca"] == search_type
     assert calls[0]["auto_confirm"] is False
     assert {key: calls[0][key] for key in expected} == expected
 
 
-def test_paid_inspection_yes_confirms_and_wait_writes_result(monkeypatch, tmp_path):
+def test_paid_inspection_yes_never_confirms_and_wait_writes_preview(monkeypatch, tmp_path):
     from sister.client import VisuraClient
 
     calls = []
@@ -117,7 +120,7 @@ def test_paid_inspection_yes_confirms_and_wait_writes_result(monkeypatch, tmp_pa
         return {
             "request_id": request_id,
             "status": "completed",
-            "data": {"cost": {"text": "Costo", "value": 1.25}, "confirmed": True},
+            "data": {"cost": {"text": "Costo", "value": 1.25}, "confirmed": False},
         }
 
     monkeypatch.setattr(VisuraClient, "ispezione_ipotecaria", fake_inspection)
@@ -130,14 +133,46 @@ def test_paid_inspection_yes_confirms_and_wait_writes_result(monkeypatch, tmp_pa
     )
 
     assert result.exit_code == 0, result.output
-    assert calls[0]["auto_confirm"] is True
+    assert calls[0]["auto_confirm"] is False
     assert calls[1] == {"waited_for": "inspection-yes"}
     assert "Cost: Costo (€1.25)" in result.output
+    assert "Cost not confirmed" in result.output
     assert json.loads(output.read_text()) == {
         "request_id": "inspection-yes",
         "status": "completed",
-        "data": {"cost": {"text": "Costo", "value": 1.25}, "confirmed": True},
+        "data": {"cost": {"text": "Costo", "value": 1.25}, "confirmed": False},
     }
+
+
+def test_mortgage_save_quote_forwards_exact_portal_request_id(monkeypatch):
+    from sister.client import VisuraClient
+
+    calls = []
+
+    async def fake_quote(self, flow_id, **kwargs):
+        calls.append((flow_id, kwargs))
+        return {"quote": {"portal_request_id": kwargs["portal_request_id"]}}
+
+    monkeypatch.setattr(VisuraClient, "mortgage_search_quote", fake_quote)
+    result = runner.invoke(
+        app,
+        ["mortgage", "quote", "18", "--step", "richieste_save", "--portal-request-id", "REQ-888"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert calls == [
+        (
+            18,
+            {
+                "step": "richieste_save",
+                "ordinals": None,
+                "ordinal": None,
+                "portal_request_id": "REQ-888",
+                "format": "PDF",
+            },
+        )
+    ]
+    assert "REQ-888" in result.output
 
 
 def test_workflow_preset_dry_run_builds_plan_without_sending(monkeypatch):
@@ -339,9 +374,13 @@ def test_db_backfill_runs_both_projections_and_xml_and_records_activity(monkeypa
 
     calls = {}
 
-    async def fake_projections(*, limit):
-        calls["projections"] = limit
+    async def fake_projections(*, limit, contains):
+        calls["projections"] = (limit, contains)
         return 3
+
+    async def fake_mortgage_searches(*, limit):
+        calls["mortgage_searches"] = limit
+        return {"responses": 2, "searches": 2, "formalities": 4, "annotations": 1, "document_requests": 0}
 
     async def fake_xml(*, force, limit):
         calls["xml"] = (force, limit)
@@ -361,6 +400,7 @@ def test_db_backfill_runs_both_projections_and_xml_and_records_activity(monkeypa
 
     monkeypatch.setattr(database, "backfill_ownership_history", fake_history)  # the real one wipes and rebuilds the live history
     monkeypatch.setattr(database, "backfill_projections", fake_projections)
+    monkeypatch.setattr(database, "backfill_mortgage_searches", fake_mortgage_searches)
     monkeypatch.setattr(xml_ingest, "backfill_documents", fake_xml)
     monkeypatch.setattr(database, "backfill_subject_names", fake_names)
     monkeypatch.setattr(database, "refresh_subject_holdings", fake_holdings)
@@ -369,18 +409,51 @@ def test_db_backfill_runs_both_projections_and_xml_and_records_activity(monkeypa
     result = runner.invoke(app, ["db", "backfill", "--force", "--limit", "12"])
 
     assert result.exit_code == 0, result.output
-    assert calls["projections"] == 12
+    assert calls["projections"] == (12, None)
+    assert calls["mortgage_searches"] == 12
     assert calls["xml"] == (True, 12)
     assert calls["activity"][0] == ("db.backfill",)
     assert calls["activity"][1]["params"] == {"what": "all", "force": True, "limit": 12}
-    assert calls["activity"][1]["result"] == {"projections": 3, "xml": 5, "names": {"nameless": 0}, "history": {"answers": 0}, "holdings": 7}
+    assert calls["activity"][1]["result"] == {
+        "projections": 3,
+        "mortgage_searches": {"responses": 2, "searches": 2, "formalities": 4, "annotations": 1, "document_requests": 0},
+        "xml": 5,
+        "names": {"nameless": 0},
+        "history": {"answers": 0},
+        "holdings": 7,
+    }
+
+
+def test_db_backfill_mortgage_searches_is_scoped_and_limited(monkeypatch):
+    from sister import database
+
+    calls = []
+
+    async def fake_mortgage_searches(*, limit):
+        calls.append(limit)
+        return {"responses": 1}
+
+    async def fake_activity(*args, **kwargs):
+        calls.append(kwargs)
+
+    monkeypatch.setattr(database, "backfill_mortgage_searches", fake_mortgage_searches)
+    monkeypatch.setattr(database, "record_activity", fake_activity)
+
+    result = runner.invoke(app, ["db", "backfill", "mortgage-searches", "--limit", "2"])
+
+    assert result.exit_code == 0, result.output
+    assert calls[0] == 2
+    assert calls[1]["params"] == {"what": "mortgage-searches", "force": False, "limit": 2}
+    assert calls[1]["result"] == {"mortgage_searches": {"responses": 1}}
 
 
 def test_db_backfill_rejects_unknown_target():
     result = runner.invoke(app, ["db", "backfill", "unknown"])
 
     assert result.exit_code == 2
-    assert "usa projections, xml, holdings, names, history o all" in result.output
+    assert "usa projections" in result.output
+    assert "mortgage-searches" in result.output
+    assert "all" in result.output
 
 
 def test_floor_plan_validate_passes_inputs_and_writes_report(monkeypatch, tmp_path):

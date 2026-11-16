@@ -36,6 +36,7 @@ DEFAULT_LONG_POLL = 25.0
 API_V1_PREFIX = "/api/v1"
 _VERSIONED_API_ROOTS = (
     "/visura",
+    "/mortgage-searches",
     "/catasto/workflow",
     "/territorio",
     "/courts",
@@ -401,6 +402,46 @@ class VisuraClient:
         return await self._request(
             "POST", "/visura/ispezione-ipotecaria", json=payload, force=force, reuse_cached=reuse_cached
         )
+
+    async def mortgage_search_start(
+        self,
+        *,
+        provincia: str,
+        codice_fiscale: str,
+        form_fields: dict[str, Any] | None = None,
+        force: bool = False,
+    ) -> dict:
+        """Queue only the free persona-fisica preview of a guarded mortgage search."""
+        if form_fields:
+            raise ValueError("The guarded persona-fisica preview accepts only provincia and codice_fiscale")
+        return await self._request(
+            "POST",
+            "/mortgage-searches",
+            json={"tipo_ricerca": "persona_fisica", "provincia": provincia, "codice_fiscale": codice_fiscale.upper()},
+        )
+
+    async def mortgage_search_status(self, flow_id: int) -> dict:
+        return await self._request("GET", f"/mortgage-searches/{int(flow_id)}")
+
+    async def mortgage_search_quote(
+        self,
+        flow_id: int,
+        *,
+        step: str = "accept",
+        ordinals: list[int] | None = None,
+        ordinal: int | None = None,
+        portal_request_id: str | None = None,
+        format: str = "PDF",
+    ) -> dict:
+        """Quote one guarded paid action; confirmation remains an admin web-session operation."""
+        payload: dict[str, Any] = {"step": step, "format": format}
+        if ordinals is not None:
+            payload["ordinals"] = ordinals
+        if ordinal is not None:
+            payload["ordinal"] = ordinal
+        if portal_request_id is not None:
+            payload["portal_request_id"] = portal_request_id
+        return await self._request("POST", f"/mortgage-searches/{int(flow_id)}/quote", json=payload)
 
     async def workflow_status(self, workflow_id: str) -> dict:
         return await self._request("GET", f"/catasto/workflow/runs/{workflow_id}")

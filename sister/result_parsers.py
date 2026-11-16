@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import math
 import re
+import unicodedata
 from datetime import date, datetime
 from zoneinfo import ZoneInfo
 from decimal import Decimal, InvalidOperation
@@ -809,3 +810,132 @@ def normalize_class(value: Any) -> str | None:
     if not text:
         return None
     return (text.lstrip("0") or None) if text.isdigit() else text
+
+
+# -- Ispezione ipotecaria: "Elenco sintetico delle formalità" ---------------------------------------------------------
+
+_FORMALITY_HEAD = re.compile(
+    r"^(\d+)\s+(TRASCRIZIONE|ISCRIZIONE|ANNOTAZIONE) (A FAVORE E CONTRO|A FAVORE|CONTRO) del (\d{2}/\d{2}/\d{4})"
+    r" - Registro Particolare (\d+) Registro Generale (\d+)$"
+)
+_FORMALITY_OFFICIAL = re.compile(r"^Pubblico ufficiale (.+?) Repertorio (\S+) del (\d{2}/\d{2}/\d{4})$")
+_FORMALITY_RELATED = re.compile(r"^\d+ - (\w+) n\. (\d+) del (\d{2}/\d{2}/\d{4}) \((.+)\)$")
+_FORMALITY_END = ("Documenti in formato elaborabile", "Formato documento")
+_CANCELLATION = re.compile(r"\b(cancellazione|cancellata|cancellato|cancellate|cancellati)\b", re.IGNORECASE)
+_INSPECTION_NUMBER_DATE = re.compile(
+    r"\bn\.?\s*(T1?\s*\d+)\s+del\s+(\d{2}/\d{2}/\d{4})\b", re.IGNORECASE
+)
+
+
+def _iso_date(value: str) -> str:
+    return f"{value[6:10]}-{value[3:5]}-{value[0:2]}"
+
+
+def parse_formalita_list(text: Any, selection_values: Any = ()) -> list[dict[str, Any]]:
+    """The visible text of the SISTER page *Elenco delle note* → one dict per formalità, in the page's order.
+
+    Each entry of the list is a heading (``1 TRASCRIZIONE A FAVORE del 29/12/2011 - Registro Particolare 15128 Registro
+    Generale 23828``) followed by the public official with repertorio, the act, the place, the availability line and,
+    optionally, *Documenti successivi correlati* (the annotations). ``selection_values`` are the values of the page's
+    ``noteSelezionate`` checkboxes, in order: each is attached as ``portal_selection_value`` to the entry whose register
+    numbers it contains, and ignored when the two lists do not line up. Dates are ISO strings.
+    """
+    entries: list[dict[str, Any]] = []
+    current: dict[str, Any] | None = None
+    for raw in str(text or "").splitlines():
+        line = squeeze(raw)
+        if not line:
+            continue
+        head = _FORMALITY_HEAD.match(line)
+        if head:
+            current = {
+                "numero": int(head[1]),
+                "tipo": head[2],
+                "verso": head[3],
+                "data_formalita": _iso_date(head[4]),
+                "registro_particolare": head[5],
+                "registro_generale": head[6],
+                "nota_disponibile_elettronica": False,
+                "presenza_titolo_telematico": False,
+                "documenti_correlati": [],
+            }
+            entries.append(current)
+            continue
+        if current is None:
+            continue
+        if line.startswith(_FORMALITY_END):
+            break
+        official = _FORMALITY_OFFICIAL.match(line)
+        related = _FORMALITY_RELATED.match(line)
+        if official:
+            current.update(pubblico_ufficiale=official[1], repertorio=official[2], data_repertorio=_iso_date(official[3]))
+        elif line.startswith("Immobili siti in "):
+            current["immobili"] = line.removeprefix("Immobili siti in ")
+        elif line.startswith("Nota disponibile"):
+            current["nota_disponibile_elettronica"] = "formato elettronico" in line
+            current["presenza_titolo_telematico"] = "Presenza titolo telematico" in line
+        elif related:
+            current["documenti_correlati"].append(
+                {"tipo": related[1], "numero": related[2], "data": _iso_date(related[3]), "descrizione": related[4]}
+            )
+        elif line.startswith("Documenti successivi correlati"):
+            continue
+        elif "causale" not in current and "pubblico_ufficiale" in current and "immobili" not in current:
+            current["causale"] = line
+    values = [str(value) for value in selection_values or ()]
+    if len(values) == len(entries):
+        for entry, value in zip(entries, values):
+            if f"-{entry['registro_particolare']}-0-{entry['registro_generale']}-" in value:
+                entry["portal_selection_value"] = value
+    return entries
+
+
+def parse_mortgage_inspection_page(
+    text: Any,
+    selection_values: Any = (),
+    *,
+    subject_fiscal_code: str,
+    office: str,
+    scope: str = "office",
+    requester_fiscal_code: str | None = None,
+    motivation: str | None = None,
+) -> dict[str, Any] | None:
+    """Normalize the accepted inspection result and its formalità from the visible SISTER page.
+
+    An inspection identity is emitted only when the portal page shows both its T number and date. The caller must keep
+    an accepted action without these fields in the flow for manual review rather than inventing an identity.
+    """
+    page_text = str(text or "")
+    identity = _INSPECTION_NUMBER_DATE.search(page_text)
+    if identity is None:
+        return None
+    number = squeeze(identity.group(1)).upper()
+    digits = re.fullmatch(r"T1\s+(\d+)", number) or re.fullmatch(r"T\s*(\d+)", number)
+    if digits is None:
+        return None
+    inspection_date = _iso_date(identity.group(2))
+    formalities = parse_formalita_list(page_text, selection_values)
+    annotations_count = sum(len(item.get("documenti_correlati") or []) for item in formalities)
+    inspection = {
+        "number": f"T {digits.group(1)}",
+        "date": inspection_date,
+        "office": squeeze(office),
+        "scope": scope,
+        "subject_tax_code": squeeze(subject_fiscal_code).upper(),
+        "requester_tax_code": squeeze(requester_fiscal_code).upper() if requester_fiscal_code else None,
+        "motivation": squeeze(motivation) if motivation else None,
+        "formalities_count": len(formalities),
+        "annotations_count": annotations_count,
+    }
+    return {
+        "portal_capture": {"inspection": inspection},
+        "formalities": formalities,
+        "total_results": len(formalities),
+    }
+
+
+def is_cancellation_annotation(value: Any) -> bool:
+    """Return whether an annotation description explicitly identifies a cancellation."""
+    normalized = unicodedata.normalize("NFKD", squeeze(value)).casefold()
+    normalized = "".join(char for char in normalized if not unicodedata.combining(char))
+    return bool(_CANCELLATION.search(normalized))

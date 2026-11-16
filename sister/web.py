@@ -4004,6 +4004,7 @@ async def _run_missing_pair_batch(job: dict[str, Any], batch: dict[str, Any], se
             job["current"] = "Downloading available PDF/P7M documents"
             downloaded = await service.download_richieste_documents()
             job["downloaded_count"] = len(downloaded)
+            job["blocked_paid_count"] = len(getattr(downloaded, "blocked_paid", []))
 
         remaining = await run_in_threadpool(build_missing_pair_batch, _files_base())
         job["remaining_pair_count"] = len(remaining["missing_pairs"])
@@ -4075,6 +4076,7 @@ async def web_retrieve_missing_pairs(request: Request, user=Depends(_require_adm
             "success_count": 0,
             "failed_count": 0,
             "downloaded_count": 0,
+            "blocked_paid_count": 0,
             "remaining_pair_count": len(batch["missing_pairs"]),
             "remaining_pairs": batch["missing_pairs"][:100],
             "current_index": 0,
@@ -4928,6 +4930,26 @@ async def web_admin_wallets(
         logger.warning("Admin pagoPA history listing failed: %s", type(exc).__name__)
         pagopa_listing = {"rows": [], "total": 0, "page": 1, "page_size": 50, "total_pages": 1}
         pagopa_listing_error = True
+    try:
+        from .ade_ledger import get_ade_ledger_admin_data
+
+        ade_ledger_data = await get_ade_ledger_admin_data(limit=100)
+        ade_ledger_error = False
+    except Exception as exc:  # noqa: BLE001 - keep the existing wallet page available when the AdE ledger is absent
+        logger.warning("AdE ledger view unavailable: %s", type(exc).__name__)
+        ade_ledger_data = {
+            "entries": [],
+            "receipts": [],
+            "receipt_lines": [],
+            "imports": [],
+            "total_credit": Decimal("0.00"),
+            "total_debit": Decimal("0.00"),
+            "balance": Decimal("0.00"),
+            "unattributed_total": Decimal("0.00"),
+            "statement_balance": None,
+            "balance_difference": None,
+        }
+        ade_ledger_error = True
     coupon_page_size = 50
     coupon_total = await count_wallet_gift_coupons()
     coupon_total_pages = max(1, (coupon_total + coupon_page_size - 1) // coupon_page_size)
@@ -4982,6 +5004,8 @@ async def web_admin_wallets(
         pagopa_listing=pagopa_listing,
         pagopa_search=pagopa_search,
         pagopa_listing_error=pagopa_listing_error,
+        ade_ledger_data=ade_ledger_data,
+        ade_ledger_error=ade_ledger_error,
         wallet_enabled=purchases_billing.credit_grants_enabled(),
         coupon_listing=coupon_listing,
         redemption_listing=redemption_listing,
@@ -4990,6 +5014,49 @@ async def web_admin_wallets(
         error=error,
         gift_code=gift_code,
     )
+
+
+@router.post("/admin/ade-ledger/allocations")
+@_audited("admin.ade_ledger.allocate")
+async def web_admin_ade_ledger_allocate(request: Request, user=Depends(_require_admin)):
+    """Attach a statement charge to one inspection using explicit supporting evidence."""
+    from .ade_ledger import AdeLedgerError, allocate_statement_charge
+
+    form = await request.form()
+    statement_key = str(form.get("statement_key") or "").strip()
+    evidence = str(form.get("evidence") or "").strip()
+    evidence_ref = str(form.get("evidence_ref") or "").strip()
+    raw_amount = str(form.get("amount") or "").strip().replace(",", ".")
+    try:
+        amount = Decimal(raw_amount)
+        search_id_raw = str(form.get("search_id") or "").strip()
+        search_id = int(search_id_raw) if search_id_raw else None
+        receipt_line_raw = str(form.get("receipt_line_id") or "").strip()
+        receipt_line_id = int(receipt_line_raw) if receipt_line_raw else None
+        request.state.audit_params = {
+            "statement_key": statement_key[:256],
+            "amount": str(amount),
+            "evidence": evidence[:32],
+            "search_id": search_id,
+            "receipt_line_id": receipt_line_id,
+        }
+        await allocate_statement_charge(
+            statement_key,
+            amount,
+            evidence=evidence,
+            evidence_ref=evidence_ref,
+            created_by=_actor(user)[:255],
+            search_id=search_id,
+            receipt_line_id=receipt_line_id,
+        )
+    except (ValueError, InvalidOperation, AdeLedgerError) as exc:
+        request.state.audit_params = {
+            "statement_key": statement_key[:256],
+            "evidence": evidence[:32],
+            "error_code": str(exc)[:80],
+        }
+        return _wallet_admin_redirect(error="ade_allocation_failed")
+    return _wallet_admin_redirect(status="ade_allocation_created")
 
 
 def _subject_access_redirect(
@@ -6522,6 +6589,8 @@ async def web_admin_document_purchase_delete(request: Request, user=Depends(_req
 @_audited("admin.subject_formalities.download")
 async def web_admin_subject_formalities_download(request: Request, user=Depends(_require_admin)):
     """Download selected mortgage note PDFs from the authenticated SISTER Richieste page."""
+    from fastapi import HTTPException
+
     form = await request.form()
     route_prefix = str(form.get("route_prefix") or "").strip()
     subject_code = str(form.get("subject_code") or "").strip().upper()
@@ -6559,10 +6628,42 @@ async def web_admin_subject_formalities_download(request: Request, user=Depends(
         return RedirectResponse(
             f"{route_prefix}/{quote(subject_code)}?formalities_download_error=download_failed", status_code=303
         )
+    blocked_paid = getattr(downloaded, "blocked_paid", [])
     return RedirectResponse(
-        f"{route_prefix}/{quote(subject_code)}?{urlencode({'formalities_downloaded': len(downloaded)})}",
+        f"{route_prefix}/{quote(subject_code)}?{urlencode({'formalities_downloaded': len(downloaded), 'formalities_blocked': len(blocked_paid)})}",
         status_code=303,
     )
+
+
+@router.post("/admin/subject-formalities/quote", response_class=JSONResponse)
+@_audited("admin.subject_formalities.quote")
+async def web_admin_subject_formalities_quote(request: Request, user=Depends(_require_admin)):
+    """Return an ownership-aware price estimate without touching the SISTER portal."""
+    from fastapi import HTTPException
+
+    from .ade_tariff import quote_note_request, quote_title_request
+
+    try:
+        body = await request.json()
+        if not isinstance(body, dict):
+            raise ValueError("Invalid quote")
+        search_id = int(body.get("search_id"))
+        kind = str(body.get("kind") or "")
+        fmt = str(body.get("format") or "PDF").upper()
+        if kind == "note":
+            ordinals = body.get("ordinals")
+            if not isinstance(ordinals, list) or not ordinals or len(ordinals) > 100:
+                raise ValueError("Select at least one and at most 100 formalities")
+            quote_result = await quote_note_request(search_id, [int(value) for value in ordinals], fmt)
+        elif kind == "title":
+            ordinal = int(body.get("ordinal"))
+            quote_result = await quote_title_request(search_id, ordinal, fmt)
+        else:
+            raise ValueError("Unsupported mortgage quote kind")
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc) or "Invalid quote") from exc
+    request.state.audit_params = {"search_id": search_id, "kind": kind, "format": fmt}
+    return JSONResponse(quote_result.public_dict())
 
 
 @router.get("/about", response_class=HTMLResponse)
@@ -9723,6 +9824,556 @@ async def web_document_plan(doc_id: int, request: Request, user=Depends(_require
     if result is None:
         raise HTTPException(status_code=422, detail="Plan data not available for this document")
     return JSONResponse(result)
+
+
+@router.post("/admin/mortgage-searches/start")
+@_audited("admin.mortgage_search.start")
+async def web_admin_mortgage_search_start(request: Request, user=Depends(_require_admin)):
+    from fastapi import HTTPException
+
+    from .fiscal_code import valid_codice_fiscale
+    from .main import visura_service
+    from .models import IspezioneIpotecariaRequest
+
+    form = await request.form()
+    fiscal_code = str(form.get("subject_fiscal_code") or "").strip().upper()
+    province = str(form.get("province") or "").strip()
+    request.state.audit_params = {"subject_fiscal_code_suffix": fiscal_code[-4:], "province": province}
+    if not valid_codice_fiscale(fiscal_code) or not province:
+        raise HTTPException(status_code=422, detail="Codice fiscale or office province is invalid")
+    if visura_service is None or not visura_service.auth_ready:
+        raise HTTPException(status_code=503, detail="SISTER browser session unavailable")
+    portal_request = IspezioneIpotecariaRequest(
+        request_id=f"mortgage_flow_{uuid4().hex}",
+        search_type="persona_fisica",
+        province=province,
+        fiscal_code=fiscal_code,
+        auto_confirm=False,
+    )
+    try:
+        flow = await visura_service.add_mortgage_flow_request(portal_request, started_by=_actor(user))
+    except Exception as exc:  # noqa: BLE001 - queue and database errors are reported as a service problem
+        logger.warning("Mortgage search start failed (%s)", type(exc).__name__)
+        raise HTTPException(status_code=503, detail="Could not queue the mortgage search preview") from exc
+    return RedirectResponse(f"/admin/mortgage-searches/{flow['id']}", status_code=303)
+
+
+@router.get("/admin/mortgage-searches/{flow_id}", response_class=HTMLResponse)
+@_audited("admin.mortgage_search.view")
+async def web_admin_mortgage_search(flow_id: int, request: Request, user=Depends(_require_admin)):
+    from decimal import Decimal, InvalidOperation
+
+    from fastapi import HTTPException
+
+    from .main import visura_service
+    from .mortgage_flow import MortgageFlowError, flow_status, issue_confirmation_token
+
+    try:
+        flow = await flow_status(flow_id)
+    except MortgageFlowError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    preview = None
+    token = None
+    quote = None
+    if visura_service is not None and flow.get("request_ref"):
+        response = await visura_service.get_response(flow["request_ref"])
+        if response is not None:
+            preview = {"success": response.success, "data": response.data, "error": response.error}
+            data = response.data if isinstance(response.data, dict) else {}
+            cost = data.get("cost") if isinstance(data.get("cost"), dict) else {}
+            if flow["state"] == "preview" and data.get("confirmed") is False:
+                try:
+                    amount = Decimal(str(cost.get("value"))).quantize(Decimal("0.01"))
+                    quote = {
+                        "step": "accept",
+                        "amount": str(amount),
+                        "currency": "EUR",
+                        "source": "cost_page",
+                        "display": str(cost.get("text") or ""),
+                    }
+                    token = issue_confirmation_token(flow_id, "accept", quote)["token"]
+                except (InvalidOperation, TypeError, ValueError, RuntimeError):
+                    quote = None
+    return _get_theme(request).render(
+        "mortgage_search_flow.html",
+        request,
+        user=user,
+        flow=flow,
+        preview=preview,
+        quote=quote,
+        confirmation_token=token,
+        admin_quote=None,
+    )
+
+
+@router.post("/admin/mortgage-searches/{flow_id}/quote", response_class=HTMLResponse)
+@_audited("admin.mortgage_search.quote")
+async def web_admin_mortgage_search_quote(flow_id: int, request: Request, user=Depends(_require_admin)):
+    """Show one ownership-aware note/title quote and mint a short-lived token for that exact selection."""
+    from fastapi import HTTPException
+
+    from .ade_tariff import (
+        get_formality_portal_items,
+        quote_note_request,
+        quote_richieste_save,
+        quote_title_request,
+    )
+    from .main import visura_service
+    from .mortgage_flow import MortgageFlowError, flow_status, issue_confirmation_token
+
+    form = await request.form()
+    step = str(form.get("step") or "").strip()
+    try:
+        flow = await flow_status(flow_id)
+    except MortgageFlowError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    if flow.get("state") not in {"accepted", "running"}:
+        raise HTTPException(status_code=409, detail="flow_not_at_formalita_step")
+    if flow.get("search_id") is None:
+        raise HTTPException(status_code=409, detail="accepted_search_required")
+
+    if step == "notes":
+        if flow.get("current_step") != "formalita":
+            raise HTTPException(status_code=409, detail="flow_not_at_formalita_step")
+        raw_ordinals = form.getlist("ordinals")
+        try:
+            ordinals = [int(value) for value in raw_ordinals]
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(status_code=422, detail="Invalid note ordinals") from exc
+        if not ordinals or len(ordinals) > 100 or any(value <= 0 for value in ordinals) or len(set(ordinals)) != len(ordinals):
+            raise HTTPException(status_code=422, detail="Select 1 to 100 unique positive note ordinals")
+        paid_quote = await quote_note_request(flow["search_id"], ordinals, "PDF")
+    elif step == "title":
+        if flow.get("current_step") != "formalita":
+            raise HTTPException(status_code=409, detail="flow_not_at_formalita_step")
+        try:
+            ordinal = int(form.get("ordinal") or "")
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(status_code=422, detail="Invalid title ordinal") from exc
+        if ordinal <= 0:
+            raise HTTPException(status_code=422, detail="Select one positive title ordinal")
+        ordinals = [ordinal]
+        paid_quote = await quote_title_request(flow["search_id"], ordinal, "PDF")
+    elif step == "richieste_save":
+        if flow.get("current_step") not in {"formalita", "richieste_list"}:
+            raise HTTPException(status_code=409, detail="flow_not_at_richieste_step")
+        portal_request_id = str(form.get("portal_request_id") or "").strip()
+        if not visura_service or not visura_service.auth_ready:
+            raise HTTPException(status_code=503, detail="SISTER browser session unavailable for Richieste quote")
+        observed = await visura_service.browser_manager.inspect_mortgage_request_row(portal_request_id)
+        portal_row = observed.get("row")
+        if not isinstance(portal_row, dict) or observed.get("ambiguous"):
+            raise HTTPException(status_code=409, detail="richieste_request_row_not_found_or_ambiguous")
+        try:
+            quote_data = await quote_richieste_save(flow["search_id"], portal_request_id, portal_row)
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        if not observed.get("page_restored") and flow.get("current_step") == "formalita":
+            from .mortgage_flow import update_flow_state
+
+            flow = {
+                **flow,
+                "state": "running",
+                "current_step": "richieste_list",
+                "state_payload": {
+                    **(flow.get("state_payload") or {}),
+                    "last_richieste_quote_page_restored": False,
+                },
+            }
+            await update_flow_state(
+                flow_id,
+                state="running",
+                current_step="richieste_list",
+                state_payload=flow["state_payload"],
+            )
+        ordinals = []
+    else:
+        raise HTTPException(status_code=422, detail="unsupported_paid_step")
+
+    if step != "richieste_save":
+        public_quote = paid_quote.public_dict()
+        payable_ordinals = [ordinal for line in paid_quote.lines for ordinal in line.ordinals]
+        portal_items = await get_formality_portal_items(flow["search_id"], payable_ordinals)
+        if payable_ordinals and len(portal_items) != len(payable_ordinals):
+            public_quote["blocked"] = [
+                *public_quote["blocked"],
+                {"reason": "portal_selection_value_missing", "ordinals": payable_ordinals},
+            ]
+        quote_data = {
+            "step": step,
+            **public_quote,
+            "portal_items": portal_items,
+            "amount": public_quote.get("new_cost"),
+            "format": "PDF",
+        }
+    else:
+        payable_ordinals = [quote_data["ordinal"]]
+    token = None
+    if step == "richieste_save":
+        can_confirm = Decimal(str(quote_data.get("amount") or "0")) > 0
+    else:
+        can_confirm = bool(
+            payable_ordinals
+            and len(portal_items) == len(payable_ordinals)
+            and not paid_quote.blocked
+            and paid_quote.new_cost is not None
+            and paid_quote.new_cost > 0
+        )
+    if can_confirm:
+        try:
+            token = issue_confirmation_token(flow_id, step, quote_data)["token"]
+        except (MortgageFlowError, RuntimeError) as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    request.state.audit_params = {
+        "flow_id": flow_id,
+        "step": step,
+        "ordinals": ordinals,
+        "portal_request_id": quote_data.get("portal_request_id"),
+    }
+    preview = None
+    response = await visura_service.get_response(flow.get("request_ref") or "") if visura_service else None
+    if response is not None:
+        preview = {"success": response.success, "data": response.data, "error": response.error}
+    return _get_theme(request).render(
+        "mortgage_search_flow.html",
+        request,
+        user=user,
+        flow=flow,
+        preview=preview,
+        quote=None,
+        confirmation_token=None,
+        admin_quote={"quote": quote_data, "token": token},
+    )
+
+
+@router.post("/admin/mortgage-searches/{flow_id}/confirm", response_class=JSONResponse)
+@_audited("admin.mortgage_search.confirm")
+async def web_admin_mortgage_search_confirm(flow_id: int, request: Request, user=Depends(_require_admin)):
+    """Confirm exactly one current paid step under the signed-in admin identity."""
+    from fastapi import HTTPException
+
+    from .main import visura_service
+    from .models import VisuraResponse
+    from .mortgage_flow import (
+        MortgageFlowError,
+        execute_paid_action,
+        flow_status,
+        update_flow_state,
+        verify_confirmation_token,
+    )
+
+    is_json = "application/json" in request.headers.get("content-type", "")
+    try:
+        if is_json:
+            body = await request.json()
+        else:
+            body = dict(await request.form())
+    except Exception as exc:  # noqa: BLE001 - invalid body is a client error
+        raise HTTPException(status_code=400, detail="Invalid confirmation body") from exc
+    token = str(body.get("token") or "").strip() if isinstance(body, dict) else ""
+    if not token:
+        raise HTTPException(status_code=422, detail="confirmation_token_required")
+    try:
+        quote_token = verify_confirmation_token(token, flow_id=flow_id)
+        flow = await flow_status(flow_id)
+    except (MortgageFlowError, RuntimeError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    step = quote_token["step"]
+    if step == "accept":
+        if flow["state"] != "preview" or not flow.get("request_ref"):
+            raise HTTPException(status_code=409, detail="flow_not_at_preview")
+    elif step in {"notes", "title"}:
+        if flow.get("search_id") is None or flow["state"] not in {"accepted", "running"}:
+            raise HTTPException(status_code=409, detail="accepted_search_required")
+        if flow.get("current_step") != "formalita":
+            raise HTTPException(status_code=409, detail="flow_not_at_formalita_step")
+        if not isinstance(quote_token.get("quote", {}).get("portal_items"), list):
+            raise HTTPException(status_code=409, detail="paid_quote_items_missing")
+    elif step == "richieste_save":
+        save_quote = quote_token.get("quote") or {}
+        if flow.get("search_id") is None or flow["state"] not in {"accepted", "running"}:
+            raise HTTPException(status_code=409, detail="accepted_search_required")
+        if flow.get("current_step") not in {"formalita", "richieste_list"}:
+            raise HTTPException(status_code=409, detail="flow_not_at_richieste_step")
+        if int(save_quote.get("search_id") or 0) != int(flow["search_id"]):
+            raise HTTPException(status_code=409, detail="paid_save_quote_wrong_search")
+    else:
+        raise HTTPException(status_code=409, detail="paid_step_executor_not_available")
+    if visura_service is None or not visura_service.auth_ready:
+        raise HTTPException(status_code=503, detail="SISTER browser session unavailable")
+    actor = _actor(user)
+
+    async def _execute(action, clicked_callback):
+        if action["step"] == "accept":
+            return await visura_service.browser_manager.confirm_mortgage_accept(
+                expected_amount=action["quote"]["amount"],
+                subject_fiscal_code=flow["subject_fiscal_code"],
+                office=flow["office"],
+                scope=flow["scope"],
+                clicked_callback=clicked_callback,
+            )
+        if action["step"] in {"notes", "title"}:
+            outcome = await visura_service.browser_manager.request_mortgage_documents(
+                step=action["step"],
+                portal_items=action["quote"]["portal_items"],
+                clicked_callback=clicked_callback,
+            )
+            if outcome.get("confirmed") is True:
+                from .mortgage_flow import attach_paid_action_requests
+
+                await attach_paid_action_requests(action["id"], outcome.get("requests") or [])
+            return outcome
+        outcome = await visura_service.browser_manager.save_mortgage_request(
+            quote=action["quote"],
+            clicked_callback=clicked_callback,
+        )
+        if outcome.get("confirmed") is True:
+            from .mortgage_flow import complete_paid_request_save
+
+            await complete_paid_request_save(
+                action["id"],
+                str(action["quote"]["portal_request_id"]),
+                int(outcome["document_id"]),
+            )
+        return outcome
+
+    try:
+        action_result = await execute_paid_action(flow_id, token, actor, _execute)
+    except MortgageFlowError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001 - action state is persisted as uncertain by execute_paid_action
+        logger.warning("Mortgage paid action outcome uncertain (%s)", type(exc).__name__)
+        raise HTTPException(status_code=409, detail="paid_action_outcome_uncertain; reconcile before retry") from exc
+
+    portal_result = action_result.get("result") or {}
+    response = await visura_service.get_response(flow["request_ref"])
+    next_step = portal_result.get("next_step") or ("richieste_list" if step == "richieste_save" else step)
+    next_flow_state = "running"
+    if action_result.get("state") == "confirmed" and step == "richieste_save":
+        refreshed_flow = await flow_status(flow_id)
+        unresolved = any(
+            row.get("status") in {"intended", "requested", "available", "uncertain"}
+            for row in refreshed_flow.get("pending_requests", [])
+        )
+        if not unresolved:
+            next_step = "complete"
+            next_flow_state = "complete"
+    if action_result.get("state") == "confirmed" and response is not None:
+        data = dict(response.data) if isinstance(response.data, dict) else {}
+        portal_data = portal_result.get("portal_data")
+        if isinstance(portal_data, dict):
+            data.update(portal_data)
+        old_visits = data.get("page_visits") if isinstance(data.get("page_visits"), list) else []
+        data["page_visits"] = old_visits + (portal_result.get("page_visits") or [])
+        data["confirmed"] = True
+        data["paid_flow"] = {
+            "flow_id": flow_id,
+            "current_step": next_step,
+            "last_paid_step": step,
+            "last_paid_action_id": action_result["id"],
+        }
+        old_flow_payload = flow.get("state_payload") if isinstance(flow.get("state_payload"), dict) else {}
+        await update_flow_state(
+            flow_id,
+            state=next_flow_state,
+            current_step=next_step,
+            state_payload={
+                **old_flow_payload,
+                "last_paid_action_id": action_result["id"],
+                "last_paid_action_step": step,
+                "last_portal_result": portal_result,
+            },
+        )
+        await visura_service._store_response(
+            VisuraResponse(
+                request_id=response.request_id,
+                success=True,
+                cadastre_type=response.cadastre_type,
+                data=data,
+            )
+        )
+    result = {"flow_id": flow_id, "action": action_result, "next_step": next_step}
+    if is_json:
+        return JSONResponse(result)
+    return RedirectResponse(f"/admin/mortgage-searches/{flow_id}", status_code=303)
+
+
+@router.post("/admin/mortgage-searches/{flow_id}/select-homonym", response_class=JSONResponse)
+@_audited("admin.mortgage_search.select_homonym")
+async def web_admin_mortgage_search_select_homonym(
+    flow_id: int,
+    request: Request,
+    user=Depends(_require_admin),
+):
+    """Continue an already-paid inspection only after an admin chooses the matching homonym."""
+    from fastapi import HTTPException
+
+    from .main import visura_service
+    from .models import VisuraResponse
+    from .mortgage_flow import MortgageFlowError, flow_status, update_flow_state
+
+    try:
+        if "application/json" in request.headers.get("content-type", ""):
+            body = await request.json()
+        else:
+            body = dict(await request.form())
+    except Exception as exc:  # noqa: BLE001 - invalid body is a client error
+        raise HTTPException(status_code=400, detail="Invalid homonym selection body") from exc
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="Invalid homonym selection body")
+
+    try:
+        flow = await flow_status(flow_id)
+    except MortgageFlowError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    state_payload = flow.get("state_payload") if isinstance(flow.get("state_payload"), dict) else {}
+    last_portal_result = state_payload.get("last_portal_result")
+    last_portal_result = last_portal_result if isinstance(last_portal_result, dict) else {}
+    expected_values = last_portal_result.get("homonym_values")
+    selected_value = str(body.get("homonym_value") or "")
+    if flow.get("state") != "running" or flow.get("current_step") != "omonimi" or flow.get("search_id"):
+        raise HTTPException(status_code=409, detail="flow_not_waiting_for_homonym_selection")
+    if not isinstance(expected_values, list) or not expected_values or selected_value not in expected_values:
+        raise HTTPException(status_code=422, detail="homonym_selection_invalid")
+    if visura_service is None or not visura_service.auth_ready:
+        raise HTTPException(status_code=503, detail="SISTER browser session unavailable")
+
+    homonyms = last_portal_result.get("homonyms") if isinstance(last_portal_result.get("homonyms"), list) else []
+    selected_index = expected_values.index(selected_value)
+    selected = homonyms[selected_index] if selected_index < len(homonyms) and isinstance(homonyms[selected_index], dict) else {}
+    request.state.audit_params = {
+        "flow_id": flow_id,
+        "homonym_index": selected_index + 1,
+        "subject_fiscal_code_suffix": str(selected.get("codice_fiscale") or "")[-4:],
+    }
+    try:
+        outcome = await visura_service.browser_manager.select_mortgage_homonym(
+            expected_values=expected_values,
+            selected_value=selected_value,
+            subject_fiscal_code=flow["subject_fiscal_code"],
+            office=flow["office"],
+            scope=flow["scope"],
+        )
+    except (ValueError, RuntimeError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    portal_data = outcome.get("portal_data") if isinstance(outcome.get("portal_data"), dict) else None
+    updated_state = {
+        **state_payload,
+        "homonym_selection": {
+            "selected": outcome.get("selected_homonym") or selected,
+            "result_readable": portal_data is not None,
+            "page_visits": outcome.get("page_visits") or [],
+        },
+        "last_portal_result": {
+            **last_portal_result,
+            "next_step": outcome.get("next_step") or "omonimi",
+            "selected_homonym": outcome.get("selected_homonym") or selected,
+            "result_readable": portal_data is not None,
+        },
+    }
+    await update_flow_state(
+        flow_id,
+        state="running",
+        current_step="formalita" if portal_data is not None else "omonimi",
+        state_payload=updated_state,
+    )
+
+    if portal_data is not None:
+        response = await visura_service.get_response(flow["request_ref"])
+        if response is None:
+            raise HTTPException(status_code=503, detail="Accepted inspection response is unavailable for projection")
+        data = dict(response.data) if isinstance(response.data, dict) else {}
+        data.update(portal_data)
+        old_visits = data.get("page_visits") if isinstance(data.get("page_visits"), list) else []
+        data["page_visits"] = old_visits + (outcome.get("page_visits") or [])
+        data["confirmed"] = True
+        data["paid_flow"] = {
+            "flow_id": flow_id,
+            "current_step": "formalita",
+            "selected_homonym": outcome.get("selected_homonym") or selected,
+        }
+        await visura_service._store_response(
+            VisuraResponse(
+                request_id=response.request_id,
+                success=True,
+                cadastre_type=response.cadastre_type,
+                data=data,
+            )
+        )
+        await update_flow_state(flow_id, state="accepted", current_step="formalita", state_payload=updated_state)
+
+    result = {
+        "flow_id": flow_id,
+        "selected_homonym": outcome.get("selected_homonym") or selected,
+        "next_step": "formalita" if portal_data is not None else "omonimi",
+        "search_projected": portal_data is not None,
+    }
+    if "application/json" in request.headers.get("content-type", ""):
+        return JSONResponse(result)
+    return RedirectResponse(f"/admin/mortgage-searches/{flow_id}", status_code=303)
+
+
+@router.post("/admin/mortgage-searches/{flow_id}/actions/{action_id}/reconcile", response_class=JSONResponse)
+@_audited("admin.mortgage_search.reconcile")
+async def web_admin_mortgage_search_reconcile(
+    flow_id: int,
+    action_id: int,
+    request: Request,
+    user=Depends(_require_admin),
+):
+    from fastapi import HTTPException
+
+    from .mortgage_flow import MortgageFlowError, flow_status, reconcile_paid_action
+
+    try:
+        if "application/json" in request.headers.get("content-type", ""):
+            body = await request.json()
+        else:
+            body = dict(await request.form())
+    except Exception as exc:  # noqa: BLE001 - invalid body is a client error
+        raise HTTPException(status_code=400, detail="Invalid reconciliation body") from exc
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="Invalid reconciliation body")
+    try:
+        flow = await flow_status(flow_id)
+    except MortgageFlowError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    action = next((item for item in flow["actions"] if item["id"] == action_id), None)
+    if action is None:
+        raise HTTPException(status_code=404, detail="paid_action_not_found")
+    resolution = str(body.get("resolution") or "")
+    if resolution == "confirmed" and not flow.get("search_id"):
+        raise HTTPException(status_code=409, detail="portal_effect_not_projected")
+    if resolution == "not_executed" and flow.get("search_id") and action["step"] == "accept":
+        raise HTTPException(status_code=409, detail="accepted_search_exists")
+    richieste_checked = str(body.get("richieste_checked") or "").casefold() in {"true", "1", "on", "yes"}
+    statement_checked = str(body.get("statement_checked") or "").casefold() in {"true", "1", "on", "yes"}
+    explanation = str(body.get("explanation") or "").strip()
+    if not richieste_checked or not statement_checked or len(explanation) < 12:
+        raise HTTPException(status_code=422, detail="Check Richieste and statement, and record a short evidence note")
+    evidence = {
+        "richieste_checked": richieste_checked,
+        "statement_checked": statement_checked,
+        "explanation": explanation[:1000],
+        "portal_request_id": str(body.get("portal_request_id") or "")[:64],
+        "statement_reference": str(body.get("statement_reference") or "")[:100],
+        "document_id": str(body.get("document_id") or "").strip(),
+    }
+    request.state.audit_params = {"flow_id": flow_id, "action_id": action_id, "resolution": resolution}
+    try:
+        result = await reconcile_paid_action(
+            action_id,
+            resolution=resolution,
+            reconciled_by=_actor(user),
+            evidence=evidence,
+        )
+    except MortgageFlowError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if "application/json" in request.headers.get("content-type", ""):
+        return JSONResponse(result)
+    return RedirectResponse(f"/admin/mortgage-searches/{flow_id}", status_code=303)
 
 
 @router.put("/documents/{doc_id}/favorite", response_class=JSONResponse)
@@ -14509,7 +15160,8 @@ _SUBJECT_CSV_COLUMNS = (
     ("province_count", "N. province"), ("properties", "Immobili"), ("buildings", "Fabbricati"), ("land", "Terreni"),
     ("full_ownership", "Piena proprietà"), ("rendita", "Rendita €"), ("reddito_dominicale", "Reddito dominicale €"),
     ("cadastral_value", "Valore catastale €"), ("cadastral_value_share", "Valore pro quota €"),
-    ("unvalued", "Non valutati"), ("unknown_share", "Senza quota"), ("visure", "Visure"), ("searches", "Ricerche"),
+    ("unvalued", "Non valutati"), ("unknown_share", "Senza quota"), ("live_burdens", "Formalità attive"),
+    ("visure", "Visure"), ("searches", "Ricerche"),
     ("searched_at", "Dati del"), ("last_seen", "Aggiornato"), ("tags", "Tag"),
 )
 

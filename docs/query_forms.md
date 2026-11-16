@@ -24,6 +24,15 @@ the command go to the matching client method, every other parameter is an input 
 travels as `form_fields`. In the browser, `_apply_form_fields` (`utils.py`) fills those inputs just before
 the form is submitted.
 
+`ipotecaria-persona-fisica` is a separate guarded entry in the same table because it has no single portal form. It accepts
+only `provincia` and `codice_fiscale` and starts the free preview through `POST /api/v1/mortgage-searches`; it never
+confirms *Accetta* or another paid step. The CLI prints the durable flow ID and its admin review path. Use
+`sister mortgage status` and `sister mortgage quote` to inspect the flow. For example, `sister mortgage quote <flow_id>
+--step notes --ordinals 1,2,3`, `--step title --ordinal 2`, or `--step richieste_save --portal-request-id <idRichiesta>`
+returns an ownership-aware quote after acceptance. Note/title and *Salva* quotes include a short-lived token when the
+selection is confirmable, but the CLI only prepares the quote; it does not submit or confirm the portal action. Paid
+confirmation and reconciliation remain restricted to the signed-in SISTER admin page.
+
 ## Mode-dependent inputs
 
 Some inputs exist only in one mode of a radio (the provisional identifier of an immobile, the historical map

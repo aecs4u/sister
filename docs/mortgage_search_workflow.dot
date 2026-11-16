@@ -1,0 +1,44 @@
+digraph mortgage_search_workflow {
+  graph [
+    rankdir=TB,
+    bgcolor="white",
+    pad="0.25",
+    nodesep="0.35",
+    ranksep="0.55",
+    fontname="Arial",
+    label="SISTER guarded mortgage search — current implementation",
+    labelloc=t,
+    fontsize=18
+  ];
+  node [shape=box, style="rounded,filled", fontname="Arial", fontsize=10, margin="0.14,0.09", color="#475569"];
+  edge [fontname="Arial", fontsize=9, color="#475569", arrowsize=0.75];
+
+  start [label="Start persona-fisica preview\nAPI key · free portal steps", fillcolor="#dbeafe"];
+  preview [label="Read preview and portal amount\nNo paid confirmation", fillcolor="#dbeafe"];
+  quote [label="Create short-lived quote token\nBound to step and amount", fillcolor="#e0e7ff"];
+  admin [label="Signed-in admin reviews\nConfirm one paid step", fillcolor="#fef3c7"];
+  intent [label="Commit paid-action intent\nbefore browser click", fillcolor="#ffedd5"];
+  recheck [label="Recheck subject and amount\non the current portal page", fillcolor="#ffedd5"];
+  click [label="Click Accetta once\nmark clicked immediately", fillcolor="#fed7aa"];
+  result [shape=diamond, style=filled, label="Recognized portal\nstate after click?", fillcolor="#f1f5f9"];
+  project [label="Project accepted inspection\nonly with number and date", fillcolor="#dcfce7"];
+  homonyms [label="Accetta confirmed; homonym page visible\nIdentity not projected; choice is not automated", fillcolor="#fef3c7"];
+  uncertain [label="Keep action uncertain\nblock retries", fillcolor="#fee2e2"];
+  reconcile [label="Admin checks Richieste + statement\nand records evidence", fillcolor="#fef3c7"];
+  resolved [shape=diamond, style=filled, label="Resolution", fillcolor="#f1f5f9"];
+  retry [label="A new confirmation may be issued\nafter not_executed", fillcolor="#e0e7ff"];
+  continue [label="Persist current flow state\nNo automatic next-page navigation yet", fillcolor="#dcfce7"];
+
+  disabled [label="Notes · titles · paid Richieste Salva\nQuote/executors not available yet\nLegacy priced Salva remains blocked", fillcolor="#f1f5f9", color="#64748b", style="rounded,dashed,filled"];
+
+  start -> preview -> quote -> admin -> intent -> recheck -> click -> result;
+  result -> project [label="inspection identity + date"];
+  result -> homonyms [label="homonym page"];
+  result -> uncertain [label="unrecognized / unreadable"];
+  uncertain -> reconcile -> resolved;
+  resolved -> retry [label="not_executed"];
+  resolved -> continue [label="confirmed"];
+  project -> continue;
+  homonyms -> continue;
+  continue -> disabled [style=dashed, arrowhead=none, label="next implementation steps"];
+}

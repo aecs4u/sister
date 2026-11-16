@@ -16,6 +16,7 @@
             "indirizzo",
             "intestati",
             "ipotecaria-elenchi",
+            "ipotecaria-persona-fisica",
             "ipotecaria-riepilogo",
             "ipotecaria-stato",
             "ispezioni",
@@ -198,6 +199,7 @@
             "indirizzo",
             "intestati",
             "ipotecaria-elenchi",
+            "ipotecaria-persona-fisica",
             "ipotecaria-riepilogo",
             "ipotecaria-stato",
             "ispezioni",
@@ -1221,6 +1223,46 @@
               "params": {
                 "type": "object",
                 "properties": {},
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "command"
+            ],
+            "properties": {
+              "command": {
+                "enum": [
+                  "ipotecaria-persona-fisica"
+                ]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "params": {
+                "type": "object",
+                "properties": {
+                  "provincia": {
+                    "type": [
+                      "string",
+                      "number",
+                      "boolean",
+                      "null"
+                    ]
+                  },
+                  "codice_fiscale": {
+                    "type": [
+                      "string",
+                      "number",
+                      "boolean",
+                      "null"
+                    ]
+                  }
+                },
                 "additionalProperties": false
               }
             }

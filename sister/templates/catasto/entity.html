@@ -336,8 +336,9 @@
         {{ subject_formalities_panel(
             subject_formalities, subject_fiscal_code, subject_route_prefix,
             subject_formalities_admin|default(false),
-            request.query_params.get('formalities_downloaded'),
-            request.query_params.get('formalities_download_error', '')
+            (request.query_params.get('formalities_downloaded') if request is defined else none),
+            (request.query_params.get('formalities_download_error', '') if request is defined else ''),
+            (request.query_params.get('formalities_blocked') if request is defined else none)
         ) }}
         {% if subject_ownership_history_rows %}{% include "catasto/_ownership_history.html" %}{% endif %}
         {% if subject_documents %}{{ subject_visure_list(subject_documents, subject_fiscal_code, subject_route_prefix, subject_document_id, subject_portfolio) }}{% endif %}
@@ -363,8 +364,9 @@
 {{ subject_formalities_panel(
     subject_formalities, subject_fiscal_code, subject_route_prefix,
     subject_formalities_admin|default(false),
-    request.query_params.get('formalities_downloaded'),
-    request.query_params.get('formalities_download_error', '')
+    (request.query_params.get('formalities_downloaded') if request is defined else none),
+    (request.query_params.get('formalities_download_error', '') if request is defined else ''),
+    (request.query_params.get('formalities_blocked') if request is defined else none)
 ) }}
 {% if subject_ownership_history_rows %}{% include "catasto/_ownership_history.html" %}{% endif %}
 {% if land_map_slot == 'content' %}

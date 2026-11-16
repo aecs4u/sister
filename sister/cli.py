@@ -63,6 +63,20 @@ workflow_app = typer.Typer(
 )
 app.add_typer(workflow_app, name="workflow")
 
+mortgage_app = typer.Typer(
+    name="mortgage",
+    help="Ispezioni ipotecarie persona fisica con anteprima, quote e conferma admin web",
+    no_args_is_help=True,
+)
+app.add_typer(mortgage_app, name="mortgage")
+
+ade_app = typer.Typer(name="ade", help="Import e riconciliazione del conto AdE separato dai wallet SISTER", no_args_is_help=True)
+ade_statement_app = typer.Typer(name="statement", help="Estratto conto consultazioni AdE", no_args_is_help=True)
+ade_receipt_app = typer.Typer(name="receipt", help="Quietanze AdE", no_args_is_help=True)
+app.add_typer(ade_app, name="ade")
+ade_app.add_typer(ade_statement_app, name="statement")
+ade_app.add_typer(ade_receipt_app, name="receipt")
+
 _forward_context = {
     "allow_extra_args": True,
     "ignore_unknown_options": True,
@@ -387,6 +401,9 @@ def _report_submission(client: VisuraClient, params: dict, result: dict, wait: b
     console.print(f"[bold green]Request submitted[/bold green] (status: {result.get('status', 'unknown')})")
     for rid in request_ids:
         console.print(f"  ID: [cyan]{rid}[/cyan]")
+    if result.get("flow_id") is not None:
+        console.print(f"  Flow: [cyan]{result['flow_id']}[/cyan]")
+        console.print(f"  Admin review: [cyan]/admin/mortgage-searches/{result['flow_id']}[/cyan]")
     if params.get("codice_fiscale"):
         console.print(f"  CF: {params['codice_fiscale'].upper()}  Scope: {result.get('provincia', 'NAZIONALE')}")
 
@@ -573,12 +590,10 @@ def _ipotecaria_command(
     force: bool = False,
 ):
     """Shared logic for ispezione ipotecaria CLI commands."""
-    if not yes:
-        console.print(
-            "[bold yellow]WARNING:[/bold yellow] Ispezioni Ipotecarie is a paid service. "
-            "Each query may incur a cost.\n"
-            "Use [bold]--yes[/bold] to auto-confirm cost."
-        )
+    console.print(
+        "[bold yellow]Preview only:[/bold yellow] paid portal steps require confirmation in the signed-in admin flow. "
+        "The legacy [bold]--yes[/bold] option does not authorize a payment."
+    )
 
     try:
         result = asyncio.run(
@@ -593,7 +608,7 @@ def _ipotecaria_command(
                 particella=particella,
                 numero_nota=numero_nota,
                 anno_nota=anno_nota,
-                auto_confirm=yes,
+                auto_confirm=False,
                 force=force,
             )
         )
@@ -620,7 +635,7 @@ def _ipotecaria_command(
             cost = data["cost"]
             console.print(f"[yellow]Cost: {cost.get('text', 'N/A')} (€{cost.get('value', 0):.2f})[/yellow]")
             if not data.get("confirmed"):
-                console.print("[red]Cost not confirmed. Use --yes to auto-confirm.[/red]")
+                console.print("[yellow]Cost not confirmed. Continue through the admin paid-flow page.[/yellow]")
         _print_result(res)
         if output:
             _write_output(res, output)
@@ -645,6 +660,172 @@ def _ipotecaria_dry_run(tipo_ricerca: str, provincia: str, **fields: Optional[st
     console.print(f"  Body: {json.dumps(body, ensure_ascii=False)}")
 
 
+@mortgage_app.command("start")
+def mortgage_start(
+    provincia: str = typer.Option(..., "--provincia", "-P", help="Provincia dell'ufficio SISTER"),
+    codice_fiscale: str = typer.Option(..., "--cf", help="Codice fiscale del soggetto"),
+):
+    """Queue the free preview stage; paid acceptance remains an admin web action."""
+    try:
+        result = asyncio.run(VisuraClient().mortgage_search_start(provincia=provincia, codice_fiscale=codice_fiscale))
+    except VisuraAPIError as exc:
+        _handle_api_error(exc)
+        return
+    console.print_json(json.dumps(result, ensure_ascii=False, default=str))
+    if result.get("flow_id"):
+        console.print(f"Admin review: /admin/mortgage-searches/{result['flow_id']}")
+
+
+@mortgage_app.command("status")
+def mortgage_status(flow_id: int = typer.Argument(..., help="ID del flusso")):
+    try:
+        result = asyncio.run(VisuraClient().mortgage_search_status(flow_id))
+    except VisuraAPIError as exc:
+        _handle_api_error(exc)
+        return
+    console.print_json(json.dumps(result, ensure_ascii=False, default=str))
+
+
+@mortgage_app.command("quote")
+def mortgage_quote(
+    flow_id: int = typer.Argument(..., help="ID del flusso"),
+    step: str = typer.Option("accept", "--step", help="Passaggio a pagamento da quotare"),
+    ordinals: Optional[str] = typer.Option(None, "--ordinals", help="Formalità separate da virgola, per --step notes"),
+    ordinal: Optional[int] = typer.Option(None, "--ordinal", help="Numero formalità, per --step title"),
+    portal_request_id: Optional[str] = typer.Option(None, "--portal-request-id", help="idRichiesta esatto, per --step richieste_save"),
+    document_format: str = typer.Option("PDF", "--format", help="Formato richiesto (solo PDF è supportato)"),
+):
+    try:
+        parsed_ordinals = None
+        if ordinals is not None:
+            try:
+                parsed_ordinals = [int(value.strip()) for value in ordinals.split(",") if value.strip()]
+            except ValueError as exc:
+                raise typer.BadParameter("Use comma-separated positive formalità numbers") from exc
+        result = asyncio.run(
+            VisuraClient().mortgage_search_quote(
+                flow_id,
+                step=step,
+                ordinals=parsed_ordinals,
+                ordinal=ordinal,
+                portal_request_id=portal_request_id,
+                format=document_format,
+            )
+        )
+    except VisuraAPIError as exc:
+        _handle_api_error(exc)
+        return
+    console.print_json(json.dumps(result, ensure_ascii=False, default=str))
+
+
+@ade_statement_app.command("import")
+def ade_statement_import(path: Path = typer.Argument(..., exists=True, file_okay=True, dir_okay=False, readable=True)):
+    """Import a saved UTF-8 AdE statement page and rebuild its dedicated euro ledger."""
+    from . import ade_ledger, database
+
+    async def _import():
+        await database.init_db()
+        return await ade_ledger.import_statement_file(path)
+
+    try:
+        result = asyncio.run(_import())
+    except (OSError, UnicodeError, ValueError) as exc:
+        console.print(f"[red]Import statement non riuscito:[/red] {exc}")
+        raise typer.Exit(1) from None
+    console.print_json(json.dumps(result, ensure_ascii=False, default=str))
+
+
+@ade_statement_app.command("link-pagopa")
+def ade_statement_link_pagopa(
+    statement_key: str = typer.Argument(..., help="Chiave radio della riga di ricarica AdE"),
+    payment_id: int = typer.Argument(..., min=1, help="ID della riga pagoPA validata"),
+):
+    """Link a top-up to a validated pagoPA source row after exact amount/date checks."""
+    import getpass
+
+    from . import ade_ledger, database
+
+    async def _link():
+        await database.init_db()
+        await ade_ledger.link_validated_pagopa(
+            statement_key,
+            payment_id,
+            linked_by=f"cli:{getpass.getuser()}"[:255],
+        )
+
+    try:
+        asyncio.run(_link())
+    except (ValueError, RuntimeError) as exc:
+        console.print(f"[red]Collegamento pagoPA non riuscito:[/red] {exc}")
+        raise typer.Exit(1) from None
+    console.print("[green]Riga pagoPA validata collegata al movimento AdE.[/green]")
+
+
+@ade_statement_app.command("detail-import")
+def ade_statement_detail_import(
+    statement_key: str = typer.Argument(..., help="Chiave radio della riga di addebito"),
+    path: Path = typer.Argument(..., exists=True, file_okay=True, dir_okay=False, readable=True),
+):
+    """Import a saved *Dettaglio* page; unrecognized pages remain unattributed."""
+    from . import ade_ledger, database
+
+    async def _import():
+        await database.init_db()
+        return await ade_ledger.import_statement_detail_file(statement_key, path)
+
+    try:
+        result = asyncio.run(_import())
+    except (OSError, ValueError, RuntimeError) as exc:
+        console.print(f"[red]Import dettaglio non riuscito:[/red] {exc}")
+        raise typer.Exit(1) from None
+    console.print_json(json.dumps(result, ensure_ascii=False, default=str))
+
+
+@ade_receipt_app.command("import")
+def ade_receipt_import(path: Path = typer.Argument(..., exists=True, file_okay=True, dir_okay=False, readable=True)):
+    """Import a saved AdE receipt PDF or extracted text into the separate ledger evidence store."""
+    from . import ade_ledger, database
+
+    async def _import():
+        await database.init_db()
+        return await ade_ledger.import_receipt_file(path)
+
+    try:
+        result = asyncio.run(_import())
+    except (OSError, UnicodeError, ValueError) as exc:
+        console.print(f"[red]Import ricevuta non riuscito:[/red] {exc}")
+        raise typer.Exit(1) from None
+    console.print_json(json.dumps(result, ensure_ascii=False, default=str))
+
+
+@documents_tool.command("import-receipts")
+def documents_import_receipts(path: Path = typer.Argument(..., exists=True, readable=True)):
+    """Import one AdE receipt or all receipt PDFs/TXT files in a directory."""
+    from . import ade_ledger, database
+
+    paths = [path] if path.is_file() else sorted(
+        child for child in path.iterdir() if child.is_file() and child.suffix.casefold() in {".pdf", ".txt", ".text"}
+    )
+    if not paths:
+        console.print("[yellow]Nessuna ricevuta PDF/TXT trovata.[/yellow]")
+        raise typer.Exit(1)
+
+    async def _import_all():
+        await database.init_db()
+        results = []
+        for source in paths:
+            try:
+                results.append({"file": source.name, **(await ade_ledger.import_receipt_file(source))})
+            except Exception as exc:  # noqa: BLE001 - continue the directory batch and report each source outcome
+                results.append({"file": source.name, "error": str(exc)[:200]})
+        return results
+
+    results = asyncio.run(_import_all())
+    console.print_json(json.dumps(results, ensure_ascii=False, default=str))
+    if any("error" in item for item in results):
+        raise typer.Exit(1)
+
+
 @query_app.command("ipotecaria-immobile")
 def ipotecaria_immobile(
     provincia: str = typer.Option(..., "--provincia", "-P", help="Nome della provincia"),
@@ -656,7 +837,7 @@ def ipotecaria_immobile(
     wait: bool = typer.Option(False, "--wait", "-w", help="Attendi il risultato"),
     dry_run: bool = typer.Option(False, "--dry-run", help="Solo anteprima"),
     force: bool = typer.Option(False, "--force", help="Ignora la cache"),
-    yes: bool = typer.Option(False, "--yes", "-y", help="Conferma il costo senza chiedere"),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Legacy option; paid steps still require admin web confirmation"),
 ):
     """Ispezione ipotecaria per immobile. SERVIZIO A PAGAMENTO."""
     client = VisuraClient()
@@ -686,7 +867,7 @@ def ipotecaria_persona(
     wait: bool = typer.Option(False, "--wait", "-w", help="Attendi il risultato"),
     dry_run: bool = typer.Option(False, "--dry-run", help="Solo anteprima"),
     force: bool = typer.Option(False, "--force", help="Ignora la cache"),
-    yes: bool = typer.Option(False, "--yes", "-y", help="Conferma il costo senza chiedere"),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Legacy option; paid steps still require admin web confirmation"),
 ):
     """Ispezione ipotecaria per persona (codice fiscale). SERVIZIO A PAGAMENTO."""
     client = VisuraClient()
@@ -713,7 +894,7 @@ def ipotecaria_azienda(
     wait: bool = typer.Option(False, "--wait", "-w", help="Attendi il risultato"),
     dry_run: bool = typer.Option(False, "--dry-run", help="Solo anteprima"),
     force: bool = typer.Option(False, "--force", help="Ignora la cache"),
-    yes: bool = typer.Option(False, "--yes", "-y", help="Conferma il costo senza chiedere"),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Legacy option; paid steps still require admin web confirmation"),
 ):
     """Ispezione ipotecaria per società (P.IVA o denominazione). SERVIZIO A PAGAMENTO."""
     client = VisuraClient()
@@ -741,7 +922,7 @@ def ipotecaria_nota(
     wait: bool = typer.Option(False, "--wait", "-w", help="Attendi il risultato"),
     dry_run: bool = typer.Option(False, "--dry-run", help="Solo anteprima"),
     force: bool = typer.Option(False, "--force", help="Ignora la cache"),
-    yes: bool = typer.Option(False, "--yes", "-y", help="Conferma il costo senza chiedere"),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Legacy option; paid steps still require admin web confirmation"),
 ):
     """Ispezione ipotecaria per riferimento nota. SERVIZIO A PAGAMENTO."""
     client = VisuraClient()
@@ -1999,7 +2180,7 @@ def db_backfill(
         "all",
         help="projections (risultati -> immobili/intestati), xml (documenti -> tabelle tipizzate), "
         "holdings (riepilogo immobili/valori per soggetto), names (nomi dei soggetti noti solo per codice), "
-        "history (storico delle proprieta') o all",
+        "history (storico delle proprieta'), mortgage-searches (ispezioni ipotecarie persona fisica) o all",
     ),
     force: bool = typer.Option(False, "--force", help="Rielabora anche i documenti gia' popolati"),
     limit: int = typer.Option(0, "--limit", help="Massimo di righe da elaborare (0 = tutte)"),
@@ -2012,8 +2193,8 @@ def db_backfill(
 
     from . import database, xml_ingest
 
-    if what not in {"all", "projections", "xml", "holdings", "names", "history"}:
-        raise typer.BadParameter("usa projections, xml, holdings, names, history o all")
+    if what not in {"all", "projections", "xml", "holdings", "names", "history", "mortgage-searches"}:
+        raise typer.BadParameter("usa projections, xml, holdings, names, history, mortgage-searches o all")
 
     async def _run():
         import getpass
@@ -2025,6 +2206,9 @@ def db_backfill(
             if what in {"all", "projections"}:
                 result["projections"] = await database.backfill_projections(limit=limit or None, contains=contains or None)
                 console.print(f"Risposte: {result['projections']}")
+            if what in {"all", "mortgage-searches"}:
+                result["mortgage_searches"] = await database.backfill_mortgage_searches(limit=limit or None)
+                console.print(f"Ispezioni ipotecarie: {result['mortgage_searches']}")
             if what in {"all", "xml"}:
                 result["xml"] = await xml_ingest.backfill_documents(force=force, limit=limit or None)
                 console.print(f"Documenti XML: {result['xml']}")

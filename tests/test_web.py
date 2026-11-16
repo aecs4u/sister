@@ -45,6 +45,20 @@ def _fake_request():
     )
 
 
+@pytest.mark.asyncio
+async def test_subject_formalities_download_rejects_invalid_profile_with_400():
+    from fastapi import HTTPException
+
+    async def form():
+        return {"route_prefix": "/persons", "subject_code": "invalid"}
+
+    request = SimpleNamespace(form=form, state=SimpleNamespace())
+    with pytest.raises(HTTPException) as exc:
+        await web.web_admin_subject_formalities_download.__wrapped__(request, user=object())
+
+    assert exc.value.status_code == 400
+
+
 def test_hub_map_geocoding_retries_rural_address_without_unit_details():
     queries = web._hub_map_geocode_queries(
         "CONTRADA CALA FRANCESE n. SNC Piano T",
@@ -1461,6 +1475,8 @@ def test_admin_activity_shows_duplicate_stripe_payment_for_refund(main_module, m
                 "result": {"amount_cents": 1490, "currency": "EUR"},
             }]
         if action_prefix == "admin.subject_access.":
+            return []
+        if action_prefix in {"admin.wallet.", "wallet.gift_coupon."}:
             return []
         assert action_prefix == "admin.document_purchase."
         return [

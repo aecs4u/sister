@@ -55,6 +55,46 @@ def test_parse_richieste_table_extracts_save_link_and_request_id():
     assert utils._parse_richieste_table("<html><table><tr><td>other</td></tr></table></html>") == []
 
 
+def test_parse_richieste_table_can_read_pending_rows_with_register_identity():
+    html = """
+    <table>
+      <tr><th>Richiesta del</th><th>Oggetto</th><th>Formato</th><th>Costo</th></tr>
+      <tr>
+        <td>16/11/2026 10:30</td><td>Nota · Registro Particolare 11 Registro Generale 22</td>
+        <td>PDF</td><td>4,00</td>
+        <td><a href="/Visure/DettaglioRichiesta.do?idRichiesta=REQ-11">Dettaglio</a></td>
+      </tr>
+    </table>
+    """
+
+    rows = utils._parse_richieste_table(html, include_pending=True)
+    assert len(rows) == 1
+    assert rows[0]["id_richiesta"] == "REQ-11"
+    assert rows[0]["status"] == "requested"
+    assert utils._richieste_register_pair(rows[0]) == ("11", "22")
+
+
+def test_only_zero_cost_receipts_can_be_saved_without_paid_consent():
+    assert utils._is_free_receipt_row({"oggetto": "RICEVUTA PER ISPEZIONI DEL 11/11/2026", "costo": "0,00 €"})
+    assert not utils._is_free_receipt_row({"oggetto": "RICEVUTA PER ISPEZIONI", "costo": "4,00"})
+    assert not utils._is_free_receipt_row({"oggetto": "Nota ipotecaria", "costo": "0,00"})
+    assert not utils._is_free_receipt_row({"oggetto": "Nota ipotecaria", "costo": ""})
+
+
+def test_paid_richieste_save_rechecks_the_quoted_amount_and_row_text():
+    from decimal import Decimal
+
+    assert utils._paid_save_cost_matches(
+        {"costo": "4,00 €"}, Decimal("4.00"), "4,00 €"
+    )
+    assert not utils._paid_save_cost_matches(
+        {"costo": "8,00 €"}, Decimal("4.00"), "4,00 €"
+    )
+    assert not utils._paid_save_cost_matches(
+        {"costo": "4,00"}, Decimal("4.00"), "4,00 €"
+    )
+
+
 def test_open_richieste_view_selects_category_and_whole_period():
     import asyncio
 

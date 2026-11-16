@@ -106,7 +106,8 @@ async def test_refresh_subject_holdings_persists_counts_and_values():
 
     assert await database.refresh_subject_holdings([CF_A]) == 1
     row = (await _exec("SELECT * FROM subject_holding WHERE fiscal_code = :cf", cf=CF_A)).mappings().one()
-    assert (row["properties"], row["buildings"], row["land_parcels"], row["provinces"]) == (3, 1, 1, "RM")
+    provinces = (await _exec("SELECT province FROM subject_holding_province WHERE fiscal_code = :cf", cf=CF_A)).scalars().all()
+    assert (row["properties"], row["buildings"], row["land_parcels"], provinces) == (3, 1, 1, ["RM"])
     assert (row["unvalued"], row["unknown_share"]) == (1, 1)  # the third has no value and no recorded quota
     assert row["searched_at"] is not None
     assert row["full_ownership"] == 1  # the land, 1/1; the building is held for 1/2
@@ -239,9 +240,15 @@ async def _seed_people():
         )
         if properties is not None:
             await _exec(
-                "INSERT INTO subject_holding (fiscal_code, properties, cadastral_value_share_eur, provinces) "
-                "VALUES (:c, :p, :v, :pv)", c=code, p=properties, v=value, pv=provinces,
+                "INSERT INTO subject_holding (fiscal_code, properties, cadastral_value_share_eur) "
+                "VALUES (:c, :p, :v)", c=code, p=properties, v=value,
             )
+            for province in filter(None, (value.strip() for value in (provinces or "").split(","))):
+                await _exec(
+                    "INSERT INTO subject_holding_province (fiscal_code, province) VALUES (:c, :p)",
+                    c=code,
+                    p=province,
+                )
     return [p[0] for p in people]
 
 
@@ -288,12 +295,74 @@ async def test_query_subject_profiles_pages_sorts_and_filters_in_sql():
 
 
 @pytest.mark.usefixtures("fresh_db")
+async def test_live_burdens_filter_uses_typed_formalities_and_cancellation_annotations():
+    await _seed_people()
+    request_pk = (
+        await _exec(
+            "INSERT INTO request (request_ref, created_at, responded_at, success, subject_query) "
+            "VALUES ('mortgage_R_1', now(), now(), true, :cf) RETURNING id",
+            cf=CF_A,
+        )
+    ).scalar_one()
+    search_pk = (
+        await _exec(
+            "INSERT INTO mortgage_search (request_id, inspection_number, inspection_date, office, scope, "
+            "subject_fiscal_code) VALUES (:r, 'T 55555', '2026-11-15', 'ROMA', 'office', :cf) RETURNING id",
+            r=request_pk,
+            cf=CF_A,
+        )
+    ).scalar_one()
+    await _exec(
+        "INSERT INTO mortgage_search_formality (search_id, ordinal, kind, act_description, registro_particolare, "
+        "registro_generale, formality_date) VALUES (:s, 1, 'iscrizione', 'IPOTECA VOLONTARIA', '100', '200', "
+        "'2020-01-01')",
+        s=search_pk,
+    )
+    await _exec(
+        "INSERT INTO mortgage_search_formality (search_id, ordinal, kind, act_description, registro_particolare, "
+        "registro_generale, formality_date) VALUES (:s, 4, 'iscrizione', 'IPOTECA VOLONTARIA', '100', '200', "
+        "'2020-01-01')",
+        s=search_pk,
+    )  # repeated act in a later row should count only once
+    cancelled_inscription = (
+        await _exec(
+            "INSERT INTO mortgage_search_formality (search_id, ordinal, kind, act_description) "
+            "VALUES (:s, 2, 'iscrizione', 'IPOTECA') RETURNING id",
+            s=search_pk,
+        )
+    ).scalar_one()
+    cancelled_execution = (
+        await _exec(
+            "INSERT INTO mortgage_search_formality (search_id, ordinal, kind, act_description) "
+            "VALUES (:s, 3, 'trascrizione', 'PIGNORAMENTO IMMOBILIARE') RETURNING id",
+            s=search_pk,
+        )
+    ).scalar_one()
+    for formality_id, ordinal in ((cancelled_inscription, 1), (cancelled_execution, 1)):
+        await _exec(
+            "INSERT INTO mortgage_search_annotation (formality_id, ordinal, description, is_cancellation) "
+            "VALUES (:f, :o, 'ANNOTAZIONE DI CANCELLAZIONE', true)",
+            f=formality_id,
+            o=ordinal,
+        )
+
+    assert await database.subjects_with_live_burdens("mortgage") == [CF_A]
+    assert await database.subjects_with_live_burdens("pignoramento") == []
+    assert await database.subjects_with_live_burdens("any") == [CF_A]
+    rows, total = await database.query_subject_profiles("person", filters={"live_burdens": ">0"})
+    assert total == 1 and [row["fiscal_code"] for row in rows] == [CF_A]
+    assert rows[0]["live_burdens"] == 1  # only the unannulled mortgage is still active
+    overview = await database.subject_overview("person")
+    assert overview["with_live_burdens"] == 1
+
+
+@pytest.mark.usefixtures("fresh_db")
 async def test_subject_overview_has_totals_widths_and_maxima():
     await _seed_people()
     overview = await database.subject_overview("person")
     assert (overview["subjects"], overview["with_visura"]) == (3, 0)
     assert overview["value_share"] == 1000000.0
-    assert overview["widest"]["name"] == "BIANCHI LAURA" and overview["widest"]["provinces"] == "RM, MI"
+    assert overview["widest"]["name"] == "BIANCHI LAURA" and overview["widest"]["provinces"] == "MI, RM"
     assert overview["widest"]["birth_place"] == "MILANO (MI)"
     assert overview["max"]["properties"] == 10 and overview["max"]["cadastral_value_share"] == 900000.0
     assert (await database.subject_overview("company"))["subjects"] == 0
@@ -322,6 +391,7 @@ async def test_index_json_pages_and_csv_follows_the_same_query():
     text_csv = csv_response.body.decode("utf-8")
     lines = text_csv.lstrip("\ufeff").strip().splitlines()
     assert lines[0].startswith("Codice;Nome;Sesso")
+    assert "Formalità attive" in lines[0]
     assert [line.split(";")[0] for line in lines[1:]] == [verdi, rossi]  # all matches, not one page
     assert csv_response.headers["content-disposition"].endswith('filename="persone.csv"')
     company_csv = await web._subject_index_csv(_sql_request(""), "company", User())

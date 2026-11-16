@@ -1,7 +1,7 @@
 """Single source of truth for the inputs of every single-step SISTER query form.
 
-Each :class:`FormField` ties one input element of the real SISTER form (its ``name`` attribute) to the
-parameter exposed by the CLI (``sister query <command> --<param>``), the API and the ``/forms`` page.
+Each :class:`FormField` ties one input element of the real SISTER form (its ``name`` attribute), or a
+flow-only parameter when there is no single portal form, to the CLI, API and applicable ``/forms`` inputs.
 The CLI options, the web form parameters and the browser form-filling are all generated from this table,
 and ``tests/test_query_forms.py`` checks it against saved copies of the portal forms
 (``tests/fixtures/portal_forms/*.html``), so a form that changes on the portal shows up as a failing test.
@@ -38,7 +38,7 @@ class FormField:
 
 @dataclass(frozen=True)
 class QueryForm:
-    """One single-step query: its inputs and how it is submitted (CLI command, API path, client method)."""
+    """One single-step query or preview-only flow command and how it is submitted."""
 
     command: str
     fixture: str | None  # file name (without .html) in tests/fixtures/portal_forms; None = no portal form
@@ -785,6 +785,21 @@ _NO_FORM = (
     ),
 )
 QUERY_FORMS.update({q.command: q for q in _NO_FORM})
+QUERY_FORMS["ipotecaria-persona-fisica"] = QueryForm(
+    command="ipotecaria-persona-fisica",
+    fixture=None,
+    fields=(
+        FormField((), "provincia", help=_PROVINCIA_HELP),
+        FormField((), "codice_fiscale", help="Codice fiscale della persona da ispezionare."),
+    ),
+    summary="Avvia solo l'anteprima gratuita di un'ispezione ipotecaria per persona fisica.",
+    path="/mortgage-searches",
+    method="mortgage_search_start",
+    search_type="mortgage-searches",
+    dedicated=("provincia", "codice_fiscale"),
+    required=("provincia", "codice_fiscale"),
+    documents="none",
+)
 
 _DOCUMENT_REQUESTS = {
     "search": "optional",
