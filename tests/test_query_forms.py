@@ -10,7 +10,7 @@ import re
 
 import pytest
 
-from sister.query_forms import FIXTURE_DIR, QUERY_FORMS, normalize_query, param_names, portal_names
+from sister.query_forms import FIXTURE_DIR, LEGACY_FLAGS, QUERY_FORMS, normalize_query, param_names, portal_names
 
 _IGNORED_TYPES = {"hidden", "submit", "reset", "button", "image"}
 

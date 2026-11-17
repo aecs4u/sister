@@ -109,9 +109,15 @@ def test_legacy_sub_flag_is_hidden_and_still_fills_subalterno():
     both = runner.invoke(app, [*base, "--subalterno", "4", "-sub", "3"])
     assert '"subalterno": "4"' in both.output
 
+    from typer.main import get_command
+
     help_text = runner.invoke(app, ["query", "intestati", "--help"]).output
     assert "--subalterno" in help_text
-    assert "-sub " not in help_text
+    query = get_command(app).commands["query"]
+    intestati = query.commands["intestati"]
+    legacy_option = next(param for param in intestati.params if param.name == "legacy_subalterno")
+    assert legacy_option.hidden is True
+    assert "--sub" in next(param for param in intestati.params if param.name == "subalterno").opts
 
 
 def test_root_help_groups_commands_and_documents_exit_codes():

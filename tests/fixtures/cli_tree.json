@@ -2772,10 +2772,18 @@
         "name": "subalterno",
         "flags": [
           "--subalterno",
-          "-sub"
+          "--sub"
         ],
         "required": false,
         "hidden": false
+      },
+      {
+        "name": "legacy_subalterno",
+        "flags": [
+          "-sub"
+        ],
+        "required": false,
+        "hidden": true
       },
       {
         "name": "tipo_denuncia",
@@ -3472,10 +3480,18 @@
         "name": "subalterno",
         "flags": [
           "--subalterno",
-          "-sub"
+          "--sub"
         ],
         "required": false,
         "hidden": false
+      },
+      {
+        "name": "legacy_subalterno",
+        "flags": [
+          "-sub"
+        ],
+        "required": false,
+        "hidden": true
       },
       {
         "name": "tipo_denuncia",
@@ -4541,10 +4557,18 @@
         "name": "subalterno",
         "flags": [
           "--subalterno",
-          "-sub"
+          "--sub"
         ],
         "required": false,
         "hidden": false
+      },
+      {
+        "name": "legacy_subalterno",
+        "flags": [
+          "-sub"
+        ],
+        "required": false,
+        "hidden": true
       },
       {
         "name": "tipo_denuncia",
@@ -5114,10 +5138,18 @@
         "name": "subalterno",
         "flags": [
           "--subalterno",
-          "-sub"
+          "--sub"
         ],
         "required": false,
         "hidden": false
+      },
+      {
+        "name": "legacy_subalterno",
+        "flags": [
+          "-sub"
+        ],
+        "required": false,
+        "hidden": true
       },
       {
         "name": "sezione",
