@@ -179,6 +179,34 @@ class CadastralUnit(SQLModel, table=True):
     subunit: Optional[str] = Field(default=None)
 
 
+class CadastralParcelCoordinate(SQLModel, table=True):
+    """Persistent point location for a cadastral parcel, with its source recorded."""
+
+    __tablename__ = "cadastral_parcel_coordinate"
+    __table_args__ = (
+        sa.CheckConstraint("latitude BETWEEN -90 AND 90", name="ck_cadastral_parcel_coordinate_latitude"),
+        sa.CheckConstraint("longitude BETWEEN -180 AND 180", name="ck_cadastral_parcel_coordinate_longitude"),
+        sa.CheckConstraint(
+            "location_source IN ('cadastral_geometry', 'anncsu_address', 'osm_address')",
+            name="ck_cadastral_parcel_coordinate_source",
+        ),
+        sa.Index("ix_cadastral_parcel_coordinate_source", "location_source"),
+    )
+
+    cadastral_code: str = Field(sa_column=Column(sa.Text, primary_key=True, nullable=False))
+    section: str = Field(default="", sa_column=Column(sa.Text, primary_key=True, nullable=False, server_default=""))
+    sheet: str = Field(sa_column=Column(sa.Text, primary_key=True, nullable=False))
+    parcel: str = Field(sa_column=Column(sa.Text, primary_key=True, nullable=False))
+    latitude: float
+    longitude: float
+    location_source: str = Field(sa_column=Column(sa.Text, nullable=False))
+    source_reference: Optional[str] = Field(default=None, sa_column=Column(sa.Text, nullable=True))
+    source_method: str = Field(sa_column=Column(sa.Text, nullable=False))
+    updated_at: datetime = Field(
+        sa_column=Column(sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now())
+    )
+
+
 class Subject(SQLModel, table=True):
     __tablename__ = "subject"
 

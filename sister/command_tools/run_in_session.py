@@ -52,10 +52,10 @@ from rich.console import Console  # noqa: E402
 from rich.live import Live  # noqa: E402
 
 from sister.answered import Answered, row_code  # noqa: E402
+from sister.cli._runtime import EXIT_SESSION_EXPIRED  # noqa: E402
 from sister.fiscal_code import valid_codice_fiscale  # noqa: E402
 
 console = Console()
-EXIT_SESSION_EXPIRED = 75  # sister.cli.EXIT_SESSION_EXPIRED (not imported: the CLI module loads the whole app)
 LOGIN_RECORD = ROOT / "logs" / "sister_login.json"  # written by `sister app login` (ade_login.record_login)
 SESSION_MINUTES = 30
 DEAD_PAGE = ("login.jsp", "sessione_scaduta", "Logout", "lock.html", "about:blank")

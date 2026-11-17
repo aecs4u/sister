@@ -37,6 +37,7 @@ from sqlalchemy import (
     null,
     or_,
     text,
+    tuple_,
     union_all,
     update,
 )
@@ -56,6 +57,7 @@ from .db_models import (
     ActivityLogAttribute,
     ActivityLogPayload,
     CadastralUnit,
+    CadastralParcelCoordinate,
     CalculationSnapshot,
     CalculationSnapshotPayload,
     Document,
@@ -155,7 +157,7 @@ DATABASE_SCHEMA = os.getenv("DATABASE_SCHEMA", "sister")
 DATABASE_ISTAT_SCHEMA = os.getenv("DATABASE_ISTAT_SCHEMA", DATABASE_SCHEMA)
 # raw payloads (response JSON, XML tree, extraction JSON) live in their own schema; tests point it at a throwaway one
 DATABASE_ARCHIVE_SCHEMA = os.getenv("DATABASE_ARCHIVE_SCHEMA", "sister_archive")
-DATABASE_REVISION = "20261207_mortgage_charge_allocation"
+DATABASE_REVISION = "20261208_cadastral_parcel_coordinates"
 
 # ---------------------------------------------------------------------------
 # Engine and session
@@ -278,6 +280,7 @@ async def init_db() -> None:
             "mortgage_search_request",
             "mortgage_search_charge",
             "parcel_geometry_cache",
+            "cadastral_parcel_coordinate",
             "sister_request_jobs",
             "sezioni_extraction_jobs",
             *LOOKUP_TABLES,
@@ -2761,6 +2764,103 @@ async def find_parcels_with_geometry(keys: Iterable[tuple[int, str, str, str]]) 
         keys,
     )
     return {tuple(row) for row in rows}
+
+
+async def get_cadastral_parcel_coordinates(
+    parcels: Iterable[dict[str, Any]],
+) -> dict[tuple[str, str, str, str], dict[str, Any]]:
+    """Read stored parcel points by cadastral identity for the map's unresolved parcels."""
+    keys = sorted({
+        (
+            str(item.get("municipality_code") or item.get("cadastral_code") or "").strip().upper(),
+            str(item.get("section") or "").strip().upper(),
+            str(item.get("sheet") or "").strip(),
+            str(item.get("parcel") or "").strip(),
+        )
+        for item in parcels
+        if str(item.get("municipality_code") or item.get("cadastral_code") or "").strip()
+        and str(item.get("sheet") or "").strip()
+        and str(item.get("parcel") or "").strip()
+    })
+    if not keys:
+        return {}
+    model = CadastralParcelCoordinate
+    stmt = select(model).where(
+        tuple_(model.cadastral_code, model.section, model.sheet, model.parcel).in_(keys)
+    )
+    async with _get_session_factory()() as session:
+        rows = (await session.execute(stmt)).scalars().all()
+    return {
+        (row.cadastral_code, row.section, row.sheet, row.parcel): {
+            "latitude": float(row.latitude),
+            "longitude": float(row.longitude),
+            "location_source": row.location_source,
+            "source_reference": row.source_reference,
+            "source_method": row.source_method,
+        }
+        for row in rows
+    }
+
+
+async def save_cadastral_parcel_coordinate(
+    *,
+    cadastral_code: str,
+    section: str,
+    sheet: str,
+    parcel: str,
+    latitude: float,
+    longitude: float,
+    location_source: str,
+    source_reference: str | None,
+    source_method: str,
+) -> bool:
+    """Persist a newly resolved point without allowing an address point to replace parcel geometry."""
+    code = str(cadastral_code or "").strip().upper()
+    normalized_section = str(section or "").strip().upper()
+    normalized_sheet = str(sheet or "").strip()
+    normalized_parcel = str(parcel or "").strip()
+    latitude = float(latitude)
+    longitude = float(longitude)
+    if not code or not normalized_sheet or not normalized_parcel:
+        return False
+    if not (-90 <= latitude <= 90 and -180 <= longitude <= 180):
+        return False
+    if location_source not in {"cadastral_geometry", "anncsu_address", "osm_address"}:
+        raise ValueError("Unsupported cadastral parcel coordinate source")
+
+    model = CadastralParcelCoordinate
+    stmt = pg_insert(model).values(
+        cadastral_code=code,
+        section=normalized_section,
+        sheet=normalized_sheet,
+        parcel=normalized_parcel,
+        latitude=latitude,
+        longitude=longitude,
+        location_source=location_source,
+        source_reference=source_reference,
+        source_method=source_method,
+        updated_at=datetime.now(timezone.utc),
+    )
+    stmt = stmt.on_conflict_do_update(
+        index_elements=[model.cadastral_code, model.section, model.sheet, model.parcel],
+        set_={
+            "latitude": stmt.excluded.latitude,
+            "longitude": stmt.excluded.longitude,
+            "location_source": stmt.excluded.location_source,
+            "source_reference": stmt.excluded.source_reference,
+            "source_method": stmt.excluded.source_method,
+            "updated_at": stmt.excluded.updated_at,
+        },
+        where=or_(
+            model.location_source == location_source,
+            location_source == "cadastral_geometry",
+            and_(location_source == "anncsu_address", model.location_source == "osm_address"),
+        ),
+    )
+    async with _get_session_factory()() as session:
+        result = await session.execute(stmt)
+        await session.commit()
+    return bool(result.rowcount)
 
 
 async def get_comune_centroids(cadastral_codes: Iterable[str]) -> dict[str, tuple[float, float]]:

@@ -1,6 +1,6 @@
 """Stateless CSRF protection for the cookie-authenticated web UI.
 
-SISTER signs users in with a JWT stored in a cookie (``aecs4u_session``), so there is no server-side session to hold a
+SISTER signs users in with a JWT stored in a cookie (``sister_session``, own name: cookies are shared across ports on localhost), so there is no server-side session to hold a
 token. The CSRF token is derived from that cookie: ``HMAC-SHA256(secret, cookie value)``. A cross-site page cannot read
 it, and it changes with every login. Requests that carry no auth cookie (API-key / bearer clients, the login itself) are
 not subject to the check.

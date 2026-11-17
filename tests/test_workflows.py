@@ -1148,7 +1148,7 @@ class TestWorkflowCLI:
                 "--max-steps",
                 "200",
                 "--include-paid",
-                "--yes",
+                "--confirm-paid",
             ],
         )
         assert result.exit_code == 0

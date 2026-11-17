@@ -1,0 +1,4588 @@
+[
+  {
+    "path": "sister",
+    "params": [
+      {
+        "name": "install_completion",
+        "flags": [
+          "--install-completion"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "show_completion",
+        "flags": [
+          "--show-completion"
+        ],
+        "required": false,
+        "hidden": false
+      }
+    ]
+  },
+  {
+    "path": "sister ade",
+    "params": []
+  },
+  {
+    "path": "sister ade receipt",
+    "params": []
+  },
+  {
+    "path": "sister ade receipt import",
+    "params": [
+      {
+        "name": "path",
+        "flags": [
+          "path"
+        ],
+        "required": true,
+        "hidden": false
+      }
+    ]
+  },
+  {
+    "path": "sister ade statement",
+    "params": []
+  },
+  {
+    "path": "sister ade statement detail-import",
+    "params": [
+      {
+        "name": "statement_key",
+        "flags": [
+          "statement_key"
+        ],
+        "required": true,
+        "hidden": false
+      },
+      {
+        "name": "path",
+        "flags": [
+          "path"
+        ],
+        "required": true,
+        "hidden": false
+      }
+    ]
+  },
+  {
+    "path": "sister ade statement import",
+    "params": [
+      {
+        "name": "path",
+        "flags": [
+          "path"
+        ],
+        "required": true,
+        "hidden": false
+      }
+    ]
+  },
+  {
+    "path": "sister ade statement link-pagopa",
+    "params": [
+      {
+        "name": "statement_key",
+        "flags": [
+          "statement_key"
+        ],
+        "required": true,
+        "hidden": false
+      },
+      {
+        "name": "payment_id",
+        "flags": [
+          "payment_id"
+        ],
+        "required": true,
+        "hidden": false
+      }
+    ]
+  },
+  {
+    "path": "sister app",
+    "params": []
+  },
+  {
+    "path": "sister app hash-password",
+    "params": []
+  },
+  {
+    "path": "sister app login",
+    "params": []
+  },
+  {
+    "path": "sister app start",
+    "params": []
+  },
+  {
+    "path": "sister app stop",
+    "params": []
+  },
+  {
+    "path": "sister audit",
+    "params": []
+  },
+  {
+    "path": "sister audit demo-purchases",
+    "params": []
+  },
+  {
+    "path": "sister audit interactions",
+    "params": []
+  },
+  {
+    "path": "sister audit purchase-paths",
+    "params": []
+  },
+  {
+    "path": "sister audit sweep",
+    "params": []
+  },
+  {
+    "path": "sister batch",
+    "params": []
+  },
+  {
+    "path": "sister batch build-list",
+    "params": []
+  },
+  {
+    "path": "sister batch build-pdf-parseable",
+    "params": []
+  },
+  {
+    "path": "sister batch convert-list",
+    "params": []
+  },
+  {
+    "path": "sister batch convert-pvp-csv",
+    "params": []
+  },
+  {
+    "path": "sister batch progress",
+    "params": []
+  },
+  {
+    "path": "sister batch prune-list",
+    "params": []
+  },
+  {
+    "path": "sister batch recrowd",
+    "params": []
+  },
+  {
+    "path": "sister batch run-list",
+    "params": []
+  },
+  {
+    "path": "sister batch run-pdf-parseable",
+    "params": []
+  },
+  {
+    "path": "sister batch run-pvp-is",
+    "params": []
+  },
+  {
+    "path": "sister batch run-session",
+    "params": []
+  },
+  {
+    "path": "sister build",
+    "params": []
+  },
+  {
+    "path": "sister build building-kmz",
+    "params": []
+  },
+  {
+    "path": "sister build dossier-graph",
+    "params": []
+  },
+  {
+    "path": "sister db",
+    "params": []
+  },
+  {
+    "path": "sister db backfill",
+    "params": [
+      {
+        "name": "what",
+        "flags": [
+          "what"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "force",
+        "flags": [
+          "--force"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "limit",
+        "flags": [
+          "--limit"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "contains",
+        "flags": [
+          "--contains"
+        ],
+        "required": false,
+        "hidden": false
+      }
+    ]
+  },
+  {
+    "path": "sister db init",
+    "params": []
+  },
+  {
+    "path": "sister db migrate",
+    "params": []
+  },
+  {
+    "path": "sister db status",
+    "params": []
+  },
+  {
+    "path": "sister dev",
+    "params": []
+  },
+  {
+    "path": "sister dev fixture-payloads",
+    "params": []
+  },
+  {
+    "path": "sister documents",
+    "params": []
+  },
+  {
+    "path": "sister documents cleanup-xml",
+    "params": []
+  },
+  {
+    "path": "sister documents define-workflow",
+    "params": []
+  },
+  {
+    "path": "sister documents download-missing-p7m",
+    "params": []
+  },
+  {
+    "path": "sister documents import",
+    "params": []
+  },
+  {
+    "path": "sister documents import-ocular",
+    "params": []
+  },
+  {
+    "path": "sister documents import-receipts",
+    "params": [
+      {
+        "name": "path",
+        "flags": [
+          "path"
+        ],
+        "required": true,
+        "hidden": false
+      }
+    ]
+  },
+  {
+    "path": "sister documents normalize",
+    "params": []
+  },
+  {
+    "path": "sister documents reconcile",
+    "params": []
+  },
+  {
+    "path": "sister documents rename-date",
+    "params": []
+  },
+  {
+    "path": "sister documents smart-ocr",
+    "params": []
+  },
+  {
+    "path": "sister floor-plan-validate",
+    "params": [
+      {
+        "name": "visura",
+        "flags": [
+          "--visura"
+        ],
+        "required": true,
+        "hidden": false
+      },
+      {
+        "name": "floor_plan",
+        "flags": [
+          "--floor-plan"
+        ],
+        "required": true,
+        "hidden": false
+      },
+      {
+        "name": "calibration",
+        "flags": [
+          "--calibration"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "rooms",
+        "flags": [
+          "--rooms"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "property_index",
+        "flags": [
+          "--property-index"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "visura_area_m2",
+        "flags": [
+          "--visura-area-m2"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "tolerance_m2",
+        "flags": [
+          "--tolerance-m2"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "tolerance_percent",
+        "flags": [
+          "--tolerance-percent"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "output",
+        "flags": [
+          "--output",
+          "-o"
+        ],
+        "required": false,
+        "hidden": false
+      }
+    ]
+  },
+  {
+    "path": "sister get",
+    "params": [
+      {
+        "name": "request_id",
+        "flags": [
+          "request_id"
+        ],
+        "required": true,
+        "hidden": false
+      },
+      {
+        "name": "output",
+        "flags": [
+          "--output",
+          "-o"
+        ],
+        "required": false,
+        "hidden": false
+      }
+    ]
+  },
+  {
+    "path": "sister health",
+    "params": []
+  },
+  {
+    "path": "sister history",
+    "params": [
+      {
+        "name": "provincia",
+        "flags": [
+          "--provincia",
+          "-P"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "comune",
+        "flags": [
+          "--comune",
+          "-C"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "foglio",
+        "flags": [
+          "--foglio",
+          "-F"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "particella",
+        "flags": [
+          "--particella",
+          "-p"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "tipo_catasto",
+        "flags": [
+          "--tipo-catasto",
+          "-t"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "limit",
+        "flags": [
+          "--limit",
+          "-n"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "offset",
+        "flags": [
+          "--offset"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "output",
+        "flags": [
+          "--output",
+          "-o"
+        ],
+        "required": false,
+        "hidden": false
+      }
+    ]
+  },
+  {
+    "path": "sister mortgage",
+    "params": []
+  },
+  {
+    "path": "sister mortgage quote",
+    "params": [
+      {
+        "name": "flow_id",
+        "flags": [
+          "flow_id"
+        ],
+        "required": true,
+        "hidden": false
+      },
+      {
+        "name": "step",
+        "flags": [
+          "--step"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "ordinals",
+        "flags": [
+          "--ordinals"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "ordinal",
+        "flags": [
+          "--ordinal"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "portal_request_id",
+        "flags": [
+          "--portal-request-id"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "document_format",
+        "flags": [
+          "--format"
+        ],
+        "required": false,
+        "hidden": false
+      }
+    ]
+  },
+  {
+    "path": "sister mortgage start",
+    "params": [
+      {
+        "name": "provincia",
+        "flags": [
+          "--provincia",
+          "-P"
+        ],
+        "required": true,
+        "hidden": false
+      },
+      {
+        "name": "codice_fiscale",
+        "flags": [
+          "--cf"
+        ],
+        "required": true,
+        "hidden": false
+      }
+    ]
+  },
+  {
+    "path": "sister mortgage status",
+    "params": [
+      {
+        "name": "flow_id",
+        "flags": [
+          "flow_id"
+        ],
+        "required": true,
+        "hidden": false
+      }
+    ]
+  },
+  {
+    "path": "sister queries",
+    "params": []
+  },
+  {
+    "path": "sister query",
+    "params": []
+  },
+  {
+    "path": "sister query azienda",
+    "params": [
+      {
+        "name": "tipo_catasto",
+        "flags": [
+          "--tipo-catasto",
+          "-t"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "restrizione_foglio",
+        "flags": [
+          "--restrizione-foglio",
+          "--no-restrizione-foglio"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "sezione",
+        "flags": [
+          "--sezione"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "sezione_urbana",
+        "flags": [
+          "--sezione-urbana"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "foglio",
+        "flags": [
+          "--foglio",
+          "-F"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "ricerca_per",
+        "flags": [
+          "--ricerca-per"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "denominazione",
+        "flags": [
+          "--denominazione"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "provincia_sede",
+        "flags": [
+          "--provincia-sede"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "comune_sede",
+        "flags": [
+          "--comune-sede"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "ristretta",
+        "flags": [
+          "--ristretta",
+          "--no-ristretta"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "identificativo",
+        "flags": [
+          "--id",
+          "-i"
+        ],
+        "required": true,
+        "hidden": false
+      },
+      {
+        "name": "richiedente",
+        "flags": [
+          "--richiedente"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "motivo",
+        "flags": [
+          "--motivo"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "provincia",
+        "flags": [
+          "--provincia",
+          "-P"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "omonimo_da",
+        "flags": [
+          "--omonimo-da"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "max_omonimi",
+        "flags": [
+          "--max-omonimi"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "con_intestati",
+        "flags": [
+          "--con-intestati"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "output",
+        "flags": [
+          "--output",
+          "-o"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "wait",
+        "flags": [
+          "--wait",
+          "-w"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "dry_run",
+        "flags": [
+          "--dry-run"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "force",
+        "flags": [
+          "--force"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "redownload",
+        "flags": [
+          "--yes",
+          "--no"
+        ],
+        "required": false,
+        "hidden": false
+      }
+    ]
+  },
+  {
+    "path": "sister query batch",
+    "params": [
+      {
+        "name": "input_file",
+        "flags": [
+          "--input",
+          "-I"
+        ],
+        "required": true,
+        "hidden": false
+      },
+      {
+        "name": "command",
+        "flags": [
+          "--command",
+          "-c"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "wait",
+        "flags": [
+          "--wait",
+          "-w",
+          "--no-wait"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "output_dir",
+        "flags": [
+          "--output-dir",
+          "-O"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "output",
+        "flags": [
+          "--output",
+          "-o"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "dry_run",
+        "flags": [
+          "--dry-run"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "force",
+        "flags": [
+          "--force"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "redownload",
+        "flags": [
+          "--yes",
+          "--no"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "resume",
+        "flags": [
+          "--resume"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "journal",
+        "flags": [
+          "--journal"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "max_in_flight",
+        "flags": [
+          "--max-in-flight"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "retries",
+        "flags": [
+          "--retries"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "poll_timeout",
+        "flags": [
+          "--poll-timeout"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "on_error",
+        "flags": [
+          "--on-error"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "skip_invalid",
+        "flags": [
+          "--skip-invalid"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "stop_at",
+        "flags": [
+          "--stop-at"
+        ],
+        "required": false,
+        "hidden": false
+      }
+    ]
+  },
+  {
+    "path": "sister query batch-schema",
+    "params": [
+      {
+        "name": "output",
+        "flags": [
+          "--output",
+          "-o"
+        ],
+        "required": false,
+        "hidden": false
+      }
+    ]
+  },
+  {
+    "path": "sister query elaborato-planimetrico",
+    "params": [
+      {
+        "name": "comune",
+        "flags": [
+          "--comune",
+          "-C"
+        ],
+        "required": true,
+        "hidden": false
+      },
+      {
+        "name": "sezione",
+        "flags": [
+          "--sezione"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "sezione_urbana",
+        "flags": [
+          "--sezione-urbana"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "foglio",
+        "flags": [
+          "--foglio",
+          "-F"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "particella",
+        "flags": [
+          "--particella",
+          "-p"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "denominatore",
+        "flags": [
+          "--denominatore"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "motivo",
+        "flags": [
+          "--motivo"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "provincia",
+        "flags": [
+          "--provincia",
+          "-P"
+        ],
+        "required": true,
+        "hidden": false
+      },
+      {
+        "name": "output",
+        "flags": [
+          "--output",
+          "-o"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "wait",
+        "flags": [
+          "--wait",
+          "-w"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "dry_run",
+        "flags": [
+          "--dry-run"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "force",
+        "flags": [
+          "--force"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "redownload",
+        "flags": [
+          "--yes",
+          "--no"
+        ],
+        "required": false,
+        "hidden": false
+      }
+    ]
+  },
+  {
+    "path": "sister query elenco",
+    "params": [
+      {
+        "name": "tipo_catasto",
+        "flags": [
+          "--tipo-catasto",
+          "-t"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "comune",
+        "flags": [
+          "--comune",
+          "-C"
+        ],
+        "required": true,
+        "hidden": false
+      },
+      {
+        "name": "sezione",
+        "flags": [
+          "--sezione"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "sezione_urbana",
+        "flags": [
+          "--sezione-urbana"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "foglio",
+        "flags": [
+          "--foglio",
+          "-F"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "particella",
+        "flags": [
+          "--particella",
+          "-p"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "denominatore",
+        "flags": [
+          "--denominatore"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "subalterno_dal",
+        "flags": [
+          "--subalterno-dal"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "subalterno_al",
+        "flags": [
+          "--subalterno-al"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "partita_speciale",
+        "flags": [
+          "--partita-speciale"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "categoria",
+        "flags": [
+          "--categoria"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "richiedente",
+        "flags": [
+          "--richiedente"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "motivo",
+        "flags": [
+          "--motivo"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "provincia",
+        "flags": [
+          "--provincia",
+          "-P"
+        ],
+        "required": true,
+        "hidden": false
+      },
+      {
+        "name": "output",
+        "flags": [
+          "--output",
+          "-o"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "wait",
+        "flags": [
+          "--wait",
+          "-w"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "dry_run",
+        "flags": [
+          "--dry-run"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "force",
+        "flags": [
+          "--force"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "redownload",
+        "flags": [
+          "--yes",
+          "--no"
+        ],
+        "required": false,
+        "hidden": false
+      }
+    ]
+  },
+  {
+    "path": "sister query export-mappa",
+    "params": [
+      {
+        "name": "comune",
+        "flags": [
+          "--comune",
+          "-C"
+        ],
+        "required": true,
+        "hidden": false
+      },
+      {
+        "name": "sezione",
+        "flags": [
+          "--sezione"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "sistema_coordinate",
+        "flags": [
+          "--sistema-coordinate"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "formato",
+        "flags": [
+          "--formato"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "motivo",
+        "flags": [
+          "--motivo"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "provincia",
+        "flags": [
+          "--provincia",
+          "-P"
+        ],
+        "required": true,
+        "hidden": false
+      },
+      {
+        "name": "tipo_catasto",
+        "flags": [
+          "--tipo-catasto",
+          "-t"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "foglio",
+        "flags": [
+          "--foglio",
+          "-F"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "output",
+        "flags": [
+          "--output",
+          "-o"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "wait",
+        "flags": [
+          "--wait",
+          "-w"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "dry_run",
+        "flags": [
+          "--dry-run"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "force",
+        "flags": [
+          "--force"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "redownload",
+        "flags": [
+          "--yes",
+          "--no"
+        ],
+        "required": false,
+        "hidden": false
+      }
+    ]
+  },
+  {
+    "path": "sister query fiduciali",
+    "params": [
+      {
+        "name": "comune",
+        "flags": [
+          "--comune",
+          "-C"
+        ],
+        "required": true,
+        "hidden": false
+      },
+      {
+        "name": "sezione",
+        "flags": [
+          "--sezione"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "foglio",
+        "flags": [
+          "--foglio",
+          "-F"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "allegato",
+        "flags": [
+          "--allegato"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "tipo_ricerca",
+        "flags": [
+          "--tipo-ricerca"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "numero_fiduciale",
+        "flags": [
+          "--numero-fiduciale"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "attendibilita_min",
+        "flags": [
+          "--attendibilita-min"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "attendibilita_max",
+        "flags": [
+          "--attendibilita-max"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "nord_min",
+        "flags": [
+          "--nord-min"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "nord_max",
+        "flags": [
+          "--nord-max"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "est_min",
+        "flags": [
+          "--est-min"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "est_max",
+        "flags": [
+          "--est-max"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "tipo_file",
+        "flags": [
+          "--tipo-file"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "motivo",
+        "flags": [
+          "--motivo"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "provincia",
+        "flags": [
+          "--provincia",
+          "-P"
+        ],
+        "required": true,
+        "hidden": false
+      },
+      {
+        "name": "tipo_catasto",
+        "flags": [
+          "--tipo-catasto",
+          "-t"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "output",
+        "flags": [
+          "--output",
+          "-o"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "wait",
+        "flags": [
+          "--wait",
+          "-w"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "dry_run",
+        "flags": [
+          "--dry-run"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "force",
+        "flags": [
+          "--force"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "redownload",
+        "flags": [
+          "--yes",
+          "--no"
+        ],
+        "required": false,
+        "hidden": false
+      }
+    ]
+  },
+  {
+    "path": "sister query indirizzo",
+    "params": [
+      {
+        "name": "comune",
+        "flags": [
+          "--comune",
+          "-C"
+        ],
+        "required": true,
+        "hidden": false
+      },
+      {
+        "name": "sezione",
+        "flags": [
+          "--sezione"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "toponimo",
+        "flags": [
+          "--toponimo"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "indirizzo",
+        "flags": [
+          "--indirizzo",
+          "-a"
+        ],
+        "required": true,
+        "hidden": false
+      },
+      {
+        "name": "parola_intera",
+        "flags": [
+          "--parola-intera"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "richiedente",
+        "flags": [
+          "--richiedente"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "motivo",
+        "flags": [
+          "--motivo"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "indirizzo_selezionato",
+        "flags": [
+          "--indirizzo-selezionato"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "civico_dal",
+        "flags": [
+          "--civico-dal"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "civico_al",
+        "flags": [
+          "--civico-al"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "provincia",
+        "flags": [
+          "--provincia",
+          "-P"
+        ],
+        "required": true,
+        "hidden": false
+      },
+      {
+        "name": "tipo_catasto",
+        "flags": [
+          "--tipo-catasto",
+          "-t"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "output",
+        "flags": [
+          "--output",
+          "-o"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "wait",
+        "flags": [
+          "--wait",
+          "-w"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "dry_run",
+        "flags": [
+          "--dry-run"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "force",
+        "flags": [
+          "--force"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "redownload",
+        "flags": [
+          "--yes",
+          "--no"
+        ],
+        "required": false,
+        "hidden": false
+      }
+    ]
+  },
+  {
+    "path": "sister query intestati",
+    "params": [
+      {
+        "name": "tipo_catasto",
+        "flags": [
+          "--tipo-catasto",
+          "-t"
+        ],
+        "required": true,
+        "hidden": false
+      },
+      {
+        "name": "comune",
+        "flags": [
+          "--comune",
+          "-C"
+        ],
+        "required": true,
+        "hidden": false
+      },
+      {
+        "name": "sezione",
+        "flags": [
+          "--sezione"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "identificativo_tipo",
+        "flags": [
+          "--identificativo-tipo"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "sezione_urbana",
+        "flags": [
+          "--sezione-urbana"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "foglio",
+        "flags": [
+          "--foglio",
+          "-F"
+        ],
+        "required": true,
+        "hidden": false
+      },
+      {
+        "name": "particella",
+        "flags": [
+          "--particella",
+          "-p"
+        ],
+        "required": true,
+        "hidden": false
+      },
+      {
+        "name": "denominatore",
+        "flags": [
+          "--denominatore"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "subalterno",
+        "flags": [
+          "--subalterno",
+          "-sub"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "tipo_denuncia",
+        "flags": [
+          "--tipo-denuncia"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "numero_denuncia",
+        "flags": [
+          "--numero-denuncia"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "anno_denuncia",
+        "flags": [
+          "--anno-denuncia"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "richiedente",
+        "flags": [
+          "--richiedente"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "motivo",
+        "flags": [
+          "--motivo"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "provincia",
+        "flags": [
+          "--provincia",
+          "-P"
+        ],
+        "required": true,
+        "hidden": false
+      },
+      {
+        "name": "richiedi_documenti",
+        "flags": [
+          "--richiedi-documenti"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "immobili_intestatari",
+        "flags": [
+          "--immobili-intestatari"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "output",
+        "flags": [
+          "--output",
+          "-o"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "wait",
+        "flags": [
+          "--wait",
+          "-w"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "dry_run",
+        "flags": [
+          "--dry-run"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "force",
+        "flags": [
+          "--force"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "redownload",
+        "flags": [
+          "--yes",
+          "--no"
+        ],
+        "required": false,
+        "hidden": false
+      }
+    ]
+  },
+  {
+    "path": "sister query ipotecaria-azienda",
+    "params": [
+      {
+        "name": "provincia",
+        "flags": [
+          "--provincia",
+          "-P"
+        ],
+        "required": true,
+        "hidden": false
+      },
+      {
+        "name": "identificativo",
+        "flags": [
+          "--id"
+        ],
+        "required": true,
+        "hidden": false
+      },
+      {
+        "name": "output",
+        "flags": [
+          "--output",
+          "-o"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "wait",
+        "flags": [
+          "--wait",
+          "-w"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "dry_run",
+        "flags": [
+          "--dry-run"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "force",
+        "flags": [
+          "--force"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "yes",
+        "flags": [
+          "--yes",
+          "-y"
+        ],
+        "required": false,
+        "hidden": true
+      }
+    ]
+  },
+  {
+    "path": "sister query ipotecaria-elenchi",
+    "params": [
+      {
+        "name": "output",
+        "flags": [
+          "--output",
+          "-o"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "wait",
+        "flags": [
+          "--wait",
+          "-w"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "dry_run",
+        "flags": [
+          "--dry-run"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "force",
+        "flags": [
+          "--force"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "redownload",
+        "flags": [
+          "--yes",
+          "--no"
+        ],
+        "required": false,
+        "hidden": false
+      }
+    ]
+  },
+  {
+    "path": "sister query ipotecaria-immobile",
+    "params": [
+      {
+        "name": "provincia",
+        "flags": [
+          "--provincia",
+          "-P"
+        ],
+        "required": true,
+        "hidden": false
+      },
+      {
+        "name": "comune",
+        "flags": [
+          "--comune",
+          "-C"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "foglio",
+        "flags": [
+          "--foglio",
+          "-F"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "particella",
+        "flags": [
+          "--particella",
+          "-p"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "tipo_catasto",
+        "flags": [
+          "--tipo-catasto",
+          "-t"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "output",
+        "flags": [
+          "--output",
+          "-o"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "wait",
+        "flags": [
+          "--wait",
+          "-w"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "dry_run",
+        "flags": [
+          "--dry-run"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "force",
+        "flags": [
+          "--force"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "yes",
+        "flags": [
+          "--yes",
+          "-y"
+        ],
+        "required": false,
+        "hidden": true
+      }
+    ]
+  },
+  {
+    "path": "sister query ipotecaria-nota",
+    "params": [
+      {
+        "name": "provincia",
+        "flags": [
+          "--provincia",
+          "-P"
+        ],
+        "required": true,
+        "hidden": false
+      },
+      {
+        "name": "numero_nota",
+        "flags": [
+          "--numero",
+          "-n"
+        ],
+        "required": true,
+        "hidden": false
+      },
+      {
+        "name": "anno_nota",
+        "flags": [
+          "--anno"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "output",
+        "flags": [
+          "--output",
+          "-o"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "wait",
+        "flags": [
+          "--wait",
+          "-w"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "dry_run",
+        "flags": [
+          "--dry-run"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "force",
+        "flags": [
+          "--force"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "yes",
+        "flags": [
+          "--yes",
+          "-y"
+        ],
+        "required": false,
+        "hidden": true
+      }
+    ]
+  },
+  {
+    "path": "sister query ipotecaria-persona",
+    "params": [
+      {
+        "name": "provincia",
+        "flags": [
+          "--provincia",
+          "-P"
+        ],
+        "required": true,
+        "hidden": false
+      },
+      {
+        "name": "codice_fiscale",
+        "flags": [
+          "--cf"
+        ],
+        "required": true,
+        "hidden": false
+      },
+      {
+        "name": "output",
+        "flags": [
+          "--output",
+          "-o"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "wait",
+        "flags": [
+          "--wait",
+          "-w"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "dry_run",
+        "flags": [
+          "--dry-run"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "force",
+        "flags": [
+          "--force"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "yes",
+        "flags": [
+          "--yes",
+          "-y"
+        ],
+        "required": false,
+        "hidden": true
+      }
+    ]
+  },
+  {
+    "path": "sister query ipotecaria-persona-fisica",
+    "params": [
+      {
+        "name": "provincia",
+        "flags": [
+          "--provincia",
+          "-P"
+        ],
+        "required": true,
+        "hidden": false
+      },
+      {
+        "name": "codice_fiscale",
+        "flags": [
+          "--cf",
+          "-i"
+        ],
+        "required": true,
+        "hidden": false
+      },
+      {
+        "name": "output",
+        "flags": [
+          "--output",
+          "-o"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "wait",
+        "flags": [
+          "--wait",
+          "-w"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "dry_run",
+        "flags": [
+          "--dry-run"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "force",
+        "flags": [
+          "--force"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "redownload",
+        "flags": [
+          "--yes",
+          "--no"
+        ],
+        "required": false,
+        "hidden": false
+      }
+    ]
+  },
+  {
+    "path": "sister query ipotecaria-riepilogo",
+    "params": [
+      {
+        "name": "output",
+        "flags": [
+          "--output",
+          "-o"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "wait",
+        "flags": [
+          "--wait",
+          "-w"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "dry_run",
+        "flags": [
+          "--dry-run"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "force",
+        "flags": [
+          "--force"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "redownload",
+        "flags": [
+          "--yes",
+          "--no"
+        ],
+        "required": false,
+        "hidden": false
+      }
+    ]
+  },
+  {
+    "path": "sister query ipotecaria-stato",
+    "params": [
+      {
+        "name": "output",
+        "flags": [
+          "--output",
+          "-o"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "wait",
+        "flags": [
+          "--wait",
+          "-w"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "dry_run",
+        "flags": [
+          "--dry-run"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "force",
+        "flags": [
+          "--force"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "redownload",
+        "flags": [
+          "--yes",
+          "--no"
+        ],
+        "required": false,
+        "hidden": false
+      }
+    ]
+  },
+  {
+    "path": "sister query ispezioni",
+    "params": [
+      {
+        "name": "comune",
+        "flags": [
+          "--comune",
+          "-C"
+        ],
+        "required": true,
+        "hidden": false
+      },
+      {
+        "name": "tipo_catasto",
+        "flags": [
+          "--tipo-catasto",
+          "-t"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "sezione_censuaria",
+        "flags": [
+          "--sezione-censuaria"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "identificativo_tipo",
+        "flags": [
+          "--identificativo-tipo"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "sezione_urbana",
+        "flags": [
+          "--sezione-urbana"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "foglio",
+        "flags": [
+          "--foglio",
+          "-F"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "particella",
+        "flags": [
+          "--particella",
+          "-p"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "denominatore",
+        "flags": [
+          "--denominatore"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "subalterno",
+        "flags": [
+          "--subalterno",
+          "-sub"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "tipo_denuncia",
+        "flags": [
+          "--tipo-denuncia"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "numero_denuncia",
+        "flags": [
+          "--numero-denuncia"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "anno_denuncia",
+        "flags": [
+          "--anno-denuncia"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "data_inizio",
+        "flags": [
+          "--data-inizio"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "data_fine",
+        "flags": [
+          "--data-fine"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "trascrizioni",
+        "flags": [
+          "--trascrizioni",
+          "--no-trascrizioni"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "iscrizioni",
+        "flags": [
+          "--iscrizioni",
+          "--no-iscrizioni"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "annotazioni",
+        "flags": [
+          "--annotazioni",
+          "--no-annotazioni"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "escludi_ipoteche_cancellate",
+        "flags": [
+          "--escludi-ipoteche-cancellate",
+          "--no-escludi-ipoteche-cancellate"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "escludi_trascrizioni_non_rinnovate",
+        "flags": [
+          "--escludi-trascrizioni-non-rinnovate",
+          "--no-escludi-trascrizioni-non-rinnovate"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "richiedente",
+        "flags": [
+          "--richiedente"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "motivo",
+        "flags": [
+          "--motivo"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "provincia",
+        "flags": [
+          "--provincia",
+          "-P"
+        ],
+        "required": true,
+        "hidden": false
+      },
+      {
+        "name": "output",
+        "flags": [
+          "--output",
+          "-o"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "wait",
+        "flags": [
+          "--wait",
+          "-w"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "dry_run",
+        "flags": [
+          "--dry-run"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "force",
+        "flags": [
+          "--force"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "redownload",
+        "flags": [
+          "--yes",
+          "--no"
+        ],
+        "required": false,
+        "hidden": false
+      }
+    ]
+  },
+  {
+    "path": "sister query ispezioni-cartacee",
+    "params": [
+      {
+        "name": "tipo_nota",
+        "flags": [
+          "--tipo-nota"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "registro",
+        "flags": [
+          "--registro"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "registro_particolare",
+        "flags": [
+          "--registro-particolare"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "registro_particolare_bis",
+        "flags": [
+          "--registro-particolare-bis"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "anno_nota_particolare",
+        "flags": [
+          "--anno-nota-particolare"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "registro_generale",
+        "flags": [
+          "--registro-generale"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "anno_nota_generale",
+        "flags": [
+          "--anno-nota-generale"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "informazioni_aggiuntive",
+        "flags": [
+          "--informazioni-aggiuntive"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "escludi_allegati",
+        "flags": [
+          "--escludi-allegati",
+          "--no-escludi-allegati"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "richiedente",
+        "flags": [
+          "--richiedente"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "motivo",
+        "flags": [
+          "--motivo"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "provincia",
+        "flags": [
+          "--provincia",
+          "-P"
+        ],
+        "required": true,
+        "hidden": false
+      },
+      {
+        "name": "comune",
+        "flags": [
+          "--comune",
+          "-C"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "tipo_catasto",
+        "flags": [
+          "--tipo-catasto",
+          "-t"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "foglio",
+        "flags": [
+          "--foglio",
+          "-F"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "particella",
+        "flags": [
+          "--particella",
+          "-p"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "output",
+        "flags": [
+          "--output",
+          "-o"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "wait",
+        "flags": [
+          "--wait",
+          "-w"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "dry_run",
+        "flags": [
+          "--dry-run"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "force",
+        "flags": [
+          "--force"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "redownload",
+        "flags": [
+          "--yes",
+          "--no"
+        ],
+        "required": false,
+        "hidden": false
+      }
+    ]
+  },
+  {
+    "path": "sister query mappa",
+    "params": [
+      {
+        "name": "tipo_richiesta",
+        "flags": [
+          "--tipo-richiesta"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "comune",
+        "flags": [
+          "--comune",
+          "-C"
+        ],
+        "required": true,
+        "hidden": false
+      },
+      {
+        "name": "sezione",
+        "flags": [
+          "--sezione"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "foglio",
+        "flags": [
+          "--foglio",
+          "-F"
+        ],
+        "required": true,
+        "hidden": false
+      },
+      {
+        "name": "particella",
+        "flags": [
+          "--particella",
+          "-p"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "intero_foglio",
+        "flags": [
+          "--intero-foglio",
+          "--no-intero-foglio"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "mappe_limitrofe",
+        "flags": [
+          "--mappe-limitrofe",
+          "--no-mappe-limitrofe"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "formato_mappa",
+        "flags": [
+          "--formato-mappa"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "foglio_storico",
+        "flags": [
+          "--foglio-storico"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "particella_storica",
+        "flags": [
+          "--particella-storica"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "data_al",
+        "flags": [
+          "--data-al"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "motivo",
+        "flags": [
+          "--motivo"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "provincia",
+        "flags": [
+          "--provincia",
+          "-P"
+        ],
+        "required": true,
+        "hidden": false
+      },
+      {
+        "name": "tipo_catasto",
+        "flags": [
+          "--tipo-catasto",
+          "-t"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "output",
+        "flags": [
+          "--output",
+          "-o"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "wait",
+        "flags": [
+          "--wait",
+          "-w"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "dry_run",
+        "flags": [
+          "--dry-run"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "force",
+        "flags": [
+          "--force"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "redownload",
+        "flags": [
+          "--yes",
+          "--no"
+        ],
+        "required": false,
+        "hidden": false
+      }
+    ]
+  },
+  {
+    "path": "sister query nota",
+    "params": [
+      {
+        "name": "tipo_catasto",
+        "flags": [
+          "--tipo-catasto",
+          "-t"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "comune",
+        "flags": [
+          "--comune",
+          "-C"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "sezione",
+        "flags": [
+          "--sezione"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "numero_nota",
+        "flags": [
+          "--numero",
+          "-n"
+        ],
+        "required": true,
+        "hidden": false
+      },
+      {
+        "name": "progressivo",
+        "flags": [
+          "--progressivo"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "anno_nota",
+        "flags": [
+          "--anno-nota"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "numero_repertorio",
+        "flags": [
+          "--numero-repertorio"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "giorno_efficacia",
+        "flags": [
+          "--giorno-efficacia"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "mese_efficacia",
+        "flags": [
+          "--mese-efficacia"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "anno_efficacia",
+        "flags": [
+          "--anno-efficacia"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "tipo_nota",
+        "flags": [
+          "--tipo-nota"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "motivo",
+        "flags": [
+          "--motivo"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "provincia",
+        "flags": [
+          "--provincia",
+          "-P"
+        ],
+        "required": true,
+        "hidden": false
+      },
+      {
+        "name": "output",
+        "flags": [
+          "--output",
+          "-o"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "wait",
+        "flags": [
+          "--wait",
+          "-w"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "dry_run",
+        "flags": [
+          "--dry-run"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "force",
+        "flags": [
+          "--force"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "redownload",
+        "flags": [
+          "--yes",
+          "--no"
+        ],
+        "required": false,
+        "hidden": false
+      }
+    ]
+  },
+  {
+    "path": "sister query originali",
+    "params": [
+      {
+        "name": "comune",
+        "flags": [
+          "--comune",
+          "-C"
+        ],
+        "required": true,
+        "hidden": false
+      },
+      {
+        "name": "sezione",
+        "flags": [
+          "--sezione"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "motivo",
+        "flags": [
+          "--motivo"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "provincia",
+        "flags": [
+          "--provincia",
+          "-P"
+        ],
+        "required": true,
+        "hidden": false
+      },
+      {
+        "name": "tipo_catasto",
+        "flags": [
+          "--tipo-catasto",
+          "-t"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "foglio",
+        "flags": [
+          "--foglio",
+          "-F"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "output",
+        "flags": [
+          "--output",
+          "-o"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "wait",
+        "flags": [
+          "--wait",
+          "-w"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "dry_run",
+        "flags": [
+          "--dry-run"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "force",
+        "flags": [
+          "--force"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "redownload",
+        "flags": [
+          "--yes",
+          "--no"
+        ],
+        "required": false,
+        "hidden": false
+      }
+    ]
+  },
+  {
+    "path": "sister query partita",
+    "params": [
+      {
+        "name": "tipo_catasto",
+        "flags": [
+          "--tipo-catasto",
+          "-t"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "comune",
+        "flags": [
+          "--comune",
+          "-C"
+        ],
+        "required": true,
+        "hidden": false
+      },
+      {
+        "name": "sezione",
+        "flags": [
+          "--sezione"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "partita",
+        "flags": [
+          "--partita"
+        ],
+        "required": true,
+        "hidden": false
+      },
+      {
+        "name": "foglio",
+        "flags": [
+          "--foglio",
+          "-F"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "richiedente",
+        "flags": [
+          "--richiedente"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "motivo",
+        "flags": [
+          "--motivo"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "provincia",
+        "flags": [
+          "--provincia",
+          "-P"
+        ],
+        "required": true,
+        "hidden": false
+      },
+      {
+        "name": "output",
+        "flags": [
+          "--output",
+          "-o"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "wait",
+        "flags": [
+          "--wait",
+          "-w"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "dry_run",
+        "flags": [
+          "--dry-run"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "force",
+        "flags": [
+          "--force"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "redownload",
+        "flags": [
+          "--yes",
+          "--no"
+        ],
+        "required": false,
+        "hidden": false
+      }
+    ]
+  },
+  {
+    "path": "sister query richieste-sister",
+    "params": [
+      {
+        "name": "output",
+        "flags": [
+          "--output",
+          "-o"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "wait",
+        "flags": [
+          "--wait",
+          "-w"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "dry_run",
+        "flags": [
+          "--dry-run"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "force",
+        "flags": [
+          "--force"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "redownload",
+        "flags": [
+          "--yes",
+          "--no"
+        ],
+        "required": false,
+        "hidden": false
+      }
+    ]
+  },
+  {
+    "path": "sister query riepilogo",
+    "params": [
+      {
+        "name": "data_visura",
+        "flags": [
+          "--data-visura"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "richiedente",
+        "flags": [
+          "--richiedente"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "output",
+        "flags": [
+          "--output",
+          "-o"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "wait",
+        "flags": [
+          "--wait",
+          "-w"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "dry_run",
+        "flags": [
+          "--dry-run"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "force",
+        "flags": [
+          "--force"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "redownload",
+        "flags": [
+          "--yes",
+          "--no"
+        ],
+        "required": false,
+        "hidden": false
+      }
+    ]
+  },
+  {
+    "path": "sister query search",
+    "params": [
+      {
+        "name": "tipo_catasto",
+        "flags": [
+          "--tipo-catasto",
+          "-t"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "comune",
+        "flags": [
+          "--comune",
+          "-C"
+        ],
+        "required": true,
+        "hidden": false
+      },
+      {
+        "name": "sezione",
+        "flags": [
+          "--sezione"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "identificativo_tipo",
+        "flags": [
+          "--identificativo-tipo"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "sezione_urbana",
+        "flags": [
+          "--sezione-urbana"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "foglio",
+        "flags": [
+          "--foglio",
+          "-F"
+        ],
+        "required": true,
+        "hidden": false
+      },
+      {
+        "name": "particella",
+        "flags": [
+          "--particella",
+          "-p"
+        ],
+        "required": true,
+        "hidden": false
+      },
+      {
+        "name": "denominatore",
+        "flags": [
+          "--denominatore"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "subalterno",
+        "flags": [
+          "--subalterno",
+          "-sub"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "tipo_denuncia",
+        "flags": [
+          "--tipo-denuncia"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "numero_denuncia",
+        "flags": [
+          "--numero-denuncia"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "anno_denuncia",
+        "flags": [
+          "--anno-denuncia"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "richiedente",
+        "flags": [
+          "--richiedente"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "motivo",
+        "flags": [
+          "--motivo"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "provincia",
+        "flags": [
+          "--provincia",
+          "-P"
+        ],
+        "required": true,
+        "hidden": false
+      },
+      {
+        "name": "richiedi_documenti",
+        "flags": [
+          "--richiedi-documenti"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "immobili_intestatari",
+        "flags": [
+          "--immobili-intestatari"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "output",
+        "flags": [
+          "--output",
+          "-o"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "wait",
+        "flags": [
+          "--wait",
+          "-w"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "dry_run",
+        "flags": [
+          "--dry-run"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "force",
+        "flags": [
+          "--force"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "redownload",
+        "flags": [
+          "--yes",
+          "--no"
+        ],
+        "required": false,
+        "hidden": false
+      }
+    ]
+  },
+  {
+    "path": "sister query soggetto",
+    "params": [
+      {
+        "name": "tipo_catasto",
+        "flags": [
+          "--tipo-catasto",
+          "-t"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "tipo_richiesta",
+        "flags": [
+          "--tipo-richiesta"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "restrizione_foglio",
+        "flags": [
+          "--restrizione-foglio",
+          "--no-restrizione-foglio"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "sezione",
+        "flags": [
+          "--sezione"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "sezione_urbana",
+        "flags": [
+          "--sezione-urbana"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "foglio",
+        "flags": [
+          "--foglio",
+          "-F"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "ricerca_per",
+        "flags": [
+          "--ricerca-per"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "cognome",
+        "flags": [
+          "--cognome"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "nome",
+        "flags": [
+          "--nome"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "giorno_nascita",
+        "flags": [
+          "--giorno-nascita"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "mese_nascita",
+        "flags": [
+          "--mese-nascita"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "anno_nascita",
+        "flags": [
+          "--anno-nascita"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "sesso",
+        "flags": [
+          "--sesso"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "provincia_nascita",
+        "flags": [
+          "--provincia-nascita"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "comune_nascita",
+        "flags": [
+          "--comune-nascita"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "codice_fiscale",
+        "flags": [
+          "--cf",
+          "-i"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "richiedente",
+        "flags": [
+          "--richiedente"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "motivo",
+        "flags": [
+          "--motivo"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "provincia",
+        "flags": [
+          "--provincia",
+          "-P"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "output",
+        "flags": [
+          "--output",
+          "-o"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "wait",
+        "flags": [
+          "--wait",
+          "-w"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "dry_run",
+        "flags": [
+          "--dry-run"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "force",
+        "flags": [
+          "--force"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "redownload",
+        "flags": [
+          "--yes",
+          "--no"
+        ],
+        "required": false,
+        "hidden": false
+      }
+    ]
+  },
+  {
+    "path": "sister query soggetto-documento",
+    "params": [
+      {
+        "name": "provincia",
+        "flags": [
+          "--provincia",
+          "-P"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "codice_fiscale",
+        "flags": [
+          "--cf",
+          "-i"
+        ],
+        "required": true,
+        "hidden": false
+      },
+      {
+        "name": "azienda",
+        "flags": [
+          "--azienda",
+          "--no-azienda"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "tipo_catasto",
+        "flags": [
+          "--tipo-catasto",
+          "-t"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "tipo_richiesta",
+        "flags": [
+          "--tipo-richiesta"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "vista",
+        "flags": [
+          "--vista"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "output",
+        "flags": [
+          "--output",
+          "-o"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "wait",
+        "flags": [
+          "--wait",
+          "-w"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "dry_run",
+        "flags": [
+          "--dry-run"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "force",
+        "flags": [
+          "--force"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "redownload",
+        "flags": [
+          "--yes",
+          "--no"
+        ],
+        "required": false,
+        "hidden": false
+      }
+    ]
+  },
+  {
+    "path": "sister query soggetto-immobili",
+    "params": [
+      {
+        "name": "provincia",
+        "flags": [
+          "--provincia",
+          "-P"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "codice_fiscale",
+        "flags": [
+          "--cf",
+          "-i"
+        ],
+        "required": true,
+        "hidden": false
+      },
+      {
+        "name": "tipo_catasto",
+        "flags": [
+          "--tipo-catasto",
+          "-t"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "tipo_richiesta",
+        "flags": [
+          "--tipo-richiesta"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "con_intestati",
+        "flags": [
+          "--con-intestati",
+          "--no-con-intestati"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "azienda",
+        "flags": [
+          "--azienda",
+          "--no-azienda"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "output",
+        "flags": [
+          "--output",
+          "-o"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "wait",
+        "flags": [
+          "--wait",
+          "-w"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "dry_run",
+        "flags": [
+          "--dry-run"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "force",
+        "flags": [
+          "--force"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "redownload",
+        "flags": [
+          "--yes",
+          "--no"
+        ],
+        "required": false,
+        "hidden": false
+      }
+    ]
+  },
+  {
+    "path": "sister query visura-storica",
+    "params": [
+      {
+        "name": "provincia",
+        "flags": [
+          "--provincia",
+          "-P"
+        ],
+        "required": true,
+        "hidden": false
+      },
+      {
+        "name": "comune",
+        "flags": [
+          "--comune",
+          "-C"
+        ],
+        "required": true,
+        "hidden": false
+      },
+      {
+        "name": "foglio",
+        "flags": [
+          "--foglio",
+          "-F"
+        ],
+        "required": true,
+        "hidden": false
+      },
+      {
+        "name": "particella",
+        "flags": [
+          "--particella",
+          "-p"
+        ],
+        "required": true,
+        "hidden": false
+      },
+      {
+        "name": "tipo_catasto",
+        "flags": [
+          "--tipo-catasto",
+          "-t"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "subalterno",
+        "flags": [
+          "--subalterno",
+          "-sub"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "sezione",
+        "flags": [
+          "--sezione"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "output",
+        "flags": [
+          "--output",
+          "-o"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "wait",
+        "flags": [
+          "--wait",
+          "-w"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "dry_run",
+        "flags": [
+          "--dry-run"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "force",
+        "flags": [
+          "--force"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "redownload",
+        "flags": [
+          "--yes",
+          "--no"
+        ],
+        "required": false,
+        "hidden": false
+      }
+    ]
+  },
+  {
+    "path": "sister query workflow",
+    "params": [
+      {
+        "name": "preset",
+        "flags": [
+          "--preset"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "provincia",
+        "flags": [
+          "--provincia",
+          "-P"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "comune",
+        "flags": [
+          "--comune",
+          "-C"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "foglio",
+        "flags": [
+          "--foglio",
+          "-F"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "particella",
+        "flags": [
+          "--particella",
+          "-p"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "tipo_catasto",
+        "flags": [
+          "--tipo-catasto",
+          "-t"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "sezione",
+        "flags": [
+          "--sezione"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "subalterno",
+        "flags": [
+          "--subalterno",
+          "-sub"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "codice_fiscale",
+        "flags": [
+          "--cf"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "azienda_id",
+        "flags": [
+          "--azienda"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "indirizzo_str",
+        "flags": [
+          "--indirizzo",
+          "-a"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "numero_nota",
+        "flags": [
+          "--nota"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "with_elenco",
+        "flags": [
+          "--elenco"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "with_mappa",
+        "flags": [
+          "--mappa"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "with_ispezioni",
+        "flags": [
+          "--ispezioni"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "with_fiduciali",
+        "flags": [
+          "--fiduciali"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "with_originali",
+        "flags": [
+          "--originali"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "with_nota",
+        "flags": [
+          "--with-nota"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "with_ispezioni_cart",
+        "flags": [
+          "--ispezioni-cart"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "depth",
+        "flags": [
+          "--depth",
+          "-d"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "max_fanout",
+        "flags": [
+          "--max-fanout"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "max_owners",
+        "flags": [
+          "--max-owners"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "max_properties_per_owner",
+        "flags": [
+          "--max-properties-per-owner"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "max_historical_properties",
+        "flags": [
+          "--max-history"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "max_paid_steps",
+        "flags": [
+          "--max-paid"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "max_total_steps",
+        "flags": [
+          "--max-steps"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "confirm_paid",
+        "flags": [
+          "--confirm-paid"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "deprecated_yes",
+        "flags": [
+          "--yes",
+          "-y"
+        ],
+        "required": false,
+        "hidden": true
+      },
+      {
+        "name": "include_paid",
+        "flags": [
+          "--include-paid"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "include_history",
+        "flags": [
+          "--history"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "output",
+        "flags": [
+          "--output",
+          "-o"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "dry_run",
+        "flags": [
+          "--dry-run"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "force",
+        "flags": [
+          "--force"
+        ],
+        "required": false,
+        "hidden": false
+      }
+    ]
+  },
+  {
+    "path": "sister requests",
+    "params": [
+      {
+        "name": "provincia",
+        "flags": [
+          "--provincia",
+          "-P"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "comune",
+        "flags": [
+          "--comune",
+          "-C"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "foglio",
+        "flags": [
+          "--foglio",
+          "-F"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "particella",
+        "flags": [
+          "--particella",
+          "-p"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "tipo_catasto",
+        "flags": [
+          "--tipo-catasto",
+          "-t"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "status",
+        "flags": [
+          "--status",
+          "-s"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "limit",
+        "flags": [
+          "--limit",
+          "-n"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "offset",
+        "flags": [
+          "--offset"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "output",
+        "flags": [
+          "--output",
+          "-o"
+        ],
+        "required": false,
+        "hidden": false
+      }
+    ]
+  },
+  {
+    "path": "sister wait",
+    "params": [
+      {
+        "name": "request_id",
+        "flags": [
+          "request_id"
+        ],
+        "required": true,
+        "hidden": false
+      },
+      {
+        "name": "timeout",
+        "flags": [
+          "--timeout",
+          "-T"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "interval",
+        "flags": [
+          "--interval"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "output",
+        "flags": [
+          "--output",
+          "-o"
+        ],
+        "required": false,
+        "hidden": false
+      }
+    ]
+  },
+  {
+    "path": "sister workflow",
+    "params": []
+  },
+  {
+    "path": "sister workflow cancel",
+    "params": [
+      {
+        "name": "workflow_id",
+        "flags": [
+          "workflow_id"
+        ],
+        "required": true,
+        "hidden": false
+      },
+      {
+        "name": "output",
+        "flags": [
+          "--output",
+          "-o"
+        ],
+        "required": false,
+        "hidden": false
+      }
+    ]
+  },
+  {
+    "path": "sister workflow status",
+    "params": [
+      {
+        "name": "workflow_id",
+        "flags": [
+          "workflow_id"
+        ],
+        "required": true,
+        "hidden": false
+      },
+      {
+        "name": "output",
+        "flags": [
+          "--output",
+          "-o"
+        ],
+        "required": false,
+        "hidden": false
+      }
+    ]
+  }
+]

@@ -1043,7 +1043,7 @@ _CF = ["query", "soggetto", "--cf", "RSSMRA85M01H501Z"]
 
 def test_an_answered_query_asks_before_downloading_again_and_defaults_to_no(monkeypatch):
     calls = _record_submits(monkeypatch, _STALE)
-    monkeypatch.setattr("sister.cli._interactive", lambda: True)
+    monkeypatch.setattr("sister.cli.query._interactive", lambda: True)
 
     result = runner.invoke(app, _CF, input="\n")
 
@@ -1054,7 +1054,7 @@ def test_an_answered_query_asks_before_downloading_again_and_defaults_to_no(monk
 
 def test_answering_yes_to_the_prompt_downloads_again(monkeypatch):
     calls = _record_submits(monkeypatch, _STALE)
-    monkeypatch.setattr("sister.cli._interactive", lambda: True)
+    monkeypatch.setattr("sister.cli.query._interactive", lambda: True)
 
     result = runner.invoke(app, _CF, input="y\n")
 
@@ -1085,7 +1085,7 @@ def test_no_reuses_the_previous_result_without_asking(monkeypatch):
 
 def test_without_a_terminal_the_answer_is_no(monkeypatch):
     calls = _record_submits(monkeypatch, _STALE)
-    monkeypatch.setattr("sister.cli._interactive", lambda: False)
+    monkeypatch.setattr("sister.cli.query._interactive", lambda: False)
 
     result = runner.invoke(app, _CF)
 

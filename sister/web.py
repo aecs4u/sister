@@ -46,6 +46,7 @@ from .database import (
     find_subject_inspection_document_ids,
     find_subject_query_requests,
     get_all_documents,
+    get_cadastral_parcel_coordinates,
     get_cadastral_sibling_visuras,
     get_comune_centroids,
     get_db_owners_for_response,
@@ -63,6 +64,7 @@ from .database import (
     get_subject_fiscal_code_for_document,
     get_subject_mortgage_formalities,
     get_subject_name,
+    save_cadastral_parcel_coordinate,
     iter_all_documents,
     parcel_key,
     record_activity,
@@ -2980,13 +2982,48 @@ async def _with_clerk_profile(request: Request, user):
     return _ClerkProfileUser(user, profile)
 
 
+def _clerk_user_from_session(request: Request):
+    """The Clerk user recorded in the signed server session at sign-in, or None.
+
+    Clerk's own ``__session`` cookie is a JWT that lives 60 seconds and only the Clerk browser script renews it, so on
+    a page that does not run that script (or after a idle minute) ``get_current_user`` finds no valid token and sends
+    the visitor back to the login. ``aecs4u-auth`` has a fallback on the signed session (``clerk_user_id``), but it
+    only works when a user-lookup callback is registered, and SISTER keeps no Clerk user table. The session cookie is
+    signed and expires with ``SESSION_MAX_AGE``, so it is as trustworthy as the sign-in that wrote it.
+    """
+    try:
+        session = request.session if "session" in request.scope else None
+        if not session or session.get("auth_method") != "clerk" or not session.get("clerk_user_id"):
+            return None
+        from aecs4u_auth.core.clerk import ClerkUser
+
+        claims: dict[str, Any] = {
+            "sub": str(session["clerk_user_id"]),
+            "email": session.get("user_email") or "",
+            "first_name": session.get("user_first_name") or "",
+            "last_name": session.get("user_last_name") or "",
+            "image_url": session.get("user_image_url") or "",
+            "public_metadata": session.get("user_public_metadata") or {},
+        }
+        if session.get("user_roles"):
+            claims["roles"] = list(session["user_roles"])
+        return ClerkUser(claims)
+    except Exception as exc:  # noqa: BLE001 - a broken session means "not signed in", never a 500
+        logger.debug("Sessione Clerk non utilizzabile: %s", type(exc).__name__)
+        return None
+
+
 async def _optional_user(request: Request):
     """The signed-in user on pages that are public but personalised (sidebar, admin links); None when anonymous."""
     try:
         from aecs4u_auth.dependencies import get_current_user
 
         return await _with_clerk_profile(request, await get_current_user(request))
-    except Exception:
+    except Exception as exc:
+        blocked = getattr(exc, "status_code", None) == 403
+        session_user = None if blocked else _clerk_user_from_session(request)
+        if session_user is not None:
+            return await _with_clerk_profile(request, session_user)
         return _get_user(request)
 
 
@@ -3018,7 +3055,10 @@ async def _require_auth(request: Request):
 
     try:
         return await _with_clerk_profile(request, await get_current_user(request))
-    except HTTPException:
+    except HTTPException as exc:
+        session_user = _clerk_user_from_session(request) if exc.status_code == 401 else None  # never bypass a 403 block
+        if session_user is not None:
+            return await _with_clerk_profile(request, session_user)
         if not _auth_required():
             if not _auth_disabled_warned:
                 _auth_disabled_warned = True
@@ -7706,7 +7746,11 @@ async def _write_visura_cadastral_map_cache(records: list[tuple]) -> None:
 
 
 async def _read_subject_map_features_from_sister_views(
-    connection, parcel_identifiers: list[dict], sheet_identifiers: list[dict]
+    connection,
+    parcel_identifiers: list[dict],
+    sheet_identifiers: list[dict],
+    *,
+    max_keys_per_query: int = 10,
 ) -> tuple[list[tuple], list[tuple]]:
     """Read the hub's requested keys from SISTER's live cadastral source views."""
     from .provinces import province_code, province_name
@@ -7717,18 +7761,25 @@ async def _read_subject_map_features_from_sister_views(
         name = province_name(code) or raw_province
         return sorted({value.strip().upper() for value in (raw_province, code, name) if value.strip()})
 
-    max_keys_per_query = 10
+    if max_keys_per_query < 1:
+        raise ValueError("max_keys_per_query must be positive")
     if len(parcel_identifiers) > max_keys_per_query or len(sheet_identifiers) > max_keys_per_query:
         parcel_rows = []
         sheet_rows = []
         for start in range(0, len(parcel_identifiers), max_keys_per_query):
             rows, _ = await _read_subject_map_features_from_sister_views(
-                connection, parcel_identifiers[start : start + max_keys_per_query], []
+                connection,
+                parcel_identifiers[start : start + max_keys_per_query],
+                [],
+                max_keys_per_query=max_keys_per_query,
             )
             parcel_rows.extend((int(row[0]) + start, *row[1:]) for row in rows)
         for start in range(0, len(sheet_identifiers), max_keys_per_query):
             _, rows = await _read_subject_map_features_from_sister_views(
-                connection, [], sheet_identifiers[start : start + max_keys_per_query]
+                connection,
+                [],
+                sheet_identifiers[start : start + max_keys_per_query],
+                max_keys_per_query=max_keys_per_query,
             )
             sheet_rows.extend((int(row[0]) + start, *row[1:]) for row in rows)
         return parcel_rows, sheet_rows
@@ -11536,14 +11587,66 @@ def _omi_zone_features_for_properties(
     return list(selected.values())
 
 
-async def _address_position_marker(item: dict[str, Any], address: str, queries: list[str]) -> dict[str, Any] | None:
+def _stored_coordinate_marker(item: dict[str, Any], coordinate: dict[str, Any]) -> dict[str, Any]:
+    source = str(coordinate.get("location_source") or "")
+    position_source = {
+        "anncsu_address": "anncsu",
+        "osm_address": "osm_address",
+        "cadastral_geometry": "cadastral_geometry",
+    }.get(source, "")
+    label = {
+        "anncsu": "Posizione indicativa dal numero civico (ANNCSU)",
+        "osm_address": "Posizione indicativa da indirizzo geocodificato con OpenStreetMap",
+        "cadastral_geometry": "Punto interno alla geometria catastale",
+    }.get(position_source, "")
+    return {
+        "latitude": float(coordinate["latitude"]),
+        "longitude": float(coordinate["longitude"]),
+        "reference": item.get("reference") or "Particella",
+        "municipality": item.get("municipality") or "",
+        "municipality_code": item.get("municipality_code") or "",
+        "province": item.get("province") or "",
+        "section": item.get("section") or "",
+        "sheet": item.get("sheet") or "",
+        "parcel": item.get("parcel") or "",
+        "category": item.get("category") or "",
+        "position_source": position_source,
+        "geocode_label": label,
+        "selected": False,
+    }
+
+
+async def _address_position_marker(
+    item: dict[str, Any],
+    address: str,
+    queries: list[str],
+    saved_coordinate: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
     """Approximate marker for a parcel the cadastre has no geometry for: ANNCSU house number first, then the geocoder."""
     from .anncsu import anncsu_position
+
+    if saved_coordinate is None:
+        try:
+            saved = await get_cadastral_parcel_coordinates([item])
+            key = (
+                str(item.get("municipality_code") or "").strip().upper(),
+                str(item.get("section") or "").strip().upper(),
+                str(item.get("sheet") or "").strip(),
+                str(item.get("parcel") or "").strip(),
+            )
+            saved_coordinate = saved.get(key)
+        except Exception as exc:  # noqa: BLE001 - a missing cache must not hide the map
+            logger.debug("Persistent parcel coordinate lookup unavailable: %s", type(exc).__name__)
+    saved_source = str((saved_coordinate or {}).get("location_source") or "")
+    if saved_coordinate and saved_source != "osm_address":
+        return _stored_coordinate_marker(item, saved_coordinate)
 
     source, place = "", None
     if address:
         place = await anncsu_position(str(item.get("municipality_code") or ""), address)
         source = "anncsu"
+    if not place and saved_coordinate:
+        return _stored_coordinate_marker(item, saved_coordinate)
     if not place:
         for query in queries:
             place = await _geocode_address(query)
@@ -11558,6 +11661,21 @@ async def _address_position_marker(item: dict[str, Any], address: str, queries: 
         return None
     if not (-90 <= latitude <= 90 and -180 <= longitude <= 180):
         return None
+    location_source = "anncsu_address" if source == "anncsu" else "osm_address"
+    try:
+        await save_cadastral_parcel_coordinate(
+            cadastral_code=str(item.get("municipality_code") or ""),
+            section=str(item.get("section") or ""),
+            sheet=str(item.get("sheet") or ""),
+            parcel=str(item.get("parcel") or ""),
+            latitude=latitude,
+            longitude=longitude,
+            location_source=location_source,
+            source_reference=str(place.get("label") or "") or None,
+            source_method="anncsu_civic_address" if source == "anncsu" else "nominatim_address",
+        )
+    except Exception as exc:  # noqa: BLE001 - coordinate persistence is an optimization for the map
+        logger.debug("Persistent parcel coordinate write unavailable: %s", type(exc).__name__)
     return {
         "latitude": latitude,
         "longitude": longitude,
@@ -11578,15 +11696,37 @@ async def _address_position_marker(item: dict[str, Any], address: str, queries: 
 async def _parcel_map_payload(lookup: dict[str, Any]) -> dict[str, Any]:
     """The JSON the parcel map script fetches: markers, parcel and sheet outlines, parcels without a position."""
     unmapped_parcels = [dict(item) for item in lookup.get("unmapped_parcel_items") or []]
-    if lookup.get("listed_only") and any(item.get("address") for item in unmapped_parcels):
-        # No cadastral geometry: place the parcel at its address (ANNCSU, else geocoder), marked as approximate.
+    if lookup.get("listed_only") and unmapped_parcels:
+        # Reuse parcel points already sourced from cadastral geometry or an exact ANNCSU civic address.
+        try:
+            saved_coordinates = await get_cadastral_parcel_coordinates(unmapped_parcels)
+        except Exception as exc:  # noqa: BLE001 - stored points are an optional map source
+            logger.debug("Persistent parcel coordinate lookup unavailable: %s", type(exc).__name__)
+            saved_coordinates = {}
         located, remaining = [], []
         for item in unmapped_parcels:
             address = str(item.get("address") or "")
-            marker = await _address_position_marker(
-                item, address,
-                _hub_map_geocode_queries(address, item.get("municipality"), item.get("province")) if address else [],
-            ) if address else None
+            key = (
+                str(item.get("municipality_code") or "").strip().upper(),
+                str(item.get("section") or "").strip().upper(),
+                str(item.get("sheet") or "").strip(),
+                str(item.get("parcel") or "").strip(),
+            )
+            coordinate = saved_coordinates.get(key)
+            marker = (
+                _stored_coordinate_marker(item, coordinate)
+                if coordinate and coordinate.get("location_source") != "osm_address"
+                else None
+            )
+            if marker is None and address:
+                marker = await _address_position_marker(
+                    item,
+                    address,
+                    _hub_map_geocode_queries(address, item.get("municipality"), item.get("province")),
+                    saved_coordinate=coordinate,
+                )
+            if marker is None and coordinate:
+                marker = _stored_coordinate_marker(item, coordinate)
             if marker:
                 located.append(marker)
             else:
@@ -14612,16 +14752,6 @@ async def _build_hub_map(map_key: str, parcels: list[dict], data_url: str) -> di
     async def publish(lookup: dict) -> None:
         for marker in lookup.get("parcel_markers") or []:
             marker["selected"] = False  # the merged lookup selects the very first one
-        address_fallbacks = []
-        for item in lookup.get("unmapped_parcel_items") or []:
-            source = parcels_by_key.get(_hub_map_parcel_key(item))
-            queries = _hub_map_geocode_queries(
-                (source or {}).get("map_address"),
-                (source or {}).get("municipality") or item.get("municipality"),
-                (source or {}).get("province_code") or (source or {}).get("province") or item.get("province"),
-            )
-            if queries:
-                address_fallbacks.append((item, source, queries))
         payload = await _parcel_map_payload(lookup)
         fresh = []
         for feature in payload["sheet_features"]["features"]:  # a sheet can be cut across two chunks
@@ -14652,16 +14782,26 @@ async def _build_hub_map(map_key: str, parcels: list[dict], data_url: str) -> di
         # Publish cadastral results first so a slow address lookup never delays the map.
         # Geocoded points are explicitly approximate and are added only when the parcel
         # has no cadastral polygon/centroid from the cadastral source.
+        address_fallbacks = []
+        for item in lookup.get("unmapped_parcel_items") or []:
+            source = parcels_by_key.get(_hub_map_parcel_key(item))
+            queries = _hub_map_geocode_queries(
+                (source or {}).get("map_address"),
+                (source or {}).get("municipality") or item.get("municipality"),
+                (source or {}).get("province_code") or (source or {}).get("province") or item.get("province"),
+            )
+            if queries:
+                address_fallbacks.append((item, source, queries))
         for item, source, queries in address_fallbacks:
             marker = await _address_position_marker(
                 {
                     **item,
-                    "municipality": item.get("municipality") or source.get("municipality") or "",
-                    "municipality_code": item.get("municipality_code") or source.get("municipality_code") or "",
-                    "province": item.get("province") or source.get("province") or "",
-                    "section": item.get("section") or source.get("section") or "",
-                    "sheet": item.get("sheet") or source.get("sheet") or "",
-                    "parcel": item.get("parcel") or source.get("parcel") or "",
+                    "municipality": item.get("municipality") or (source or {}).get("municipality") or "",
+                    "municipality_code": item.get("municipality_code") or (source or {}).get("municipality_code") or "",
+                    "province": item.get("province") or (source or {}).get("province") or "",
+                    "section": item.get("section") or (source or {}).get("section") or "",
+                    "sheet": item.get("sheet") or (source or {}).get("sheet") or "",
+                    "parcel": item.get("parcel") or (source or {}).get("parcel") or "",
                 },
                 str((source or {}).get("map_address") or ""),
                 queries,

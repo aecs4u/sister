@@ -92,7 +92,8 @@ sister.municipalities ◄── cadastral_unit ◄── request ──► reque
    │            │       ├── property_group ──► building_unit ──► building_unit_related_parcel
    │            │       ├── land_parcel ──► land_parcel_classification
    │            │       └── ownership_mutation ──► mutation_owner ──► subject, ownership_right
-   └── parcel_geometry_cache
+   ├── parcel_geometry_cache
+   └── cadastral_parcel_coordinate
 ```
 
 | Legacy | New |
@@ -114,6 +115,7 @@ sister.municipalities ◄── cadastral_unit ◄── request ──► reque
 | `mortgage_inspections` + `_liens` + `_titles` | `mortgage_inspection` (one row; `lien_*`, `title_*` columns) |
 | `mortgage_inspection_units` + `_properties` | `mortgage_inspection_property` |
 | `cadastral_map_geometry_cache` | `parcel_geometry_cache` keyed by `(feature_type, comune_id, section, sheet, parcel)`; `lookup_key` was the concatenation of those columns |
+| — | `cadastral_parcel_coordinate` keyed by cadastral code, section, sheet and parcel; stores WGS84 points with source provenance (parcel geometry or an exact ANNCSU address match) |
 | `document_xml_nodes`, `_attributes` | `sister_archive.document_xml_node`, `_attribute` |
 | 28 `enum_*` tables + trigger | `CHECK`s for closed sets; lookup tables for `request_type` (display label and description, with `request_type_tag` categories), `document_type`, `cadastral_category`, `land_quality`, `activity_action`, mortgage vocabularies |
 | `sister_owner_index`, `sister_property_index` (matviews), 13 views | not rebuilt; 7 flat views (below) |

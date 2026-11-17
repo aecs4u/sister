@@ -1,7 +1,9 @@
 """Command-level tests for CLI surfaces not covered by the main query flow suite."""
 
 import json
+import subprocess
 import sys
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -39,6 +41,26 @@ def _dry_run_arguments(form):
     return [*args, "--dry-run"]
 
 
+def _cli_tree(command, path=()):
+    rows = []
+    command_path = (*path, command.name or "sister")
+    params = []
+    for param in command.params:
+        flags = [*getattr(param, "opts", ()), *getattr(param, "secondary_opts", ())]
+        params.append(
+            {
+                "name": param.name,
+                "flags": flags,
+                "required": bool(getattr(param, "required", False)),
+                "hidden": bool(getattr(param, "hidden", False)),
+            }
+        )
+    rows.append({"path": " ".join(command_path), "params": params})
+    for name, child in sorted(getattr(command, "commands", {}).items()):
+        rows.extend(_cli_tree(child, command_path))
+    return rows
+
+
 @pytest.mark.parametrize("form", QUERY_FORMS.values(), ids=lambda form: form.command)
 def test_generated_query_commands_accept_required_options_and_show_api_v1(form):
     result = runner.invoke(app, _dry_run_arguments(form))
@@ -55,6 +77,127 @@ def test_queries_lists_versioned_json_endpoints_and_root_health():
     assert "/api/v1/visura" in result.output
     assert "/health" in result.output
     assert "/api/v1/health" not in result.output
+
+
+def test_cli_tree_matches_help_snapshot():
+    from typer.main import get_command
+
+    fixture = Path(__file__).parent / "fixtures" / "cli_tree.json"
+    expected = json.loads(fixture.read_text(encoding="utf-8"))
+
+    assert _cli_tree(get_command(app)) == expected
+
+
+def test_run_session_internal_cli_contract_is_pinned():
+    from typer.main import get_command
+
+    from sister.cli import EXIT_SESSION_EXPIRED
+    from sister.command_tools.run_in_session import EXIT_SESSION_EXPIRED as session_expired_code
+
+    root = get_command(app)
+    query = root.commands["query"]
+    batch_command = query.commands["batch"]
+    batch_flags = {flag for param in batch_command.params for flag in [*param.opts, *param.secondary_opts]}
+    assert {"--input", "-I", "--resume", "--output", "-o", "--stop-at"} <= batch_flags
+
+    subject_command = query.commands["soggetto"]
+    subject_flags = {flag for param in subject_command.params for flag in [*param.opts, *param.secondary_opts]}
+    assert {"--cf", "--wait", "-w", "--yes", "--no", "-o"} <= subject_flags
+    assert EXIT_SESSION_EXPIRED == session_expired_code == 75
+
+    root_path = Path(__file__).resolve().parents[1]
+    result = subprocess.run(
+        [sys.executable, "-m", "sister.cli", "--help"],
+        cwd=root_path,
+        capture_output=True,
+        text=True,
+        timeout=10,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "Usage: python -m sister.cli" in result.stdout
+
+
+def test_cli_run_api_uses_one_managed_client_context():
+    from sister.cli import _runtime
+
+    class FakeClient:
+        base_url = "http://sister.test"
+
+        def __init__(self):
+            self.entered = 0
+            self.exited = 0
+
+        async def __aenter__(self):
+            self.entered += 1
+            return self
+
+        async def __aexit__(self, *_exc):
+            self.exited += 1
+
+        async def result(self):
+            return {"ok": True}
+
+    client = FakeClient()
+    result = _runtime.run_api(lambda active: active.result(), client=client)
+
+    assert result == {"ok": True}
+    assert client.entered == client.exited == 1
+
+
+def test_cli_run_api_maps_service_connect_error_to_exit_3():
+    import httpx
+    import typer
+
+    from sister.cli import _runtime
+
+    class FakeClient:
+        base_url = "http://sister.test"
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_exc):
+            return None
+
+        async def fail(self):
+            raise httpx.ConnectError("offline")
+
+    with pytest.raises(typer.Exit) as raised:
+        _runtime.run_api(lambda active: active.fail(), client=FakeClient())
+
+    assert raised.value.exit_code == 3
+
+
+def test_cli_run_db_maps_missing_dsn_to_exit_3(monkeypatch):
+    import typer
+
+    from sister import database
+    from sister.cli import _runtime
+
+    async def missing_dsn():
+        raise RuntimeError("SISTER_DATABASE_DSN_LOCALHOST must be set to a PostgreSQL connection URL")
+
+    monkeypatch.setattr(database, "init_db", missing_dsn)
+    with pytest.raises(typer.Exit) as raised:
+        _runtime.run_db(lambda: None)
+
+    assert raised.value.exit_code == 3
+
+
+def test_health_uses_exit_3_when_service_cannot_be_reached(monkeypatch):
+    import httpx
+
+    from sister.cli import VisuraClient
+
+    async def offline(self):
+        raise httpx.ConnectError("offline")
+
+    monkeypatch.setattr(VisuraClient, "health", offline)
+    result = runner.invoke(app, ["health"])
+
+    assert result.exit_code == 3
+    assert "Service not reachable" in result.output
 
 
 @pytest.mark.parametrize(
@@ -144,6 +287,14 @@ def test_paid_inspection_yes_never_confirms_and_wait_writes_preview(monkeypatch,
     }
 
 
+def test_paid_inspection_help_hides_legacy_yes_flag():
+    result = runner.invoke(app, ["query", "ipotecaria-persona", "--help"])
+
+    assert result.exit_code == 0, result.output
+    assert "--yes" not in result.output
+    assert "-y" not in result.output
+
+
 def test_mortgage_save_quote_forwards_exact_portal_request_id(monkeypatch):
     from sister.client import VisuraClient
 
@@ -202,18 +353,64 @@ def test_workflow_preset_dry_run_builds_plan_without_sending(monkeypatch):
             "166",
             "--history",
             "--include-paid",
-            "--yes",
+            "--confirm-paid",
             "--dry-run",
         ],
     )
 
     assert result.exit_code == 0, result.output
-    assert "POST /api/v1/visura/workflow" in result.output
+    assert "POST /api/v1/catasto/workflow/run" in result.output
     assert "search → intestati → history" in result.output
     assert captured["preset"] == "due-diligence"
     assert captured["include_history"] is True
     assert captured["include_paid_steps"] is True
     assert captured["auto_confirm"] is True
+
+
+@pytest.mark.parametrize("legacy_flag", ["--yes", "-y"])
+def test_workflow_legacy_yes_flag_fails_with_migration_message(monkeypatch, legacy_flag):
+    from sister.client import VisuraClient
+
+    calls = []
+
+    async def fake_workflow(self, **kwargs):
+        calls.append(kwargs)
+        return {}
+
+    monkeypatch.setattr(VisuraClient, "workflow", fake_workflow)
+    result = runner.invoke(app, ["query", "workflow", "--preset", "due-diligence", legacy_flag])
+
+    assert result.exit_code == 2, result.output
+    assert "Use --confirm-paid instead" in result.output
+    assert calls == []
+
+
+def test_workflow_paid_deep_run_requires_confirmation_before_request(monkeypatch):
+    from sister.client import VisuraClient
+
+    calls = []
+
+    async def fake_workflow(self, **kwargs):
+        calls.append(kwargs)
+        return {}
+
+    monkeypatch.setattr(VisuraClient, "workflow", fake_workflow)
+    result = runner.invoke(
+        app,
+        ["query", "workflow", "--preset", "due-diligence", "--depth", "deep", "--include-paid"],
+    )
+
+    assert result.exit_code == 2, result.output
+    assert "--depth deep --include-paid requires --confirm-paid" in result.output
+    assert calls == []
+
+
+def test_workflow_help_hides_legacy_paid_confirmation_flag():
+    result = runner.invoke(app, ["query", "workflow", "--help"])
+
+    assert result.exit_code == 0, result.output
+    assert "--confirm-paid" in result.output
+    assert "--yes" not in result.output
 
 
 def test_workflow_preset_submission_formats_results_and_writes_output(monkeypatch, tmp_path):
@@ -256,7 +453,9 @@ def test_workflow_preset_submission_formats_results_and_writes_output(monkeypatc
             "166",
             "--history",
             "--include-paid",
-            "--yes",
+            "--confirm-paid",
+            "--depth",
+            "deep",
             "-o",
             str(output),
         ],
@@ -266,6 +465,7 @@ def test_workflow_preset_submission_formats_results_and_writes_output(monkeypatc
     assert calls[0]["preset"] == "due-diligence"
     assert calls[0]["include_history"] is True
     assert calls[0]["include_paid_steps"] is True
+    assert calls[0]["depth"] == "deep"
     assert calls[0]["auto_confirm"] is True
     assert "immobili: 2 records" in result.output
     assert "total: 2" in result.output
@@ -311,14 +511,18 @@ def test_workflow_preset_reports_invalid_plan(monkeypatch):
     ids=[f"{group.info.name}-{name}" for group, commands in cli._tool_commands.items() for name in commands],
 )
 def test_registered_tool_commands_forward_to_their_target(monkeypatch, tmp_path, group, name, target, shell):
-    monkeypatch.setattr(cli, "_project_root", lambda: tmp_path)
+    from sister.cli import _runtime
+
+    monkeypatch.setattr(_runtime, "project_root", lambda: tmp_path)
     calls = []
 
     def fake_run(command, *, cwd, check):
         calls.append((command, cwd, check))
         return SimpleNamespace(returncode=7)
 
-    monkeypatch.setattr(cli.subprocess, "run", fake_run)
+    from sister.cli import tools
+
+    monkeypatch.setattr(tools.subprocess, "run", fake_run)
     result = runner.invoke(app, [group, name, "--example-option", "value"])
 
     expected = ["bash", str(tmp_path / target)] if shell else [sys.executable, "-m", target]
@@ -389,6 +593,9 @@ def test_db_backfill_runs_both_projections_and_xml_and_records_activity(monkeypa
     async def fake_activity(*args, **kwargs):
         calls["activity"] = (args, kwargs)
 
+    async def fake_init_db():
+        calls["init_db"] = True
+
     async def fake_names():
         return {"nameless": 0}
 
@@ -405,6 +612,7 @@ def test_db_backfill_runs_both_projections_and_xml_and_records_activity(monkeypa
     monkeypatch.setattr(database, "backfill_subject_names", fake_names)
     monkeypatch.setattr(database, "refresh_subject_holdings", fake_holdings)
     monkeypatch.setattr(database, "record_activity", fake_activity)
+    monkeypatch.setattr(database, "init_db", fake_init_db)
 
     async def fake_mortgage_notes(*, force, limit):
         calls["mortgage_notes"] = (force, limit)
@@ -445,8 +653,12 @@ def test_db_backfill_mortgage_searches_is_scoped_and_limited(monkeypatch):
     async def fake_activity(*args, **kwargs):
         calls.append(kwargs)
 
+    async def fake_init_db():
+        return None
+
     monkeypatch.setattr(database, "backfill_mortgage_searches", fake_mortgage_searches)
     monkeypatch.setattr(database, "record_activity", fake_activity)
+    monkeypatch.setattr(database, "init_db", fake_init_db)
 
     result = runner.invoke(app, ["db", "backfill", "mortgage-searches", "--limit", "2"])
 

@@ -591,6 +591,10 @@ try:
             AUTH_MODE="clerk_and_local" if _clerk_configured else "local",
             CLERK_AFTER_SIGN_IN_URL="/",
             CLERK_AFTER_SIGN_UP_URL="/",
+            # Cookies are not scoped by port: every aecs4u app on localhost used ``aecs4u_session`` with its own secret,
+            # so signing in to one app (or any request that refreshed its cookie) replaced SISTER's session with one
+            # SISTER could not verify, and the next request was sent back to the login.
+            SESSION_COOKIE_NAME=os.getenv("SESSION_COOKIE_NAME", "sister_session"),
         )
         # Per-path rate limits: /auth/* (login brute force) is much stricter than normal browsing/polling. The client
         # is the socket peer, not X-Forwarded-For (spoofable); behind a trusted proxy supply the real address instead.

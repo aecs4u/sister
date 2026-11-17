@@ -45,6 +45,7 @@ from sister.db_models import (  # noqa: F401, E402
     AdeStatementRow,
     CalculationSnapshot,
     CalculationSnapshotPayload,
+    CadastralParcelCoordinate,
     CadastralCategory,
     CadastralUnit,
     ConservatoriaMunicipality,

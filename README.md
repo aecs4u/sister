@@ -560,7 +560,7 @@ uv run sister query workflow --preset cross-reference \
 
 # Workflow con depth "deep" — include owner expansion e ispezioni ipotecarie
 uv run sister query workflow --preset due-diligence \
-    -P Roma -C ROMA -F 100 -p 50 --depth deep --include-paid --yes -o deep.json
+    -P Roma -C ROMA -F 100 -p 50 --depth deep --include-paid --confirm-paid -o deep.json
 
 # Workflow con depth "light" — solo step core (veloce)
 uv run sister query workflow --preset patrimonio \
@@ -568,7 +568,7 @@ uv run sister query workflow --preset patrimonio \
 
 # Multi-hop full investigation — bounded graph expansion
 uv run sister query workflow --preset full-due-diligence \
-    -P Roma -C ROMA -F 100 -p 50 --depth full --include-paid --yes \
+    -P Roma -C ROMA -F 100 -p 50 --depth full --include-paid --confirm-paid \
     --max-paid 5 --max-owners 15 --max-history 10 -o full_investigation.json
 
 # Multi-hop corporate audit
