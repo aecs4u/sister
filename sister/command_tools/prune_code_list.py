@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Remove from a Markdown batch list the rows whose answer SISTER (or the document store) already has.
 
-    uv run sister batch prune-list inputs/codici_fiscali.all.md [--dry-run]
+    uv run sister batch prune-list inputs/codici_fiscali.all.md [--apply]
 
 Works on every list ``sister batch build-list`` reads (``docs/batch_markdown_format.md``):
 
@@ -130,21 +130,17 @@ def available_lines(text: str, answered: Answered | set[str], stored: set) -> tu
     return drop, counts
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("list_file", type=Path)
-    parser.add_argument("--dry-run", action="store_true")
-    args = parser.parse_args()
-
+def run(list_file: Path, *, dry_run: bool = True) -> int:
+    """Remove rows already answered, writing a timestamped backup only when ``dry_run`` is false."""
     answered = asyncio.run(answered_queries())
-    source = args.list_file.read_text(encoding="utf-8")
+    source = list_file.read_text(encoding="utf-8")
     if is_table_markdown(source):
         stored = asyncio.run(stored_parcels())
         drop, counts = available_lines(source, answered, stored)
         kept = [line for number, line in enumerate(source.splitlines(), 1) if number not in set(drop)]
         print(f"{sum(counts.values())} righe ({counts['subject']} soggetti, {counts['parcel']} particelle, "
               f"{counts['other']} altre): {len(drop)} gia' disponibili tolte, {sum(counts.values()) - len(drop)} restano")
-        return _write(args, "\n".join(kept) + "\n")
+        return _write(list_file, "\n".join(kept) + "\n", dry_run=dry_run)
     lines = source.splitlines()
     out, removed, counts, section, number = [], [], {}, None, 0
     for line in lines:
@@ -168,18 +164,28 @@ def main() -> int:
     text = re.sub(r"Totale: \*\*\d+\*\* da interrogare \(\d+ persone fisiche, \d+ partite IVA\)",
                   lambda m: f"Totale: **{kept}** da interrogare ({list(counts.values())[0]} persone fisiche, {list(counts.values())[1]} partite IVA)", text)
     print(f"{len(removed) + kept} righe: {len(removed)} gia' risposte tolte, {kept} restano")
-    return _write(args, text)
+    return _write(list_file, text, dry_run=dry_run)
 
 
-def _write(args: argparse.Namespace, text: str) -> int:
-    if args.dry_run:
+def _write(list_file: Path, text: str, *, dry_run: bool) -> int:
+    if dry_run:
         return 0
-    backup = args.list_file.parent / "backups" / f"{args.list_file.stem}.{datetime.now():%Y%m%d_%H%M%S}.md"
+    backup = list_file.parent / "backups" / f"{list_file.stem}.{datetime.now():%Y%m%d_%H%M%S}.md"
     backup.parent.mkdir(exist_ok=True)
-    shutil.copy2(args.list_file, backup)
-    args.list_file.write_text(text, encoding="utf-8")
+    shutil.copy2(list_file, backup)
+    list_file.write_text(text, encoding="utf-8")
     print(f"copia precedente: {backup}")
     return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("list_file", type=Path)
+    parser.add_argument("--dry-run", action="store_true", dest="dry_run")
+    parser.add_argument("--apply", action="store_false", dest="dry_run", help="rewrite the list after making a backup")
+    parser.set_defaults(dry_run=True)
+    args = parser.parse_args(argv)
+    return run(args.list_file, dry_run=args.dry_run)
 
 
 if __name__ == "__main__":

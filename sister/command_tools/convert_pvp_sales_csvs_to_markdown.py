@@ -9,7 +9,6 @@ import html
 import sys
 from pathlib import Path
 
-
 TABLE_MARKER = "<!-- sister-batch-table:v1 -->"
 OUTPUT_COLUMNS = (
     "id",
@@ -62,24 +61,29 @@ def convert_file(source: Path, output_dir: Path) -> int:
     return len(rows)
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("source_dir", type=Path, help="directory containing per-province CSV files")
-    parser.add_argument("output_dir", type=Path, help="directory for generated Markdown files")
-    args = parser.parse_args()
-
-    sources = sorted(args.source_dir.glob("*.csv"))
+def run(source_dir: Path, output_dir: Path) -> int:
+    """Convert all per-province CSV files in ``source_dir`` into Markdown tables."""
+    sources = sorted(source_dir.glob("*.csv"))
     if not sources:
-        parser.error(f"no CSV files found in {args.source_dir}")
+        print(f"no CSV files found in {source_dir}", file=sys.stderr)
+        return 2
 
     try:
-        counts = [(source, convert_file(source, args.output_dir)) for source in sources]
+        counts = [(source, convert_file(source, output_dir)) for source in sources]
     except (OSError, UnicodeError, csv.Error, ValueError) as exc:
         print(f"Conversion failed: {exc}", file=sys.stderr)
         return 1
 
-    print(f"Created {len(counts)} Markdown files with {sum(count for _, count in counts)} parcel queries in {args.output_dir}")
+    print(f"Created {len(counts)} Markdown files with {sum(count for _, count in counts)} parcel queries in {output_dir}")
     return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("source_dir", type=Path, help="directory containing per-province CSV files")
+    parser.add_argument("output_dir", type=Path, help="directory for generated Markdown files")
+    args = parser.parse_args(argv)
+    return run(args.source_dir, args.output_dir)
 
 
 if __name__ == "__main__":

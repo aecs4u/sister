@@ -61,7 +61,11 @@ def test_command_names_are_normalised():
 # step 2a: spec -> CLI (every parameter is an option of the command and reaches the client call)
 # --------------------------------------------------------------------------------------------------
 
-_NOT_INPUTS = {"output", "wait", "dry_run", "force", "redownload", "help"}
+_NOT_INPUTS = {
+    "output", "wait", "dry_run", "force", "redownload", "deprecated_yes", "help",
+    # hidden options that carry a deprecated flag (``query_forms.LEGACY_FLAGS``) are not form inputs
+    *(f"legacy_{param}" for param in LEGACY_FLAGS),
+}
 
 
 def sample_value(query: str, param: str) -> str:
@@ -105,7 +109,7 @@ def variants(query: str) -> list[dict[str, str]]:
 
 _CLIENT_METHODS = (
     "search", "intestati", "soggetto", "persona_giuridica", "elenco_immobili", "generic_search",
-    "mortgage_search_start",
+    "mortgage_search_start", "ispezione_ipotecaria",
 )
 
 
@@ -135,7 +139,8 @@ def test_every_parameter_is_a_cli_option(query):
 def test_cli_options_reach_the_client(query, monkeypatch):
     from typer.testing import CliRunner
 
-    from sister.cli import VisuraClient, app
+    from sister.cli import app
+    from sister.client import VisuraClient
 
     sent: dict = {}
 
@@ -229,7 +234,7 @@ async def _submit_and_check(client, service, query, params):
         received = set(request.params) | {"provincia", "comune", "tipo_catasto"}
     else:
         names = getattr(request, "names", {})
-        received = set(request.form_fields) | {
+        received = set(getattr(request, "form_fields", {}) or {}) | {
             p for p in params if getattr(request, names.get(p, p), None) not in (None, "")
         }
     assert set(params) - received == set(), f"{query}: lost on the way to the service: {sorted(set(params) - received)}"
@@ -461,9 +466,20 @@ def test_queries_that_request_documents_are_marked():
         "visura-storica": "always",
         "soggetto-documento": "always",
     }
-    assert QUERY_FORMS["ipotecaria-persona-fisica"].documents == "none"
+    assert QUERY_FORMS["ipotecaria-persona-fisica"].documents == ""
     assert "CAPTCHA" in documents_note(QUERY_FORMS["soggetto-documento"])
     assert documents_note(QUERY_FORMS["soggetto"]) == ""
+
+
+def test_paid_inspections_have_fixed_search_types():
+    paid = {name: form for name, form in QUERY_FORMS.items() if form.paid}
+
+    assert set(paid) == {"ipotecaria-immobile", "ipotecaria-azienda", "ipotecaria-nota"}
+    assert {name: form.fixed_params["tipo_ricerca"] for name, form in paid.items()} == {
+        "ipotecaria-immobile": "immobile",
+        "ipotecaria-azienda": "persona_giuridica",
+        "ipotecaria-nota": "nota",
+    }
 
 
 def test_cli_dry_run_and_help_warn_about_document_requests():

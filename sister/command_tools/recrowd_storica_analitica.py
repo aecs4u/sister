@@ -13,7 +13,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 WORKFLOWS = {
     "proponents": "_recrowd_proponents.py",
@@ -45,8 +44,16 @@ def main(argv: list[str] | None = None) -> int:
     if not args.items:
         parser.error("--items is required (choose proponents or properties)")
 
-    workflow = Path(__file__).resolve().with_name(WORKFLOWS[args.items])
-    return subprocess.run([sys.executable, str(workflow), *forwarded], cwd=PROJECT_ROOT, check=False).returncode
+    return run(args.items, forwarded=forwarded)
+
+
+def run(items: str, *, forwarded: list[str] | None = None) -> int:
+    """Run one of the two maintained Recrowd workflows with its remaining options."""
+    if items not in WORKFLOWS:
+        raise ValueError("items must be proponents or properties")
+
+    workflow = Path(__file__).resolve().with_name(WORKFLOWS[items])
+    return subprocess.run([sys.executable, str(workflow), *(forwarded or [])], cwd=PROJECT_ROOT, check=False).returncode
 
 
 if __name__ == "__main__":

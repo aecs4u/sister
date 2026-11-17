@@ -2,11 +2,12 @@
 
 import typer
 
+from . import _runtime
 from ._runtime import console, project_root, run_db
 
 db_app = typer.Typer(
     name="db",
-    help="Gestione del database (init, migrate, status)",
+    help="Gestione del database (migrate, status, backfill)",
     no_args_is_help=True,
 )
 
@@ -18,30 +19,70 @@ def _alembic_config():
     return Config(project_root() / "alembic.ini")
 
 
-@db_app.command("init")
-def db_init():
-    """Inizializza il database ed esegue tutte le migrazioni."""
-    from alembic import command
-
-    command.upgrade(_alembic_config(), "head")
-    console.print("[green]Database initialized and migrations applied.[/green]")
-
-
 @db_app.command("migrate")
 def db_migrate():
     """Esegue le migrazioni Alembic in sospeso."""
     from alembic import command
 
     command.upgrade(_alembic_config(), "head")
-    console.print("[green]Migrations applied.[/green]")
+    if _runtime.json_output_enabled():
+        _runtime.emit_data({"status": "migrated"})
+    else:
+        console.print("[green]Migrazioni applicate.[/green]")
+
+
+@db_app.command("init", hidden=True)
+def db_init():
+    """Deprecated alias for ``db migrate``."""
+    typer.echo("`sister db init` è deprecato; usa `sister db migrate`.", err=True)
+    return db_migrate()
+
+
+async def _migration_status() -> dict:
+    from alembic.runtime.migration import MigrationContext
+    from alembic.script import ScriptDirectory
+
+    from .. import database
+
+    config = _alembic_config()
+    heads = ScriptDirectory.from_config(config).get_heads()
+    async with database._get_engine().connect() as connection:
+        current = await connection.run_sync(
+            lambda sync_connection: list(
+                MigrationContext.configure(
+                    sync_connection,
+                    opts={"version_table_schema": database.DATABASE_SCHEMA},
+                ).get_current_heads()
+            )
+        )
+    expected = database.DATABASE_REVISION
+    behind = set(current) != set(heads) or expected not in current
+    return {
+        "current": current,
+        "heads": heads,
+        "database_revision": expected,
+        "revision_matches": expected in current,
+        "behind": behind,
+    }
 
 
 @db_app.command("status")
 def db_status():
-    """Mostra la revisione corrente delle migrazioni del database."""
-    from alembic import command
+    """Mostra revisione applicata, testa Alembic e revisione attesa."""
+    try:
+        result = _runtime.run_db(_migration_status, initialize=False)
+    except Exception as exc:  # noqa: BLE001 - report database setup/connection failures without a traceback
+        console.print(f"[red]Stato del database non disponibile: {exc}[/red]")
+        raise typer.Exit(3) from None
 
-    command.current(_alembic_config(), verbose=True)
+    current = ", ".join(result["current"]) or "none"
+    heads = ", ".join(result["heads"]) or "none"
+    state = "indietro" if result["behind"] else "aggiornato"
+    console.print(f"DATABASE_REVISION: {result['database_revision']}")
+    console.print(f"Applicate: {current} | Teste: {heads} | {state}")
+    _runtime.emit_data(result)
+    if result["behind"]:
+        raise typer.Exit(1)
 
 
 @db_app.command("backfill")
@@ -115,5 +156,8 @@ def db_backfill(
             result=result,
             started_at=started,
         )
+        return result
 
-    run_db(_run)
+    result = run_db(_run)
+    if _runtime.json_output_enabled():
+        _runtime.emit_data(result)

@@ -19,11 +19,11 @@ from typing import Any
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from sqlalchemy import delete
-from sqlmodel import select
+from sqlalchemy import delete  # noqa: E402
+from sqlmodel import select  # noqa: E402
 
-from sister.database import _get_session_factory, document_file_path
-from sister.db_models import (
+from sister.database import _get_session_factory, document_file_path  # noqa: E402
+from sister.db_models import (  # noqa: E402
     Document,
     DocumentExtraction,
     DocumentExtractionPayload,
@@ -31,8 +31,8 @@ from sister.db_models import (
     MortgageInspectionParty,
     MortgageInspectionProperty,
 )
-from sister.mortgage_note_projection import project_note_data
-from sister.result_parsers import parse_it_date
+from sister.mortgage_note_projection import project_note_data  # noqa: E402
+from sister.result_parsers import parse_it_date  # noqa: E402
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -156,14 +156,20 @@ async def import_extraction(document_id: int, structured_path: Path) -> int:
     return extraction_id
 
 
-def main() -> None:
+def run(document_id: int, structured_json: Path) -> int:
+    """Import one Ocular structured extraction into the document archive."""
+    extraction_id = asyncio.run(import_extraction(document_id, structured_json))
+    print(f"Imported structured extraction {extraction_id} for document {document_id}")
+    return 0
+
+
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("document_id", type=int)
     parser.add_argument("structured_json", type=Path)
-    args = parser.parse_args()
-    extraction_id = asyncio.run(import_extraction(args.document_id, args.structured_json))
-    print(f"Imported structured extraction {extraction_id} for document {args.document_id}")
+    args = parser.parse_args(argv)
+    return run(args.document_id, args.structured_json)
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

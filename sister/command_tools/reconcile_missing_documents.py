@@ -28,9 +28,9 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PROJECT_ROOT))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from cleanup_extracted_xml import backup, delete_tree  # noqa: E402
 from sqlalchemy import text  # noqa: E402
 
-from cleanup_extracted_xml import backup, delete_tree  # noqa: E402
 from sister.utils import _p7m_payload  # noqa: E402
 
 XML_NOISE = re.compile(rb'\s(Data|Ora|Protocollo|Anno)="[^"]*"')
@@ -118,16 +118,10 @@ async def remove_rows(pairs: list[tuple[int, int]], commit: bool) -> dict[str, i
     return counts
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--documents", required=True, type=Path)
-    parser.add_argument("--links", type=Path)
-    parser.add_argument("--backup-dir", type=Path, default=None)
-    parser.add_argument("--apply", action="store_true")
-    args = parser.parse_args()
-
-    documents = args.documents.resolve()
-    backup_dir = args.backup_dir or documents.parent / "backups"
+def run(*, documents: Path, links: Path | None = None, backup_dir: Path | None = None, apply: bool = False) -> int:
+    """Preview or reconcile database rows whose local files are missing."""
+    documents = documents.resolve()
+    backup_dir = backup_dir or documents.parent / "backups"
     chain = rename_chain(backup_dir)
     existing = {p.name for p in documents.iterdir() if p.is_file()}
     keys: dict[str, str] = {}
@@ -180,8 +174,8 @@ def main() -> None:
 
     repoint: list[tuple[Path, str]] = []
     orphan_links: list[str] = []
-    if args.links and args.links.is_dir():
-        for link in sorted(args.links.iterdir()):
+    if links and links.is_dir():
+        for link in sorted(links.iterdir()):
             if not link.is_symlink() or link.exists() or link.name.endswith(".meta"):
                 continue
             target = os.readlink(link)
@@ -197,11 +191,11 @@ def main() -> None:
     for entry in orphan_links[:10]:
         print("      no equivalent:", entry)
 
-    counts = asyncio.run(remove_rows(removable, commit=False)) if not args.apply else None
-    if not args.apply:
+    counts = asyncio.run(remove_rows(removable, commit=False)) if not apply else None
+    if not apply:
         print("rows that would be removed:", {k: v for k, v in sorted(counts.items()) if v})
         print("dry run: nothing changed (use --apply)")
-        return
+        return 0
     print("backup:", backup(backup_dir))
     counts = asyncio.run(remove_rows(removable, commit=True))
     print("rows removed:", {k: v for k, v in sorted(counts.items()) if v})
@@ -210,7 +204,18 @@ def main() -> None:
         os.symlink(new_target, temporary)
         os.replace(temporary, link)
     print(f"aliases re-pointed: {len(repoint)}")
+    return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--documents", required=True, type=Path)
+    parser.add_argument("--links", type=Path)
+    parser.add_argument("--backup-dir", type=Path, default=None)
+    parser.add_argument("--apply", action="store_true")
+    args = parser.parse_args(argv)
+    return run(documents=args.documents, links=args.links, backup_dir=args.backup_dir, apply=args.apply)
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

@@ -135,6 +135,82 @@ def _is_true(value) -> bool:
     return value is True or str(value).strip().lower() in {"1", "true", "yes", "si", "sì", "on"}
 
 
+_CUSTOM_WITH_STEPS = {
+    "elenco",
+    "mappa",
+    "fiduciali",
+    "originali",
+    "nota",
+    "ispezioni",
+    "ispezioni_cart",
+}
+
+_WORKFLOW_DESCRIPTIONS_IT = {
+    "due-diligence": "Verifica catastale e immobiliare con approfondimenti in base alla profondità selezionata.",
+    "portfolio": "Analisi patrimoniale di una persona o azienda, con espansione in base alla profondità.",
+    "custom": "Workflow personalizzato con un punto di avvio e passaggi aggiuntivi selezionabili.",
+    "patrimonio": "Indagine patrimoniale su soggetto, intestatari, titolari e indirizzi.",
+    "fondiario": "Verifica fondiaria con elenco, mappa e dati catastali collegati.",
+    "aziendale": "Verifica aziendale su società, intestatari, titolari e indirizzi.",
+    "storico": "Ricostruzione storica della particella e delle relative formalità.",
+    "indirizzo": "Ricerca catastale a partire da un indirizzo.",
+    "cross-reference": "Confronto tra soggetto e azienda per individuare immobili in comune.",
+    "full-due-diligence": "Verifica immobiliare completa con approfondimenti multi-passaggio.",
+    "full-patrimonio": "Analisi patrimoniale completa con approfondimenti multi-passaggio.",
+    "full-aziendale": "Verifica aziendale completa con approfondimenti multi-passaggio.",
+}
+
+
+def _prepare_custom_steps(data: dict) -> tuple[str, list[str]]:
+    """Choose a validated base preset and ordered steps for a custom workflow."""
+    optional = list(data.pop("custom_steps", []) or [])
+    unknown = [step for step in optional if step not in _CUSTOM_WITH_STEPS]
+    if unknown:
+        raise ValueError("Passaggi custom sconosciuti: " + ", ".join(unknown))
+    if len(optional) != len(set(optional)):
+        raise ValueError("custom_steps contiene valori duplicati")
+
+    has_person = bool(str(data.get("codice_fiscale") or "").strip())
+    has_company = bool(str(data.get("identificativo") or "").strip())
+    has_address = bool(str(data.get("indirizzo") or "").strip())
+    parcel_fields = ("provincia", "comune", "foglio", "particella")
+    has_parcel = any(str(data.get(field) or "").strip() for field in ("foglio", "particella"))
+    start_shapes = sum((has_person, has_company, has_address, has_parcel))
+    if start_shapes != 1:
+        raise ValueError(
+            "Scegli un solo punto di partenza per il workflow custom: --cf, --azienda, --indirizzo oppure una particella completa."
+        )
+
+    if has_person:
+        preset, start_steps = "patrimonio", ["soggetto"]
+        data["codice_fiscale"] = str(data["codice_fiscale"]).strip().upper()
+    elif has_company:
+        preset, start_steps = "aziendale", ["azienda"]
+    elif has_address:
+        preset, start_steps = "indirizzo", ["indirizzo_search"]
+    else:
+        missing = [field for field in parcel_fields if not str(data.get(field) or "").strip()]
+        if missing:
+            raise ValueError("Per partire da una particella sono richiesti: " + ", ".join(missing))
+        preset, start_steps = "fondiario", ["search", "intestati"]
+
+    with_requirements = {
+        "elenco": ("provincia", "comune"),
+        "mappa": ("provincia", "comune", "foglio"),
+        "fiduciali": ("provincia", "comune"),
+        "originali": ("provincia", "comune"),
+        "nota": ("provincia", "numero_nota"),
+        "ispezioni": ("provincia", "comune"),
+        "ispezioni_cart": ("provincia", "comune"),
+    }
+    for step in optional:
+        missing = [field for field in with_requirements[step] if not str(data.get(field) or "").strip()]
+        if missing:
+            raise ValueError(f"--with {step} richiede: " + ", ".join(missing))
+
+    return preset, [*start_steps, *optional]
+
+
 def prepare_workflow(payload: dict) -> WorkflowPlan:
     """Normalize compact form families to the existing workflow step presets."""
     data = dict(payload)
@@ -143,7 +219,10 @@ def prepare_workflow(payload: dict) -> WorkflowPlan:
     extra_params = {}
     custom_steps = None
 
-    if family == "due-diligence":
+    if family == "custom":
+        data["preset"], custom_steps = _prepare_custom_steps(data)
+
+    elif family == "due-diligence":
         include_history = _is_true(data.pop("include_history", False))
         numero_nota = data.pop("numero_nota", None)
         if numero_nota:
@@ -177,7 +256,7 @@ def prepare_workflow(payload: dict) -> WorkflowPlan:
         codice_fiscale = str(data.get("codice_fiscale") or "").strip()
         identificativo = str(data.get("identificativo") or "").strip()
         if bool(codice_fiscale) == bool(identificativo):
-            raise ValueError("Enter either a codice fiscale or a company identifier.")
+            raise ValueError("Inserisci un codice fiscale oppure un identificativo aziendale, non entrambi.")
         if depth == "full":
             data["preset"] = "full-patrimonio" if codice_fiscale else "full-aziendale"
         else:
@@ -201,11 +280,8 @@ def prepare_workflow(payload: dict) -> WorkflowPlan:
         )
     ]
 
-    description = definition["description"]
-    if family == "due-diligence":
-        description = "Parcel due diligence with optional history and depth-based enrichment."
-    elif family == "portfolio":
-        description = "Person or company asset investigation with depth-based portfolio expansion."
+    description_key = family if family in {"due-diligence", "portfolio", "custom"} else workflow.preset
+    description = _WORKFLOW_DESCRIPTIONS_IT.get(description_key, definition["description"])
 
     return WorkflowPlan(
         workflow=workflow,

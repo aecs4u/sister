@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
 from pathlib import Path
+from typing import Mapping
 
 FIXTURE_DIR = Path(__file__).resolve().parents[1] / "tests" / "fixtures" / "portal_forms"
 
@@ -56,6 +57,8 @@ class QueryForm:
     # it requests documents. A document request goes through the one SISTER form with a CAPTCHA (a human types it:
     # the request ends as ``needs_human`` otherwise) and a repeated request can be charged again
     documents: str = ""
+    fixed_params: Mapping[str, str] = field(default_factory=dict)
+    paid: bool = False
 
 
 def _f(portal, param, kind="text", help="", choices=None, handled=False, page=1) -> FormField:
@@ -461,12 +464,18 @@ FLAGS: dict[str, tuple[str, ...]] = {
     "foglio": ("--foglio", "-F"),
     "particella": ("--particella", "-p"),
     "tipo_catasto": ("--tipo-catasto", "-t"),
-    "subalterno": ("--subalterno", "-sub"),
+    # the old one-dash ``-sub`` is a hidden option of the generated commands (``LEGACY_FLAGS``), not part of this list
+    "subalterno": ("--subalterno", "--sub"),
     "codice_fiscale": ("--cf", "-i"),
     "identificativo": ("--id", "-i"),
     "indirizzo": ("--indirizzo", "-a"),
     "numero_nota": ("--numero", "-n"),
+    "anno_nota": ("--anno", "--anno-nota"),
 }
+
+# deprecated flags kept working for old scripts: parameter -> flag. The CLI adds each as a hidden option that fills the
+# same parameter and prints a deprecation line (click cannot hide one alias of a visible option)
+LEGACY_FLAGS: dict[str, str] = {"subalterno": "-sub"}
 
 _EXTRA_HELP = {
     "omonimo_da": (
@@ -798,8 +807,55 @@ QUERY_FORMS["ipotecaria-persona-fisica"] = QueryForm(
     search_type="mortgage-searches",
     dedicated=("provincia", "codice_fiscale"),
     required=("provincia", "codice_fiscale"),
-    documents="none",
+    documents="",
 )
+for _command, _summary, _fields, _required, _tipo_ricerca in (
+    (
+        "ipotecaria-immobile",
+        "SERVIZIO A PAGAMENTO — Ispezione ipotecaria per immobile.",
+        (
+            FormField((), "provincia", help=_PROVINCIA_HELP),
+            FormField((), "comune", help="Comune dell'immobile."),
+            FormField((), "tipo_catasto", kind="select", help="T = Terreni, F = Fabbricati"),
+            FormField((), "foglio", help="Foglio."),
+            FormField((), "particella", help="Particella."),
+        ),
+        ("provincia",),
+        "immobile",
+    ),
+    (
+        "ipotecaria-azienda",
+        "SERVIZIO A PAGAMENTO — Ispezione ipotecaria per società (P.IVA o denominazione).",
+        (
+            FormField((), "provincia", help=_PROVINCIA_HELP),
+            FormField((), "identificativo", help="Partita IVA, codice fiscale o denominazione."),
+        ),
+        ("provincia", "identificativo"),
+        "persona_giuridica",
+    ),
+    (
+        "ipotecaria-nota",
+        "SERVIZIO A PAGAMENTO — Ispezione ipotecaria per riferimento nota.",
+        (
+            FormField((), "provincia", help=_PROVINCIA_HELP),
+            FormField((), "numero_nota", help="Numero della nota."),
+            FormField((), "anno_nota", help="Anno della nota."),
+        ),
+        ("provincia", "numero_nota"),
+        "nota",
+    ),
+):
+    QUERY_FORMS[_command] = QueryForm(
+        command=_command,
+        fixture=None,
+        fields=_fields,
+        summary=_summary,
+        path="/visura/ispezione-ipotecaria",
+        method="ispezione_ipotecaria",
+        required=_required,
+        fixed_params={"tipo_ricerca": _tipo_ricerca},
+        paid=True,
+    )
 
 _DOCUMENT_REQUESTS = {
     "search": "optional",
@@ -865,7 +921,7 @@ def portal_names(query: str) -> set[str]:
 def command_for_path(path: str) -> str | None:
     """The ``sister query`` command behind an API path (``/visura/elenco-immobili`` → ``elenco``)."""
     path = "/" + path.strip().strip("/")
-    return next((q.command for q in QUERY_FORMS.values() if q.path == path), None)
+    return next((q.command for q in QUERY_FORMS.values() if q.path == path and not q.paid), None)
 
 
 def option_flags(param: str) -> tuple[str, ...]:

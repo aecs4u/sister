@@ -37,9 +37,9 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PROJECT_ROOT))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from cleanup_extracted_xml import backup, delete_tree  # noqa: E402
 from sqlalchemy import text  # noqa: E402
 
-from cleanup_extracted_xml import backup, delete_tree  # noqa: E402
 from sister.document_scope import subject_search_scope  # noqa: E402
 from sister.utils import (  # noqa: E402
     _descriptive_filename,
@@ -319,25 +319,22 @@ def move_files(plan: dict, documents: Path, quarantine: Path, stamp: str) -> lis
     return done
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--documents", required=True, type=Path)
-    parser.add_argument("--links", type=Path)
-    parser.add_argument("--backup-dir", type=Path, default=None, help="default: <documents>/../backups")
-    parser.add_argument("--apply", action="store_true")
-    parser.add_argument(
-        "--only", nargs="+", metavar="NAME",
-        help="rename just these files (current names); no other rename and no duplicate is touched",
-    )
-    args = parser.parse_args()
-
-    documents = args.documents.resolve()
+def run(
+    *,
+    documents: Path,
+    links: Path | None = None,
+    backup_dir: Path | None = None,
+    apply: bool = False,
+    only: list[str] | None = None,
+) -> int:
+    """Preview or apply canonical document names and duplicate cleanup."""
+    documents = documents.resolve()
     plan = build_plan(documents)
-    if args.only:
-        wanted = set(args.only)
+    if only:
+        wanted = set(only)
         unknown = wanted - {entry["old"] for entry in plan["renames"]}
         if unknown:
-            parser.error(f"nothing to rename for: {', '.join(sorted(unknown))}")
+            raise ValueError(f"nothing to rename for: {', '.join(sorted(unknown))}")
         plan = {"renames": [e for e in plan["renames"] if e["old"] in wanted], "redundant": [], "distinct": []}
     renames, redundant, distinct = plan["renames"], plan["redundant"], plan["distinct"]
     recomputed = [e for e in renames if e["renamed_core"]]
@@ -357,16 +354,16 @@ def main() -> None:
                 print(f"           {file}")
 
     stamp = f"{datetime.now():%Y%m%d_%H%M%S}"
-    if not args.apply:
+    if not apply:
         counts = asyncio.run(update_database(plan, commit=False))
         print(
             "\ndatabase: rows renamed", counts["_renamed"], "| rows removed",
             {k: v for k, v in sorted(counts.items()) if not k.startswith("_")},
         )
         print("dry run: nothing changed (use --apply)")
-        return
+        return 0
 
-    backup_dir = args.backup_dir or documents.parent / "backups"
+    backup_dir = backup_dir or documents.parent / "backups"
     quarantine = backup_dir / f"removed_duplicates_{stamp}"
     quarantine.mkdir(parents=True, exist_ok=True)
     print("\nbackup:", backup(backup_dir))
@@ -380,10 +377,28 @@ def main() -> None:
         raise
     print("database rows renamed:", counts["_renamed"], "| removed:", {k: v for k, v in counts.items() if not k.startswith("_")})
     print("responses re-linked to the kept document:", counts["_relinked"])
-    if args.links and args.links.is_dir():
-        print("aliases re-pointed:", repoint_links(plan, documents, args.links))
+    if links and links.is_dir():
+        print("aliases re-pointed:", repoint_links(plan, documents, links))
     print(f"quarantined {len(redundant)} files in {quarantine}; renamed {len(renames)}")
+    return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--documents", required=True, type=Path)
+    parser.add_argument("--links", type=Path)
+    parser.add_argument("--backup-dir", type=Path, default=None, help="default: <documents>/../backups")
+    parser.add_argument("--apply", action="store_true")
+    parser.add_argument(
+        "--only", nargs="+", metavar="NAME",
+        help="rename just these files (current names); no other rename and no duplicate is touched",
+    )
+    args = parser.parse_args(argv)
+    try:
+        return run(documents=args.documents, links=args.links, backup_dir=args.backup_dir, apply=args.apply, only=args.only)
+    except ValueError as exc:
+        parser.error(str(exc))
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

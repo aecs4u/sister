@@ -2,15 +2,65 @@
 
 import json
 import os
+import sys
+import types
 from collections.abc import Awaitable, Callable
+from contextlib import redirect_stdout
+from enum import StrEnum
+from io import StringIO
 from pathlib import Path
-from typing import Any, TypeVar
+from typing import Annotated, Any, Optional, TypeVar
 
-from rich.console import Console
+import typer
+from rich.console import Console, RenderableType
 
 EXIT_SESSION_EXPIRED = 75  # EX_TEMPFAIL: ask for a fresh SISTER login and resume the batch
 console = Console()
 T = TypeVar("T")
+_json_output = False
+
+
+class OutputFormat(StrEnum):
+    """Supported command output modes."""
+
+    NONE = "none"
+    RICH = "rich"
+    JSON = "json"
+
+
+def configure_output(*, json_output: bool) -> None:
+    """Route human-readable output to stderr while reserving stdout for JSON."""
+    global _json_output
+    _json_output = json_output
+    console.file = sys.stderr if json_output else sys.stdout
+    console.no_color = json_output
+
+
+def json_output_enabled() -> bool:
+    return _json_output
+
+
+def reset_output() -> None:
+    """Restore Rich's dynamic standard-stream lookup after a CLI invocation closes."""
+    global _json_output
+    _json_output = False
+    console.file = None
+    console.no_color = None
+
+
+OutputOpt = Annotated[
+    Optional[str], typer.Option("--output", "-o", help="Percorso del file di output (.json)")
+]
+WaitOpt = Annotated[bool, typer.Option("--wait", "-w", help="Attende il risultato invece di tornare subito")]
+DryRunOpt = Annotated[bool, typer.Option("--dry-run", help="Mostra l'operazione senza inviarla o modificarla")]
+ForceOpt = Annotated[bool, typer.Option("--force", help="Ignora la cache e forza una nuova operazione")]
+RedownloadOpt = Annotated[
+    Optional[bool],
+    typer.Option(
+        "--yes/--no",
+        help="Se la richiesta esiste gia': scarica di nuovo (--yes) o riusa il risultato (--no).",
+    ),
+]
 
 
 def project_root() -> Path:
@@ -29,24 +79,112 @@ def handle_api_error(exc) -> None:
     import typer
     from rich.markup import escape
 
-    console.print(f"[bold red]Error:[/bold red] sister returned HTTP {exc.status_code}: {escape(str(exc.detail))}")
+    console.print(f"[bold red]Errore:[/bold red] sister ha restituito HTTP {exc.status_code}: {escape(str(exc.detail))}")
     raise typer.Exit(1)
 
 
-def write_output(data: dict | list, path: str | Path) -> None:
-    """Write JSON output, creating parent directories when needed."""
+def emit(
+    data: Any,
+    *,
+    output: str | Path | None = None,
+    fmt: OutputFormat = OutputFormat.NONE,
+    render: Callable[[Any], RenderableType] | None = None,
+) -> None:
+    """Write optional JSON output and render data in the requested format."""
     import typer
     from rich.markup import escape
 
-    output_path = Path(path)
-    content = json.dumps(data, indent=2, ensure_ascii=False)
+    if output is not None:
+        output_path = Path(output)
+        content = json.dumps(data, indent=2, ensure_ascii=False, default=str)
+        try:
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            output_path.write_text(content, encoding="utf-8")
+        except OSError as exc:
+            console.print(
+                f"[bold red]Impossibile scrivere il file {escape(str(output_path))}:[/bold red] {escape(str(exc))}"
+            )
+            raise typer.Exit(1) from None
+        if fmt is OutputFormat.JSON:
+            typer.echo(f"File di output scritto in {output_path}", err=True)
+        else:
+            console.print(f"[dim]File di output scritto in {escape(str(output_path))}[/dim]")
+
+    if fmt is OutputFormat.JSON:
+        typer.echo(json.dumps(data, indent=2, ensure_ascii=False, default=str))
+    elif fmt is OutputFormat.RICH and render is not None:
+        console.print(render(data))
+
+
+def emit_data(data: Any, *, output: str | Path | None = None) -> None:
+    """Emit a command result as JSON when requested and optionally save its JSON file."""
+    fmt = OutputFormat.JSON if json_output_enabled() else OutputFormat.NONE
+    emit(data, output=output, fmt=fmt)
+
+
+def run_local_tool(command: str, operation: Callable[[], T]) -> T:
+    """Run an in-process tool and keep its report out of stdout in JSON mode."""
+    import typer
+
+    if not json_output_enabled():
+        return operation()
+
+    captured = StringIO()
+    redirected_consoles: list[tuple[Console, Any, Any]] = []
+    redirected_console_ids: set[int] = set()
+    for module_name, module in tuple(sys.modules.items()):
+        if not module_name.startswith("sister.command_tools.") or not isinstance(module, types.ModuleType):
+            continue
+        for value in vars(module).values():
+            if isinstance(value, Console) and value is not console and id(value) not in redirected_console_ids:
+                redirected_console_ids.add(id(value))
+                redirected_consoles.append((value, value.file, value.no_color))
+                value.file = captured
+                value.no_color = True
+
+    def publish(result: Any = None, *, error: Exception | None = None, exit_code: int | None = None) -> None:
+        output = captured.getvalue()
+        if output:
+            typer.echo(output.rstrip("\n"), err=True)
+        payload: dict[str, Any] = {"command": command, "exit_code": exit_code or 0}
+        if output:
+            payload["output"] = output
+        if result is not None:
+            payload["result"] = result
+        if error is not None and not isinstance(error, typer.Exit):
+            payload["error"] = str(error) or error.__class__.__name__
+        emit_data(payload)
+
     try:
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        output_path.write_text(content, encoding="utf-8")
-    except OSError as exc:
-        console.print(f"[bold red]Cannot write output to {escape(str(output_path))}:[/bold red] {escape(str(exc))}")
-        raise typer.Exit(1) from None
-    console.print(f"[dim]Output written to {escape(str(output_path))}[/dim]")
+        with redirect_stdout(captured):
+            result = operation()
+    except typer.Exit as exc:
+        publish(error=exc, exit_code=exc.exit_code)
+        raise
+    except KeyboardInterrupt:
+        publish(error=KeyboardInterrupt(), exit_code=130)
+        raise typer.Exit(130) from None
+    except Exception as exc:
+        publish(error=exc, exit_code=1)
+        raise
+    finally:
+        for tool_console, output_file, no_color in redirected_consoles:
+            tool_console.file = output_file
+            tool_console.no_color = no_color
+
+    if isinstance(result, int):
+        publish(exit_code=result)
+    else:
+        publish(result=result)
+    return result
+
+
+def exit_for_status(*results: dict) -> None:
+    """Exit with status 1 when any service result reports an unsuccessful terminal state."""
+    import typer
+
+    if any(result.get("status") in {"error", "expired", "needs_human"} for result in results if isinstance(result, dict)):
+        raise typer.Exit(1)
 
 
 def run_api(coro_factory: Callable[[Any], Awaitable[T]], *, client: Any | None = None) -> T:
@@ -72,16 +210,16 @@ def run_api(coro_factory: Callable[[Any], Awaitable[T]], *, client: Any | None =
         from rich.markup import escape
 
         console.print(
-            f"[bold red]Service not reachable at {active_client.base_url} "
-            f"(sister app start?): {escape(str(exc))}[/bold red]"
+            f"[bold red]Servizio non raggiungibile all'indirizzo {active_client.base_url} "
+            f"(avviare l'app sister?): {escape(str(exc))}[/bold red]"
         )
         raise typer.Exit(3) from None
     except KeyboardInterrupt:
         raise typer.Exit(130) from None
 
 
-def run_db(coro_factory: Callable[[], Awaitable[T]]) -> T:
-    """Initialize the selected SISTER database and run one command in a managed event loop."""
+def run_db(coro_factory: Callable[[], Awaitable[T]], *, initialize: bool = True) -> T:
+    """Run a database command in one managed event loop, validating the schema by default."""
     import asyncio
 
     import typer
@@ -89,7 +227,8 @@ def run_db(coro_factory: Callable[[], Awaitable[T]]) -> T:
     from .. import database
 
     async def _run() -> T:
-        await database.init_db()
+        if initialize:
+            await database.init_db()
         return await coro_factory()
 
     try:
@@ -97,6 +236,6 @@ def run_db(coro_factory: Callable[[], Awaitable[T]]) -> T:
     except RuntimeError as exc:
         message = str(exc)
         if message.startswith("SISTER_DATABASE_DSN_") and "must be set to a PostgreSQL connection URL" in message:
-            console.print(f"[bold red]Database not configured:[/bold red] {message}")
+            console.print(f"[bold red]Database non configurato:[/bold red] {message}")
             raise typer.Exit(3) from None
         raise

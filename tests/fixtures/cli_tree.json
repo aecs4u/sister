@@ -3,6 +3,14 @@
     "path": "sister",
     "params": [
       {
+        "name": "json_output",
+        "flags": [
+          "--json"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
         "name": "install_completion",
         "flags": [
           "--install-completion"
@@ -106,19 +114,71 @@
   },
   {
     "path": "sister app hash-password",
-    "params": []
+    "params": [
+      {
+        "name": "username",
+        "flags": [
+          "username"
+        ],
+        "required": true,
+        "hidden": false
+      }
+    ]
   },
   {
     "path": "sister app login",
-    "params": []
+    "params": [
+      {
+        "name": "close",
+        "flags": [
+          "--close"
+        ],
+        "required": false,
+        "hidden": false
+      }
+    ]
   },
   {
     "path": "sister app start",
-    "params": []
+    "params": [
+      {
+        "name": "port",
+        "flags": [
+          "--port"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "no_reload",
+        "flags": [
+          "--no-reload"
+        ],
+        "required": false,
+        "hidden": false
+      }
+    ]
   },
   {
     "path": "sister app stop",
-    "params": []
+    "params": [
+      {
+        "name": "port",
+        "flags": [
+          "port"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "pid",
+        "flags": [
+          "--pid"
+        ],
+        "required": false,
+        "hidden": false
+      }
+    ]
   },
   {
     "path": "sister audit",
@@ -138,7 +198,16 @@
   },
   {
     "path": "sister audit sweep",
-    "params": []
+    "params": [
+      {
+        "name": "user",
+        "flags": [
+          "user"
+        ],
+        "required": false,
+        "hidden": false
+      }
+    ]
   },
   {
     "path": "sister batch",
@@ -146,47 +215,525 @@
   },
   {
     "path": "sister batch build-list",
-    "params": []
+    "params": [
+      {
+        "name": "list_file",
+        "flags": [
+          "list_file"
+        ],
+        "required": true,
+        "hidden": false
+      },
+      {
+        "name": "output_dir",
+        "flags": [
+          "--output-dir"
+        ],
+        "required": true,
+        "hidden": false
+      },
+      {
+        "name": "tipo_richiesta",
+        "flags": [
+          "--tipo-richiesta"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "extra",
+        "flags": [
+          "--extra"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "captcha_free",
+        "flags": [
+          "--captcha-free"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "name",
+        "flags": [
+          "--name"
+        ],
+        "required": false,
+        "hidden": false
+      }
+    ]
   },
   {
     "path": "sister batch build-pdf-parseable",
-    "params": []
+    "params": [
+      {
+        "name": "documents_dir",
+        "flags": [
+          "--documents-dir"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "batch_csv",
+        "flags": [
+          "--batch-csv"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "inventory_csv",
+        "flags": [
+          "--inventory-csv"
+        ],
+        "required": false,
+        "hidden": false
+      }
+    ]
   },
   {
     "path": "sister batch convert-list",
-    "params": []
+    "params": [
+      {
+        "name": "list_file",
+        "flags": [
+          "list_file"
+        ],
+        "required": true,
+        "hidden": false
+      },
+      {
+        "name": "destination",
+        "flags": [
+          "--destination"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "legacy_output",
+        "flags": [
+          "-o",
+          "--output"
+        ],
+        "required": false,
+        "hidden": true
+      },
+      {
+        "name": "dry_run",
+        "flags": [
+          "--dry-run",
+          "--apply"
+        ],
+        "required": false,
+        "hidden": false
+      }
+    ]
   },
   {
     "path": "sister batch convert-pvp-csv",
-    "params": []
+    "params": [
+      {
+        "name": "source_dir",
+        "flags": [
+          "source_dir"
+        ],
+        "required": true,
+        "hidden": false
+      },
+      {
+        "name": "output_dir",
+        "flags": [
+          "output_dir"
+        ],
+        "required": true,
+        "hidden": false
+      }
+    ]
   },
   {
     "path": "sister batch progress",
-    "params": []
+    "params": [
+      {
+        "name": "directories",
+        "flags": [
+          "directories"
+        ],
+        "required": true,
+        "hidden": false
+      },
+      {
+        "name": "once",
+        "flags": [
+          "--once"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "interval",
+        "flags": [
+          "--interval"
+        ],
+        "required": false,
+        "hidden": false
+      }
+    ]
   },
   {
     "path": "sister batch prune-list",
-    "params": []
+    "params": [
+      {
+        "name": "list_file",
+        "flags": [
+          "list_file"
+        ],
+        "required": true,
+        "hidden": false
+      },
+      {
+        "name": "dry_run",
+        "flags": [
+          "--dry-run",
+          "--apply"
+        ],
+        "required": false,
+        "hidden": false
+      }
+    ]
   },
   {
     "path": "sister batch recrowd",
-    "params": []
+    "params": [
+      {
+        "name": "items",
+        "flags": [
+          "--items"
+        ],
+        "required": true,
+        "hidden": false
+      }
+    ]
   },
   {
     "path": "sister batch run-list",
-    "params": []
+    "params": [
+      {
+        "name": "list_file",
+        "flags": [
+          "list_file"
+        ],
+        "required": true,
+        "hidden": false
+      },
+      {
+        "name": "batch_dir",
+        "flags": [
+          "batch_dir"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "preflight_cf",
+        "flags": [
+          "--preflight-cf"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "email_progress",
+        "flags": [
+          "--email-progress"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "email_to",
+        "flags": [
+          "--email-to"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "stop_stale_service",
+        "flags": [
+          "--stop-stale-service"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "minutes",
+        "flags": [
+          "--minutes"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "logged_in_at",
+        "flags": [
+          "--logged-in-at"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "grace_seconds",
+        "flags": [
+          "--grace-seconds"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "port",
+        "flags": [
+          "--port"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "cdp",
+        "flags": [
+          "--cdp"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "tipo_richiesta",
+        "flags": [
+          "--tipo-richiesta"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "extra",
+        "flags": [
+          "--extra"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "captcha_free",
+        "flags": [
+          "--captcha-free"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "dry_run",
+        "flags": [
+          "--dry-run"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "keep_answered",
+        "flags": [
+          "--keep-answered"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "probe",
+        "flags": [
+          "--probe"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "resume",
+        "flags": [
+          "--resume"
+        ],
+        "required": false,
+        "hidden": true
+      }
+    ]
   },
   {
     "path": "sister batch run-pdf-parseable",
-    "params": []
+    "params": [
+      {
+        "name": "documents_dir",
+        "flags": [
+          "--documents-dir"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "batch_csv",
+        "flags": [
+          "--batch-csv"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "inventory_csv",
+        "flags": [
+          "--inventory-csv"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "output_dir",
+        "flags": [
+          "--output-dir"
+        ],
+        "required": false,
+        "hidden": false
+      }
+    ]
   },
   {
     "path": "sister batch run-pvp-is",
-    "params": []
+    "params": [
+      {
+        "name": "source_path",
+        "flags": [
+          "source_path"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "batch_dir",
+        "flags": [
+          "batch_dir"
+        ],
+        "required": false,
+        "hidden": false
+      }
+    ]
   },
   {
     "path": "sister batch run-session",
-    "params": []
+    "params": [
+      {
+        "name": "batch",
+        "flags": [
+          "--batch"
+        ],
+        "required": true,
+        "hidden": false
+      },
+      {
+        "name": "minutes",
+        "flags": [
+          "--minutes"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "logged_in_at",
+        "flags": [
+          "--logged-in-at"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "grace_seconds",
+        "flags": [
+          "--grace-seconds"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "port",
+        "flags": [
+          "--port"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "preflight_cf",
+        "flags": [
+          "--preflight-cf"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "stop_stale_service",
+        "flags": [
+          "--stop-stale-service"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "cdp",
+        "flags": [
+          "--cdp"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "email_progress",
+        "flags": [
+          "--email-progress"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "email_to",
+        "flags": [
+          "--email-to"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "dry_run",
+        "flags": [
+          "--dry-run"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "keep_answered",
+        "flags": [
+          "--keep-answered"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "probe",
+        "flags": [
+          "--probe"
+        ],
+        "required": false,
+        "hidden": false
+      }
+    ]
   },
   {
     "path": "sister build",
@@ -194,11 +741,133 @@
   },
   {
     "path": "sister build building-kmz",
-    "params": []
+    "params": [
+      {
+        "name": "lat",
+        "flags": [
+          "--lat"
+        ],
+        "required": true,
+        "hidden": false
+      },
+      {
+        "name": "lng",
+        "flags": [
+          "--lng"
+        ],
+        "required": true,
+        "hidden": false
+      },
+      {
+        "name": "radius",
+        "flags": [
+          "--radius"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "name",
+        "flags": [
+          "--name"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "nearest",
+        "flags": [
+          "--nearest"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "osm_json",
+        "flags": [
+          "--osm-json"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "out",
+        "flags": [
+          "--out"
+        ],
+        "required": true,
+        "hidden": false
+      }
+    ]
   },
   {
     "path": "sister build dossier-graph",
-    "params": []
+    "params": [
+      {
+        "name": "seed",
+        "flags": [
+          "--seed"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "from_batch",
+        "flags": [
+          "--from-batch"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "resume",
+        "flags": [
+          "--resume"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "out",
+        "flags": [
+          "--out"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "max_depth",
+        "flags": [
+          "--max-depth"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "max_nodes",
+        "flags": [
+          "--max-nodes"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "retry_errors",
+        "flags": [
+          "--retry-errors"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "max_requests",
+        "flags": [
+          "--max-requests"
+        ],
+        "required": false,
+        "hidden": false
+      }
+    ]
   },
   {
     "path": "sister db",
@@ -267,23 +936,219 @@
   },
   {
     "path": "sister documents cleanup-xml",
-    "params": []
+    "params": [
+      {
+        "name": "documents",
+        "flags": [
+          "--documents"
+        ],
+        "required": true,
+        "hidden": false
+      },
+      {
+        "name": "links",
+        "flags": [
+          "--links"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "backup_dir",
+        "flags": [
+          "--backup-dir"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "dry_run",
+        "flags": [
+          "--dry-run",
+          "--apply"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "skip_db",
+        "flags": [
+          "--skip-db"
+        ],
+        "required": false,
+        "hidden": false
+      }
+    ]
   },
   {
     "path": "sister documents define-workflow",
-    "params": []
+    "params": [
+      {
+        "name": "documents",
+        "flags": [
+          "--documents"
+        ],
+        "required": true,
+        "hidden": false
+      },
+      {
+        "name": "manifest",
+        "flags": [
+          "--manifest"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "legacy_output",
+        "flags": [
+          "--output"
+        ],
+        "required": false,
+        "hidden": true
+      }
+    ]
   },
   {
     "path": "sister documents download-missing-p7m",
-    "params": []
+    "params": [
+      {
+        "name": "documents",
+        "flags": [
+          "--documents"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "output",
+        "flags": [
+          "--output"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "sister_url",
+        "flags": [
+          "--sister-url"
+        ],
+        "required": false,
+        "hidden": false
+      }
+    ]
+  },
+  {
+    "path": "sister documents floor-plan-validate",
+    "params": [
+      {
+        "name": "visura",
+        "flags": [
+          "--visura"
+        ],
+        "required": true,
+        "hidden": false
+      },
+      {
+        "name": "floor_plan",
+        "flags": [
+          "--floor-plan"
+        ],
+        "required": true,
+        "hidden": false
+      },
+      {
+        "name": "calibration",
+        "flags": [
+          "--calibration"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "rooms",
+        "flags": [
+          "--rooms"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "property_index",
+        "flags": [
+          "--property-index"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "visura_area_m2",
+        "flags": [
+          "--visura-area-m2"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "tolerance_m2",
+        "flags": [
+          "--tolerance-m2"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "tolerance_percent",
+        "flags": [
+          "--tolerance-percent"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "output",
+        "flags": [
+          "--output",
+          "-o"
+        ],
+        "required": false,
+        "hidden": false
+      }
+    ]
   },
   {
     "path": "sister documents import",
-    "params": []
+    "params": [
+      {
+        "name": "documents",
+        "flags": [
+          "--documents"
+        ],
+        "required": false,
+        "hidden": false
+      }
+    ]
   },
   {
     "path": "sister documents import-ocular",
-    "params": []
+    "params": [
+      {
+        "name": "document_id",
+        "flags": [
+          "document_id"
+        ],
+        "required": true,
+        "hidden": false
+      },
+      {
+        "name": "structured_json",
+        "flags": [
+          "structured_json"
+        ],
+        "required": true,
+        "hidden": false
+      }
+    ]
   },
   {
     "path": "sister documents import-receipts",
@@ -300,19 +1165,154 @@
   },
   {
     "path": "sister documents normalize",
-    "params": []
+    "params": [
+      {
+        "name": "documents",
+        "flags": [
+          "--documents"
+        ],
+        "required": true,
+        "hidden": false
+      },
+      {
+        "name": "links",
+        "flags": [
+          "--links"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "backup_dir",
+        "flags": [
+          "--backup-dir"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "dry_run",
+        "flags": [
+          "--dry-run",
+          "--apply"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "only",
+        "flags": [
+          "--only"
+        ],
+        "required": false,
+        "hidden": false
+      }
+    ]
   },
   {
     "path": "sister documents reconcile",
-    "params": []
+    "params": [
+      {
+        "name": "documents",
+        "flags": [
+          "--documents"
+        ],
+        "required": true,
+        "hidden": false
+      },
+      {
+        "name": "links",
+        "flags": [
+          "--links"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "backup_dir",
+        "flags": [
+          "--backup-dir"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "dry_run",
+        "flags": [
+          "--dry-run",
+          "--apply"
+        ],
+        "required": false,
+        "hidden": false
+      }
+    ]
   },
   {
     "path": "sister documents rename-date",
-    "params": []
+    "params": [
+      {
+        "name": "documents",
+        "flags": [
+          "--documents"
+        ],
+        "required": true,
+        "hidden": false
+      },
+      {
+        "name": "links",
+        "flags": [
+          "--links"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "backup_dir",
+        "flags": [
+          "--backup-dir"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "dry_run",
+        "flags": [
+          "--dry-run",
+          "--apply"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "revert",
+        "flags": [
+          "--revert"
+        ],
+        "required": false,
+        "hidden": false
+      }
+    ]
   },
   {
     "path": "sister documents smart-ocr",
-    "params": []
+    "params": [
+      {
+        "name": "output_root",
+        "flags": [
+          "--output-root"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "workers",
+        "flags": [
+          "--workers"
+        ],
+        "required": false,
+        "hidden": false
+      }
+    ]
   },
   {
     "path": "sister floor-plan-validate",
@@ -569,6 +1569,40 @@
           "--cf"
         ],
         "required": true,
+        "hidden": false
+      },
+      {
+        "name": "output",
+        "flags": [
+          "--output",
+          "-o"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "wait",
+        "flags": [
+          "--wait",
+          "-w"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "dry_run",
+        "flags": [
+          "--dry-run"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "force",
+        "flags": [
+          "--force"
+        ],
+        "required": false,
         "hidden": false
       }
     ]
@@ -1868,7 +2902,8 @@
       {
         "name": "identificativo",
         "flags": [
-          "--id"
+          "--id",
+          "-i"
         ],
         "required": true,
         "hidden": false
@@ -1908,7 +2943,7 @@
         "hidden": false
       },
       {
-        "name": "yes",
+        "name": "deprecated_yes",
         "flags": [
           "--yes",
           "-y"
@@ -1988,6 +3023,15 @@
         "hidden": false
       },
       {
+        "name": "tipo_catasto",
+        "flags": [
+          "--tipo-catasto",
+          "-t"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
         "name": "foglio",
         "flags": [
           "--foglio",
@@ -2001,15 +3045,6 @@
         "flags": [
           "--particella",
           "-p"
-        ],
-        "required": false,
-        "hidden": false
-      },
-      {
-        "name": "tipo_catasto",
-        "flags": [
-          "--tipo-catasto",
-          "-t"
         ],
         "required": false,
         "hidden": false
@@ -2049,7 +3084,7 @@
         "hidden": false
       },
       {
-        "name": "yes",
+        "name": "deprecated_yes",
         "flags": [
           "--yes",
           "-y"
@@ -2083,7 +3118,8 @@
       {
         "name": "anno_nota",
         "flags": [
-          "--anno"
+          "--anno",
+          "--anno-nota"
         ],
         "required": false,
         "hidden": false
@@ -2123,7 +3159,7 @@
         "hidden": false
       },
       {
-        "name": "yes",
+        "name": "deprecated_yes",
         "flags": [
           "--yes",
           "-y"
@@ -2148,7 +3184,8 @@
       {
         "name": "codice_fiscale",
         "flags": [
-          "--cf"
+          "--cf",
+          "-i"
         ],
         "required": true,
         "hidden": false
@@ -2188,13 +3225,13 @@
         "hidden": false
       },
       {
-        "name": "yes",
+        "name": "redownload",
         "flags": [
           "--yes",
-          "-y"
+          "--no"
         ],
         "required": false,
-        "hidden": true
+        "hidden": false
       }
     ]
   },
@@ -2993,6 +4030,7 @@
       {
         "name": "anno_nota",
         "flags": [
+          "--anno",
           "--anno-nota"
         ],
         "required": false,
@@ -4499,6 +5537,152 @@
     ]
   },
   {
+    "path": "sister requests get",
+    "params": [
+      {
+        "name": "request_id",
+        "flags": [
+          "request_id"
+        ],
+        "required": true,
+        "hidden": false
+      },
+      {
+        "name": "output",
+        "flags": [
+          "--output",
+          "-o"
+        ],
+        "required": false,
+        "hidden": false
+      }
+    ]
+  },
+  {
+    "path": "sister requests list",
+    "params": [
+      {
+        "name": "provincia",
+        "flags": [
+          "--provincia",
+          "-P"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "comune",
+        "flags": [
+          "--comune",
+          "-C"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "foglio",
+        "flags": [
+          "--foglio",
+          "-F"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "particella",
+        "flags": [
+          "--particella",
+          "-p"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "tipo_catasto",
+        "flags": [
+          "--tipo-catasto",
+          "-t"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "status",
+        "flags": [
+          "--status",
+          "-s"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "limit",
+        "flags": [
+          "--limit",
+          "-n"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "offset",
+        "flags": [
+          "--offset"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "output",
+        "flags": [
+          "--output",
+          "-o"
+        ],
+        "required": false,
+        "hidden": false
+      }
+    ]
+  },
+  {
+    "path": "sister requests wait",
+    "params": [
+      {
+        "name": "request_id",
+        "flags": [
+          "request_id"
+        ],
+        "required": true,
+        "hidden": false
+      },
+      {
+        "name": "timeout",
+        "flags": [
+          "--timeout",
+          "-T"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "interval",
+        "flags": [
+          "--interval"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "output",
+        "flags": [
+          "--output",
+          "-o"
+        ],
+        "required": false,
+        "hidden": false
+      }
+    ]
+  },
+  {
     "path": "sister wait",
     "params": [
       {
@@ -4557,6 +5741,236 @@
         "flags": [
           "--output",
           "-o"
+        ],
+        "required": false,
+        "hidden": false
+      }
+    ]
+  },
+  {
+    "path": "sister workflow run",
+    "params": [
+      {
+        "name": "preset",
+        "flags": [
+          "--preset"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "provincia",
+        "flags": [
+          "--provincia",
+          "-P"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "comune",
+        "flags": [
+          "--comune",
+          "-C"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "foglio",
+        "flags": [
+          "--foglio",
+          "-F"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "particella",
+        "flags": [
+          "--particella",
+          "-p"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "tipo_catasto",
+        "flags": [
+          "--tipo-catasto",
+          "-t"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "sezione",
+        "flags": [
+          "--sezione"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "subalterno",
+        "flags": [
+          "--subalterno"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "codice_fiscale",
+        "flags": [
+          "--cf"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "azienda_id",
+        "flags": [
+          "--azienda"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "indirizzo",
+        "flags": [
+          "--indirizzo",
+          "-a"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "numero_nota",
+        "flags": [
+          "--nota"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "with_steps",
+        "flags": [
+          "--with"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "depth",
+        "flags": [
+          "--depth",
+          "-d"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "max_fanout",
+        "flags": [
+          "--max-fanout"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "max_owners",
+        "flags": [
+          "--max-owners"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "max_properties_per_owner",
+        "flags": [
+          "--max-properties-per-owner"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "max_historical_properties",
+        "flags": [
+          "--max-history"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "max_paid_steps",
+        "flags": [
+          "--max-paid"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "max_total_steps",
+        "flags": [
+          "--max-steps"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "confirm_paid",
+        "flags": [
+          "--confirm-paid"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "include_paid",
+        "flags": [
+          "--include-paid"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "include_history",
+        "flags": [
+          "--history"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "wait",
+        "flags": [
+          "--wait",
+          "--no-wait"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "output",
+        "flags": [
+          "--output",
+          "-o"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "dry_run",
+        "flags": [
+          "--dry-run"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "force",
+        "flags": [
+          "--force"
         ],
         "required": false,
         "hidden": false

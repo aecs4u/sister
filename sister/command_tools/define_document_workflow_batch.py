@@ -22,7 +22,6 @@ from typing import Any, Iterator
 
 from lxml import etree
 
-
 CF_RE = re.compile(r"(?<![A-Z0-9])[A-Z0-9]{16}(?![A-Z0-9])", re.IGNORECASE)
 PROPERTY_FILENAME_RE = re.compile(
     r"(?:^|_)FG(?P<sheet>[A-Z0-9]+)_PT(?P<parcel>[A-Z0-9]+)(?:_SUB(?P<subunit>[A-Z0-9]+))?",
@@ -422,37 +421,52 @@ def build_manifest(properties: dict[tuple[str, ...], dict[str, Any]], people: di
     return jobs
 
 
-def main() -> int:
+def run(
+    *,
+    documents: Path,
+    output: Path = Path("outputs/document_workflow_batch.jsonl"),
+    return_report: bool = False,
+) -> int | tuple[int, dict]:
+    """Create a private JSONL manifest without submitting the workflows."""
+    def finish(status: int, report: dict):
+        return (status, report) if return_report else status
+
+    documents = documents.expanduser().resolve()
+    if not documents.is_dir():
+        print(f"documents directory does not exist: {documents}", file=sys.stderr)
+        return finish(2, {"error": f"documents directory does not exist: {documents}"})
+
+    properties, people, stats = gather_targets(documents)
+    jobs = build_manifest(properties, people)
+    output.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    output.write_text("".join(json.dumps(job, ensure_ascii=False, sort_keys=True) + "\n" for job in jobs), encoding="utf-8")
+    try:
+        output.chmod(0o600)
+        output.parent.chmod(0o700)
+    except OSError:
+        pass
+
+    report = {
+        "manifest": str(output.resolve()),
+        "jobs": len(jobs),
+        "property_due_diligence_jobs": len(properties),
+        "person_portfolio_jobs": len(people),
+        "paid_steps_deferred": True,
+        **stats,
+    }
+    print(json.dumps(report, ensure_ascii=False, indent=2))
+    return finish(0, report)
+
+
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--documents", type=Path, required=True, help="Root directory containing source documents")
     parser.add_argument(
         "--output", type=Path, default=Path("outputs/document_workflow_batch.jsonl"),
         help="Private JSONL output path (default: outputs/document_workflow_batch.jsonl)",
     )
-    args = parser.parse_args()
-    documents = args.documents.expanduser().resolve()
-    if not documents.is_dir():
-        parser.error(f"documents directory does not exist: {documents}")
-
-    properties, people, stats = gather_targets(documents)
-    jobs = build_manifest(properties, people)
-    args.output.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    args.output.write_text("".join(json.dumps(job, ensure_ascii=False, sort_keys=True) + "\n" for job in jobs), encoding="utf-8")
-    try:
-        args.output.chmod(0o600)
-        args.output.parent.chmod(0o700)
-    except OSError:
-        pass
-
-    print(json.dumps({
-        "manifest": str(args.output.resolve()),
-        "jobs": len(jobs),
-        "property_due_diligence_jobs": len(properties),
-        "person_portfolio_jobs": len(people),
-        "paid_steps_deferred": True,
-        **stats,
-    }, ensure_ascii=False, indent=2))
-    return 0
+    args = parser.parse_args(argv)
+    return run(documents=args.documents, output=args.output)
 
 
 if __name__ == "__main__":

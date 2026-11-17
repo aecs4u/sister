@@ -22,16 +22,16 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 load_dotenv(PROJECT_ROOT / ".env")
 load_dotenv(PROJECT_ROOT.parent / ".env", override=False)
 
-from lxml import etree
-from sqlalchemy import delete, select
-from sqlalchemy.ext.asyncio import AsyncSession
+from lxml import etree  # noqa: E402
+from sqlalchemy import delete, select  # noqa: E402
+from sqlalchemy.ext.asyncio import AsyncSession  # noqa: E402
 
-from sister.db_models import Document, DocumentContent
-from sister.document_scope import subject_search_scope
-from sister.reference import clean, ensure_lookup, get_or_create_cadastral_unit
-from sister.result_parsers import parse_it_date
-from sister.utils import _document_key, _parse_visura_pdf, _parse_visura_xml
-from sister.visura_xml_models import DocumentXmlAttribute, DocumentXmlNode
+from sister.db_models import Document, DocumentContent  # noqa: E402
+from sister.document_scope import subject_search_scope  # noqa: E402
+from sister.reference import clean, ensure_lookup, get_or_create_cadastral_unit  # noqa: E402
+from sister.result_parsers import parse_it_date  # noqa: E402
+from sister.utils import _document_key, _parse_visura_pdf, _parse_visura_xml  # noqa: E402
+from sister.visura_xml_models import DocumentXmlAttribute, DocumentXmlNode  # noqa: E402
 
 
 def resolve_path(path: str) -> Path:
@@ -259,12 +259,9 @@ async def import_documents(files: list[Path], paired_xml: dict[str, Path]) -> di
     return stats
 
 
-async def async_main() -> None:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--documents", default=str(PROJECT_ROOT / "documents"))
-    args = parser.parse_args()
-
-    documents_dir = resolve_path(args.documents)
+async def run(*, documents: str | Path = PROJECT_ROOT / "documents") -> int:
+    """Index supported files from the documents directory in PostgreSQL."""
+    documents_dir = resolve_path(str(documents))
     files = sorted(
         path
         for path in documents_dir.rglob("*")
@@ -283,11 +280,15 @@ async def async_main() -> None:
 
     print(f"files={len(files)} xml_pairs={len(xml_by_stem)}")
     print("postgresql", await import_documents(files, xml_by_stem))
+    return 0
 
 
-def main() -> None:
-    asyncio.run(async_main())
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--documents", default=str(PROJECT_ROOT / "documents"))
+    args = parser.parse_args(argv)
+    return asyncio.run(run(documents=args.documents))
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

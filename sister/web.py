@@ -52,6 +52,7 @@ from .database import (
     get_db_owners_for_response,
     get_db_properties_for_response,
     get_document_by_id,
+    get_document_extraction_monitor,
     get_document_group_siblings,
     get_document_owner_fiscal_codes,
     get_document_structured_extraction,
@@ -64,10 +65,10 @@ from .database import (
     get_subject_fiscal_code_for_document,
     get_subject_mortgage_formalities,
     get_subject_name,
-    save_cadastral_parcel_coordinate,
     iter_all_documents,
     parcel_key,
     record_activity,
+    save_cadastral_parcel_coordinate,
 )
 from .document_scope import subject_search_scope as _subject_search_scope
 from .form_config import get_available_form_groups, get_single_step_groups, get_workflow_groups
@@ -76,8 +77,14 @@ from .request_types import known_request_tags, known_request_types, request_type
 from .result_parsers import format_amount_it, parse_consistency
 from .subject_view import (
     build_subject_visura_view,
+)
+from .subject_view import (
     hub_anchor_part as _hub_anchor_part,
+)
+from .subject_view import (
     hub_parcel_anchor_id as _hub_parcel_anchor_id,
+)
+from .subject_view import (
     subject_parcel_anchor as _subject_parcel_anchor,
 )
 from .visura_view import build_visura_view
@@ -446,6 +453,7 @@ _CLI_COMMAND_TERMINAL_ONLY = {
     "app:hash-password",
     "batch:run-pvp-is",
 }
+_CLI_COMMAND_GROUPS = ("app", "batch", "documents", "build", "audit", "dev")
 
 
 def _record_optional_data_degradation(component: str) -> None:
@@ -2840,19 +2848,25 @@ def _write_admin_input(path: Path, content: str) -> Path | None:
 
 def _cli_command_catalog() -> list[dict[str, Any]]:
     """Return the registered operational CLI commands for the admin launcher."""
-    from .cli import _tool_commands
+    from typer.main import get_command
+
+    from .cli import app
 
     commands = []
-    for group_app, group_commands in _tool_commands.items():
-        group = group_app.info.name
-        if not group:
+    root = get_command(app)
+    for group_name in _CLI_COMMAND_GROUPS:
+        group_command = root.commands.get(group_name)
+        if group_command is None:
             continue
-        for name, (_target, description, *_shell) in group_commands.items():
-            command_id = f"{group}:{name}"
+        for name, command in sorted(getattr(group_command, "commands", {}).items()):
+            if getattr(command, "hidden", False):
+                continue
+            command_id = f"{group_name}:{name}"
+            description = command.help or command.short_help or name.replace("-", " ")
             commands.append(
                 {
                     "id": command_id,
-                    "group": group,
+                    "group": group_name,
                     "name": name,
                     "description": description,
                     "terminal_only": command_id in _CLI_COMMAND_TERMINAL_ONLY,
@@ -5063,6 +5077,17 @@ async def web_settings(request: Request, user=Depends(_require_auth)):
 async def web_admin(request: Request, user=Depends(_require_admin)):
     """Admin landing page for managing document ownership."""
     return _get_theme(request).render("admin/index.html", request, user=user)
+
+
+@router.get("/admin/extractions", response_class=HTMLResponse)
+async def web_admin_extractions(
+    request: Request,
+    days: int = Query(90, ge=7, le=365),
+    user=Depends(_require_admin),
+):
+    """Monitor persisted SISTER structured extractions over time."""
+    monitor = await get_document_extraction_monitor(days=days)
+    return _get_theme(request).render("admin/extractions.html", request, user=user, **monitor)
 
 
 @router.get("/admin/users", response_class=HTMLResponse)
@@ -8760,6 +8785,11 @@ async def _google_maps_context_uncached(doc: dict, *, refresh_only: bool = False
         dsn = dsn.replace("postgresql+psycopg://", "postgresql://", 1)
         connection_options = "-c default_transaction_read_only=on -c statement_timeout=2500"
         if use_sister_cadastral_views:
+            # The views read a foreign table: a cold lookup took 21 s and a warm one 2.2 s (measured 2026-11-17), so 2.5 s
+            # cancelled it every time and the parcels stayed off the map. The map is built in a background task.
+            connection_options = connection_options.replace(
+                "statement_timeout=2500", f"statement_timeout={_CADASTRAL_VIEWS_TIMEOUT_MS}"
+            )
             connection_options += " -c search_path=sister,public"
         async with await psycopg.AsyncConnection.connect(
             dsn,
@@ -11754,7 +11784,8 @@ async def _parcel_map_payload(lookup: dict[str, Any]) -> dict[str, Any]:
                 item["latitude"], item["longitude"] = point
     sheet_features = lookup.get("sheet_features") or []
     parcel_features = lookup.get("parcel_features") or []
-    parcel_markers = lookup.get("parcel_markers") or []
+    # a copy: the hub map later appends address-placed markers to the lookup, which must not reach this published chunk
+    parcel_markers = list(lookup.get("parcel_markers") or [])
     omi_zone_features = (
         await run_in_threadpool(
             _omi_zone_features_for_properties,
@@ -14515,6 +14546,7 @@ def _subject_tree_with_elenco(xml_parsed: dict, profile: dict | None) -> dict:
     return {**xml_parsed, key or "VisuraSoggetto": body}
 
 
+_CADASTRAL_VIEWS_TIMEOUT_MS = int(os.getenv("SISTER_CADASTRAL_VIEWS_TIMEOUT_MS", "40000"))
 _HUB_MAP_CHUNK_PARCELS = 120  # parcels per spatial lookup: one query over thousands of parcels outlives its timeout
 _HUB_MAP_FIRST_CHUNK_PARCELS = 40  # a small first chunk: something is on the map within seconds
 _HUB_MAP_WAIT_SECONDS = float(os.getenv("SISTER_HUB_MAP_WAIT_SECONDS", "2"))  # how long the page waits for the whole map before it shows up as "loading" (and fills in)
@@ -14601,6 +14633,28 @@ def _hub_map_geocode_queries(address: Any, municipality: Any, province: Any) -> 
             query = _hub_map_geocode_query(locality, municipality_variant, province)
             if query and query not in queries:
                 queries.append(query)
+    # A road OSM does not know under its cadastral name ("STRADA FUNIVIE GIOMEIN 42" is only "Giomein" there): try the
+    # name without road type and number, then its last word as a place name inside the comune. The result is a
+    # marker placed by address, which the map already shows as approximate.
+    bare = _hub_map_geocode_query(
+        re.sub(
+            r"^(?:strada|via|viale|vicolo|piazza|piazzale|largo|corso)\s+",
+            "",
+            street_address,
+            flags=re.IGNORECASE,
+        ),
+        municipality,
+        province,
+    )
+    place_words = [w for w in re.split(r"\s+", re.sub(r"\s*\d.*$", "", bare.partition(",")[0]).strip()) if w]
+    variants = []
+    if len(queries) == 1 and len(place_words) >= 2:  # a one-word road name ("Via Roma") would only match unrelated places
+        variants = [bare, _hub_map_geocode_query(place_words[-1], municipality, province)]
+    for variant in variants:
+        # drop a house number left in the street part ("Funivie Giomein 42"): it cannot match a place name
+        variant = re.sub(r"^([^,]*?)\s+\d+[A-Z]?(?:/[A-Z0-9]+)?(?=,)", r"\1", variant or "")
+        if variant and variant not in queries:
+            queries.append(variant)
     return queries
 
 

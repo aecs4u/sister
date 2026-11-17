@@ -517,6 +517,12 @@ class VisuraClient:
             _REUSE_PREVIOUS.reset(token)
 
     async def _submit_validated(self, spec, params: dict[str, Any], force: bool) -> dict:
+        if spec.method == "ispezione_ipotecaria":
+            return await self.ispezione_ipotecaria(
+                **{**spec.fixed_params, **params},
+                auto_confirm=False,
+                force=force,
+            )
         if spec.method != "generic_search":
             known = {name: params.pop(name) for name in spec.dedicated if name in params}
             return await getattr(self, spec.method)(**known, form_fields=params or None, force=force)

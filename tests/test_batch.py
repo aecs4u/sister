@@ -7,6 +7,8 @@ from pathlib import Path
 import pytest
 
 from sister import batch
+from sister.cli import app
+from sister.cli._runtime import EXIT_SESSION_EXPIRED
 from sister.client import VisuraAPIError, VisuraClient
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -94,6 +96,15 @@ def test_plan_reports_every_problem_without_stopping():
 def test_aliases_resolve_to_the_canonical_command():
     item = batch.plan_batch(make([{"command": "persona-giuridica", "params": {"identificativo": "01234567890"}}]))[0]
     assert item.command == "azienda"
+
+
+def test_paid_inspection_queries_are_rejected_in_batch_plans():
+    item = batch.plan_batch(
+        make([{"command": "ipotecaria-immobile", "params": {"provincia": "Trieste"}}])
+    )[0]
+
+    assert item.state == "invalid"
+    assert "pagamento" in item.error
 
 
 def test_query_options_override_batch_options():
@@ -424,8 +435,6 @@ def test_no_row_starts_after_stop_at():
 def test_cli_batch_exits_75_on_expired_session(monkeypatch, tmp_path):
     from typer.testing import CliRunner
 
-    from sister import cli
-
     path = tmp_path / "b.json"
     path.write_text(json.dumps({"version": 1, "queries": [{"params": SEARCH}, {"params": {**SEARCH, "particella": 9}}]}))
 
@@ -437,12 +446,12 @@ def test_cli_batch_exits_75_on_expired_session(monkeypatch, tmp_path):
 
     monkeypatch.setattr(VisuraClient, "submit", fake_submit)
     monkeypatch.setattr(VisuraClient, "wait_for_result", fake_wait)
-    result = CliRunner().invoke(cli.app, ["query", "batch", "-I", str(path), "--wait", "--stop-at", "23:59"])
-    assert result.exit_code == cli.EXIT_SESSION_EXPIRED, result.output
+    result = CliRunner().invoke(app, ["query", "batch", "-I", str(path), "--wait", "--stop-at", "23:59"])
+    assert result.exit_code == EXIT_SESSION_EXPIRED, result.output
 
 
 def test_parse_stop_at():
-    from sister.cli import _parse_stop_at
+    from sister.cli.query import _parse_stop_at
 
     assert _parse_stop_at("17:43").strftime("%H:%M") == "17:43"
     assert _parse_stop_at("2026-11-05T17:43:00").minute == 43

@@ -3,7 +3,7 @@
 Repeatable app operations, batch workflows, document maintenance, exports, and UI audits are exposed through the installed
 `sister` CLI. Run commands from the repository root; use `sister --help` or append `--help` to a command for its options.
 The implementation modules live in [`sister/command_tools/`](../sister/command_tools/) and are invoked through
-[`sister/cli.py`](../sister/cli.py).
+[`sister/cli/`](../sister/cli/).
 
 ```bash
 uv run sister --help
@@ -34,8 +34,8 @@ Both commands are read-only by default. Add `--execute` to submit missing reques
 
 `start.sh`, `run_list_in_session.sh`, `run_pdf_parseable_batch.sh`, `run_pvp_sales_is.sh`, and
 `sister_fixture_payload_commands.sh` remain shell wrappers in this folder and call the unified CLI where applicable.
-`sister app stop [PORT]` uses the shared `../bin/kill_app.sh` helper, relative to the SISTER repository root, to stop the
-listener on the selected port (default 8025).
+`sister app stop [PORT]` checks the listener's `/proc` command line and only stops a process running `sister.main`.
+When more than one SISTER process owns the port, select one explicitly with `--pid`.
 
 ## One-off scripts
 

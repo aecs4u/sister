@@ -58,7 +58,7 @@ def main() -> int:
 
     before = remaining(args.list_file)
     print(f"1/4 lista: {before} codici")
-    if run("batch", "prune-list", str(args.list_file), *(["--dry-run"] if args.dry_run else [])):
+    if run("batch", "prune-list", str(args.list_file), *(["--dry-run"] if args.dry_run else ["--apply"])):
         return 1
     if args.dry_run:
         print("(prova a vuoto: la lista non e' stata riscritta, il piano non viene rigenerato)")
@@ -83,7 +83,7 @@ def main() -> int:
     status = run(*session)
 
     print("4/4 lista aggiornata")
-    run("batch", "prune-list", str(args.list_file))
+    run("batch", "prune-list", str(args.list_file), "--apply")
     left = remaining(args.list_file)
     print(f"restano {left} codici su {before}" + ("" if left == 0 else ": dopo il prossimo accesso rilancia lo stesso comando con la nuova ora"))
     return status

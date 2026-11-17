@@ -1,22 +1,35 @@
 # CLI architecture plan
 
-Status: implementation in progress, reviewed 2026-11-17. Scope: the `sister` command line (`sister/cli/`,
+Status: code phases 0–7 implemented, reviewed 2026-11-17. Full live verification remains pending authenticated
+query, workflow, and batch checks. Scope: the `sister` command line (`sister/cli/`,
 `sister/command_tools/`, and the shell helpers it forwards to). The original `sister/cli.py` has moved into the
-`sister/cli/` package. `_commands.py` currently assembles the root app and defines root commands; group modules own
-most other commands. The forwarded tool ports and command-tree migration remain. The service, client contract, and
-`query_forms.py` change only where a phase says so.
+`sister/cli/` package. `_commands.py` assembles the root app and defines root commands; group modules own most other
+commands. The service, client contract, and `query_forms.py` change only where a phase says so.
 
 ### Implementation snapshot (2026-11-17)
 
 | Phase | Current state in this checkout |
 |---|---|
 | 0 — Safety fix | Implemented: paid workflow confirmation uses `--confirm-paid`; deprecated workflow `--yes/-y` fails, and the deep/full paid guard is checked before the request. The hidden `--yes/-y` options on the legacy ipotecaria commands remain ignored for compatibility. |
-| 1 — Package split | In progress: query/batch, request, database, workflow-status, mortgage, AdE, and document commands have group modules. `_commands.py` mounts them and keeps root commands; `query.py` still contains the hand-written ipotecaria commands and custom workflow orchestration. `__main__.py`, the lazy facade, shared session-expiry code, and on-demand batch import are in place. Forwarded tools remain in `tools.py`; the latest cold root-help measurement was 1.10 s, above the 0.4 s target. |
-| 2 — Shared runtime | In progress: shared console, API/database runners, error handling, JSON file output, and a status-aware result printer exist. Request/history tables, workflow and health displays remain coupled to command code; the legacy custom workflow still has its own `asyncio.run` calls. Most request, mortgage, generated-query, preset-workflow, and batch API paths use `run_api`. |
-| 3–7 | Not complete. Machine-readable stdout, one server workflow engine, query/command-tree cleanup, and Typer ports for forwarded tools remain planned work. |
+| 1 — Package split | Implemented: command groups live in focused modules; `_commands.py` assembles the root and owns root-only commands. `query.py` contains generated query forms, batch execution, and a hidden deprecated workflow alias. `__init__.py` lazily exposes only `app` and `run`; the forwarding registry and `tools.py` are removed. The admin launcher reads its allowlisted commands from the Typer tree. Cold root help measured 0.38 s median across three runs with stdout redirected. |
+| 2 — Shared runtime | Implemented: all API requests use `run_api`; `run_db` handles local async database operations; the two `VisuraAPIError` catches are in `_runtime.py` and the multi-request query path. `emit` owns data-result `--output` writes. Hidden legacy artifact flags on `batch convert-list` and `documents define-workflow` retain their old destinations with warnings; their canonical names are `--destination` and `--manifest`. The remaining direct `asyncio.run` calls are local login and floor-plan work. Pure renderers and exit handling are covered by focused tests. |
+| 3 — Machine-readable output | Implemented: root `--json` and `SISTER_CLI_JSON=1` route Rich progress and hints to stderr. Data commands emit one JSON document. Local tools whose report was text use a shared `{command, exit_code, output}` envelope, including module-level Rich consoles; commands with structured reports emit those reports directly. Coverage includes health, `queries`, requests/history, every generated query dry-run, batch execution/schema, workflow run/status/cancel, mortgage status/quote, database migration/status/backfill, AdE imports/linking, floor-plan validation, receipt imports (including an empty directory), P7M/workflow reports, password hashes, and local tool reports. |
+| 4 — One definition per query | Implemented: paid immobile/company/note inspections are `QueryForm` entries with fixed `tipo_ricerca`, `auto_confirm=false`, paid help/list markers, and hidden ignored `--yes` compatibility. The free persona-fisica preview is the shared target of hidden `query ipotecaria-persona` and `mortgage start` aliases. Paid forms are excluded from batch schemas/plans and MCP submission; `list_queries` marks them. `queries` builds form rows from `QUERY_FORMS` and other API rows from registered Typer callback metadata. |
+| 5 — One workflow engine | Implemented in the SISTER and OpenData checkouts: OpenData accepts `preset=custom` and ordered `custom_steps`; SISTER prepares the four start shapes, exposes `workflow run` with repeatable `--with`, and keeps `query workflow` as a hidden deprecated alias. The OpenData run endpoint persists and returns a queued workflow ID before background execution; wait mode polls status. Live service verification remains pending. |
+| 6 — Command tree cleanup | Implemented: `requests get|wait|list`, migration revision/status comparison, `documents floor-plan-validate`, root help panels, Italian CLI messages, and hidden compatibility aliases are implemented and covered. The active CLI service at `http://localhost:8025` returned matching rows for pending/completed/failed status queries, so the client-side fallback has been removed. |
+| 7 — Port forwarded tools | Implemented: batch session/progress/list/PDF-parseable/Recrowd workflows, all app commands, all document tools, both build commands, and all UI audits have Typer entry points. `app start` delegates Uvicorn startup to `scripts/start.sh`; retained batch shell scripts are compatibility launchers to the CLI, and `dev fixture-payloads` is the only developer shell command. Standalone `python -m sister.command_tools...` entry points remain where they existed. Input-list and document maintenance commands preview by default and write only with `--apply`. |
 
-Verification on this worktree: the focused CLI/query-form/batch/workflow set passed 404 tests; Ruff passed for `sister/cli/`.
-This is not a full-suite or release claim. Update the snapshot when a phase changes state.
+Verification: the focused SISTER CLI/query-form/batch/workflow/render/runtime/JSON/MCP set passed 528 tests. The run
+reported the existing pytest-asyncio configuration notice and a Logfire-not-configured warning. Ruff passed for
+`sister/cli/`, the focused test modules, and the added batch, PDF/PVP, and audit runner
+modules. A read-only `sister --json health` probe against the local service returned valid JSON on stdout and a
+`degraded` status with authentication unavailable because the browser was not running. OpenData's focused workflow
+route/custom-step tests passed 9 tests, and Ruff passed for the changed router and tests. The active CLI service at
+`http://localhost:8025` returned five matching rows for each of `pending`, `completed`, and `failed` using both the
+API endpoint and `sister --json requests list --status STATUS --limit 5`; the CLI no longer re-filters those results.
+Login-bound query/workflow/batch checks remain pending because the service reports no authenticated browser session.
+This is not a full-suite or release claim.
+Update the snapshot when a phase changes state.
 
 ## 1. Why
 
@@ -64,7 +77,7 @@ below describe the original baseline unless marked as current:
     named `app`.
 - **Slow start (original baseline).** `sister --help` took about 1.0 s, and about 0.5 s of that was `import
   sister.batch`, which pulled in logfire. Every command paid it, `sister health` included. The batch import is now
-  on demand; cold root help still measures 1.10 s in the current checkout.
+  on demand; cold root help measured 0.38 s median across three runs in this checkout.
 
 ## 2. Goals and non-goals
 
@@ -90,7 +103,7 @@ Non-goals:
 
 ```
 sister/cli/
-  __init__.py      lazy facade for app/run() and compatibility exports still used by callers
+  __init__.py      lazy facade for app/run()
   _commands.py     constructs the root Typer app, mounts groups, defines root-only commands
   _runtime.py      console, run_api(), run_db(), emit(), exit_for_status(), project_root(), shared options
   render.py        result, request, history, workflow and health renderers: dict -> Rich renderable (no I/O)
@@ -104,8 +117,8 @@ sister/cli/
   batch_tools.py   Typer commands for batch preparation and session workflows
                    (`batch run-list|run-session|progress|build-list|...`)
   app_tools.py     `app login|start|stop|hash-password`
-  build.py, audit.py, dev.py
-  tools.py         the forwarding registry, only for tools not yet ported (removed at the end)
+  build_tools.py, audit_tools.py
+  dev.py           developer-only fixture command (shell wrapper)
 ```
 
 `sister.cli` stays the import path: the entry point in `pyproject.toml` (`sister = "sister.cli:run"`) does not change.
@@ -129,7 +142,7 @@ def exit_for_status(*results: dict) -> None:
     """exit 1 if any result is error/expired/needs_human."""
 
 # shared Annotated options, one definition each
-OutputOpt  = Annotated[Optional[Path], typer.Option("--output", "-o", help=...)]
+OutputOpt  = Annotated[Optional[str], typer.Option("--output", "-o", help=...)]
 WaitOpt    = Annotated[bool, typer.Option("--wait", "-w", help=...)]
 DryRunOpt  = Annotated[bool, typer.Option("--dry-run", help=...)]
 ForceOpt   = Annotated[bool, typer.Option("--force", help=...)]
@@ -176,8 +189,10 @@ sister
 ```
 
 Old names (`get`, `wait`, `history`, top-level `requests` with filters, `query workflow`,
-`query ipotecaria-persona|-immobile|-azienda|-nota`, `floor-plan-validate`) stay as hidden aliases that print one
-deprecation line on stderr and call the new command. They are removed after one tagged release.
+`query ipotecaria-persona|-immobile|-azienda|-nota`, `floor-plan-validate`) stay as deprecated aliases that print one
+line on stderr and call the new command. Root `requests` filters are handled by the canonical `requests` group's
+no-subcommand callback because the old syntax and new group share the same name. The other aliases are hidden.
+They are removed after one tagged release.
 
 ### 3.4 Batch entry points: separate workflows, shared execution
 
@@ -188,8 +203,8 @@ builds a plan and starts a session run, `run-session` manages that authenticated
 
 | Layer | Owns |
 |---|---|
-| `batch run-list` (currently forwarded to `scripts/run_list_in_session.sh`) | The list → plan coordinator for a supported Markdown list: records the login time before batch generation, picks the batch folder (resume or new), previews in a temporary folder for `--dry-run`, and calls `build-list` with list choices (`--extra`, `--captcha-free`, `--tipo-richiesta`). It then hands the plan and session options to `run-session`. |
-| `batch run-session` (`sister/command_tools/run_in_session.py`) | The authenticated-session lifecycle: browser check, service start/stop and stale-service handling (`--stop-stale-service`), dropping answered rows, the preflight search, deadline and grace period. It launches `query batch` as a subprocess, then downloads ready documents from Richieste (`download_ready_documents`) and sends the progress email. |
+| `batch run-list` (`sister/cli/batch_tools.py`; `scripts/run_list_in_session.sh` is a compatibility wrapper) | The list → plan coordinator for a supported Markdown list: records the login time before batch generation, picks the batch folder (resume or new), previews in a temporary folder for `--dry-run`, and calls `build-list` with list choices (`--extra`, `--captcha-free`, `--tipo-richiesta`). It then hands the plan and session options to `run-session`. |
+| `batch run-session` (`sister/cli/batch_tools.py` → `sister/command_tools/run_in_session.py`) | The authenticated-session lifecycle: browser check, service start/stop and stale-service handling (`--stop-stale-service`), dropping answered rows, the preflight search, deadline and grace period. It launches `query batch` as a subprocess, then downloads ready documents from Richieste (`download_ready_documents`) and sends the progress email. |
 | `query batch` | Row execution for a prepared JSON, Markdown, or CSV batch through the shared batch engine (`BatchRunner`): validation, batch options, retries, journal, `--resume`, `--stop-at`. It assumes the service is already running and does not own the browser session or a session schedule. |
 
 Keep session-only options on `batch run-session`, list-only options on `batch run-list`, and generic submission and
@@ -215,13 +230,14 @@ uv run --no-project sister batch run-list inputs/pvp_current.phase1.md --extra a
 reports “No such command 'run-list'.”
 
 **`run-session` runs `query batch` as a subprocess, and keeps doing so.** `run_batch()` starts
-`python -m sister.cli query batch -I … --resume -o … --stop-at …` and, after the grace
-period, interrupts it with `os.killpg(…, SIGINT)`. The subprocess gives a clean interrupt (the journal keeps
+`python -m sister.cli query batch -I … --resume --output-dir … -o … --stop-at …`; `--output-dir` stores the
+resume journal, while `-o` writes the final report. After the grace period, it interrupts the subprocess with
+`os.killpg(…, SIGINT)`. The subprocess gives a clean interrupt (the journal keeps
 every state), separate logs, and a crash that does not take the session runner down. It follows that **part of the CLI
 is an internal API**, kept stable by every phase and pinned by the help snapshot (§6):
 
 - `python -m sister.cli` as the launcher (needs `sister/cli/__main__.py` once `cli` is a package, see Phase 1);
-- `query batch -I --resume -o --stop-at`;
+- `query batch -I --resume --output-dir -o --stop-at`;
 - the preflight `query soggetto --cf --wait --yes -o` (`preflight()` in `run_in_session.py`; `--yes` = download again, the meaning
   Phase 0 keeps);
 - exit code 75 for an expired session;
@@ -233,9 +249,9 @@ is an internal API**, kept stable by every phase and pinned by the help snapshot
 Each phase is one PR, leaves the test baseline no worse than it was (see §6) and is releasable on its own.
 Phases 1-3 are mechanical; 4-6 change behaviour; 7 is the long tail.
 
-### Phase 0 — Safety fix (small, first)
+### Phase 0 — Safety fix (implemented)
 
-The `--yes` trap shouldn't wait for the refactor.
+The payment-confirmation trap was closed before the refactor.
 
 - `query workflow`: rename `--yes/-y` (auto-confirm paid costs) to `--confirm-paid`. Keep `--yes/-y` as a hidden alias
   that **fails** with exit 2 and a message pointing to `--confirm-paid`. A silent alias would keep the trap.
@@ -247,7 +263,8 @@ The `--yes` trap shouldn't wait for the refactor.
   `API_V1_PREFIX` like the generated commands.
 - Tests: `test_cli_commands.py` — `--yes` on `query workflow` exits 2; `--confirm-paid` reaches
   `VisuraClient.workflow(auto_confirm=True)`.
-- Docs: `README.md` (uses `--include-paid --yes`) and the examples in the `query workflow` docstring.
+- **Implemented:** README uses `--confirm-paid` only for paid workflow costs, and CLI examples use the canonical
+  `workflow run` command. The `query workflow` alias remains hidden and deprecated for one release.
 
 Done when: no command takes a flag named `--yes` that authorizes a payment.
 
@@ -256,14 +273,9 @@ Done when: no command takes a flag named `--yes` that authorizes a payment.
 The package shell and launcher are already in place; do not repeat the file move. Finish the extraction from
 `_commands.py` into the group modules in §3, keeping the CLI tree and behavior stable during this phase.
 
-1. `__init__.py` re-exports what tests touch today: `app`, `run`, `VisuraClient`, `_interactive`, `_tool_commands`,
-   `_project_root`, `subprocess`, `_parse_stop_at`, `EXIT_SESSION_EXPIRED`.
-   - Caveat: `monkeypatch.setattr(cli, "_project_root", ...)` and `monkeypatch.setattr(cli.subprocess, "run", ...)`
-     only work if `tools.py` looks those names up when it runs (`from . import _runtime; _runtime.project_root()`,
-     `subprocess.run` through the module), not through a name bound at import time.
-   - Update `test_cli_commands.py` to patch `sister.cli.tools` / `sister.cli._runtime` directly in the same PR and
-     drop the re-exports at the end of Phase 7.
-   - The `VisuraClient` patches (`monkeypatch.setattr(VisuraClient, "search", ...)`) patch the class, so they keep working.
+1. **Implemented:** `__init__.py` lazily exposes only `app` and `run`. Tests import `VisuraClient` from `sister.client`,
+   runtime helpers from `sister.cli._runtime`, and patch the command module that owns each subprocess call. The admin
+   command catalog walks the current Typer tree instead of depending on the removed forwarding registry.
 2. Keep `_commands.py` as the root app assembly module only; command implementations belong in their group modules
    (root-only commands such as `health`, `queries` and `floor-plan-validate` may stay there).
 3. Lazy imports: `batch`, `database`, `xml_ingest`, `workflows`, `floor_plan`, `ade_ledger` and alembic are imported
@@ -275,16 +287,16 @@ The package shell and launcher are already in place; do not repeat the file move
 6. Keep `EXIT_SESSION_EXPIRED` in `sister/cli/_runtime.py` and use that shared value from
    `sister/command_tools/run_in_session.py`.
 
-Done when: command groups have been extracted into their target modules; `tools.py` forwards only the tools still
-awaiting Phase 7; the existing focused CLI/batch tests pass; `python -m sister.cli --help` works; cold root help is
-≤ 0.4 s; and Phase 1 introduces no CLI-tree or option changes against the snapshot. Compare the scoped CLI diff,
+Done: command groups and compatibility exports are cleaned up; the forwarding module is removed; focused CLI/batch tests
+pass; `python -m sister.cli --help` works; and cold root help measured 0.38 s median across three runs with stdout
+redirected. The current CLI snapshot includes deliberate tree changes from later phases. Compare the scoped CLI diff,
 not the whole worktree, which may contain unrelated changes.
 
 ### Phase 2 — Shared runtime and renderers
 
 1. Implement `_runtime.py` (§3.1) and convert every API-client command to `run_api`.
-   - The multi-request paths (`_report_submission`, `_wait_for_requests`, `_ipotecaria_command`, `batch`) await
-     inside one loop.
+   - The multi-request paths (`_report_submission`, `_wait_for_requests`, `batch`) await inside one loop.
+     (`_ipotecaria_command` was deleted in Phase 4, not converted.)
 2. Move `_print_result`, the request/history tables, the workflow step summary and the health table to `render.py`
    as pure functions returning Rich renderables, so they can be tested without a console.
 3. Introduce the exit codes of §3.2. The only visible change is that "service unreachable" exits 3 with one line
@@ -331,10 +343,8 @@ parametrized test covers it with the client faked.
    - one row per registered non-query command, from its Typer command and an `endpoint` attribute set where the
      command is defined.
    - Drop the hand-written rows.
-4. Regenerate `docs/batch_submission.schema.json` (`sister query batch-schema -o ...`). The new forms become valid
-   batch commands; check `batch.py` doesn't allow `paid=True` forms in batches unless the file opts in
-   (`options.allow_paid: true`). Today a batch can't run ispezioni at all, so keeping them out is the
-   no-change choice.
+4. Regenerate `docs/batch_submission.schema.json` (`sister query batch-schema -o ...`). Keep `paid=True` forms out
+   of batch schemas and plans; there is no `allow_paid` opt-in. A batch cannot run ipotecaria inspections.
 5. MCP: `mcp_server.list_queries` exposes `paid`, and `submit_query` refuses `paid=True` forms (the preview/confirm
    flow for paid steps is the admin web page).
 
@@ -343,7 +353,7 @@ Done when: `grep -n "def ipotecaria_" sister/cli/` is empty, `tests/test_query_f
 
 ### Phase 5 — One workflow engine
 
-1. Server: add a `custom` preset to `workflows.py` that reproduces the client-side flow:
+1. Server: use the existing OpenData `custom` preset and `custom_steps` contract to reproduce the client-side flow:
    - start step chosen from the inputs (soggetto, persona giuridica, indirizzo, or search → intestati per subalterno);
    - optional steps from a `with` list: `elenco`, `mappa`, `fiduciali`, `originali`, `nota`, `ispezioni`,
      `ispezioni_cart`.
@@ -354,8 +364,9 @@ Done when: `grep -n "def ipotecaria_" sister/cli/` is empty, `tests/test_query_f
    - The seven `--elenco/--mappa/...` flags become one repeatable `--with elenco --with mappa` (the old flags stay
      as hidden aliases for one release).
    - Delete the client-side orchestration in `sister/cli/query.py` and `_run_step`.
-3. `workflow run` prints the workflow id at once, and `--wait` (default on, as today) follows
-   `GET /catasto/workflow/runs/{id}` with the long poll. A long workflow can then be left and picked up with
+3. `workflow run` prints the workflow id at once. The OpenData `/run` endpoint persists the queued run and starts
+   execution after returning its ID; `--wait` (default on, as today) follows `GET /catasto/workflow/runs/{id}` until
+   a terminal status. `--no-wait` returns after acceptance. A long workflow can then be picked up with
    `workflow status <id>`.
 4. Tests:
    - `tests/test_workflows.py` gets the `custom` preset (plans for each start shape).
@@ -372,16 +383,16 @@ Done when: the CLI holds no workflow logic, and `workflow run --dry-run` prints 
    - `list` merges `requests` and `history`: it has the filters of both, plus `--status`, and the columns of
      `requests` (a superset).
    - `get`, `wait`, `history` and the top-level `requests` stay as hidden aliases.
-   - Remove the client-side `status` re-filter in `requests` once the service in production filters by `status`
-     (check `/visura/history?status=pending` against the deployed service first).
+   - **Implemented:** after checking `/visura/history?status=...` on the active CLI service, remove the client-side
+     `status` re-filter so the service applies it before pagination.
 2. `db migrate | status | backfill`.
    - `init` becomes a hidden alias of `migrate`.
    - `db status` also prints `DATABASE_REVISION` and whether the database is behind it (alembic `current` vs `heads`).
    - `db.py` already finds `alembic.ini` through `_runtime.project_root()` in this checkout. Keep that behavior and
      add coverage for a non-editable install; do not reintroduce a path relative to the package.
 3. `floor-plan-validate` → `documents floor-plan-validate` (alias kept).
-4. Language: decide once (§8, decision 1) and apply it to help and messages in `sister/cli/`. The forwarded tools
-   follow in Phase 7 as they are ported.
+4. Language: decide once (§8, decision 1) and apply it to help and messages in `sister/cli/`. **Implemented:** CLI-owned
+   workflow descriptions and validation errors are Italian. The forwarded tools follow in Phase 7 as they are ported.
 5. Root help: group the commands by what they need (Typer `rich_help_panel`: "Service", "Database", "Local files",
    "Checkout tools") and list the exit codes.
 
@@ -392,13 +403,12 @@ deprecation line and that the new command is called.
 
 Order (most used first, from the batch/session workflow in `CLAUDE.md`):
 
-1. `batch run-session` (`run_in_session.py`), `batch progress` (`batch_progress.py`)
-2. `batch build-list`, `batch prune-list`, `batch convert-list`, `batch convert-pvp-csv`
-3. `app login` (`ade_login.py`), `app hash-password`
-4. `documents normalize`, `documents reconcile`, `documents cleanup-xml`, `documents rename-date`, `documents import`
-5. `build dossier-graph`, `build building-kmz`
-6. The rest: `documents import-ocular|smart-ocr|download-missing-p7m|define-workflow`, `batch build-pdf-parseable`,
-   `batch recrowd`, `audit *`
+1. **Implemented:** `batch run-session` (`run_in_session.py`), `batch progress` (`batch_progress.py`)
+2. **Implemented:** `batch build-list`, `batch prune-list`, `batch convert-list`, `batch convert-pvp-csv`
+3. **Implemented:** `app login` (`ade_login.py`), `app hash-password`, `app start`, and `app stop`
+4. **Implemented:** `documents normalize`, `documents reconcile`, `documents cleanup-xml`, `documents rename-date`, `documents import`
+5. **Implemented:** `build dossier-graph`, `build building-kmz`
+6. **Implemented:** `batch build-pdf-parseable`, `batch recrowd`, `documents import-ocular|smart-ocr|download-missing-p7m|define-workflow`, `audit *`
 
 For each tool:
 
@@ -409,37 +419,37 @@ For each tool:
   - `--dry-run` is the default for destructive tools and `--apply` performs. This already holds for `normalize`,
     `reconcile`, `cleanup-xml` and `rename-date`; check each one and make it hold.
   - `-o/--output` always means "write the result JSON here".
-- Remove the entry from `tools.py` and add the tool to the help snapshot.
+- Add the tool to the help snapshot (`tests/fixtures/cli_tree.json`). The forwarding registry (`tools.py`) is gone.
 
 Shell helpers:
 
-- `run-list` remains a separate `batch run-list` coordinator over the `build-list` and `run-session` operations
-  (§3.4). Port its orchestration to Python while keeping only the list → plan step at this layer: login time, batch
-  folder choice (resume or new), the temporary-folder `--dry-run` (already the §5 convention; keep it) and the list
-  transforms passed to `build-list`. Session setup, deadline, service cleanup and the document download stay in
-  `run-session`; per-row work stays in the batch engine behind `query batch`. `run-list` must not grow a second
-  submission/retry/journal implementation or absorb `query batch`'s generic options.
+- **Implemented:** `run-list` is a separate `batch run-list` Python coordinator over `build-list` and `run-session`
+  (§3.4). It records the login time, chooses a batch folder (resume or new), uses a temporary folder for `--dry-run`,
+  and passes the list transforms to `build-list`. Session setup, deadline, service cleanup and document download stay
+  in `run-session`; per-row work stays in the batch engine behind `query batch`. `run-list` does not add a second
+  submission/retry/journal implementation or absorb `query batch`'s generic options. The old shell script is now a thin
+  wrapper around `sister batch run-list`.
 - `run-session` keeps starting `query batch` as a subprocess (§3.4). Porting `run_in_session.py` to Typer changes its
   entry point only, not that call.
-- `run-pvp-is` and `run-pdf-parseable` chain Python steps. Port them to Python commands that call the relevant
-  build/run functions, then delete the `.sh` files (or keep them as one-line wrappers if cron uses them; check
-  `crontab -l` and `scripts/README.md`).
-- `app start` stays a wrapper of `scripts/start.sh` (uvicorn with reload flags). Accept `--no-reload` and the port
-  as real Typer options instead of passing unknown arguments through.
-- `app stop`: replace `../bin/kill_app.sh` with a Python implementation in `sister/cli/app_tools.py` (find the
-  uvicorn process listening on the port through `psutil` or `/proc`, check its command line contains
-  `sister.main`, SIGTERM, wait, SIGKILL after a timeout). Don't kill whatever holds the port without checking.
+- **Implemented:** `run-pvp-is` and `run-pdf-parseable` are Python commands that call the shared list/batch runners;
+  their shell files are thin CLI wrappers.
+- **Implemented:** `app start` wraps `scripts/start.sh` (uvicorn with reload flags) and accepts `--no-reload` and the port
+  as real Typer options.
+- **Implemented:** `app stop` uses `sister/cli/app_tools.py` to replace `../bin/kill_app.sh` (find the listener under
+  `/proc`, require `sister.main` in its command line, send SIGTERM, wait, and send SIGKILL after a timeout). It refuses
+  non-SISTER listeners and requires `--pid` if more than one SISTER process matches.
 - `dev fixture-payloads` can stay a shell wrapper (developer only).
 
-Done when: `tools.py` and `_forward_context` are deleted (or hold only `app start` and `dev fixture-payloads`), and
-`sister batch run-session --help` prints Typer help.
+Done when: every operational command has a Typer entry point; `app start` delegates only the Uvicorn launch to
+`scripts/start.sh`, compatibility shell scripts call the CLI, and `dev fixture-payloads` remains the developer shell
+command; and `sister batch run-session --help` plus the §6 internal-command contract pass.
 
 ## 5. Conventions the plan fixes
 
 | Topic | Rule |
 |---|---|
 | Option meaning | `--yes/--no` = download again or reuse an answered free query, nothing else. Paid steps: `--confirm-paid`, only where the server accepts it. `--force` = bypass reuse. `--dry-run` = send/change nothing. `--apply` = perform a destructive local change. `-o/--output` = write JSON to a file. `--json` (root) = JSON on stdout. |
-| Short options | Kept as today for the cadastral fields (`-P -C -F -p -t`); no new short option that clashes with them. `-sub` (two letters after one dash) is replaced by `--sub`/`--subalterno`; `-sub` stays hidden for one release. |
+| Short options | Kept as today for the cadastral fields (`-P -C -F -p -t`); no new short option that clashes with them. `-sub` (two letters after one dash) is replaced by `--subalterno`/`--sub`. **Implemented** for the generated query commands: `-sub` is a hidden option (`LEGACY_FLAGS` in `query_forms.py`) that fills the same parameter and prints a deprecation line on stderr; the hidden `query workflow` alias keeps `-sub` as it was. |
 | Output streams | Data on stdout; progress, hints and warnings on stderr. |
 | Imports | A group module imports at the top only `typer`, `rich`, `_runtime` and the light modules it needs (`query_forms`, `client`); everything else inside the command. |
 | New single-step query | Only in `query_forms.py` (unchanged rule; now it covers paid queries too). |
@@ -450,10 +460,10 @@ Done when: `tools.py` and `_forward_context` are deleted (or hold only `app star
 - **Baseline first.** Record the current result of
   `../.venv/bin/python -m pytest -p no:logfire --continue-on-collection-errors tests/test_cli.py tests/test_cli_commands.py tests/test_batch.py tests/test_query_forms.py tests/test_workflows.py`
   before Phase 0. Every phase keeps at least the same passes.
-- **Help snapshot.** A test that walks the Typer app (`typer.main.get_command(app)`) and writes
-  `command path → params (name, flags, required, hidden)` to `tests/fixtures/cli_tree.json`; the test compares
-  against it. Phase 1 must not change it; later phases update it on purpose, so every change to the CLI surface
-  shows in the diff. A separate test pins the internal API of §3.4 (`query batch -I --resume -o --stop-at`,
+- **Help snapshot.** A test walks the Typer app (`typer.main.get_command(app)`) and compares
+  `command path → params (name, flags, required, hidden)` with `tests/fixtures/cli_tree.json`. Update that fixture
+  deliberately when changing the CLI surface so each command and option change shows in the diff. A separate test
+  pins the internal API of §3.4 (`query batch -I --resume --output-dir -o --stop-at`,
   `batch run-list` routing and its forwarded `--extra` / `--stop-stale-service` options, `query soggetto --cf --wait
   --yes -o`, `python -m sister.cli` resolving): those may not change even on purpose without updating the relevant
   caller in the same PR. The tree must contain `batch run-list` and must not contain `query run-list`.
@@ -475,22 +485,22 @@ Done when: `tools.py` and `_forward_context` are deleted (or hold only `app star
 |---|---|
 | Scripts, cron jobs and docs call the old names | Hidden aliases for one release with a stderr warning; grep `scripts/`, `docs/`, `CLAUDE.md`, `inputs/` and crontab for old names in the same PR that adds each alias, and update them. |
 | Phase 2's single event loop changes timing in long `--wait` runs | Only the connection pool changes; polling (`VISURA_LONG_POLL`) doesn't. Run the live checks of §6 before merging. |
-| A paid query becomes reachable by a new path in Phase 4 (batch, MCP) | `paid=True` is refused by `batch.py` (unless opted in) and by MCP `submit_query`, with tests for both, in the same PR. |
+| A paid query becomes reachable by a new path in Phase 4 (batch, MCP) | `paid=True` is refused by `batch.py` and MCP `submit_query`, with tests for both; batch has no paid-query opt-in. |
 | The `custom` workflow preset differs from the client-side flow it replaces | Before deleting the CLI flow, compare their step lists for the four start shapes (CF, P.IVA, address, F/P with and without `-sub`) in a test. |
-| `app stop` in Python kills the wrong process | Match on the listening port **and** a `sister.main` command line; dry run by default when more than one process matches. |
+| `app stop` in Python kills the wrong process | Match on the listening port **and** a `sister.main` command line; refuse non-SISTER listeners and require `--pid` when more than one SISTER listener matches. |
 | `run-session` stops seeing a running batch | Its `stop_stale_service()` check matches `sister.cli query batch` in the process list. If `query batch` is ever run in-process or by another command line, `--stop-stale-service` could stop a service a batch is using. Keep the subprocess call (§3.4), or change the detection in the same PR (for example a lock file in the batch folder). |
 | Phase 1 breaks `python -m sister.cli` | `sister/cli/__main__.py` is part of Phase 1; the internal-API test of §6 runs `python -m sister.cli --help`. |
 | Moving `cli.py` loses `git blame` | `git mv` first in its own commit, then edit; use `git log --follow`. |
 
-## 8. Decisions needed
+## 8. Recorded decisions
 
-1. **Language of help and messages.** The portal and its terms are Italian, and most help text already is, but
-   run-time messages are English. Recommendation: Italian help, Italian messages, technical identifiers
-   (statuses, JSON keys) unchanged.
-2. **How long aliases live.** Recommendation: one tagged release, then remove them in one PR.
-3. **Paid queries in batch files.** Recommendation: keep them out (as today) unless a real use comes up. Phase 4
-   adds the `allow_paid` option only if decision 3 says yes.
-4. **`mortgage` group.** Keep it for `status`/`quote` (recommended) or fold it into `query`/`workflow`.
+1. **Language of help and messages.** Use Italian for CLI-owned help, validation and user-facing messages; keep
+   technical identifiers, statuses and JSON keys unchanged. Forwarded command surfaces follow the same rule.
+2. **Alias lifetime.** Keep hidden deprecated aliases for one tagged release, then remove them in a separate PR.
+3. **Paid queries in batch files.** Keep paid forms out of batch schemas, plans and MCP submission. There is no
+   `allow_paid` opt-in.
+4. **`mortgage` group.** Keep `mortgage status|quote`; `mortgage start` remains a deprecated alias for the free
+   `query ipotecaria-persona-fisica` preview.
 
 ## 9. Size and order
 

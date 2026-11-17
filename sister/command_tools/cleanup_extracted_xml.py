@@ -136,16 +136,16 @@ def backup(directory: Path) -> Path:
     return target
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--documents", required=True, type=Path)
-    parser.add_argument("--links", type=Path, help="document_links directory: aliases of deleted XML are removed")
-    parser.add_argument("--backup-dir", type=Path, default=None, help="where pg_dump writes (default: <documents>/../backups)")
-    parser.add_argument("--apply", action="store_true")
-    parser.add_argument("--skip-db", action="store_true", help="files only")
-    args = parser.parse_args()
-
-    documents = args.documents.resolve()
+def run(
+    *,
+    documents: Path,
+    links: Path | None = None,
+    backup_dir: Path | None = None,
+    apply: bool = False,
+    skip_db: bool = False,
+) -> int:
+    """Preview or delete extracted XML copies and their aliases and database rows."""
+    documents = documents.resolve()
     copies, notes = scan_files(documents)
     print(f"verified extracted copies in {documents}: {len(copies)}")
     print(f"  .xml: {sum(1 for n in copies if n.endswith('.xml'))}, extensionless: {sum(1 for n in copies if '.' not in n)}")
@@ -154,25 +154,25 @@ def main() -> None:
 
     targets = {Path(os.path.realpath(path)) for path in copies.values()}
     aliases = []
-    if args.links and args.links.is_dir():
-        for link in args.links.iterdir():
+    if links and links.is_dir():
+        for link in links.iterdir():
             if link.is_symlink():
                 resolved = Path(os.path.realpath(os.path.join(link.parent, os.readlink(link))))
                 if resolved in targets:
                     aliases.append(link)
     print(f"document_links aliases pointing at those copies: {len(aliases)}")
 
-    if not args.skip_db:
-        if args.apply:
-            dump = backup(args.backup_dir or documents.parent / "backups")
+    if not skip_db:
+        if apply:
+            dump = backup(backup_dir or documents.parent / "backups")
             print(f"backup written: {dump}")
-        counts = asyncio.run(clean_database(copies, args.apply))
-        print("database rows " + ("deleted" if args.apply else "that would be deleted") + ":")
+        counts = asyncio.run(clean_database(copies, apply))
+        print("database rows " + ("deleted" if apply else "that would be deleted") + ":")
         for table, count in sorted(counts.items()):
             if not table.startswith("_"):
                 print(f"  {table}: {count}")
 
-    if args.apply:
+    if apply:
         for path in copies.values():
             path.unlink()
         for link in aliases:
@@ -180,7 +180,25 @@ def main() -> None:
         print(f"removed {len(copies)} files and {len(aliases)} aliases")
     else:
         print("dry run: nothing changed (use --apply)")
+    return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--documents", required=True, type=Path)
+    parser.add_argument("--links", type=Path, help="document_links directory: aliases of deleted XML are removed")
+    parser.add_argument("--backup-dir", type=Path, default=None, help="where pg_dump writes (default: <documents>/../backups)")
+    parser.add_argument("--apply", action="store_true")
+    parser.add_argument("--skip-db", action="store_true", help="files only")
+    args = parser.parse_args(argv)
+    return run(
+        documents=args.documents,
+        links=args.links,
+        backup_dir=args.backup_dir,
+        apply=args.apply,
+        skip_db=args.skip_db,
+    )
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

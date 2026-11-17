@@ -8,8 +8,8 @@ CSV. It loads into the same `BatchFile` model, so validation, `reuse`, journal a
 |---|---|
 | `sister batch run-list FILE.md` | build the plan and run it in the logged-in session |
 | `sister batch build-list FILE.md --output-dir DIR` | write `DIR/batch.json` only |
-| `sister batch prune-list FILE.md [--dry-run]` | drop the rows that are already answered/stored |
-| `sister batch convert-list FILE.md [-o OUT.md]` | rewrite a legacy codici list in this format |
+| `sister batch prune-list FILE.md [--apply]` | preview rows that are already answered/stored; `--apply` rewrites the list with a backup |
+| `sister batch convert-list FILE.md [-o OUT.md] [--apply]` | preview conversion of a legacy codici list; `--apply` writes the Markdown file |
 | `sister query batch --input FILE.md` | run it directly, with all the batch flags |
 
 ## Layout
@@ -59,8 +59,8 @@ First paragraph after the title.          ← batch description (the first parag
 
 The older `codici_fiscali.all.md` (rows `| 1 | \`CODE\` | Nome | Fonte |` under "Persone fisiche"/"Persone giuridiche") is
 still read: a 16-character code with a valid check character is a `soggetto` query, an 11-digit partita IVA an `azienda`
-query, both with `tipo_catasto` `E`; the others are reported and skipped. `sister batch convert-list` rewrites such a
-file in the table format above (the old `Nome` column becomes `intestatario`, so it can never be sent as the first-name
+query, both with `tipo_catasto` `E`; the others are reported and skipped. `sister batch convert-list` previews the
+conversion and rewrites the file only with `--apply` (the old `Nome` column becomes `intestatario`, so it can never be sent as the first-name
 filter of the person search).
 
 ## Pruning (`prune-list`)

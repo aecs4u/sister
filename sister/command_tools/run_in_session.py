@@ -47,9 +47,9 @@ from dotenv import load_dotenv  # noqa: E402
 load_dotenv(ROOT / ".env")
 
 from batch_progress import Dashboard, render, snapshot  # noqa: E402
-from run_list_status import RunListStatus  # noqa: E402
 from rich.console import Console  # noqa: E402
 from rich.live import Live  # noqa: E402
+from run_list_status import RunListStatus  # noqa: E402
 
 from sister.answered import Answered, row_code  # noqa: E402
 from sister.cli._runtime import EXIT_SESSION_EXPIRED  # noqa: E402
@@ -186,7 +186,9 @@ def start_service(port: int, log: Path, stop_stale: bool = False) -> subprocess.
         print(f"servizio rimasto sulla porta {port} fermato ({owner})")
     if health(port):  # an old service (own state, maybe a dead session) would be mistaken for the one started here
         owner = port_owner(port)
-        hint = f" ({owner}; se non c'e' un batch in corso: kill {' '.join(re.findall(r'pid ([\d, ]+)', owner)[0].replace(',', '').split())})" if owner else ""
+        match = re.search("pid ([0-9, ]+)", owner)
+        kill_ids = " ".join(match.group(1).replace(",", " ").split()) if match else ""
+        hint = f" ({owner}; se non c'e' un batch in corso: kill {kill_ids})" if owner else ""
         raise SystemExit(f"la porta {port} e' gia' occupata da un altro servizio{hint}: fermalo (o usa --port, o --stop-stale-service) e rilancia")
     handle = open(log, "w")
     process = subprocess.Popen(
@@ -399,7 +401,8 @@ def run_batch(directory: Path, port: int, deadline: datetime, tick=None, *, grac
     log = directory / "run.log"
     command = [
         sys.executable, "-m", "sister.cli", "query", "batch", "-I", str(directory / "batch.json"), "--resume",
-        "-o", str(directory / "report.json"), "--stop-at", deadline.isoformat(timespec="seconds"),
+        "--output-dir", str(directory), "-o", str(directory / "report.json"),
+        "--stop-at", deadline.isoformat(timespec="seconds"),
     ]
     started_at = time.time()
     with open(log, "a") as handle:
@@ -520,27 +523,38 @@ def send_progress_email(
     return asyncio.run(send())
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--batch", action="append", required=True, type=Path, help="plan directory (repeat, run in order)")
-    parser.add_argument("--minutes", type=float, default=26, help="minutes after the login to stop (SISTER closes at ~30)")
-    parser.add_argument("--logged-in-at", help="HH:MM of the login (default: the time `sister app login` recorded, else now)")
-    parser.add_argument("--grace-seconds", type=float, default=60,
-                        help="after the deadline no row starts; one still running this long after it is interrupted")
-    parser.add_argument("--port", type=int, default=8027)
-    parser.add_argument("--preflight-cf", default=os.getenv("SISTER_PREFLIGHT_CF", ""), help="code for the proof search")
-    parser.add_argument("--stop-stale-service", action="store_true", help="if the port is held by a SISTER service left by an earlier run "
-                        "(and no batch is running), stop it and start a fresh one; Chrome and the login are not touched")
-    parser.add_argument("--cdp", default=os.getenv("BROWSER_CDP_ENDPOINT", "http://localhost:9222"))
-    parser.add_argument("--email-progress", action="store_true", help="email the final progress summary when this session run closes")
-    parser.add_argument("--email-to", default="demo@aecs4u.com", help="progress summary recipient (default: demo@aecs4u.com)")
-    parser.add_argument("--dry-run", action="store_true", help="count what pruning would drop and print the timing; change and start nothing")
-    parser.add_argument("--keep-answered", action="store_true", help="do not drop the rows that already have an answer (rows asking for the Storica are "
-                        "always kept: the database does not record the 'Tipo richiesta' of an answer)")
-    parser.add_argument("--probe", action="store_true", help="also open a scratch tab to test the login first. Off by default: a second tab on the live "
-                        "session made SISTER answer lock.html to the search that followed (2026-10-27); use --preflight-cf for a real proof search")
-    args = parser.parse_args()
-
+def run(
+    *,
+    batch: list[Path],
+    minutes: float = 26,
+    logged_in_at: str | None = None,
+    grace_seconds: float = 60.0,
+    port: int = 8027,
+    preflight_cf: str | None = None,
+    stop_stale_service: bool = False,
+    cdp: str | None = None,
+    email_progress: bool = False,
+    email_to: str = "demo@aecs4u.com",
+    dry_run: bool = False,
+    keep_answered: bool = False,
+    probe: bool = False,
+) -> int:
+    """Run plans in one authenticated session using plain keyword arguments."""
+    args = argparse.Namespace(
+        batch=batch,
+        minutes=minutes,
+        logged_in_at=logged_in_at,
+        grace_seconds=grace_seconds,
+        port=port,
+        preflight_cf=preflight_cf if preflight_cf is not None else os.getenv("SISTER_PREFLIGHT_CF", ""),
+        stop_stale_service=stop_stale_service,
+        cdp=cdp or os.getenv("BROWSER_CDP_ENDPOINT", "http://localhost:9222"),
+        email_progress=email_progress,
+        email_to=email_to,
+        dry_run=dry_run,
+        keep_answered=keep_answered,
+        probe=probe,
+    )
     now = datetime.now()
     if args.logged_in_at:
         hour, minute = map(int, args.logged_in_at.split(":"))
@@ -691,6 +705,57 @@ def main() -> int:
     else:
         say("per riprendere: nuovo login con sister app login, poi rilancia lo stesso comando (--resume salta il fatto)")
     return 0
+
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--batch", action="append", required=True, type=Path, help="plan directory (repeat, run in order)")
+    parser.add_argument("--minutes", type=float, default=26, help="minutes after the login to stop (SISTER closes at ~30)")
+    parser.add_argument("--logged-in-at", help="HH:MM of the login (default: the time `sister app login` recorded, else now)")
+    parser.add_argument(
+        "--grace-seconds",
+        type=float,
+        default=60,
+        help="after the deadline no row starts; one still running this long after it is interrupted",
+    )
+    parser.add_argument("--port", type=int, default=8027)
+    parser.add_argument("--preflight-cf", default=os.getenv("SISTER_PREFLIGHT_CF", ""), help="code for the proof search")
+    parser.add_argument(
+        "--stop-stale-service",
+        action="store_true",
+        help="if the port is held by a SISTER service left by an earlier run (and no batch is running), stop it and start a fresh one",
+    )
+    parser.add_argument("--cdp", default=os.getenv("BROWSER_CDP_ENDPOINT", "http://localhost:9222"))
+    parser.add_argument("--email-progress", action="store_true", help="email the final progress summary when this session run closes")
+    parser.add_argument("--email-to", default="demo@aecs4u.com", help="progress summary recipient (default: demo@aecs4u.com)")
+    parser.add_argument("--dry-run", action="store_true", help="count what pruning would drop and print the timing; change and start nothing")
+    parser.add_argument(
+        "--keep-answered",
+        action="store_true",
+        help="do not drop the rows that already have an answer",
+    )
+    parser.add_argument(
+        "--probe",
+        action="store_true",
+        help="also open a scratch tab to test the login first; off by default",
+    )
+    args = parser.parse_args(argv)
+    return run(
+        batch=args.batch,
+        minutes=args.minutes,
+        logged_in_at=args.logged_in_at,
+        grace_seconds=args.grace_seconds,
+        port=args.port,
+        preflight_cf=args.preflight_cf,
+        stop_stale_service=args.stop_stale_service,
+        cdp=args.cdp,
+        email_progress=args.email_progress,
+        email_to=args.email_to,
+        dry_run=args.dry_run,
+        keep_answered=args.keep_answered,
+        probe=args.probe,
+    )
 
 
 if __name__ == "__main__":

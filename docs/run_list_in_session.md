@@ -17,7 +17,8 @@ do not need to start `scripts/start.sh` separately.
    session lasts about 30 minutes.
 3. Use a Markdown batch file ([format](batch_markdown_format.md)): tables marked `<!-- sister-batch-table -->` with one
    query per row, in any mix of commands (subjects, parcels, PVP lists such as `inputs/pvp_sales/IS.md`, or the legacy
-   `inputs/codici_fiscali.all.md`). Remove what SISTER already has first with `sister batch prune-list FILE.md`.
+   `inputs/codici_fiscali.all.md`). Preview answered rows with `sister batch prune-list FILE.md`; pass `--apply` to
+   remove them from the source list before running.
 
 See [batch format](batch_format.md) for the underlying batch behavior and [portal session](portal_session.md) for
 login and session details.
@@ -110,7 +111,7 @@ then calls `sister batch run-list`.
 
 ## Help
 
-The shell runners accept `-h` or `--help`. The Python scripts use `argparse`, which provides the same options:
+The CLI and shell wrappers accept `-h` or `--help`:
 
 ```bash
 uv run sister batch run-list --help

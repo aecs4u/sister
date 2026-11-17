@@ -243,7 +243,7 @@ def render(snaps: list[dict]):
             else:
                 status = f"{office['done']}/{office_total} completati"
                 if office["province"] != "-":
-                    status += f"  " + (
+                    status += "  " + (
                         f"apertura {office['province']}" if office["state"] == "opening" else office["province"]
                     )
             office_line = Table.grid(padding=(0, 1))
@@ -322,28 +322,29 @@ class Dashboard:
         return render_session(self.snaps(), self.login, self.deadline)
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("directories", nargs="+", type=Path, help="batch output directories")
-    parser.add_argument("--once", action="store_true", help="print one snapshot and exit")
-    parser.add_argument("--interval", type=float, default=0.5, help="seconds between journal checks (default 0.5)")
-    args = parser.parse_args()
-    console = Console()
-
+def run(
+    directories: list[Path],
+    *,
+    once: bool = False,
+    interval: float = 0.5,
+    console: Console | None = None,
+) -> int:
+    """Display one or more saved batch directories until complete or interrupted."""
+    console = console or Console()
     def take() -> list[dict]:
-        return [snapshot(d) for d in args.directories]
+        return [snapshot(d) for d in directories]
 
-    if args.once or not console.is_terminal:
+    if once or not console.is_terminal:
         console.print(render(take()))
         return 0
 
-    marks = {d: _file_marks(d) for d in args.directories}
+    marks = {d: _file_marks(d) for d in directories}
     snaps = take()
     with Live(render(snaps), console=console, refresh_per_second=4) as live:
         try:
             while True:
                 changed = False
-                for d in args.directories:
+                for d in directories:
                     mtime = _file_marks(d)
                     if mtime != marks[d]:
                         marks[d], changed = mtime, True
@@ -352,10 +353,19 @@ def main() -> int:
                     live.update(render(snaps))
                 if all(s["done"] >= s["total"] for s in snaps):
                     break
-                time.sleep(args.interval)
+                time.sleep(interval)
         except KeyboardInterrupt:
             pass
     return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("directories", nargs="+", type=Path, help="batch output directories")
+    parser.add_argument("--once", action="store_true", help="print one snapshot and exit")
+    parser.add_argument("--interval", type=float, default=0.5, help="seconds between journal checks (default 0.5)")
+    args = parser.parse_args(argv)
+    return run(args.directories, once=args.once, interval=args.interval)
 
 
 if __name__ == "__main__":

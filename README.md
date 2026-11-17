@@ -53,7 +53,7 @@ Le API JSON di Catasto usano il prefisso `/api/v1`; le pagine HTML e i relativi 
 | **1 — Immobili** | `POST /api/v1/visura` | `sister query search` | Cerca gli immobili associati a foglio + particella |
 | **2 — Intestati** | `POST /api/v1/visura/intestati` | `sister query intestati` | Recupera i titolari di uno specifico subalterno |
 
-Entrambe le richieste vengono accodate ed eseguite sequenzialmente su un singolo browser autenticato al portale SISTER. I risultati si recuperano in polling con `GET /api/v1/visura/{request_id}` o con `sister wait`.
+Entrambe le richieste vengono accodate ed eseguite sequenzialmente su un singolo browser autenticato al portale SISTER. I risultati si recuperano in polling con `GET /api/v1/visura/{request_id}` o con `sister requests wait`.
 
 ### Funzionalità principali
 
@@ -531,54 +531,54 @@ uv run sister query fiduciali -P Roma -C ROMA -F 100 --wait
 
 ```bash
 # Due diligence immobiliare — search → intestati → ispezioni
-uv run sister query workflow --preset due-diligence \
+uv run sister workflow run --preset due-diligence \
     -P Roma -C ROMA -F 100 -p 50 -o due_diligence.json
 
 # Indagine patrimoniale — tutti gli immobili di un soggetto
-uv run sister query workflow --preset patrimonio \
+uv run sister workflow run --preset patrimonio \
     --cf RSSMRI85E28H501E -o patrimonio.json
 
 # Mappatura fondiaria — elenco → mappa → fiduciali → originali
-uv run sister query workflow --preset fondiario \
+uv run sister workflow run --preset fondiario \
     -P Roma -C ROMA -F 100 -o fondiario.json
 
 # Audit aziendale — tutti gli immobili di un'azienda
-uv run sister query workflow --preset aziendale \
+uv run sister workflow run --preset aziendale \
     --azienda 02471840997 -o audit.json
 
 # Analisi storica — search → intestati → nota → ispezioni → originali
-uv run sister query workflow --preset storico \
+uv run sister workflow run --preset storico \
     -P Trieste -C TRIESTE -F 9 -p 166 -o storico.json
 
 # Ricerca per indirizzo — indirizzo → search → intestati
-uv run sister query workflow --preset indirizzo \
+uv run sister workflow run --preset indirizzo \
     -P Terni -C TERNI --indirizzo "DEL RIVO" -o indirizzo.json
 
 # Controllo incrociato persona/azienda
-uv run sister query workflow --preset cross-reference \
+uv run sister workflow run --preset cross-reference \
     --cf RSSMRI85E28H501E --azienda 02471840997 -o cross.json
 
 # Workflow con depth "deep" — include owner expansion e ispezioni ipotecarie
-uv run sister query workflow --preset due-diligence \
+uv run sister workflow run --preset due-diligence \
     -P Roma -C ROMA -F 100 -p 50 --depth deep --include-paid --confirm-paid -o deep.json
 
 # Workflow con depth "light" — solo step core (veloce)
-uv run sister query workflow --preset patrimonio \
+uv run sister workflow run --preset patrimonio \
     --cf RSSMRI85E28H501E --depth light -o quick.json
 
 # Multi-hop full investigation — bounded graph expansion
-uv run sister query workflow --preset full-due-diligence \
+uv run sister workflow run --preset full-due-diligence \
     -P Roma -C ROMA -F 100 -p 50 --depth full --include-paid --confirm-paid \
     --max-paid 5 --max-owners 15 --max-history 10 -o full_investigation.json
 
 # Multi-hop corporate audit
-uv run sister query workflow --preset full-aziendale \
+uv run sister workflow run --preset full-aziendale \
     --azienda 02471840997 --depth full -o full_audit.json
 
 # Workflow custom — combina flag a piacere
-uv run sister query workflow \
+uv run sister workflow run --preset custom \
     -P Roma -C ROMA -F 100 -p 50 \
-    --cf RSSMRI85E28H501E --elenco --mappa \
+    --with elenco --with mappa \
     -o full_report.json
 ```
 
@@ -625,27 +625,27 @@ azienda,,,,,,02471840997,
 uv run sister query search -P Trieste -C TRIESTE -F 9 -p 166 -t F
 
 # Controlla lo stato
-uv run sister get req_F_abc123
+uv run sister requests get req_F_abc123
 
 # Attendi con timeout personalizzato
-uv run sister wait req_F_abc123 --timeout 600 --interval 3
+uv run sister requests wait req_F_abc123 --timeout 600 --interval 3
 ```
 
 ### Requests, storico e salute
 
 ```bash
 # Lista richieste con filtro stato
-uv run sister requests --status pending
-uv run sister requests --status completed --provincia Trieste
+uv run sister requests list --status pending
+uv run sister requests list --status completed --provincia Trieste
 
 # Storico visure
-uv run sister history --provincia Trieste --limit 20
+uv run sister requests list --provincia Trieste --limit 20
 
 # Stato del servizio
 uv run sister health
 ```
 
-`requests --status` scans history pages until it finds the requested number of matching records; `--offset` skips
+`requests list --status` scans history pages until it finds the requested number of matching records; `--offset` skips
 matching records, and `--limit` accepts values from 1 to 200. `get`, `wait`, and `query ... --wait` return a non-zero
 exit status when a request fails, expires, or needs human action. `health` returns non-zero when the service is degraded
 or the SISTER session is unauthenticated.
@@ -822,10 +822,10 @@ Se il risultato è scaduto, risponde con `410` e `status: "expired"`.
 curl -s http://localhost:8025/api/v1/visura/req_F_abc123 | jq .
 
 # CLI — singolo poll
-uv run sister get req_F_abc123
+uv run sister requests get req_F_abc123
 
 # CLI — attesa automatica con timeout
-uv run sister wait req_F_abc123 --timeout 600
+uv run sister requests wait req_F_abc123 --timeout 600
 ```
 
 **Risposta completata (Fase 1):**
@@ -907,7 +907,7 @@ Consulta lo storico delle visure salvate nel database PostgreSQL.
 curl -s "http://localhost:8025/api/v1/visura/history?provincia=Trieste&limit=20" | jq .
 
 # CLI
-uv run sister history --provincia Trieste --limit 20
+uv run sister requests list --provincia Trieste --limit 20
 ```
 
 ---
@@ -997,13 +997,13 @@ uv run sister query search -P Roma -C ROMA -F 100 -p 50 -t F --wait --output imm
 uv run sister query intestati -P Roma -C ROMA -F 100 -p 50 -t F -sub 3 --wait
 
 # 3. Oppure: workflow automatico (fase 1 + fase 2 in un solo comando)
-uv run sister query workflow -P Roma -C ROMA -F 100 -p 50 -t F --output full.json
+uv run sister workflow run -P Roma -C ROMA -F 100 -p 50 -t F --output full.json
 
 # 4. Batch da file CSV
 uv run sister query batch -I parcelle.csv --wait -O ./results/
 
 # 5. Consulta lo storico
-uv run sister history --provincia Roma --limit 10
+uv run sister requests list --provincia Roma --limit 10
 ```
 
 ### Guide operative
@@ -1071,7 +1071,7 @@ curl -s http://localhost:8025/api/v1/visura/intestati_F_xyz789 | jq .
 uv run sister query search -P Trieste -C TRIESTE -F 9 -p 166 2>/dev/null \
   | jq -r '.request_ids[]' \
   | while read -r rid; do
-      uv run sister wait "$rid" --output "result_${rid}.json"
+      uv run sister requests wait "$rid" --output "result_${rid}.json"
     done
 ```
 

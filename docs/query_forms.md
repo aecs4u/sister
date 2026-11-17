@@ -33,6 +33,12 @@ returns an ownership-aware quote after acceptance. Note/title and *Salva* quotes
 selection is confirmable, but the CLI only prepares the quote; it does not submit or confirm the portal action. Paid
 confirmation and reconciliation remain restricted to the signed-in SISTER admin page.
 
+The paid CLI inspections `ipotecaria-immobile`, `ipotecaria-azienda` and `ipotecaria-nota` are also generated from
+`QueryForm`. Each fixes its `tipo_ricerca` in the spec, marks the command as paid, and always sends
+`auto_confirm=false`. Their deprecated hidden `--yes/-y` option is ignored; paid inspection commands are excluded from
+batch files and MCP submission. The hand-written `query ipotecaria-persona` and `mortgage start` names remain hidden
+aliases of the free `ipotecaria-persona-fisica` preview for one release.
+
 ## Mode-dependent inputs
 
 Some inputs exist only in one mode of a radio (the provisional identifier of an immobile, the historical map

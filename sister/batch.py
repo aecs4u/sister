@@ -310,6 +310,9 @@ def plan_batch(batch: BatchFile, options: BatchOptions | None = None) -> list[Pl
         if spec is None:
             item.state, item.error = "invalid", f"comando sconosciuto: {name}"
             continue
+        if spec.paid:
+            item.state, item.error = "invalid", "le query a pagamento non sono ammesse nei batch"
+            continue
         item.fingerprint = fingerprint(spec.command, params)
         unknown = sorted(set(params) - set(param_names(spec.command)))
         try:
@@ -912,7 +915,7 @@ def batch_json_schema() -> dict:
     aliases: dict[str, list[str]] = {}
     for alias, target in _ALIASES.items():
         aliases.setdefault(target, []).append(alias)
-    commands = sorted(QUERY_FORMS)
+    commands = sorted(command for command, form in QUERY_FORMS.items() if not form.paid)
     names = sorted({*commands, *_ALIASES})
     defs = schema["$defs"]
     defs["BatchQuery"]["properties"]["command"] = {

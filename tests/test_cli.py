@@ -72,7 +72,7 @@ def test_search_dry_run():
         ],
     )
     assert result.exit_code == 0
-    assert "DRY RUN" in result.output
+    assert "SIMULAZIONE" in result.output
     assert "POST" in result.output
     assert "Trieste" in result.output
 
@@ -195,7 +195,7 @@ def test_intestati_dry_run():
         ],
     )
     assert result.exit_code == 0
-    assert "DRY RUN" in result.output
+    assert "SIMULAZIONE" in result.output
     assert "/visura/intestati" in result.output
 
 
@@ -253,7 +253,8 @@ def test_get_completed(monkeypatch):
 
     result = runner.invoke(app, ["get", "req_F_done"])
     assert result.exit_code == 0
-    assert "Completed" in result.output
+    assert "è deprecato; usa `sister requests get`" in result.stderr
+    assert "Completata" in result.output
     assert "req_F_done" in result.output
 
 
@@ -269,7 +270,7 @@ def test_get_processing(monkeypatch):
 
     result = runner.invoke(app, ["get", "req_F_proc"])
     assert result.exit_code == 0
-    assert "processing" in result.output
+    assert "in elaborazione" in result.output
 
 
 def test_get_expired(monkeypatch):
@@ -284,7 +285,7 @@ def test_get_expired(monkeypatch):
 
     result = runner.invoke(app, ["get", "req_F_exp"])
     assert result.exit_code == 1  # an expired request is a failure for scripts: the exit status says so
-    assert "expired" in result.output
+    assert "scaduta" in result.output
 
 
 def test_get_error_status(monkeypatch):
@@ -357,7 +358,8 @@ def test_wait_completes(monkeypatch):
 
     result = runner.invoke(app, ["wait", "req_wait"])
     assert result.exit_code == 0
-    assert "Completed" in result.output
+    assert "è deprecato; usa `sister requests wait`" in result.stderr
+    assert "Completata" in result.output
 
 
 def test_wait_timeout(monkeypatch):
@@ -382,7 +384,7 @@ def test_history_empty(monkeypatch):
 
     result = runner.invoke(app, ["history"])
     assert result.exit_code == 0
-    assert "No history records found" in result.output
+    assert "Nessun record nello storico" in result.output
 
 
 def test_history_with_results(monkeypatch):
@@ -409,7 +411,8 @@ def test_history_with_results(monkeypatch):
     result = runner.invoke(app, ["history", "-P", "Trieste"])
     assert result.exit_code == 0
     assert "r1" in result.output
-    assert "1 results" in result.output
+    assert "1 risultati" in result.output
+    assert "è deprecato; usa `sister requests list`" in result.stderr
 
 
 def test_history_with_output(monkeypatch, tmp_path):
@@ -468,7 +471,7 @@ def test_health_unreachable(monkeypatch):
 
     result = runner.invoke(app, ["health"])
     assert result.exit_code == 1
-    assert "Cannot reach" in result.output
+    assert "Impossibile raggiungere sister" in result.output
 
 
 # ---------------------------------------------------------------------------
@@ -496,57 +499,31 @@ def test_workflow_dry_run():
         ],
     )
     assert result.exit_code == 0
-    assert "DRY RUN" in result.output
+    assert "SIMULAZIONE" in result.output
     assert "search" in result.output
     assert "intestati" in result.output
 
 
-def test_workflow_fabbricati_full(monkeypatch):
-    """Workflow: search finds 2 sub-units, intestati fetched for each."""
+def test_workflow_run_custom_submits_server_plan(monkeypatch):
     from sister.client import VisuraClient
 
-    call_log = []
+    captured = {}
 
-    async def fake_search(self, **kwargs):
-        call_log.append(("search", kwargs))
-        return {"request_ids": ["req_F_001"], "status": "queued"}
-
-    async def fake_wait(self, request_id, **kwargs):
-        call_log.append(("wait", request_id))
-        if request_id == "req_F_001":
-            return {
-                "request_id": "req_F_001",
-                "tipo_catasto": "F",
-                "status": "completed",
-                "data": {
-                    "immobili": [
-                        {"Foglio": "9", "Particella": "166", "Sub": "3"},
-                        {"Foglio": "9", "Particella": "166", "Sub": "5"},
-                    ],
-                    "intestati": [],
-                },
-            }
-        # intestati results
+    async def fake_workflow(self, **kwargs):
+        captured.update(kwargs)
         return {
-            "request_id": request_id,
-            "status": "completed",
-            "data": {"intestati": [{"Nominativo": "ROSSI MARIO"}]},
+            "workflow_id": "wf_custom_test123",
+            "preset": "custom",
+            "steps": [{"step": step, "status": "completed"} for step in kwargs["custom_steps"]],
+            "summary": {"completed": len(kwargs["custom_steps"]), "failed": 0, "skipped": 0},
         }
 
-    async def fake_intestati(self, **kwargs):
-        call_log.append(("intestati", kwargs))
-        rid = f"int_{kwargs.get('subalterno', 'x')}"
-        return {"request_id": rid, "status": "queued"}
-
-    monkeypatch.setattr(VisuraClient, "search", fake_search)
-    monkeypatch.setattr(VisuraClient, "wait_for_result", fake_wait)
-    monkeypatch.setattr(VisuraClient, "intestati", fake_intestati)
-
+    monkeypatch.setattr(VisuraClient, "workflow", fake_workflow)
     result = runner.invoke(
         app,
         [
-            "query",
             "workflow",
+            "run",
             "-P",
             "Trieste",
             "-C",
@@ -557,164 +534,91 @@ def test_workflow_fabbricati_full(monkeypatch):
             "166",
             "-t",
             "F",
-        ],
-    )
-    assert result.exit_code == 0
-    assert "Search" in result.output
-    assert "Intestati" in result.output
-    assert "Workflow complete" in result.output
-
-    # Should have submitted intestati for sub 3 and sub 5
-    intestati_calls = [c for c in call_log if c[0] == "intestati"]
-    subs = sorted(c[1]["subalterno"] for c in intestati_calls)
-    assert subs == ["3", "5"]
-
-
-def test_workflow_specific_subalterno(monkeypatch):
-    """Workflow with --subalterno only fetches intestati for that sub."""
-    from sister.client import VisuraClient
-
-    async def fake_search(self, **kwargs):
-        return {"request_ids": ["req_F_001"], "status": "queued"}
-
-    async def fake_wait(self, request_id, **kwargs):
-        if request_id == "req_F_001":
-            return {
-                "request_id": "req_F_001",
-                "tipo_catasto": "F",
-                "status": "completed",
-                "data": {
-                    "immobili": [
-                        {"Foglio": "9", "Particella": "166", "Sub": "3"},
-                        {"Foglio": "9", "Particella": "166", "Sub": "5"},
-                    ],
-                    "intestati": [],
-                },
-            }
-        return {"request_id": request_id, "status": "completed", "data": {"intestati": []}}
-
-    intestati_calls = []
-
-    async def fake_intestati(self, **kwargs):
-        intestati_calls.append(kwargs)
-        return {"request_id": "int_3", "status": "queued"}
-
-    monkeypatch.setattr(VisuraClient, "search", fake_search)
-    monkeypatch.setattr(VisuraClient, "wait_for_result", fake_wait)
-    monkeypatch.setattr(VisuraClient, "intestati", fake_intestati)
-
-    result = runner.invoke(
-        app,
-        [
-            "query",
-            "workflow",
-            "-P",
-            "Trieste",
-            "-C",
-            "TRIESTE",
-            "-F",
-            "9",
-            "-p",
-            "166",
-            "-t",
-            "F",
-            "-sub",
+            "--subalterno",
             "3",
+            "--with",
+            "mappa",
         ],
     )
-    assert result.exit_code == 0
-    assert len(intestati_calls) == 1
-    assert intestati_calls[0]["subalterno"] == "3"
+
+    assert result.exit_code == 0, result.output
+    assert captured["preset"] == "custom"
+    assert captured["custom_steps"] == ["search", "intestati", "mappa"]
+    assert captured["subalterno"] == "3"
+    assert "wf_custom_test123" in result.output
 
 
-def test_workflow_no_immobili_skips_phase2(monkeypatch):
-    """Workflow with empty search results skips Phase 2."""
+def test_workflow_run_no_wait_prints_id_without_status_poll(monkeypatch):
     from sister.client import VisuraClient
 
-    async def fake_search(self, **kwargs):
-        return {"request_ids": ["req_T_001"], "status": "queued"}
+    calls = []
 
-    async def fake_wait(self, request_id, **kwargs):
-        return {
-            "request_id": request_id,
-            "tipo_catasto": "T",
-            "status": "completed",
-            "data": {"immobili": [], "error": "NESSUNA CORRISPONDENZA TROVATA"},
-        }
+    async def fake_workflow(self, **kwargs):
+        return {"workflow_id": "wf_running", "status": "running", "preset": "custom"}
 
-    monkeypatch.setattr(VisuraClient, "search", fake_search)
-    monkeypatch.setattr(VisuraClient, "wait_for_result", fake_wait)
+    async def fake_status(self, workflow_id):
+        calls.append(workflow_id)
+        return {"workflow_id": workflow_id, "status": "completed"}
 
+    monkeypatch.setattr(VisuraClient, "workflow", fake_workflow)
+    monkeypatch.setattr(VisuraClient, "workflow_status", fake_status)
     result = runner.invoke(
         app,
-        [
-            "query",
-            "workflow",
-            "-P",
-            "Roma",
-            "-C",
-            "ROMA",
-            "-F",
-            "999",
-            "-p",
-            "999",
-            "-t",
-            "T",
-        ],
+        ["workflow", "run", "--cf", "RSSMRA70A01H501Z", "--no-wait"],
     )
-    assert result.exit_code == 0
-    assert "Immobili: 0" in result.output
+
+    assert result.exit_code == 0, result.output
+    assert "wf_running" in result.output
+    assert calls == []
 
 
-def test_workflow_writes_output(monkeypatch, tmp_path):
-    """Workflow saves aggregated results to file."""
+def test_workflow_wait_polls_status_until_complete(monkeypatch):
     from sister.client import VisuraClient
 
-    async def fake_search(self, **kwargs):
-        return {"request_ids": ["req_T_001"], "status": "queued"}
+    calls = []
 
-    async def fake_wait(self, request_id, **kwargs):
-        if request_id == "req_T_001":
-            return {
-                "request_id": "req_T_001",
-                "tipo_catasto": "T",
-                "status": "completed",
-                "data": {"immobili": [{"Foglio": "1", "Particella": "1"}], "intestati": []},
-            }
-        return {"request_id": request_id, "status": "completed", "data": {"intestati": [{"Nome": "TEST"}]}}
+    async def fake_workflow(self, **kwargs):
+        return {"workflow_id": "wf_running", "status": "running", "preset": "custom"}
 
-    async def fake_intestati(self, **kwargs):
-        return {"request_id": "int_T", "status": "queued"}
+    async def fake_status(self, workflow_id):
+        calls.append(workflow_id)
+        return {
+            "workflow_id": workflow_id,
+            "status": "completed",
+            "data": {"steps": [{"step": "soggetto", "status": "completed"}], "summary": {"completed": 1}},
+        }
 
-    monkeypatch.setattr(VisuraClient, "search", fake_search)
-    monkeypatch.setattr(VisuraClient, "wait_for_result", fake_wait)
-    monkeypatch.setattr(VisuraClient, "intestati", fake_intestati)
+    monkeypatch.setattr(VisuraClient, "workflow", fake_workflow)
+    monkeypatch.setattr(VisuraClient, "workflow_status", fake_status)
+    result = runner.invoke(app, ["workflow", "run", "--cf", "RSSMRA70A01H501Z"])
 
+    assert result.exit_code == 0, result.output
+    assert calls == ["wf_running"]
+    assert "soggetto" in result.output
+
+
+def test_workflow_writes_server_result_output(monkeypatch, tmp_path):
+    from sister.client import VisuraClient
+
+    async def fake_workflow(self, **kwargs):
+        return {
+            "workflow_id": "wf_result",
+            "preset": kwargs["preset"],
+            "steps": [{"step": "search", "status": "completed", "data": {"immobili": []}}],
+            "summary": {"completed": 1, "properties": 0},
+        }
+
+    monkeypatch.setattr(VisuraClient, "workflow", fake_workflow)
     out_file = tmp_path / "workflow.json"
     result = runner.invoke(
         app,
-        [
-            "query",
-            "workflow",
-            "-P",
-            "Roma",
-            "-C",
-            "ROMA",
-            "-F",
-            "1",
-            "-p",
-            "1",
-            "-t",
-            "T",
-            "-o",
-            str(out_file),
-        ],
+        ["workflow", "run", "-P", "Roma", "-C", "ROMA", "-F", "1", "-p", "1", "-o", str(out_file)],
     )
-    assert result.exit_code == 0
 
+    assert result.exit_code == 0, result.output
     written = json.loads(out_file.read_text())
-    assert "immobili" in written
-    assert "intestati_results" in written
+    assert written["workflow_id"] == "wf_result"
+    assert written["steps"][0]["step"] == "search"
 
 
 # ---------------------------------------------------------------------------
@@ -759,98 +663,64 @@ def test_requests_lists_all(monkeypatch):
         },
     )
 
-    result = runner.invoke(app, ["requests"])
+    result = runner.invoke(app, ["requests"], terminal_width=160)
     assert result.exit_code == 0
     assert "req_F_001" in result.output
     assert "req_T_002" in result.output
-    assert "completed" in result.output
     assert "pending" in result.output
+    assert "sono deprecati; usa `sister requests list`" in result.stderr
 
 
-def test_requests_filter_by_status_completed(monkeypatch):
-    _patch_client(
-        monkeypatch,
-        "history",
-        {
+def test_requests_list_trusts_server_status_filter(monkeypatch):
+    from sister.client import VisuraClient
+
+    captured = {}
+
+    async def fake_history(self, **kwargs):
+        captured.update(kwargs)
+        return {
+            "count": 2,
+            "results": [
+                {"request_id": "completed-row", "success": True, "responded_at": "2025-01-01"},
+                {"request_id": "pending-row", "success": None, "responded_at": None},
+            ],
+        }
+
+    monkeypatch.setattr(VisuraClient, "history", fake_history)
+    result = runner.invoke(app, ["requests", "list", "--status", "pending"])
+
+    assert result.exit_code == 0, result.output
+    assert captured["status"] == "pending"
+    assert "completed-row" in result.output
+    assert "pending-row" in result.output
+
+
+def test_grouped_requests_list_forwards_status_filter(monkeypatch):
+    from sister.client import VisuraClient
+
+    captured = {}
+
+    async def fake_history(self, **kwargs):
+        captured.update(kwargs)
+        return {
+            "count": 1,
             "results": [
                 {
-                    "request_id": "r1",
-                    "request_type": "visura",
-                    "tipo_catasto": "F",
-                    "provincia": "X",
-                    "comune": "X",
-                    "foglio": "1",
-                    "particella": "1",
-                    "subalterno": None,
-                    "success": True,
-                    "responded_at": "2025-01-01",
-                    "requested_at": "2025-01-01",
-                },
-                {
-                    "request_id": "r2",
-                    "request_type": "visura",
-                    "tipo_catasto": "T",
-                    "provincia": "X",
-                    "comune": "X",
-                    "foglio": "1",
-                    "particella": "1",
-                    "subalterno": None,
+                    "request_id": "pending-1",
                     "success": None,
                     "responded_at": None,
                     "requested_at": "2025-01-01",
-                },
+                }
             ],
-            "count": 2,
-        },
-    )
+        }
 
-    result = runner.invoke(app, ["requests", "--status", "completed"])
-    assert result.exit_code == 0
-    assert "r1" in result.output
-    assert "r2" not in result.output
+    monkeypatch.setattr(VisuraClient, "history", fake_history)
+    result = runner.invoke(app, ["requests", "list", "--status", "pending", "-P", "Trieste"])
 
-
-def test_requests_filter_by_status_pending(monkeypatch):
-    _patch_client(
-        monkeypatch,
-        "history",
-        {
-            "results": [
-                {
-                    "request_id": "r1",
-                    "request_type": "visura",
-                    "tipo_catasto": "F",
-                    "provincia": "X",
-                    "comune": "X",
-                    "foglio": "1",
-                    "particella": "1",
-                    "subalterno": None,
-                    "success": True,
-                    "responded_at": "2025-01-01",
-                    "requested_at": "2025-01-01",
-                },
-                {
-                    "request_id": "r2",
-                    "request_type": "visura",
-                    "tipo_catasto": "T",
-                    "provincia": "X",
-                    "comune": "X",
-                    "foglio": "1",
-                    "particella": "1",
-                    "subalterno": None,
-                    "success": None,
-                    "responded_at": None,
-                    "requested_at": "2025-01-01",
-                },
-            ],
-            "count": 2,
-        },
-    )
-
-    result = runner.invoke(app, ["requests", "--status", "pending"])
-    assert result.exit_code == 0
-    assert "r2" in result.output
-    assert "r1" not in result.output
+    assert result.exit_code == 0, result.output
+    assert captured["status"] == "pending"
+    assert captured["provincia"] == "Trieste"
+    assert "pending-1" in result.output
 
 
 def test_requests_empty(monkeypatch):
@@ -858,7 +728,7 @@ def test_requests_empty(monkeypatch):
 
     result = runner.invoke(app, ["requests"])
     assert result.exit_code == 0
-    assert "No requests found" in result.output
+    assert "Nessuna richiesta trovata" in result.output
 
 
 def test_requests_with_output(monkeypatch, tmp_path):
@@ -906,7 +776,7 @@ def test_batch_dry_run(tmp_path):
 
     result = runner.invoke(app, ["query", "batch", "-I", str(csv_file), "--dry-run"])
     assert result.exit_code == 0
-    assert "DRY RUN" in result.output
+    assert "SIMULAZIONE" in result.output
     assert "2" in result.output
 
 
@@ -927,7 +797,7 @@ def test_batch_submits_rows(monkeypatch, tmp_path):
     result = runner.invoke(app, ["query", "batch", "-I", str(csv_file)])
     assert result.exit_code == 0
     assert len(submitted) == 2
-    assert "Batch complete" in result.output
+    assert "Batch completato" in result.output
 
 
 def test_batch_with_wait(monkeypatch, tmp_path):
@@ -947,13 +817,13 @@ def test_batch_with_wait(monkeypatch, tmp_path):
 
     result = runner.invoke(app, ["query", "batch", "-I", str(csv_file), "--wait"])
     assert result.exit_code == 0
-    assert "Completed" in result.output
+    assert "Completata" in result.output
 
 
 def test_batch_file_not_found():
     result = runner.invoke(app, ["query", "batch", "-I", "/nonexistent/file.csv"])
     assert result.exit_code == 1
-    assert "File not found" in result.output
+    assert "File non trovato" in result.output
 
 
 def test_batch_skips_comment_lines(monkeypatch, tmp_path):
@@ -1048,7 +918,7 @@ def test_an_answered_query_asks_before_downloading_again_and_defaults_to_no(monk
     result = runner.invoke(app, _CF, input="\n")
 
     assert result.exit_code == 0, result.output
-    assert "Already downloaded" in result.output and "soggetto_E_old" in result.output
+    assert "Già scaricata" in result.output and "soggetto_E_old" in result.output
     assert calls == [{"force": False, "reuse_previous": True}]  # Enter = no: nothing new was requested
 
 
@@ -1100,13 +970,14 @@ def test_a_new_query_is_submitted_without_any_question(monkeypatch):
 
     assert result.exit_code == 0, result.output
     assert calls == [{"force": False, "reuse_previous": True}]
-    assert "Already downloaded" not in result.output
+    assert "Già scaricata" not in result.output
 
 
 def test_single_query_warns_about_a_wrong_codice_fiscale_check_character(monkeypatch):
     from typer.testing import CliRunner
 
-    from sister.cli import VisuraClient, app
+    from sister.cli import app
+    from sister.client import VisuraClient
 
     sent = []
 
@@ -1125,7 +996,8 @@ def test_single_query_warns_about_a_wrong_codice_fiscale_check_character(monkeyp
 def test_ipotecaria_dry_run_shows_the_body_and_force_reaches_the_client(monkeypatch):
     from typer.testing import CliRunner
 
-    from sister.cli import VisuraClient, app
+    from sister.cli import app
+    from sister.client import VisuraClient
 
     calls = []
 
@@ -1147,7 +1019,8 @@ def test_ipotecaria_dry_run_shows_the_body_and_force_reaches_the_client(monkeypa
 def test_workflow_status_and_cancel_commands(monkeypatch):
     from typer.testing import CliRunner
 
-    from sister.cli import VisuraClient, app
+    from sister.cli import app
+    from sister.client import VisuraClient
 
     async def status(self, workflow_id):
         return {"status": "running", "steps": [{"step": "search", "status": "completed"}, {"step": "owners", "status": "error", "error": "boom"}],

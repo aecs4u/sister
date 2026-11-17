@@ -35,7 +35,7 @@ chiavi API nella configurazione condivisa o nel repository.
 
 | Strumento | Funzione |
 |---|---|
-| `list_queries` | Elenca i comandi supportati, i parametri, le scelte e i requisiti. |
+| `list_queries` | Elenca i comandi supportati, i parametri, le scelte, i requisiti e il campo `paid`. |
 | `preview_query` | Valida i parametri senza contattare l'API e crea un'anteprima valida 15 minuti. |
 | `submit_query` | Invia una query preparata dopo conferma esplicita; l'anteprima è monouso. |
 | `get_request` | Legge stato e risultato di una richiesta tramite ID. |
@@ -64,9 +64,9 @@ consultato con `mortgage_search_status`.
 2. Chiama `preview_query`. La validazione è locale e non invia richieste al portale.
 3. Mostra all'utente comando e parametri dell'anteprima. Chiama `submit_query` con il relativo `preview_id` e
    `confirm_submission=true` solo dopo che l'utente ha chiesto esplicitamente di inviare quella query.
-4. Per impostazione predefinita, una risposta precedente identica viene riusata se disponibile; la risposta può essere
-   marcata `stale`. `force=true` ignora il riuso e può avviare una nuova operazione a pagamento: usalo solo su richiesta
-   esplicita dell'utente.
+4. `submit_query` rifiuta le anteprime di ispezioni a pagamento: devono passare dal flusso di revisione admin
+   autenticato. Per le altre query, una risposta identica precedente viene riusata se disponibile e può essere marcata
+   `stale`. `force=true` ignora il riuso e può avviare una nuova operazione a pagamento: usalo solo su richiesta esplicita.
 5. Se la risposta contiene ID di richiesta, usa `get_request` per consultarne stato e dati. Se il portale richiede un
    CAPTCHA, una persona deve completarlo nella sessione browser SISTER.
 

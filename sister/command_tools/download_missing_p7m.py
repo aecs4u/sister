@@ -21,7 +21,6 @@ import httpx
 
 SISTER_URL = "http://localhost:8025"
 DOCS_DIR = Path("/mnt/mobile/data/aecs4u.it/sister/documents")
-OUTPUT_PATH = Path(__file__).resolve().parents[2] / "outputs" / f"download_p7m_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
 POLL_INTERVAL = 5
 TIMEOUT = 300
 
@@ -155,16 +154,16 @@ def collect_queries(docs_dir: Path) -> list[dict]:
 # ── HTTP helpers ─────────────────────────────────────────────────────────────
 
 
-def submit(client: httpx.Client, endpoint: str, payload: dict) -> str | None:
-    resp = client.post(f"{SISTER_URL}/api/v1{endpoint}", json=payload, timeout=30)
+def submit(client: httpx.Client, endpoint: str, payload: dict, *, base_url: str = SISTER_URL) -> str | None:
+    resp = client.post(f"{base_url}/api/v1{endpoint}", json=payload, timeout=30)
     resp.raise_for_status()
     return resp.json().get("request_id")
 
 
-def poll(client: httpx.Client, request_id: str) -> dict:
+def poll(client: httpx.Client, request_id: str, *, base_url: str = SISTER_URL) -> dict:
     deadline = time.time() + TIMEOUT
     while time.time() < deadline:
-        resp = client.get(f"{SISTER_URL}/api/v1/visura/{request_id}", timeout=30)
+        resp = client.get(f"{base_url}/api/v1/visura/{request_id}", timeout=30)
         resp.raise_for_status()
         data = resp.json()
         if data.get("status") in ("completed", "error", "failed"):
@@ -176,23 +175,34 @@ def poll(client: httpx.Client, request_id: str) -> dict:
 # ── Main ─────────────────────────────────────────────────────────────────────
 
 
-def main():
-    if not DOCS_DIR.exists():
-        print(f"Documents directory not found: {DOCS_DIR}", file=sys.stderr)
-        sys.exit(1)
+def run(
+    *,
+    documents: Path = DOCS_DIR,
+    output: Path | None = None,
+    base_url: str = SISTER_URL,
+    return_report: bool = False,
+) -> int | tuple[int, dict]:
+    """Find PDFs without signed companions and request their missing P7M files."""
+    def finish(status: int, report: dict):
+        return (status, report) if return_report else status
+
+    if not documents.exists():
+        print(f"Documents directory not found: {documents}", file=sys.stderr)
+        return finish(1, {"error": f"documents directory not found: {documents}", "results": []})
 
     print("Scanning for PDFs without companion P7M...", flush=True)
-    queries = collect_queries(DOCS_DIR)
+    queries = collect_queries(documents)
 
     if not queries:
         print("Nothing to do — all PDFs have a companion P7M.")
-        return
+        return finish(0, {"results": [], "completed": 0, "errors": 0})
 
     print(f"\nFound {len(queries)} unique queries to run:")
     for q in queries:
         print(f"  /api/v1{q['endpoint']}  {q['label']}")
 
-    OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
+    output_path = output or Path(__file__).resolve().parents[2] / "outputs" / f"download_p7m_{datetime.now():%Y%m%d_%H%M%S}.json"
+    output_path.parent.mkdir(parents=True, exist_ok=True)
     results = []
 
     with httpx.Client() as client:
@@ -200,12 +210,12 @@ def main():
             label = q["label"]
             print(f"\n[{i:2}/{len(queries)}] {label} ...", end=" ", flush=True)
             try:
-                request_id = submit(client, q["endpoint"], q["payload"])
+                request_id = submit(client, q["endpoint"], q["payload"], base_url=base_url)
                 if not request_id:
                     print("ERROR: no request_id")
                     results.append({**q, "status": "error", "error": "no request_id"})
                     continue
-                result = poll(client, request_id)
+                result = poll(client, request_id, base_url=base_url)
                 status = result.get("status")
                 print(status)
                 results.append({**q, "request_id": request_id, **result})
@@ -213,14 +223,34 @@ def main():
                 print(f"EXCEPTION: {e}")
                 results.append({**q, "status": "error", "error": str(e)})
 
-            OUTPUT_PATH.write_text(json.dumps(results, ensure_ascii=False, indent=2))
+            output_path.write_text(json.dumps(results, ensure_ascii=False, indent=2))
 
     completed = sum(1 for r in results if r.get("status") == "completed")
     errors = len(results) - completed
     print(f"\nDone: {completed} completed, {errors} errors/timeouts")
-    print(f"Output: {OUTPUT_PATH}")
+    print(f"Output: {output_path}")
     print("\nRun 'Aggiorna' in /web/documents to index the new P7M files.")
+    return finish(
+        0,
+        {
+            "results": results,
+            "output": str(output_path),
+            "completed": completed,
+            "errors": errors,
+        },
+    )
+
+
+def main(argv: list[str] | None = None) -> int:
+    import argparse
+
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--documents", type=Path, default=DOCS_DIR)
+    parser.add_argument("--output", type=Path)
+    parser.add_argument("--sister-url", default=SISTER_URL)
+    args = parser.parse_args(argv)
+    return run(documents=args.documents, output=args.output, base_url=args.sister_url)
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

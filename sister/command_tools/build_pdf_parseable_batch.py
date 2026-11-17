@@ -13,6 +13,7 @@ import argparse
 import csv
 import re
 import subprocess
+import sys
 from collections import defaultdict
 from pathlib import Path
 
@@ -239,16 +240,17 @@ def write_csv(path: Path, fields: list[str], rows: list[dict]) -> None:
         writer.writerows(rows)
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--documents-dir", type=Path, default=DEFAULT_DOCUMENTS)
-    parser.add_argument("--batch-csv", type=Path, default=DEFAULT_BATCH)
-    parser.add_argument("--inventory-csv", type=Path, default=DEFAULT_INVENTORY)
-    args = parser.parse_args()
-
-    if not args.documents_dir.is_dir():
-        parser.error(f"documents directory not found: {args.documents_dir}")
-    pdfs = sorted(args.documents_dir.glob("*.pdf"))
+def run(
+    *,
+    documents_dir: Path = DEFAULT_DOCUMENTS,
+    batch_csv: Path = DEFAULT_BATCH,
+    inventory_csv: Path = DEFAULT_INVENTORY,
+) -> int:
+    """Build the parseable companion batch and its source-file inventory."""
+    if not documents_dir.is_dir():
+        print(f"documents directory not found: {documents_dir}", file=sys.stderr)
+        return 2
+    pdfs = sorted(documents_dir.glob("*.pdf"))
     texts = {path: pdf_text(path) for path in pdfs}
     names_by_code, municipalities_by_sheet = province_lookup(pdfs, texts)
 
@@ -258,7 +260,7 @@ def main() -> int:
     inventory: list[dict] = []
 
     for path in pdfs:
-        companions = exact_companions(path, args.documents_dir)
+        companions = exact_companions(path, documents_dir)
         if companions:
             inventory.append(
                 {
@@ -334,8 +336,8 @@ def main() -> int:
         "scope_note",
     ]
     inventory_fields = ["pdf", "status", "companion_files", "batch_row", "command", "scope_note"]
-    write_csv(args.batch_csv, batch_fields, batch_rows)
-    write_csv(args.inventory_csv, inventory_fields, inventory)
+    write_csv(batch_csv, batch_fields, batch_rows)
+    write_csv(inventory_csv, inventory_fields, inventory)
 
     matched = sum(row["status"] == "has_parseable_companion" for row in inventory)
     missing = len(inventory) - matched
@@ -346,9 +348,18 @@ def main() -> int:
         f"covered by {len(batch_rows)} deduplicated SISTER JSON queries ({queued} PDFs); "
         f"manual review: {review}"
     )
-    print(f"Batch CSV: {args.batch_csv}")
-    print(f"Inventory CSV: {args.inventory_csv}")
+    print(f"Batch CSV: {batch_csv}")
+    print(f"Inventory CSV: {inventory_csv}")
     return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--documents-dir", type=Path, default=DEFAULT_DOCUMENTS)
+    parser.add_argument("--batch-csv", type=Path, default=DEFAULT_BATCH)
+    parser.add_argument("--inventory-csv", type=Path, default=DEFAULT_INVENTORY)
+    args = parser.parse_args(argv)
+    return run(documents_dir=args.documents_dir, batch_csv=args.batch_csv, inventory_csv=args.inventory_csv)
 
 
 if __name__ == "__main__":

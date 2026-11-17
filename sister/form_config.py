@@ -931,7 +931,7 @@ def generate_single_step_params() -> None:
         merged: dict[str, EndpointParam] = {}
         for endpoint in group.endpoints:
             spec = QUERY_FORMS.get(command_for_path(endpoint.path) or "")
-            if spec is None:
+            if spec is None or spec.paid:
                 continue  # e.g. ispezione ipotecaria (paid): its form is defined by hand above
             seen: set[str] = set()
             # required parameters first, then the form inputs in portal order

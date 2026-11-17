@@ -114,3 +114,40 @@ async def test_mcp_mortgage_tools_dispatch_preview_status_and_exact_save_quote(m
             },
         ),
     ]
+
+
+@pytest.mark.asyncio
+async def test_mcp_marks_paid_queries_and_refuses_submission(monkeypatch):
+    _install_mcp_sdk(monkeypatch)
+
+    class QueryClient:
+        calls = []
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_exc):
+            return False
+
+        async def submit(self, *args, **kwargs):
+            self.calls.append((args, kwargs))
+            return {"request_id": "should-not-send"}
+
+    client = QueryClient()
+    monkeypatch.setattr(mcp_server, "_client", lambda: client)
+    monkeypatch.setattr(mcp_server, "_prepared_queries", {})
+    server = mcp_server.create_server()
+
+    queries = server.tools["list_queries"]()
+    paid_query = next(item for item in queries if item["command"] == "ipotecaria-immobile")
+    assert paid_query["paid"] is True
+    preview = server.tools["preview_query"]("ipotecaria-immobile", {"provincia": "Trieste"})
+    assert preview["valid"] and preview["paid"] is True
+
+    submitted = await server.tools["submit_query"](
+        preview_id=preview["preview_id"], confirm_submission=True
+    )
+
+    assert submitted["submitted"] is False and submitted["paid"] is True
+    assert "admin review flow" in submitted["error"]
+    assert client.calls == []

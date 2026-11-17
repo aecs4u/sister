@@ -10,14 +10,14 @@ Tests cover:
 
 import pytest
 from pydantic import ValidationError
+
+from sister.models import WORKFLOW_PRESETS, WorkflowInput
 from sister.workflows import (
     _build_aggregate,
     _deduplicate_properties,
     _normalize_property,
     _step_key,
 )
-
-from sister.models import WORKFLOW_PRESETS, WorkflowInput
 
 # ---------------------------------------------------------------------------
 # WorkflowInput validation
@@ -1045,10 +1045,10 @@ class TestWorkflowCLI:
             ],
         )
         assert result.exit_code == 0
-        assert "DRY RUN" in result.output
+        assert "SIMULAZIONE" in result.output
         assert "due-diligence" in result.output
 
-    def test_unknown_preset_exits_1(self):
+    def test_unknown_preset_is_reported_as_invalid_input(self):
         from typer.testing import CliRunner
 
         from sister.cli import app
@@ -1063,7 +1063,7 @@ class TestWorkflowCLI:
                 "nonexistent",
             ],
         )
-        assert result.exit_code == 1
+        assert result.exit_code == 2
         assert "Unknown preset" in result.output
 
     def test_preset_calls_server(self, monkeypatch):
@@ -1193,3 +1193,67 @@ def test_workflows_keep_mortgage_inspections_out_until_the_paid_flow_is_used():
 
     assert "ispezione_ipotecaria" not in plan.steps
     assert "portfolio_ipotecaria" not in plan.steps
+
+
+@pytest.mark.parametrize(
+    ("payload", "expected"),
+    [
+        ({"codice_fiscale": "rssmra70a01h501z"}, ["soggetto"]),
+        ({"identificativo": "02471840997"}, ["azienda"]),
+        ({"provincia": "Roma", "comune": "ROMA", "indirizzo": "Via Verdi 1"}, ["indirizzo_search"]),
+        (
+            {"provincia": "Roma", "comune": "ROMA", "foglio": "1", "particella": "2"},
+            ["search", "intestati"],
+        ),
+    ],
+    ids=["person", "company", "address", "parcel"],
+)
+def test_custom_workflow_plan_selects_start_shape(payload, expected):
+    from sister.workflows import prepare_workflow
+
+    plan = prepare_workflow({"preset": "custom", **payload})
+
+    assert plan.family == "custom"
+    assert plan.description == "Workflow personalizzato con un punto di avvio e passaggi aggiuntivi selezionabili."
+    assert plan.steps == expected
+
+
+def test_custom_workflow_plan_adds_ordered_optional_steps():
+    from sister.workflows import prepare_workflow
+
+    plan = prepare_workflow(
+        {
+            "preset": "custom",
+            "provincia": "Roma",
+            "comune": "ROMA",
+            "foglio": "1",
+            "particella": "2",
+            "numero_nota": "5678",
+            "custom_steps": ["mappa", "nota", "ispezioni_cart"],
+        }
+    )
+
+    assert plan.steps == ["search", "intestati", "mappa", "nota", "ispezioni_cart"]
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"preset": "custom"},
+        {"preset": "custom", "provincia": "Roma", "foglio": "1"},
+        {"preset": "custom", "codice_fiscale": "RSSMRA70A01H501Z", "identificativo": "02471840997"},
+        {
+            "preset": "custom",
+            "provincia": "Roma",
+            "comune": "ROMA",
+            "foglio": "1",
+            "particella": "2",
+            "custom_steps": ["nota"],
+        },
+    ],
+)
+def test_custom_workflow_plan_rejects_invalid_start_or_optional_requirements(payload):
+    from sister.workflows import prepare_workflow
+
+    with pytest.raises(ValueError):
+        prepare_workflow(payload)

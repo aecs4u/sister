@@ -8,7 +8,8 @@ set -euo pipefail
 # without submitting requests to SISTER. To execute live queries:
 #   DRY_RUN=0 WAIT=1 sister dev fixture-payloads
 #
-# Paid ipotecaria commands are kept in dry-run mode unless PAID=1 is set.
+# Paid ipotecaria commands are kept in dry-run mode unless PAID=1 is set. Even
+# then the CLI sends auto_confirm=false; it does not authorize a payment.
 
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
@@ -27,9 +28,7 @@ if [[ "$WAIT" == "1" ]]; then
 fi
 
 paid_flags=()
-if [[ "$PAID" == "1" ]]; then
-  paid_flags+=(--yes)
-else
+if [[ "$PAID" != "1" ]]; then
   paid_flags+=(--dry-run)
 fi
 if [[ "$WAIT" == "1" ]]; then
@@ -76,18 +75,20 @@ fi
 
 # Ispezione ipotecaria payloads. These are paid-service commands.
 "$SISTER_CLI" query ipotecaria-immobile --provincia Roma --comune ROMA --foglio 100 --particella 50 --tipo-catasto F "${paid_flags[@]}"
-"$SISTER_CLI" query ipotecaria-persona --provincia Roma --cf RSSMRI85E28H501E "${paid_flags[@]}"
 "$SISTER_CLI" query ipotecaria-azienda --provincia Roma --id 02471840997 "${paid_flags[@]}"
 "$SISTER_CLI" query ipotecaria-nota --provincia Roma --numero 12345 --anno 2020 "${paid_flags[@]}"
 
+# Persona fisica starts the free preview; any paid action remains in the admin flow.
+"$SISTER_CLI" query ipotecaria-persona-fisica --provincia Roma --cf RSSMRI85E28H501E "${common_flags[@]}"
+
 # Workflow payloads
-"$SISTER_CLI" query workflow --preset due-diligence --provincia Roma --comune ROMA --foglio 100 --particella 50 "${workflow_flags[@]}"
-"$SISTER_CLI" query workflow --preset patrimonio --cf RSSMRI85E28H501E "${workflow_flags[@]}"
-"$SISTER_CLI" query workflow --preset fondiario --provincia Trieste --comune TRIESTE --foglio 9 "${workflow_flags[@]}"
-"$SISTER_CLI" query workflow --preset aziendale --azienda 02471840997 "${workflow_flags[@]}"
-"$SISTER_CLI" query workflow --preset storico --provincia Trieste --comune TRIESTE --foglio 9 --particella 166 "${workflow_flags[@]}"
-"$SISTER_CLI" query workflow --preset indirizzo --provincia Terni --comune TERNI --indirizzo "VIA DEL RIVO 1" "${workflow_flags[@]}"
-"$SISTER_CLI" query workflow --preset cross-reference --cf RSSMRI85E28H501E --azienda 02471840997 "${workflow_flags[@]}"
-"$SISTER_CLI" query workflow --preset full-due-diligence --provincia Roma --comune ROMA --foglio 100 --particella 50 "${workflow_flags[@]}"
-"$SISTER_CLI" query workflow --preset full-patrimonio --cf RSSMRI85E28H501E "${workflow_flags[@]}"
-"$SISTER_CLI" query workflow --preset full-aziendale --azienda 02471840997 "${workflow_flags[@]}"
+"$SISTER_CLI" workflow run --preset due-diligence --provincia Roma --comune ROMA --foglio 100 --particella 50 "${workflow_flags[@]}"
+"$SISTER_CLI" workflow run --preset patrimonio --cf RSSMRI85E28H501E "${workflow_flags[@]}"
+"$SISTER_CLI" workflow run --preset fondiario --provincia Trieste --comune TRIESTE --foglio 9 "${workflow_flags[@]}"
+"$SISTER_CLI" workflow run --preset aziendale --azienda 02471840997 "${workflow_flags[@]}"
+"$SISTER_CLI" workflow run --preset storico --provincia Trieste --comune TRIESTE --foglio 9 --particella 166 "${workflow_flags[@]}"
+"$SISTER_CLI" workflow run --preset indirizzo --provincia Terni --comune TERNI --indirizzo "VIA DEL RIVO 1" "${workflow_flags[@]}"
+"$SISTER_CLI" workflow run --preset cross-reference --cf RSSMRI85E28H501E --azienda 02471840997 "${workflow_flags[@]}"
+"$SISTER_CLI" workflow run --preset full-due-diligence --provincia Roma --comune ROMA --foglio 100 --particella 50 "${workflow_flags[@]}"
+"$SISTER_CLI" workflow run --preset full-patrimonio --cf RSSMRI85E28H501E "${workflow_flags[@]}"
+"$SISTER_CLI" workflow run --preset full-aziendale --azienda 02471840997 "${workflow_flags[@]}"

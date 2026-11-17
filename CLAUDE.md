@@ -82,8 +82,8 @@ uv run python -m pytest
 uv run sister health
 uv run sister query search -P Roma -C ROMA -F 100 -p 50 --wait
 uv run sister query soggetto --cf CF_DI_ESEMPIO --wait
-uv run sister query workflow --preset due-diligence -P Roma -C ROMA -F 100 -p 50
-uv run sister db init
+uv run sister workflow run --preset due-diligence -P Roma -C ROMA -F 100 -p 50
+uv run sister db migrate
 # Fill the structured tables from data already stored (responses JSON, XML documents); idempotent, writes to the app schema
 uv run sister db backfill            # projections + xml; `xml --force --limit N` to redo some documents
 # Optional local MCP server for LLM clients

@@ -102,7 +102,7 @@ async def close_stale_session(mgr: AuthBrowserManager) -> bool:
             await page.close()
 
 
-async def main(close_only: bool) -> int:
+async def run(*, close_only: bool = False) -> int:
     config = BrowserConfig()
     if not config.cdp_endpoint:
         print("BROWSER_CDP_ENDPOINT non impostato: il login condiviso richiede Chrome via CDP", file=sys.stderr)
@@ -142,7 +142,12 @@ async def main(close_only: bool) -> int:
     return 0
 
 
-if __name__ == "__main__":
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--close", action="store_true", help="only close the SISTER session held on the server")
-    sys.exit(asyncio.run(main(parser.parse_args().close)))
+    args = parser.parse_args(argv)
+    return asyncio.run(run(close_only=args.close))
+
+
+if __name__ == "__main__":
+    sys.exit(main())

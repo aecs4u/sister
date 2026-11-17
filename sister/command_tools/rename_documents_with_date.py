@@ -234,21 +234,21 @@ async def load_requested_at() -> dict[str, str]:
     return {r.file_name: r.requested_at for r in rows if r.requested_at}
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--documents", required=True, type=Path)
-    parser.add_argument("--links", type=Path, help="document_links directory whose aliases are re-pointed")
-    parser.add_argument("--backup-dir", type=Path, default=None, help="default: <documents>/../backups")
-    parser.add_argument("--apply", action="store_true")
-    parser.add_argument("--revert", type=Path, help="plan.json of a previous run: restore the old names")
-    args = parser.parse_args()
-
-    documents = args.documents.resolve()
+def run(
+    *,
+    documents: Path,
+    links: Path | None = None,
+    backup_dir: Path | None = None,
+    apply: bool = False,
+    revert: Path | None = None,
+) -> int:
+    """Preview or apply date-based document renames, or restore a previous plan."""
+    documents = documents.resolve()
     stamp = f"{datetime.now():%Y%m%d_%H%M%S}"
-    backup_dir = args.backup_dir or documents.parent / "backups"
+    backup_dir = backup_dir or documents.parent / "backups"
 
-    if args.revert:
-        plan = [{"old": e["new"], "new": e["old"]} for e in json.loads(args.revert.read_text())]
+    if revert:
+        plan = [{"old": e["new"], "new": e["old"]} for e in json.loads(revert.read_text())]
         notes: list[str] = []
     else:
         plan, notes = build_plan(documents, asyncio.run(load_requested_at()))
@@ -259,15 +259,15 @@ def main() -> None:
         print("  ", note)
     for entry in plan[:12]:
         print(f"   {entry['old']}\n     -> {entry['new']}  [{entry.get('source', '')}]")
-    if not args.apply and not args.revert:
+    if not apply and not revert:
         counts = asyncio.run(update_database(plan, documents, commit=False))
         print("database rows that would change:", counts)
         print("dry run: nothing changed (use --apply)")
-        return
+        return 0
 
     plan_file = backup_dir / f"rename_plan_{stamp}.json"
     backup_dir.mkdir(parents=True, exist_ok=True)
-    if not args.revert:
+    if not revert:
         print("backup:", backup(backup_dir, stamp))
         plan_file.write_text(json.dumps(plan, indent=1, ensure_ascii=False))
         print("plan:", plan_file, "(revert with --revert)")
@@ -281,10 +281,28 @@ def main() -> None:
             os.rename(target, source)
         raise
     print("database rows updated:", counts)
-    if args.links and args.links.is_dir():
-        print("aliases re-pointed:", repoint_links(plan, documents, args.links))
+    if links and links.is_dir():
+        print("aliases re-pointed:", repoint_links(plan, documents, links))
     print(f"renamed {len(done)} files")
+    return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--documents", required=True, type=Path)
+    parser.add_argument("--links", type=Path, help="document_links directory whose aliases are re-pointed")
+    parser.add_argument("--backup-dir", type=Path, default=None, help="default: <documents>/../backups")
+    parser.add_argument("--apply", action="store_true")
+    parser.add_argument("--revert", type=Path, help="plan.json of a previous run: restore the old names")
+    args = parser.parse_args(argv)
+    return run(
+        documents=args.documents,
+        links=args.links,
+        backup_dir=args.backup_dir,
+        apply=args.apply,
+        revert=args.revert,
+    )
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

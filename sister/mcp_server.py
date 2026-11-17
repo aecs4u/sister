@@ -85,6 +85,7 @@ def _query_description(spec) -> dict[str, Any]:
         "description": spec.summary,
         "api_path": f"/api/v1{spec.path}",
         "requests_documents": spec.documents or None,
+        "paid": spec.paid,
         "parameters": fields,
         "required_any": [list(group) for group in spec.required_any],
     }
@@ -184,6 +185,7 @@ def create_server():
             "command": spec.command,
             "description": spec.summary,
             "api_path": f"/api/v1{spec.path}",
+            "paid": spec.paid,
             "parameters": normalized,
             "side_effects": _SIDE_EFFECT_WARNING,
             "submit_requires_explicit_confirmation": True,
@@ -214,6 +216,15 @@ def create_server():
                 "submitted": False,
                 "preview_id": preview_id,
                 "error": "Submission refused. Ask the user to confirm this exact query first.",
+            }
+
+        spec = QUERY_FORMS[prepared.command]
+        if spec.paid:
+            return {
+                "submitted": False,
+                "preview_id": preview_id,
+                "paid": True,
+                "error": "Paid inspections must go through the signed-in admin review flow.",
             }
 
         # Consume the preview before network I/O so the same token cannot submit twice.

@@ -45,6 +45,14 @@ def _fake_request():
     )
 
 
+def test_admin_cli_catalog_includes_in_process_tool_commands():
+    catalog = {command["id"]: command for command in web._cli_command_catalog()}
+
+    assert {"app:login", "batch:run-list", "documents:normalize", "build:dossier-graph", "audit:sweep"} <= set(catalog)
+    assert catalog["app:login"]["terminal_only"] is True
+    assert catalog["batch:run-list"]["terminal_only"] is False
+
+
 @pytest.mark.asyncio
 async def test_subject_formalities_download_rejects_invalid_profile_with_400():
     from fastapi import HTTPException

@@ -17,7 +17,21 @@ from pathlib import Path
 from sister.building_kmz import build_kmz, fetch_buildings
 
 
-def main() -> None:
+def run(*, lat: float, lng: float, radius: int = 80, name: str = "Edificio", nearest: int = 3,
+        osm_json: Path | None = None, out: Path) -> int:
+    """Build a KMZ from a saved Overpass response or a live building lookup."""
+    if osm_json:
+        data = json.loads(osm_json.read_text())
+    else:
+        data = asyncio.run(fetch_buildings(lat, lng, radius, tries=5))
+    payload, count = build_kmz(data, lat, lng, name, nearest, radius)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_bytes(payload)
+    print(f"{count} buildings -> {out}")
+    return 0
+
+
+def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--lat", type=float, required=True)
     ap.add_argument("--lng", type=float, required=True)
@@ -26,17 +40,17 @@ def main() -> None:
     ap.add_argument("--nearest", type=int, default=3, help="how many closest buildings to highlight")
     ap.add_argument("--osm-json", type=Path, help="reuse a saved Overpass answer instead of querying")
     ap.add_argument("--out", type=Path, required=True)
-    args = ap.parse_args()
-
-    if args.osm_json:
-        data = json.loads(args.osm_json.read_text())
-    else:
-        data = asyncio.run(fetch_buildings(args.lat, args.lng, args.radius, tries=5))
-    payload, count = build_kmz(data, args.lat, args.lng, args.name, args.nearest, args.radius)
-    args.out.parent.mkdir(parents=True, exist_ok=True)
-    args.out.write_bytes(payload)
-    print(f"{count} buildings -> {args.out}")
+    args = ap.parse_args(argv)
+    return run(
+        lat=args.lat,
+        lng=args.lng,
+        radius=args.radius,
+        name=args.name,
+        nearest=args.nearest,
+        osm_json=args.osm_json,
+        out=args.out,
+    )
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

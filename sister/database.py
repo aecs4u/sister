@@ -4771,6 +4771,121 @@ async def get_document_structured_extraction(
     }
 
 
+async def get_document_extraction_monitor(days: int = 90, recent_limit: int = 100) -> dict[str, Any]:
+    """Return persisted structured-extraction activity for the admin dashboard."""
+    days = max(1, min(int(days), 365))
+    recent_limit = max(1, min(int(recent_limit), 250))
+    rome = ZoneInfo("Europe/Rome")
+    now = datetime.now(rome)
+    today = now.date()
+    period_start = datetime.combine(today - timedelta(days=days - 1), datetime.min.time(), tzinfo=rome)
+    bucket = func.date_trunc("day", func.timezone("Europe/Rome", DocumentExtraction.created_at)).label("day")
+    period_filter = and_(DocumentExtraction.created_at >= period_start, DocumentExtraction.created_at <= now)
+
+    async with _get_session_factory()() as session:
+        summary = (
+            await session.execute(
+                select(
+                    func.count(DocumentExtraction.id),
+                    func.count(DocumentExtraction.id).filter(period_filter),
+                    func.count(distinct(DocumentExtraction.document_id)).filter(period_filter),
+                    func.count(distinct(DocumentExtraction.schema_name)).filter(period_filter),
+                )
+            )
+        ).one()
+        daily_rows = (
+            await session.execute(
+                select(bucket, func.count(DocumentExtraction.id))
+                .where(DocumentExtraction.created_at >= period_start, DocumentExtraction.created_at <= now)
+                .group_by(bucket)
+                .order_by(bucket)
+            )
+        ).all()
+        breakdown_rows = (
+            await session.execute(
+                select(
+                    func.coalesce(DocumentExtraction.provider, "Non indicato").label("provider"),
+                    func.coalesce(DocumentExtraction.model, "Non indicato").label("model"),
+                    DocumentExtraction.schema_name,
+                    func.count(DocumentExtraction.id).label("count"),
+                )
+                .where(DocumentExtraction.created_at >= period_start, DocumentExtraction.created_at <= now)
+                .group_by(
+                    DocumentExtraction.provider,
+                    DocumentExtraction.model,
+                    DocumentExtraction.schema_name,
+                )
+                .order_by(func.count(DocumentExtraction.id).desc(), DocumentExtraction.schema_name)
+                .limit(30)
+            )
+        ).all()
+        recent_rows = (
+            await session.execute(
+                select(DocumentExtraction, Document.file_name)
+                .join(Document, Document.id == DocumentExtraction.document_id)
+                .order_by(DocumentExtraction.created_at.desc(), DocumentExtraction.id.desc())
+                .limit(recent_limit)
+            )
+        ).all()
+
+    daily_counts = {
+        (day.date() if isinstance(day, datetime) else day): int(count)
+        for day, count in daily_rows
+    }
+    daily = []
+    peak = max(daily_counts.values(), default=0)
+    for offset in range(days):
+        date_value = today - timedelta(days=days - offset - 1)
+        count = daily_counts.get(date_value, 0)
+        daily.append(
+            {
+                "date": date_value.isoformat(),
+                "label": date_value.strftime("%d/%m"),
+                "count": count,
+                "height": max(4, round(count * 100 / peak)) if count and peak else 0,
+                "show_label": offset == 0 or offset == days - 1 or offset % max(1, days // 7) == 0,
+            }
+        )
+
+    breakdown = [
+        {"provider": provider, "model": model, "schema": schema_name, "count": int(count)}
+        for provider, model, schema_name, count in breakdown_rows
+    ]
+    max_breakdown = max((row["count"] for row in breakdown), default=0)
+    for row in breakdown:
+        row["relative_width"] = round(row["count"] * 100 / max_breakdown) if max_breakdown else 0
+
+    recent = []
+    for extraction, file_name in recent_rows:
+        created_at = extraction.created_at
+        extracted_at = extraction.extracted_at
+        recent.append(
+            {
+                "id": extraction.id,
+                "document_id": extraction.document_id,
+                "file_name": file_name,
+                "provider": extraction.provider,
+                "model": extraction.model,
+                "schema": extraction.schema_name,
+                "schema_version": extraction.schema_version,
+                "run_id": extraction.run_id,
+                "created_at": created_at.astimezone(rome) if created_at else None,
+                "extracted_at": extracted_at.astimezone(rome) if extracted_at else None,
+            }
+        )
+
+    return {
+        "days": days,
+        "total": int(summary[0] or 0),
+        "period_total": int(summary[1] or 0),
+        "period_documents": int(summary[2] or 0),
+        "period_schemas": int(summary[3] or 0),
+        "daily": daily,
+        "breakdown": breakdown,
+        "recent": recent,
+    }
+
+
 async def get_units_current_data(unit_ids: list[int]) -> dict[int, dict]:
     """Latest stored classamento of each cadastral unit (from any saved search): category, class, zone, consistency, rendita.
 

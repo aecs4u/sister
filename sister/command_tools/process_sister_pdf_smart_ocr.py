@@ -10,8 +10,8 @@ import os
 import sys
 import time
 from collections import Counter, defaultdict
-from datetime import UTC, datetime
 from dataclasses import replace
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -27,10 +27,12 @@ load_dotenv(PROJECT_ROOT / ".env")
 load_dotenv(PROJECT_ROOT.parent / ".env", override=False)
 load_dotenv(OCULAR_ROOT / ".env", override=False)
 
-from sister.database import _get_session_factory  # noqa: E402
-from sister.database import document_file_path  # noqa: E402
-from sister.db_models import Document, DocumentExtraction  # noqa: E402
 from sister.command_tools.import_ocular_extraction import import_extraction  # noqa: E402
+from sister.database import (  # noqa: E402
+    _get_session_factory,
+    document_file_path,
+)
+from sister.db_models import Document, DocumentExtraction  # noqa: E402
 
 
 def sha256_file(path: Path) -> str:
@@ -371,15 +373,21 @@ async def run_batch(output_root: Path, workers: int) -> int:
     return 0 if totals["failed"] == 0 and missing_file == 0 else 1
 
 
-def main() -> None:
+def run(*, output_root: Path = DEFAULT_OUTPUT_ROOT, workers: int = 2) -> int:
+    """Process eligible SISTER PDFs with the selected worker count."""
+    if workers < 1 or workers > 4:
+        print("--workers must be between 1 and 4", file=sys.stderr)
+        return 2
+    return asyncio.run(run_batch(output_root.resolve(), workers))
+
+
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output-root", type=Path, default=DEFAULT_OUTPUT_ROOT)
     parser.add_argument("--workers", type=int, default=2)
-    args = parser.parse_args()
-    if args.workers < 1 or args.workers > 4:
-        raise SystemExit("--workers must be between 1 and 4")
-    raise SystemExit(asyncio.run(run_batch(args.output_root.resolve(), args.workers)))
+    args = parser.parse_args(argv)
+    return run(output_root=args.output_root, workers=args.workers)
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

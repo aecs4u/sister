@@ -263,33 +263,31 @@ def seeds_from_batch(folder: Path) -> set[str]:
     return found
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--seed", action="append", default=[], help="codice fiscale or partita IVA (repeatable)")
-    parser.add_argument("--from-batch", type=Path, help="folder of batch result JSON: seed with every id found")
-    parser.add_argument("--resume", type=Path, help="graph JSON to continue")
-    parser.add_argument("--out", type=Path, help="graph JSON to write (default: new file in the graphs folder)")
-    parser.add_argument("--max-depth", type=int, default=0, help="stop expanding beyond this depth (0 = no limit)")
-    parser.add_argument(
-        "--max-nodes", type=int, default=0, help="stop when the graph has this many nodes (0 = no limit)"
-    )
-    parser.add_argument("--retry-errors", action="store_true", help="re-queue ids whose expansion failed earlier")
-    parser.add_argument("--max-requests", type=int, default=300, help="portal requests in this run (resumable)")
-    args = parser.parse_args()
-
-    graph = Graph(json.loads(args.resume.read_text(encoding="utf-8"))) if args.resume else Graph()
-    out = args.out or args.resume or GRAPHS_DIR / f"graph_{datetime.now():%Y%m%d_%H%M%S}.json"
+def run(
+    *,
+    seeds: list[str] | None = None,
+    from_batch: Path | None = None,
+    resume: Path | None = None,
+    out: Path | None = None,
+    max_depth: int = 0,
+    max_nodes: int = 0,
+    retry_errors: bool = False,
+    max_requests: int = 300,
+) -> int:
+    """Build or resume the ownership graph with the configured request budget."""
+    graph = Graph(json.loads(resume.read_text(encoding="utf-8"))) if resume else Graph()
+    out = out or resume or GRAPHS_DIR / f"graph_{datetime.now():%Y%m%d_%H%M%S}.json"
     graph.meta.setdefault("created", datetime.now().isoformat(timespec="seconds"))
 
-    if args.retry_errors:
+    if retry_errors:
         for ident in [i for i, info in graph.expanded.items() if "error" in info]:
             graph.expanded.pop(ident)
             graph.queue.append(ident)
 
-    seeds = {seed.strip().upper() for seed in args.seed}
-    if args.from_batch:
-        seeds |= seeds_from_batch(args.from_batch)
-    for seed in sorted(seeds):
+    seed_ids = {seed.strip().upper() for seed in seeds or []}
+    if from_batch:
+        seed_ids |= seeds_from_batch(from_batch)
+    for seed in sorted(seed_ids):
         graph.add_owner({"codice_fiscale": seed}, 0)
     print(f"Graph file: {out}\nStart: {graph.summary()}")
 
@@ -297,15 +295,15 @@ def main() -> int:
     try:
         with httpx.Client(headers=_headers(), timeout=60) as client:
             while graph.queue:
-                if args.max_requests and requests_done >= args.max_requests:
-                    print(f"Reached --max-requests={args.max_requests}; resume with --resume {out}")
+                if max_requests and requests_done >= max_requests:
+                    print(f"Reached --max-requests={max_requests}; resume with --resume {out}")
                     break
-                if args.max_nodes and len(graph.nodes) >= args.max_nodes:
-                    print(f"Reached --max-nodes={args.max_nodes}")
+                if max_nodes and len(graph.nodes) >= max_nodes:
+                    print(f"Reached --max-nodes={max_nodes}")
                     break
                 ident = graph.queue[0]
                 depth = graph.nodes[ident].get("depth", 0)
-                if args.max_depth and depth > args.max_depth:
+                if max_depth and depth > max_depth:
                     graph.queue.pop(0)
                     graph.expanded[ident] = {"skipped": "max-depth"}
                     continue
@@ -337,6 +335,31 @@ def main() -> int:
     save(graph, out)
     print(f"Done: {graph.summary()}\nSaved {out}")
     return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--seed", action="append", default=[], help="codice fiscale or partita IVA (repeatable)")
+    parser.add_argument("--from-batch", type=Path, help="folder of batch result JSON: seed with every id found")
+    parser.add_argument("--resume", type=Path, help="graph JSON to continue")
+    parser.add_argument("--out", type=Path, help="graph JSON to write (default: new file in the graphs folder)")
+    parser.add_argument("--max-depth", type=int, default=0, help="stop expanding beyond this depth (0 = no limit)")
+    parser.add_argument(
+        "--max-nodes", type=int, default=0, help="stop when the graph has this many nodes (0 = no limit)"
+    )
+    parser.add_argument("--retry-errors", action="store_true", help="re-queue ids whose expansion failed earlier")
+    parser.add_argument("--max-requests", type=int, default=300, help="portal requests in this run (resumable)")
+    args = parser.parse_args(argv)
+    return run(
+        seeds=args.seed,
+        from_batch=args.from_batch,
+        resume=args.resume,
+        out=args.out,
+        max_depth=args.max_depth,
+        max_nodes=args.max_nodes,
+        retry_errors=args.retry_errors,
+        max_requests=args.max_requests,
+    )
 
 
 if __name__ == "__main__":

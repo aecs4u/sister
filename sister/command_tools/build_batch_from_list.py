@@ -125,7 +125,64 @@ def make_captcha_free(queries: list[dict], defaults: dict | None = None) -> int:
     return changed
 
 
-def main() -> int:
+def run(
+    list_file: Path,
+    output_dir: Path,
+    *,
+    tipo_richiesta: str | None = None,
+    extra: str | None = None,
+    captcha_free: bool = False,
+    name: str | None = None,
+) -> int:
+    try:
+        parsed = load_markdown(list_file.read_text(encoding="utf-8"), tipo_richiesta)
+    except ValueError as exc:
+        print(f"{list_file}: {exc}", file=sys.stderr)
+        return 2
+    batch, skipped = parsed.batch, parsed.skipped
+    queries = [query.model_dump(mode="json", exclude_defaults=True) for query in batch.queries]
+    if batch.name and batch.name.startswith("PVP sales parcels"):
+        for query in queries:
+            query.setdefault("metadata", {})["tags"] = list(dict.fromkeys([*query.get("metadata", {}).get("tags", []), "PVP"]))
+
+    defaults = batch.defaults.model_dump(mode="json", exclude_defaults=True)
+    if captcha_free:
+        print(f"--captcha-free: {make_captcha_free(queries, defaults)} righe senza richiesta di documenti")
+    if extra:
+        print(f"--extra {extra}: {apply_extra(queries, extra, defaults)} righe aggiornate")
+    queries, duplicates = drop_duplicate_queries(queries, defaults)
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    plan = {
+        "version": 1,
+        "name": name or batch.name or f"Da {list_file.name}",
+        "description": batch.description or f"Da {list_file.name}. Sola lettura.",
+        "options": {
+            "wait": True,
+            "reuse": "reuse",
+            "max_in_flight": 1,
+            "retries": 0,
+            "on_error": "continue",
+            "poll_timeout": 600,  # above the service budget (SISTER_OMONIMI_MAX_SECONDS 150 + one record): no false timeouts
+            **batch.options.model_dump(mode="json", exclude_defaults=True),
+            "output_dir": str(output_dir.resolve()),
+        },
+        "queries": queries,
+    }
+    if batch.defaults.command or batch.defaults.params:
+        plan["defaults"] = batch.defaults.model_dump(mode="json", exclude_defaults=True)
+    (output_dir / "batch.json").write_text(json.dumps(plan, ensure_ascii=False, indent=1), encoding="utf-8")
+    if duplicates:
+        print(f"{len(duplicates)} righe duplicate tolte (stesso comando e parametri; resta la prima): "
+              + ", ".join(f"{gone}={kept}" for gone, kept in duplicates[:5]) + (" ..." if len(duplicates) > 5 else ""))
+    if skipped:
+        print(f"{len(queries)} righe in {output_dir / 'batch.json'}; saltati (formato o controllo errato): {skipped}")
+    else:
+        print(f"{len(queries)} righe in {output_dir / 'batch.json'}")
+    return 0
+
+
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("list_file", type=Path)
     parser.add_argument("--output-dir", type=Path, required=True)
@@ -143,54 +200,15 @@ def main() -> int:
         "(visura-storica -> search, soggetto-documento -> soggetto-immobili, richiedi_documenti=false)",
     )
     parser.add_argument("--name")
-    args = parser.parse_args()
-
-    try:
-        parsed = load_markdown(args.list_file.read_text(encoding="utf-8"), args.tipo_richiesta)
-    except ValueError as exc:
-        print(f"{args.list_file}: {exc}", file=sys.stderr)
-        return 2
-    batch, skipped = parsed.batch, parsed.skipped
-    queries = [query.model_dump(mode="json", exclude_defaults=True) for query in batch.queries]
-    if batch.name and batch.name.startswith("PVP sales parcels"):
-        for query in queries:
-            query.setdefault("metadata", {})["tags"] = list(dict.fromkeys([*query.get("metadata", {}).get("tags", []), "PVP"]))
-
-    defaults = batch.defaults.model_dump(mode="json", exclude_defaults=True)
-    if args.captcha_free:
-        print(f"--captcha-free: {make_captcha_free(queries, defaults)} righe senza richiesta di documenti")
-    if args.extra:
-        print(f"--extra {args.extra}: {apply_extra(queries, args.extra, defaults)} righe aggiornate")
-    queries, duplicates = drop_duplicate_queries(queries, defaults)
-
-    args.output_dir.mkdir(parents=True, exist_ok=True)
-    plan = {
-        "version": 1,
-        "name": args.name or batch.name or f"Da {args.list_file.name}",
-        "description": batch.description or f"Da {args.list_file.name}. Sola lettura.",
-        "options": {
-            "wait": True,
-            "reuse": "reuse",
-            "max_in_flight": 1,
-            "retries": 0,
-            "on_error": "continue",
-            "poll_timeout": 600,  # above the service budget (SISTER_OMONIMI_MAX_SECONDS 150 + one record): no false timeouts
-            **batch.options.model_dump(mode="json", exclude_defaults=True),
-            "output_dir": str(args.output_dir.resolve()),
-        },
-        "queries": queries,
-    }
-    if batch.defaults.command or batch.defaults.params:
-        plan["defaults"] = batch.defaults.model_dump(mode="json", exclude_defaults=True)
-    (args.output_dir / "batch.json").write_text(json.dumps(plan, ensure_ascii=False, indent=1), encoding="utf-8")
-    if duplicates:
-        print(f"{len(duplicates)} righe duplicate tolte (stesso comando e parametri; resta la prima): "
-              + ", ".join(f"{gone}={kept}" for gone, kept in duplicates[:5]) + (" ..." if len(duplicates) > 5 else ""))
-    if skipped:
-        print(f"{len(queries)} righe in {args.output_dir / 'batch.json'}; saltati (formato o controllo errato): {skipped}")
-    else:
-        print(f"{len(queries)} righe in {args.output_dir / 'batch.json'}")
-    return 0
+    args = parser.parse_args(argv)
+    return run(
+        args.list_file,
+        args.output_dir,
+        tipo_richiesta=args.tipo_richiesta,
+        extra=args.extra,
+        captcha_free=args.captcha_free,
+        name=args.name,
+    )
 
 
 if __name__ == "__main__":

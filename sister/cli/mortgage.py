@@ -6,7 +6,8 @@ from typing import Optional
 import typer
 
 from . import _runtime
-from ._runtime import console
+from ._runtime import DryRunOpt, ForceOpt, OutputOpt, WaitOpt, console
+from .query import _run_query_command
 
 mortgage_app = typer.Typer(
     name="mortgage",
@@ -15,24 +16,34 @@ mortgage_app = typer.Typer(
 )
 
 
-@mortgage_app.command("start")
+@mortgage_app.command("start", hidden=True)
 def mortgage_start(
     provincia: str = typer.Option(..., "--provincia", "-P", help="Provincia dell'ufficio SISTER"),
     codice_fiscale: str = typer.Option(..., "--cf", help="Codice fiscale del soggetto"),
+    output: OutputOpt = None,
+    wait: WaitOpt = False,
+    dry_run: DryRunOpt = False,
+    force: ForceOpt = False,
 ):
-    """Queue the free preview stage; paid acceptance remains an admin web action."""
-    result = _runtime.run_api(
-        lambda client: client.mortgage_search_start(provincia=provincia, codice_fiscale=codice_fiscale)
+    """Deprecated alias for `query ipotecaria-persona-fisica`."""
+    typer.echo("`mortgage start` è deprecato; usa `query ipotecaria-persona-fisica`.", err=True)
+    _run_query_command(
+        "ipotecaria-persona-fisica",
+        {"provincia": provincia, "codice_fiscale": codice_fiscale},
+        wait,
+        output,
+        dry_run,
+        force,
     )
-    console.print_json(json.dumps(result, ensure_ascii=False, default=str))
-    if result.get("flow_id"):
-        console.print(f"Admin review: /admin/mortgage-searches/{result['flow_id']}")
 
 
 @mortgage_app.command("status")
 def mortgage_status(flow_id: int = typer.Argument(..., help="ID del flusso")):
     result = _runtime.run_api(lambda client: client.mortgage_search_status(flow_id))
-    console.print_json(json.dumps(result, ensure_ascii=False, default=str))
+    if _runtime.json_output_enabled():
+        _runtime.emit_data(result)
+    else:
+        console.print_json(json.dumps(result, ensure_ascii=False, default=str))
 
 
 @mortgage_app.command("quote")
@@ -51,7 +62,7 @@ def mortgage_quote(
         try:
             parsed_ordinals = [int(value.strip()) for value in ordinals.split(",") if value.strip()]
         except ValueError as exc:
-            raise typer.BadParameter("Use comma-separated positive formalità numbers") from exc
+            raise typer.BadParameter("Inserisci numeri di formalità positivi, separati da virgole") from exc
     result = _runtime.run_api(
         lambda client: client.mortgage_search_quote(
             flow_id,
@@ -62,4 +73,13 @@ def mortgage_quote(
             format=document_format,
         )
     )
-    console.print_json(json.dumps(result, ensure_ascii=False, default=str))
+    if _runtime.json_output_enabled():
+        _runtime.emit_data(result)
+    else:
+        console.print_json(json.dumps(result, ensure_ascii=False, default=str))
+
+
+mortgage_status.endpoint = "/api/v1/mortgage-searches/{id}"
+mortgage_status.method = "GET"
+mortgage_quote.endpoint = "/api/v1/mortgage-searches/{id}/quote"
+mortgage_quote.method = "POST"
