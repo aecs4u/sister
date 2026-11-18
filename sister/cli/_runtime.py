@@ -69,9 +69,10 @@ def project_root() -> Path:
     for candidate in candidates:
         if candidate and (Path(candidate) / "scripts").is_dir() and (Path(candidate) / "pyproject.toml").is_file():
             return Path(candidate).resolve()
-    raise FileNotFoundError(
-        "checkout di SISTER non trovato: lancia il comando dalla sua cartella o imposta SISTER_HOME"
+    console.print(
+        "[bold red]Checkout di SISTER non trovato:[/bold red] lancia il comando dalla sua cartella o imposta SISTER_HOME"
     )
+    raise typer.Exit(3)
 
 
 def handle_api_error(exc) -> None:

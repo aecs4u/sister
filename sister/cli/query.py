@@ -12,11 +12,11 @@ from rich.markup import escape
 from ..client import API_V1_PREFIX, VisuraAPIError, VisuraClient
 from ..fiscal_code import valid_codice_fiscale
 from ..query_forms import LEGACY_FLAGS, QUERY_FORMS, documents_note, option_flags, validate_params
-
-_LEGACY_PREFIX = "legacy_"  # name prefix of the hidden option that carries a deprecated flag (see LEGACY_FLAGS)
 from . import _runtime
 from ._runtime import DryRunOpt, ForceOpt, OutputOpt, RedownloadOpt, WaitOpt, console
 from .render import render_result
+
+_LEGACY_PREFIX = "legacy_"  # name prefix of the hidden option that carries a deprecated flag (see LEGACY_FLAGS)
 
 query_app = typer.Typer(
     name="query",

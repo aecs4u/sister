@@ -37,6 +37,83 @@ fi
 SHARED_START="${PROJECT_ROOT}/../bin/start-common.sh"
 source "${SHARED_START}"
 
+START_ENV="dev"
+START_ARGUMENTS=()
+START_SHOW_HELP=false
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --env)
+            if [[ $# -lt 2 || -z "$2" ]]; then
+                printf '%s: --env requires dev, test, staging, or production\n' "${START_APP_NAME}" >&2
+                exit 2
+            fi
+            START_ENV="$2"
+            shift 2
+            ;;
+        --env=*)
+            START_ENV="${1#--env=}"
+            shift
+            ;;
+        -h|--help)
+            START_SHOW_HELP=true
+            START_ARGUMENTS+=("$1")
+            shift
+            ;;
+        --)
+            START_ARGUMENTS+=("$@")
+            break
+            ;;
+        *)
+            START_ARGUMENTS+=("$1")
+            shift
+            ;;
+    esac
+done
+
+case "${START_ENV,,}" in
+    dev|development)
+        START_RUNTIME_ENVIRONMENT="development"
+        START_PROFILE_DEBUG=true
+        START_PROFILE_LOG_LEVEL=DEBUG
+        START_PROFILE_RELOAD=true
+        ;;
+    test|testing)
+        START_RUNTIME_ENVIRONMENT="testing"
+        START_PROFILE_DEBUG=false
+        START_PROFILE_LOG_LEVEL=INFO
+        START_PROFILE_RELOAD=false
+        ;;
+    staging|stage)
+        START_RUNTIME_ENVIRONMENT="staging"
+        START_PROFILE_DEBUG=false
+        START_PROFILE_LOG_LEVEL=INFO
+        START_PROFILE_RELOAD=false
+        ;;
+    prod|production)
+        START_RUNTIME_ENVIRONMENT="production"
+        START_PROFILE_DEBUG=false
+        START_PROFILE_LOG_LEVEL=INFO
+        START_PROFILE_RELOAD=false
+        ;;
+    *)
+        printf '%s: invalid environment %q (choose dev, test, staging, or production)\n' \
+            "${START_APP_NAME}" "${START_ENV}" >&2
+        exit 2
+        ;;
+esac
+
+export ENVIRONMENT="${START_RUNTIME_ENVIRONMENT}"
+export LOGFIRE_ENVIRONMENT="${START_RUNTIME_ENVIRONMENT}"
+export DEBUG="${START_DEBUG:-${START_PROFILE_DEBUG}}"
+export LOG_LEVEL="${START_APP_LOG_LEVEL:-${START_PROFILE_LOG_LEVEL}}"
+START_DEFAULT_RELOAD="${START_PROFILE_RELOAD}"
+
+if [[ "${START_SHOW_HELP}" == true ]]; then
+    start_common_usage
+    printf '\nSISTER environment option:\n  --env ENV  dev (default, reload on), test, staging, or production (reload off)\n'
+    exit 0
+fi
+
 # Uvicorn runs the application lifespan before the final bind. Catch an
 # already-running local instance first so a duplicate launch does not perform
 # database/browser startup and then fail with EADDRINUSE.
@@ -44,7 +121,7 @@ START_CHECK_HOST="${START_HOST:-${HOST:-${START_DEFAULT_HOST}}}"
 START_CHECK_PORT="${START_PORT:-${PORT:-${START_DEFAULT_PORT}}}"
 START_CHECK_HELP=false
 START_CHECK_ARGUMENTS_VALID=true
-START_CHECK_ARGS=("$@")
+START_CHECK_ARGS=("${START_ARGUMENTS[@]}")
 for ((START_CHECK_INDEX = 0; START_CHECK_INDEX < ${#START_CHECK_ARGS[@]}; START_CHECK_INDEX++)); do
     case "${START_CHECK_ARGS[START_CHECK_INDEX]}" in
         -h|--help)
@@ -87,4 +164,4 @@ if [[ "${START_CHECK_HELP}" != true && "${START_CHECK_ARGUMENTS_VALID}" == true 
     fi
 fi
 
-start_common_main "$@"
+start_common_main "${START_ARGUMENTS[@]}"

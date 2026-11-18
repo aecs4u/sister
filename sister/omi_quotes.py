@@ -22,6 +22,8 @@ from statistics import median
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
+from .database_config import database_dsn_suffix
+
 from .cadastral_values import normalize_category
 
 logger = logging.getLogger("sister")
@@ -215,8 +217,7 @@ def omi_dsn() -> str | None:
     if not dsn:
         base = os.getenv("STATS_POSTGRES_DSN", "").strip() or os.getenv("CADASTRAL_POSTGRES_DSN", "").strip()
         if not base:
-            environment = os.getenv("ENVIRONMENT", "development").strip().lower()
-            suffix = "NEON" if environment in {"production", "prod", "staging"} else "LOCALHOST"
+            suffix = database_dsn_suffix()
             base = os.getenv(f"CADASTRAL_DATABASE_DSN_{suffix}", "").strip()
         if not base:
             return None

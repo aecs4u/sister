@@ -9,8 +9,8 @@ from sister.database_config import database_dsn_setting, get_database_dsn
         ("development", "LOCALHOST"),
         ("local", "LOCALHOST"),
         ("localhost", "LOCALHOST"),
-        ("test", "LOCALHOST"),
-        ("testing", "LOCALHOST"),
+        ("test", "TEST"),
+        ("testing", "TEST"),
         ("production", "NEON"),
         ("prod", "NEON"),
         ("staging", "NEON"),
@@ -20,11 +20,16 @@ from sister.database_config import database_dsn_setting, get_database_dsn
 def test_database_selection_follows_environment(monkeypatch, environment, suffix):
     monkeypatch.setenv("ENVIRONMENT", environment)
     monkeypatch.setenv("SISTER_DATABASE_DSN_LOCALHOST", "postgresql://localhost/sister")
+    monkeypatch.setenv("SISTER_DATABASE_DSN_TEST", "postgresql://localhost/sister_test")
     monkeypatch.setenv("SISTER_DATABASE_DSN_NEON", "postgresql://example.invalid/sister")
     monkeypatch.setenv("DATABASE_DSN", "postgresql://old.invalid/unrelated")
 
     assert database_dsn_setting() == f"SISTER_DATABASE_DSN_{suffix}"
-    expected = "postgresql://localhost/sister" if suffix == "LOCALHOST" else "postgresql://example.invalid/sister"
+    expected = {
+        "LOCALHOST": "postgresql://localhost/sister",
+        "TEST": "postgresql://localhost/sister_test",
+        "NEON": "postgresql://example.invalid/sister",
+    }[suffix]
     assert get_database_dsn(required=True) == expected
 
 
@@ -34,12 +39,16 @@ def test_database_defaults_to_localhost(monkeypatch):
     assert get_database_dsn() == "postgresql://localhost/sister"
 
 
-@pytest.mark.parametrize(("environment", "suffix"), [("development", "LOCALHOST"), ("production", "NEON")])
+@pytest.mark.parametrize(
+    ("environment", "suffix"),
+    [("development", "LOCALHOST"), ("testing", "TEST"), ("production", "NEON")],
+)
 @pytest.mark.parametrize("missing_value", [None, "", "  "])
 def test_missing_selected_database_never_falls_back(monkeypatch, environment, suffix, missing_value):
     monkeypatch.setenv("ENVIRONMENT", environment)
     monkeypatch.setenv("DATABASE_DSN", "postgresql://old.invalid/unrelated")
     monkeypatch.setenv("SISTER_DATABASE_DSN_LOCALHOST", "postgresql://localhost/sister")
+    monkeypatch.setenv("SISTER_DATABASE_DSN_TEST", "postgresql://localhost/sister_test")
     monkeypatch.setenv("SISTER_DATABASE_DSN_NEON", "postgresql://example.invalid/sister")
     selected = f"SISTER_DATABASE_DSN_{suffix}"
     if missing_value is None:

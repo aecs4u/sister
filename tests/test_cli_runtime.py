@@ -1,7 +1,9 @@
 """Tests for shared CLI output helpers."""
 
 import json
+import tomllib
 from io import StringIO
+from pathlib import Path
 
 import pytest
 import typer
@@ -9,6 +11,12 @@ from rich.console import Console
 from rich.text import Text
 
 from sister.cli import _runtime
+
+
+def test_cli_package_is_in_the_explicit_distribution_package_list():
+    project = tomllib.loads((Path(__file__).parents[1] / "pyproject.toml").read_text(encoding="utf-8"))
+
+    assert "sister.cli" in project["tool"]["setuptools"]["packages"]
 
 
 def test_db_alembic_config_uses_checkout_path_for_non_editable_install(monkeypatch, tmp_path):
@@ -25,6 +33,23 @@ def test_db_alembic_config_uses_checkout_path_for_non_editable_install(monkeypat
     config = db._alembic_config()
 
     assert config.config_file_name == str(checkout / "alembic.ini")
+
+
+def test_missing_checkout_uses_environment_exit_code(monkeypatch, tmp_path):
+    outside_checkout = tmp_path / "outside"
+    outside_checkout.mkdir()
+    monkeypatch.chdir(outside_checkout)
+    monkeypatch.setattr(
+        _runtime,
+        "__file__",
+        str(tmp_path / "venv" / "lib" / "python3.12" / "site-packages" / "sister" / "cli" / "_runtime.py"),
+    )
+    monkeypatch.setenv("SISTER_HOME", str(tmp_path / "missing"))
+
+    with pytest.raises(typer.Exit) as raised:
+        _runtime.project_root()
+
+    assert raised.value.exit_code == 3
 
 
 def test_emit_writes_json_to_stdout_and_file_notices_to_stderr(tmp_path, monkeypatch):

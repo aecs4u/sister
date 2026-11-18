@@ -1218,6 +1218,50 @@ def test_custom_workflow_plan_selects_start_shape(payload, expected):
     assert plan.steps == expected
 
 
+@pytest.mark.parametrize(
+    ("payload", "legacy_start"),
+    [
+        ({"codice_fiscale": "RSSMRA70A01H501Z"}, ["soggetto"]),
+        ({"identificativo": "02471840997"}, ["persona_giuridica"]),
+        (
+            {"provincia": "Roma", "comune": "ROMA", "indirizzo": "Via Verdi 1"},
+            ["indirizzo"],
+        ),
+        (
+            {"provincia": "Roma", "comune": "ROMA", "foglio": "1", "particella": "2"},
+            ["search", "intestati"],
+        ),
+        (
+            {
+                "provincia": "Roma",
+                "comune": "ROMA",
+                "foglio": "1",
+                "particella": "2",
+                "subalterno": "3",
+            },
+            ["search", "intestati"],
+        ),
+    ],
+    ids=["person", "company", "address", "parcel-all-subs", "parcel-one-sub"],
+)
+def test_custom_workflow_matches_legacy_client_start_shapes(payload, legacy_start):
+    """Pin the old client-side workflow starts before their server-side replacement.
+
+    The expectations were captured from the pre-migration `query workflow` flow:
+    CF → soggetto, P.IVA → persona_giuridica, address → indirizzo, and parcel
+    search → intestati. For parcel starts, the shared server executor expands
+    intestati by the discovered subalterni, or uses the requested one.
+    """
+    from sister.workflows import prepare_workflow
+
+    plan = prepare_workflow({"preset": "custom", **payload})
+    step_names = {"azienda": "persona_giuridica", "indirizzo_search": "indirizzo"}
+
+    assert [step_names.get(step, step) for step in plan.steps] == legacy_start
+    if "subalterno" in payload:
+        assert plan.workflow.subalterno == payload["subalterno"]
+
+
 def test_custom_workflow_plan_adds_ordered_optional_steps():
     from sister.workflows import prepare_workflow
 

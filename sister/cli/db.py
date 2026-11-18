@@ -71,6 +71,8 @@ def db_status():
     """Mostra revisione applicata, testa Alembic e revisione attesa."""
     try:
         result = _runtime.run_db(_migration_status, initialize=False)
+    except typer.Exit:
+        raise
     except Exception as exc:  # noqa: BLE001 - report database setup/connection failures without a traceback
         console.print(f"[red]Stato del database non disponibile: {exc}[/red]")
         raise typer.Exit(3) from None
