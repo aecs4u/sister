@@ -13,25 +13,17 @@ import math
 import os
 import re
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
 import httpx
 from bs4 import BeautifulSoup
-from dotenv import load_dotenv
+
+from .environment import load_environment
+
+load_environment()
 
 logger = logging.getLogger("sister.jev")
-
-
-def _load_environment() -> None:
-    """Load project and shared-workspace .env files without overriding env vars."""
-    project_root = Path(__file__).resolve().parents[1]
-    load_dotenv(project_root / ".env", override=False)
-    load_dotenv(project_root.parents[1] / ".env", override=False)
-
-
-_load_environment()
 
 API_URL = "https://api.typesafe.ai/v1/systemone"
 MODEL = "jev-latest"

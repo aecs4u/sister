@@ -180,7 +180,7 @@ git clone https://github.com/aecs4u/sister.git
 cd sister
 
 cp .env.example .env
-# Imposta SISTER_DATABASE_DSN_LOCALHOST (o SISTER_DATABASE_DSN_NEON) e le credenziali SPID in .env
+# Imposta SISTER_DATABASE_DSN_LOCALHOST e le credenziali SPID in .env
 
 docker-compose run --rm visure-service alembic upgrade head
 
@@ -208,12 +208,17 @@ pip install -e .
 playwright install chromium
 
 cp .env.example .env
-# Imposta SISTER_DATABASE_DSN_LOCALHOST (o SISTER_DATABASE_DSN_NEON) e le credenziali SPID in .env
+# Imposta SISTER_DATABASE_DSN_LOCALHOST, SISTER_DATABASE_DSN_TEST e le credenziali SPID in .env
+# SISTER_DATABASE_DSN_NEON serve per i profili staging e production.
 
 alembic upgrade head
 
 ./scripts/start.sh
 ```
+
+Il launcher usa `--env dev` per impostazione predefinita. Per selezionare gli
+altri profili: `./scripts/start.sh --env test`, `--env staging` oppure
+`--env production`.
 
 > **Nota:** `aecs4u-auth` e `aecs4u-theme` sono su GitHub. Il `pyproject.toml` include le source git per uv.
 
@@ -229,8 +234,9 @@ All'avvio il servizio:
 
 ## Configurazione
 
-La [strategia di configurazione proposta](docs/configuration_strategy.md) definisce
-la precedenza tra ambiente del processo, `.env` dell'applicazione, `../.env` condiviso e valori predefiniti.
+La [configurazione per ambiente](docs/configuration_strategy.md) definisce il caricamento
+dei valori condivisi e di quelli specifici di SISTER. `scripts/start.sh` usa `dev` per
+impostazione predefinita; seleziona `test`, `staging` o `production` con `--env`.
 
 Crea un file `.env` nella root del progetto (vedi `.env.example`):
 
@@ -240,9 +246,9 @@ ADE_USERNAME=RSSMRA85M01H501Z    # Codice fiscale
 ADE_PASSWORD=la_tua_password
 
 # Obbligatorio — Database PostgreSQL (schema gestito da Alembic)
-ENVIRONMENT=development
 SISTER_DATABASE_DSN_LOCALHOST=postgresql+psycopg://postgres@127.0.0.1:5432/sister?options=-csearch_path%3Dsister
-# Per production/prod/staging viene usata soltanto questa variabile:
+SISTER_DATABASE_DSN_TEST=postgresql+psycopg://postgres@127.0.0.1:5432/sister_test?options=-csearch_path%3Dsister
+# Staging e produzione usano la stessa variabile di connessione al database live:
 # SISTER_DATABASE_DSN_NEON=postgresql+psycopg://utente:password@host/sister?sslmode=require&options=-csearch_path%3Dsister
 
 # Opzionale — Autenticazione (gestite da aecs4u-auth)
@@ -251,7 +257,6 @@ ADE_SPID_PROVIDER=sielte          # sielte | aruba | poste | namirial
 
 # Opzionale — Applicazione
 API_KEY=una_chiave_operativa       # Protegge endpoint operativi via X-API-Key
-LOG_LEVEL=INFO                    # DEBUG | INFO | WARNING | ERROR
 SHUTDOWN_API_KEY=una_chiave_lunga # Protegge POST /api/v1/shutdown via header X-API-Key
 QUEUE_MAX_SIZE=100                # Capienza massima coda richieste
 RESPONSE_TTL_SECONDS=21600        # TTL cache risultati (default 6 ore)
@@ -277,9 +282,10 @@ non fa logout. Dettagli, livelli di ufficio (Nazionale/Provincia) e risoluzione 
 
 | Variabile | Obbligatoria | Default | Descrizione |
 |-----------|:------------:|---------|-------------|
-| `ENVIRONMENT` | | `development` | `production`, `prod` e `staging` selezionano Neon; gli altri ambienti selezionano localhost |
-| `SISTER_DATABASE_DSN_LOCALHOST` | in locale | — | URL PostgreSQL locale usato dal servizio, dai batch e da Alembic |
-| `SISTER_DATABASE_DSN_NEON` | su Neon | — | URL PostgreSQL usato in production/prod/staging; nessun fallback al database locale |
+| `ENVIRONMENT` | | `development` | Profili supportati: `development`, `testing`, `staging`, `production`; il launcher accetta anche `dev` e `test` |
+| `SISTER_DATABASE_DSN_LOCALHOST` | in sviluppo | — | Database locale usato dal profilo development |
+| `SISTER_DATABASE_DSN_TEST` | nei test | — | Database PostgreSQL di test isolato; i test rifiutano host remoti |
+| `SISTER_DATABASE_DSN_NEON` | staging e produzione | — | Database live condiviso da staging e produzione; nessun fallback ad altri database |
 | `ADE_USERNAME` | ✅ | — | Codice fiscale per il login SPID |
 | `ADE_PASSWORD` | ✅ | — | Password SPID |
 | `ADE_AUTH_METHOD` | | `spid` | Metodo di autenticazione: `spid`, `cie`, `cns`, `fisconline` |
@@ -292,7 +298,7 @@ non fa logout. Dettagli, livelli di ufficio (Nazionale/Provincia) e risoluzione 
 | `SISTER_DOSSIER_GRAPHS_DIR` | | `dossier_graphs/` accanto ai documenti | Grafi proprietari ↔ immobili |
 | `BROWSER_MFA_TIMEOUT` | | `120` | Timeout in secondi per approvazione MFA |
 | `API_KEY` | | non impostata | Se impostata, richiede `X-API-Key` sugli endpoint operativi |
-| `LOG_LEVEL` | | `INFO` | Livello di log su console e file |
+| `LOG_LEVEL` | | dal profilo | `DEBUG` in development e testing; `INFO` in staging e production |
 | `SHUTDOWN_API_KEY` | | non impostata | Se assente, endpoint `POST /api/v1/shutdown` disabilitato |
 | `QUEUE_MAX_SIZE` | | `100` | Numero massimo richieste accodabili prima di rispondere `429` |
 | `RESPONSE_TTL_SECONDS` | | `21600` | Tempo massimo (secondi) di retention risultati in memoria |

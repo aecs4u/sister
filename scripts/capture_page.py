@@ -23,6 +23,9 @@ from uuid import uuid4
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
+from sister.environment import load_environment  # noqa: E402
+
+load_environment()
 
 REQUEST_TYPE = "manual_capture"
 CF_RE = re.compile(r"\b[A-Z]{6}\d{2}[A-EHLMPRST]\d{2}[A-Z]\d{3}[A-Z]\b")
@@ -110,9 +113,6 @@ async def main() -> None:
     )
     args = parser.parse_args()
 
-    from dotenv import load_dotenv
-
-    load_dotenv(ROOT / ".env")
     capture = await read_page(args.endpoint, args.url_part)
     parsed = parse_capture_formalities(capture) if args.parse else None
     text = capture["text"]

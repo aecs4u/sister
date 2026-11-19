@@ -5,6 +5,8 @@ env/
 
 # Variabili d'ambiente (contiene credenziali!)
 .env
+.env.*
+!.env.example
 
 # Log
 logs/

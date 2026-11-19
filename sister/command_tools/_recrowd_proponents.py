@@ -19,13 +19,13 @@ from pathlib import Path
 from typing import Any
 
 import httpx
-from dotenv import load_dotenv
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import URL, make_url
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-load_dotenv(PROJECT_ROOT / ".env")
-load_dotenv(PROJECT_ROOT.parent / ".env", override=False)
+from sister.environment import load_environment  # noqa: E402
+
+load_environment()
 
 from sister.database_config import get_database_dsn  # noqa: E402
 

@@ -13,14 +13,12 @@ or a fake service.
 """
 
 import os
-from pathlib import Path
 
-from dotenv import load_dotenv
 import pytest
 
-ROOT = Path(__file__).resolve().parents[1]
-load_dotenv(ROOT / ".env", override=False)
-load_dotenv(ROOT.parents[1] / ".env", override=False)
+from sister.environment import load_environment
+
+load_environment()
 
 from sister.browser import BrowserManager, _run_with_network_json  # noqa: E402
 from sister.jev import jev_enabled  # noqa: E402

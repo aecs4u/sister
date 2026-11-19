@@ -42,9 +42,9 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from dotenv import load_dotenv  # noqa: E402
+from sister.environment import load_environment  # noqa: E402
 
-load_dotenv(ROOT / ".env")
+load_environment()
 
 from batch_progress import Dashboard, render, snapshot  # noqa: E402
 from rich.console import Console  # noqa: E402

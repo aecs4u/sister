@@ -23,8 +23,9 @@ OCULAR_ROOT = Path("/mnt/mobile/git/aecs4u.it/ocular")
 DEFAULT_OUTPUT_ROOT = Path("/mnt/mobile/data/aecs4u.it/real-estates/outputs")
 sys.path.insert(0, str(PROJECT_ROOT))
 sys.path.insert(0, str(OCULAR_ROOT))
-load_dotenv(PROJECT_ROOT / ".env")
-load_dotenv(PROJECT_ROOT.parent / ".env", override=False)
+from sister.environment import load_environment  # noqa: E402
+
+load_environment()
 load_dotenv(OCULAR_ROOT / ".env", override=False)
 
 from sister.command_tools.import_ocular_extraction import import_extraction  # noqa: E402

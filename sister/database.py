@@ -20,7 +20,6 @@ from pathlib import Path
 from typing import Any, AsyncIterator, Iterable, Optional
 from zoneinfo import ZoneInfo
 
-from dotenv import load_dotenv
 from sqlalchemy import (
     Boolean,
     Date,
@@ -49,6 +48,10 @@ from sqlalchemy.orm import aliased, sessionmaker
 from sqlmodel import select
 
 from .database_config import database_dsn_setting, get_database_dsn
+from .environment import load_environment
+
+load_environment()
+
 from .db_models import (
     PROPERTY_FIELD_MAP,
     PROPERTY_LOCATION_FIELD_MAP,
@@ -149,8 +152,6 @@ from .visura_xml_models import DocumentSubject
 logger = logging.getLogger("sister")
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-load_dotenv(PROJECT_ROOT / ".env")
-load_dotenv(PROJECT_ROOT.parent / ".env", override=False)
 DATA_ROOT = Path(os.getenv("SISTER_DATA_ROOT", str(PROJECT_ROOT))).expanduser().resolve()
 DATABASE_DSN = get_database_dsn()
 DATABASE_SCHEMA = os.getenv("DATABASE_SCHEMA", "sister")

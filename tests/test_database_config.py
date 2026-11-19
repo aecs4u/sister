@@ -61,18 +61,18 @@ def test_missing_selected_database_never_falls_back(monkeypatch, environment, su
         get_database_dsn(required=True)
 
 
-def test_database_tests_always_select_the_local_setting(monkeypatch):
-    from tests.pg_isolation import _local_dsn
+def test_database_tests_always_select_the_test_setting(monkeypatch):
+    from tests.pg_isolation import _test_dsn
 
     monkeypatch.setenv("ENVIRONMENT", "production")
-    monkeypatch.setenv("SISTER_DATABASE_DSN_LOCALHOST", "postgresql://postgres@127.0.0.1/sister")
+    monkeypatch.setenv("SISTER_DATABASE_DSN_TEST", "postgresql://postgres@127.0.0.1/sister_test")
     monkeypatch.setenv("SISTER_DATABASE_DSN_NEON", "postgresql://example.invalid/sister")
-    assert _local_dsn().host == "127.0.0.1"
+    assert _test_dsn().database == "sister_test"
 
 
-def test_database_tests_refuse_a_remote_local_setting(monkeypatch):
-    from tests.pg_isolation import _local_dsn
+def test_database_tests_refuse_a_remote_test_setting(monkeypatch):
+    from tests.pg_isolation import _test_dsn
 
-    monkeypatch.setenv("SISTER_DATABASE_DSN_LOCALHOST", "postgresql://example.invalid/sister")
+    monkeypatch.setenv("SISTER_DATABASE_DSN_TEST", "postgresql://example.invalid/sister_test")
     with pytest.raises(pytest.skip.Exception, match="only run against a local PostgreSQL"):
-        _local_dsn()
+        _test_dsn()

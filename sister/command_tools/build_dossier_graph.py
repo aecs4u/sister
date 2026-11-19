@@ -32,11 +32,10 @@ from datetime import datetime
 from pathlib import Path
 
 import httpx
-from dotenv import load_dotenv
-
 ROOT = Path(__file__).resolve().parents[2]
-load_dotenv(ROOT / ".env")
-load_dotenv(ROOT.parent / ".env", override=False)
+from sister.environment import load_environment  # noqa: E402
+
+load_environment()
 
 BASE_URL = os.getenv("SISTER_URL", "http://localhost:8025")
 API_KEY = os.getenv("VISURA_API_KEY") or os.getenv("API_KEY", "")

@@ -12,15 +12,20 @@ import argparse
 import hashlib
 import json
 import os
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
 import psycopg
-from dotenv import dotenv_values
 from psycopg import sql
 from psycopg.conninfo import conninfo_to_dict, make_conninfo
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+from sister.environment import load_environment  # noqa: E402
+
+load_environment()
+
 SUPPORT = "_cadastral_sales"
 MARKER = "cadastral_sales migration v1; managed by scripts/create_cadastral_sales.py"
 RELATIONS = ("cadastral_parcel", "cadastral_sheet")
@@ -410,8 +415,7 @@ def selection_audit(connection, directory, manifest):
 
 
 def neon_config():
-    settings = {**dotenv_values(ROOT / ".env"), **os.environ}
-    dsn = settings.get("CADASTRAL_SALES_POSTGRES_DSN_NEON")
+    dsn = os.getenv("CADASTRAL_SALES_POSTGRES_DSN_NEON")
     if not dsn:
         raise RuntimeError("CADASTRAL_SALES_POSTGRES_DSN_NEON is missing")
     params = conninfo_to_dict(dsn)

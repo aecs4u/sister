@@ -8,13 +8,13 @@ from datetime import datetime
 from pathlib import Path
 
 import httpx
-from dotenv import load_dotenv
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import make_url
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-load_dotenv(PROJECT_ROOT / ".env")
-load_dotenv(PROJECT_ROOT.parent / ".env", override=False)
+from sister.environment import load_environment  # noqa: E402
+
+load_environment()
 
 SISTER_URL = "http://localhost:8025"
 OUTPUT_PATH = (

@@ -1,7 +1,7 @@
 """Isolated PostgreSQL schema for the database-backed tests.
 
 ``sister.database`` is PostgreSQL-only, so DB tests need a real Postgres. They never touch the application's own schema:
-a session-scoped throwaway schema ``sister_test_<8 hex>`` is created on the *local* server named by ``SISTER_DATABASE_DSN_LOCALHOST``,
+a session-scoped throwaway schema ``sister_test_<8 hex>`` is created on the *local* server named by ``SISTER_DATABASE_DSN_TEST``,
 filled from the current ORM models, stamped with the expected Alembic revision, truncated before every test and dropped
 at the end. Safety rules, enforced in code:
 
@@ -24,17 +24,17 @@ _SCHEMA_RE = re.compile(r"^sister_test_[0-9a-f]{8}(?:_(?:archive|istat))?$")
 _LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1"}
 
 
-def _local_dsn():
+def _test_dsn():
     from sqlalchemy.engine import make_url
 
-    dsn = os.getenv("SISTER_DATABASE_DSN_LOCALHOST")
+    dsn = os.getenv("SISTER_DATABASE_DSN_TEST")
     if not dsn:
-        pytest.skip("DB tests need SISTER_DATABASE_DSN_LOCALHOST pointing at a local PostgreSQL")
+        pytest.skip("DB tests need SISTER_DATABASE_DSN_TEST pointing at a local PostgreSQL")
     url = make_url(dsn)
     if url.get_backend_name() != "postgresql":
-        pytest.skip("DB tests need a PostgreSQL SISTER_DATABASE_DSN_LOCALHOST")
+        pytest.skip("DB tests need a PostgreSQL SISTER_DATABASE_DSN_TEST")
     if (url.host or "") not in _LOCAL_HOSTS:
-        pytest.skip(f"DB tests only run against a local PostgreSQL (SISTER_DATABASE_DSN_LOCALHOST host is {url.host!r})")
+        pytest.skip(f"DB tests only run against a local PostgreSQL (SISTER_DATABASE_DSN_TEST host is {url.host!r})")
     return url
 
 
@@ -199,7 +199,7 @@ def pg_test_schema():
     import sister.db_models  # noqa: F401
     import sister.visura_xml_models  # noqa: F401
 
-    url = _local_dsn()
+    url = _test_dsn()
     source_istat_schema = database.DATABASE_ISTAT_SCHEMA
     sync_url = url.set(drivername="postgresql+psycopg")
     admin = create_engine(sync_url, isolation_level="AUTOCOMMIT")

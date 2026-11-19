@@ -18,7 +18,6 @@ import logging
 import os
 import sys
 
-from dotenv import load_dotenv
 from rich.console import Console
 from rich.logging import RichHandler
 from rich.table import Table
@@ -26,7 +25,9 @@ from rich.table import Table
 # Add project root to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-load_dotenv()
+from sister.environment import load_environment  # noqa: E402
+
+load_environment()
 
 # Rich logging setup
 logging.basicConfig(

@@ -8,6 +8,10 @@ import types
 
 import pytest
 
+# Pytest always runs against the isolated test database profile, regardless of
+# the developer's default or shell environment.
+os.environ["ENVIRONMENT"] = "testing"
+
 from .pg_isolation import fresh_db, pg_test_schema  # noqa: F401  (isolated PostgreSQL schema for DB tests)
 
 # The web routes fail closed (see sister.web._require_auth). Tests that exercise them without a login opt into the

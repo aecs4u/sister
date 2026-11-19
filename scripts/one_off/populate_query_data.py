@@ -11,11 +11,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from dotenv import load_dotenv
-
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-load_dotenv(PROJECT_ROOT / ".env")
-load_dotenv(PROJECT_ROOT.parent / ".env", override=False)
+from sister.environment import load_environment  # noqa: E402
+
+load_environment()
 
 from sqlalchemy import func, select  # noqa: E402
 

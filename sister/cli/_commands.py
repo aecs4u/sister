@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Optional
 
 import typer
-from dotenv import find_dotenv, load_dotenv
+from ..environment import load_environment
 from rich.table import Table
 
 from ..client import VisuraClient
@@ -219,8 +219,7 @@ def _load_environment() -> None:
     `uv run --no-project sister ...` does not load it, so VISURA_API_URL / VISURA_API_KEY and the database settings
     would be missing. Done in the entry point, not at import, so tests importing this module keep their environment.
     """
-    load_dotenv(find_dotenv(usecwd=True))
-    load_dotenv(Path(__file__).resolve().parents[2] / ".env", override=False)
+    load_environment()
     if os.getenv("API_KEY"):
         os.environ.setdefault("VISURA_API_KEY", os.environ["API_KEY"])  # the service's key is the one the CLI must send
 

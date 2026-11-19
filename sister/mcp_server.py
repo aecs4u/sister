@@ -9,17 +9,15 @@ from __future__ import annotations
 import os
 import time
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from dotenv import load_dotenv
+from .environment import load_environment
+
+load_environment()
 
 from .client import VisuraClient
 from .query_forms import QUERY_FORMS, get_query_form, validate_params
-
-load_dotenv()
-load_dotenv(Path(__file__).resolve().parents[2] / ".env", override=False)
 
 PREVIEW_TTL_SECONDS = 15 * 60
 MAX_PREVIEWS = 100

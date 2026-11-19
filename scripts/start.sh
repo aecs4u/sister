@@ -73,26 +73,18 @@ done
 case "${START_ENV,,}" in
     dev|development)
         START_RUNTIME_ENVIRONMENT="development"
-        START_PROFILE_DEBUG=true
-        START_PROFILE_LOG_LEVEL=DEBUG
         START_PROFILE_RELOAD=true
         ;;
     test|testing)
         START_RUNTIME_ENVIRONMENT="testing"
-        START_PROFILE_DEBUG=false
-        START_PROFILE_LOG_LEVEL=INFO
         START_PROFILE_RELOAD=false
         ;;
     staging|stage)
         START_RUNTIME_ENVIRONMENT="staging"
-        START_PROFILE_DEBUG=false
-        START_PROFILE_LOG_LEVEL=INFO
         START_PROFILE_RELOAD=false
         ;;
     prod|production)
         START_RUNTIME_ENVIRONMENT="production"
-        START_PROFILE_DEBUG=false
-        START_PROFILE_LOG_LEVEL=INFO
         START_PROFILE_RELOAD=false
         ;;
     *)
@@ -103,9 +95,14 @@ case "${START_ENV,,}" in
 esac
 
 export ENVIRONMENT="${START_RUNTIME_ENVIRONMENT}"
-export LOGFIRE_ENVIRONMENT="${START_RUNTIME_ENVIRONMENT}"
-export DEBUG="${START_DEBUG:-${START_PROFILE_DEBUG}}"
-export LOG_LEVEL="${START_APP_LOG_LEVEL:-${START_PROFILE_LOG_LEVEL}}"
+# Shared DEBUG, LOG_LEVEL, and LOGFIRE_ENVIRONMENT values come from the selected
+# workspace profile. Keep explicit per-process overrides available to operators.
+if [[ -n "${START_DEBUG:-}" ]]; then
+    export DEBUG="${START_DEBUG}"
+fi
+if [[ -n "${START_APP_LOG_LEVEL:-}" ]]; then
+    export LOG_LEVEL="${START_APP_LOG_LEVEL}"
+fi
 START_DEFAULT_RELOAD="${START_PROFILE_RELOAD}"
 
 if [[ "${START_SHOW_HELP}" == true ]]; then

@@ -13,13 +13,12 @@ import logging
 import os
 import sys
 from pathlib import Path
-from dotenv import load_dotenv
-
 # Allow running from repo root
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PROJECT_ROOT))
-load_dotenv(PROJECT_ROOT / ".env")
-load_dotenv(PROJECT_ROOT.parent / ".env", override=False)
+from sister.environment import load_environment  # noqa: E402
+
+load_environment()
 
 from sister.database import _get_session_factory, init_db, save_request, save_response
 

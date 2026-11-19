@@ -5,7 +5,6 @@ import sys
 from logging.config import fileConfig
 from pathlib import Path
 
-from dotenv import load_dotenv
 from sqlalchemy import engine_from_config, pool
 from sqlalchemy.engine import make_url
 from sqlmodel import SQLModel
@@ -15,8 +14,9 @@ from alembic import context
 # Add project root to path so sister package is importable
 project_root = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(project_root))
-load_dotenv(project_root / ".env")
-load_dotenv(project_root.parent / ".env", override=False)
+from sister.environment import load_environment  # noqa: E402
+
+load_environment()
 
 # Import all models to register them with SQLModel.metadata
 from sister.cadastral import (  # noqa: F401, E402

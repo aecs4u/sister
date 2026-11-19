@@ -17,14 +17,14 @@ from pathlib import Path
 from typing import Any
 
 import psycopg
-from dotenv import load_dotenv
 from psycopg.rows import tuple_row
 from sqlalchemy.engine import make_url
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PROJECT_ROOT))
-load_dotenv(PROJECT_ROOT / ".env")
-load_dotenv(PROJECT_ROOT.parent / ".env", override=False)
+from sister.environment import load_environment  # noqa: E402
+
+load_environment()
 
 _COORDINATE_UPSERT = """\
 INSERT INTO sister.cadastral_parcel_coordinate

@@ -22,11 +22,10 @@ from contextlib import suppress
 from datetime import datetime, timezone
 from pathlib import Path
 
-from dotenv import load_dotenv
-
 ROOT = Path(__file__).resolve().parents[2]
-load_dotenv(ROOT / ".env")
-load_dotenv(ROOT.parent / ".env", override=False)
+from sister.environment import load_environment  # noqa: E402
+
+load_environment()
 
 from aecs4u_auth.browser import BrowserConfig  # noqa: E402
 from aecs4u_auth.browser import BrowserManager as AuthBrowserManager  # noqa: E402

@@ -15,12 +15,11 @@ import re
 import sys
 from datetime import datetime
 from pathlib import Path
-from dotenv import load_dotenv
-
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PROJECT_ROOT))
-load_dotenv(PROJECT_ROOT / ".env")
-load_dotenv(PROJECT_ROOT.parent / ".env", override=False)
+from sister.environment import load_environment  # noqa: E402
+
+load_environment()
 
 REPORTS_DIR = Path("/data/aecs4u.it/sister/reports")
 RENAME_MAP_PATH = REPORTS_DIR / "rename_map.json"

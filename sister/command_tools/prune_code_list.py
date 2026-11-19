@@ -36,9 +36,9 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from dotenv import load_dotenv  # noqa: E402
+from sister.environment import load_environment  # noqa: E402
 
-load_dotenv(ROOT / ".env")
+load_environment()
 
 from run_in_session import answered_queries  # noqa: E402  (same definition of "answered" as the runner)
 

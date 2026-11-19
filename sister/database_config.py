@@ -6,11 +6,16 @@ import os
 def database_dsn_suffix(environment: str | None = None) -> str:
     """Return the DSN suffix for dev, isolated test, staging, or production."""
     selected = (environment if environment is not None else os.getenv("ENVIRONMENT", "development")).strip().lower()
-    if selected in {"production", "prod", "staging"}:
+    if selected in {"production", "prod", "staging", "stage"}:
         return "NEON"
     if selected in {"test", "testing"}:
         return "TEST"
-    return "LOCALHOST"
+    if selected in {"development", "dev", "local", "localhost"}:
+        return "LOCALHOST"
+    raise ValueError(
+        "ENVIRONMENT must be development, testing, staging, or production "
+        f"(received {selected!r})"
+    )
 
 
 def database_dsn_setting() -> str:

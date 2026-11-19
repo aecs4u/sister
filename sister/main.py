@@ -10,11 +10,10 @@ from pathlib import Path
 from typing import Optional
 from uuid import uuid4
 
-from dotenv import load_dotenv
-
 # Load configuration before importing modules that read environment variables at import time.
-load_dotenv()
-load_dotenv(Path(__file__).resolve().parents[2] / ".env", override=False)  # shared workspace-root defaults (project .env above wins)
+from .environment import load_environment
+
+load_environment()
 
 from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.exception_handlers import http_exception_handler as fastapi_http_exception_handler
