@@ -6,7 +6,6 @@ import os
 import re
 import secrets
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 from uuid import uuid4
@@ -66,7 +65,7 @@ from .routes import (
     resume_section_extraction,
     visura_history,
 )
-from .passwords import plaintext_users_allowed, require_hashed_passwords, verify_local_password
+from .passwords import plaintext_users_allowed, require_hashed_passwords
 from .services import PageLogger, VisuraService
 from .territory import (
     get_conservatoria,
@@ -242,6 +241,13 @@ async def _ensure_chrome_cdp() -> None:
 async def lifespan(app: FastAPI):
     global visura_service
     await init_db()
+    _directory = getattr(app.state, "local_user_directory", None)
+    if _directory is not None:
+        # Offer the table's accounts (not only the file's) in the admin purchase form.
+        _names = await _directory.usernames()
+        app.state.local_user_keys = sorted(
+            set(getattr(app.state, "local_user_keys", []) or []) | {f"id:{name.casefold()}" for name in _names}
+        )
     PageLogger.reset_session()
     if os.getenv("SISTER_NO_QUERY"):
         logger.info("No-query mode (SISTER_NO_QUERY set) — browser service skipped")
@@ -680,48 +686,11 @@ try:
             )
         ).expanduser()
 
-        @dataclass(frozen=True)
-        class _LocalUser:
-            id: str
-            email: str
-            username: str
-            full_name: str | None = None
-            role: str = "user"
-            is_active: bool = True
-            is_superuser: bool = False
+        from .local_users import LocalUserDirectory, normalize_source, parse_users_file
 
-        def _load_local_users() -> dict[str, tuple[str, str]]:
-            users: dict[str, tuple[str, str]] = {}
-            try:
-                lines = _local_users_path.read_text(encoding="utf-8").splitlines()
-            except OSError as exc:
-                logger.error(
-                    "Could not read local users file %s (%s)",
-                    _local_users_path,
-                    type(exc).__name__,
-                )
-                return users
-
-            for line_number, line in enumerate(lines, start=1):
-                entry = line.strip()
-                if not entry or entry.startswith("#"):
-                    continue
-                fields = entry.split(maxsplit=1)
-                if len(fields) != 2 or not fields[0] or not fields[1]:
-                    logger.warning("Ignoring malformed local user entry on line %d", line_number)
-                    continue
-
-                username, password = fields
-                normalized_username = username.casefold()
-                if normalized_username in users:
-                    logger.warning("Ignoring duplicate local user entry on line %d", line_number)
-                    continue
-                users[normalized_username] = (username, password)
-            return users
-
-        _local_users = _load_local_users()
-        # Account keys (never passwords) the admin purchase form offers: purchases match on ``id:<username>``.
-        app.state.local_user_keys = sorted({f"id:{name}" for name, _ in _local_users.values()})
+        _local_source = normalize_source(os.getenv("SISTER_LOCAL_USERS_SOURCE"))
+        _local_users = {} if _local_source == "db" else parse_users_file(_local_users_path)
+        # Plain-text passwords are refused only for the file; the table only accepts hashes (check constraint).
         _allow_plaintext = plaintext_users_allowed(os.getenv("ALLOW_PLAINTEXT_USERS"))
         try:
             plaintext_count = require_hashed_passwords(
@@ -737,44 +706,32 @@ try:
                 plaintext_count,
                 _local_users_path.name,
             )
-        if _local_users:
-            logger.info("Loaded %d local authentication users", len(_local_users))
-        else:
-            logger.warning("No local authentication users loaded from %s", _local_users_path)
+        logger.info("Local users: source=%s, %d in %s", _local_source, len(_local_users), _local_users_path.name)
 
-        # Local users receive the admin role only when their username is listed in SISTER_ADMIN_USERS.
+        # Local users receive the admin role from the table, or when their username is listed in SISTER_ADMIN_USERS.
         _admin_usernames = {
             name.strip().casefold() for name in os.getenv("SISTER_ADMIN_USERS", "").split(",") if name.strip()
         }
         if not _admin_usernames:
             logger.warning(
-                "SISTER_ADMIN_USERS non configurata: nessun utente locale riceve il ruolo admin"
+                "SISTER_ADMIN_USERS non configurata: solo gli utenti con ruolo admin nella tabella local_user sono admin"
             )
+        _local_directory = LocalUserDirectory(
+            file_users=_local_users,
+            admin_usernames=_admin_usernames,
+            source=_local_source,
+            cache_seconds=float(os.getenv("SISTER_LOCAL_USERS_CACHE_SECONDS", "30")),
+        )
+        app.state.local_user_directory = _local_directory
+        # Account keys (never passwords) the admin purchase form offers: purchases match on ``id:<username>``.
+        # The file's users are known now; table users are added by the lifespan (``refresh_local_user_keys``).
+        app.state.local_user_keys = sorted({f"id:{name.casefold()}" for name, _ in _local_users.values()})
 
-        def _get_local_user(username: str, _db=None):
-            entry = _local_users.get(str(username).strip().casefold())
-            if entry is None:
-                return None
-            canonical_username = entry[0]
-            is_admin = canonical_username.casefold() in _admin_usernames
-            return _LocalUser(
-                id=canonical_username.casefold(),
-                email=canonical_username if "@" in canonical_username else "",
-                username=canonical_username,
-                role="admin" if is_admin else "user",
-                is_superuser=is_admin,
-            )
+        async def _get_local_user(username: str, _db=None):
+            return await _local_directory.get(username)
 
-        def _verify_local_password(username: str, password: str):
-            username_bytes = str(username).strip().casefold().encode("utf-8")
-            matched_username = None
-            for normalized_username, (canonical_username, stored_password) in _local_users.items():
-                user_matches = secrets.compare_digest(username_bytes, normalized_username.encode("utf-8"))
-                # Always evaluate the password check so timing does not reveal which usernames exist.
-                password_matches = verify_local_password(str(password), stored_password)
-                if user_matches and password_matches:
-                    matched_username = canonical_username
-            return _get_local_user(matched_username) if matched_username else None
+        async def _verify_local_password(username: str, password: str):
+            return await _local_directory.verify(username, password)
 
         set_password_verify_callback(_verify_local_password)
         set_user_by_username_callback(_get_local_user)
@@ -864,6 +821,18 @@ try:
     # Mount sister-specific static files
     if _static_dir.exists():
         app.mount("/static", StaticFiles(directory=str(_static_dir)), name="static")
+
+    # aecs4u-auth's unified login page, extended by SISTER's auth_login.html exactly as OpenData does it.
+    try:
+        import aecs4u_auth
+        from jinja2 import ChoiceLoader, FileSystemLoader, PrefixLoader
+
+        _auth_templates = Path(aecs4u_auth.__file__).resolve().parent / "templates"
+        if _auth_templates.is_dir():
+            _env = theme_setup.templates.env
+            _env.loader = ChoiceLoader([PrefixLoader({"aecs4u-auth": FileSystemLoader(str(_auth_templates))}), _env.loader])
+    except ImportError:
+        pass
 
     # Cadastral map assets and tile/identify API used by /documents?view=cadastral-map
     try:

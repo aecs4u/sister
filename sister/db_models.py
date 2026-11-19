@@ -911,6 +911,35 @@ class SubjectTag(SQLModel, table=True):
     )
 
 
+class LocalUser(SQLModel, table=True):
+    """A local (username + password) sign-in account.
+
+    Replaces the ``local_users.txt`` file. ``password_hash`` holds a ``pbkdf2_sha256$...`` hash
+    (``sister.passwords``), never a plain password. ``username_key`` is the casefolded username and the identity.
+    """
+
+    __tablename__ = "local_user"
+    __table_args__ = (
+        sa.CheckConstraint("role IN ('admin', 'user')", name="ck_local_user_role"),
+        sa.CheckConstraint("substr(password_hash, 1, 14) = 'pbkdf2_sha256$'", name="ck_local_user_hashed"),
+    )
+
+    username_key: str = Field(sa_column=Column(sa.String(255), primary_key=True))
+    username: str = Field(sa_column=Column(sa.String(255), nullable=False))
+    password_hash: str = Field(sa_column=Column(sa.String(), nullable=False))
+    role: str = Field(default="user", sa_column=Column(sa.String(16), nullable=False, server_default="user"))
+    is_active: bool = Field(default=True, sa_column=Column(sa.Boolean(), nullable=False, server_default=sa.true()))
+    created_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc),
+        sa_column=Column(sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
+    )
+    updated_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc),
+        sa_column=Column(sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
+    )
+    last_login_at: Optional[datetime] = Field(default=None, sa_column=Column(sa.DateTime(timezone=True), nullable=True))
+
+
 class ManualPropertyValuation(SQLModel, table=True):
     """A user's manually transcribed market estimate from an external provider."""
 

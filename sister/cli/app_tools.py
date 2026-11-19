@@ -49,6 +49,28 @@ def app_hash_password(username: str = typer.Argument(..., help="Nome utente loca
         typer.echo(entry)
 
 
+@app_tools_app.command("import-local-users")
+def app_import_local_users(
+    file: Path = typer.Option(None, "--file", help="local_users.txt (default: LOCAL_USERS_FILE)"),
+    apply: bool = typer.Option(False, "--apply", help="Scrive nella tabella local_user (default: solo anteprima)"),
+):
+    """Importa gli utenti con password hash di local_users.txt nella tabella local_user (idempotente)."""
+    import asyncio
+
+    from ..command_tools import import_local_users
+
+    default_users_file = Path(__file__).resolve().parents[3] / "local_users.txt"
+    path = file or Path(os.getenv("LOCAL_USERS_FILE", str(default_users_file))).expanduser()
+    admins = {name.strip() for name in os.getenv("SISTER_ADMIN_USERS", "").split(",") if name.strip()}
+    result = asyncio.run(import_local_users.run(path, admins, apply))
+    if _runtime.json_output_enabled():
+        _runtime.emit_data(result)
+        return
+    typer.echo("APPLICATO" if apply else "ANTEPRIMA (usa --apply per scrivere)")
+    for label in ("create", "update", "unchanged", "skipped_plaintext"):
+        typer.echo(f"{label}: {len(result[label])}" + (f" ({', '.join(result[label])})" if result[label] else ""))
+
+
 @app_tools_app.command("start")
 def app_start(
     port: int = typer.Option(8025, "--port", min=1, max=65535, help="Porta di ascolto"),

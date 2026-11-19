@@ -94,6 +94,7 @@ def _apply_table_migrations(engine, schema: str, istat_schema: str) -> None:
         "20261205_mortgage_search_tables.py",
         "20261206_ade_statement_ledger.py",
         "20261207_mortgage_charge_allocation.py",
+        "20261209_local_users.py",
     ):
         path = migration_dir / name
         spec = importlib.util.spec_from_file_location(f"_{path.stem}_migration", path)

@@ -1,71 +1,89 @@
 /**
- * "Accedi con Google" button of sister/templates/auth_login.html (Clerk SSO next to the local accounts).
- * clerk-js itself is loaded by aecs4u-theme's auth_base.html; the signed-in session is created by aecs4u-auth's
- * GET /auth/clerk/callback, which exchanges the Clerk session for SISTER's own cookie.
- * Expects window.SisterLoginClerk = { nextUrl: "/", callbackUrl: "/auth/clerk/callback" }.
+ * Clerk's embedded sign-in widget on sister/templates/auth_login.html (same behaviour as OpenData's login).
+ * clerk-js and its UI bundle are loaded by the page; once signed in, aecs4u-auth's POST /auth/clerk/session turns the
+ * Clerk session into SISTER's own cookie. Configuration comes from data attributes of #sisterLoginClerk (no inline
+ * script, so the CSP nonce is not needed); every message is set with textContent.
  */
 (function () {
   'use strict';
 
-  var cfg = window.SisterLoginClerk || {};
-  var button = document.getElementById('clerkSignIn');
-  if (!button) return;
-  var label = button.querySelector('.btn-text');
-  var spinner = button.querySelector('.btn-spinner');
-  var errorBox = document.getElementById('loginError');
-  var idleLabel = label ? label.textContent : '';
+  var cfg = document.getElementById('sisterLoginClerk');
+  var statusEl = document.getElementById('clerk-status');
+  var mountEl = document.getElementById('clerk-sign-in');
+  if (!cfg || !statusEl || !mountEl) return;
 
-  function state(disabled, text, loading) {
-    button.disabled = disabled;
-    if (label) label.textContent = text;
-    if (spinner) spinner.classList.toggle('d-none', !loading);
+  var nextUrl = cfg.dataset.nextUrl || '/';
+  var callbackUrl = cfg.dataset.callbackUrl || '/auth/clerk/callback';
+  var sessionUrl = cfg.dataset.sessionUrl || '/auth/clerk/session';
+
+  function say(cls, text) {
+    statusEl.className = 'text-center small mb-2 ' + cls;
+    statusEl.textContent = text;
   }
 
-  function fail(message) {
-    state(false, idleLabel, false);
-    if (errorBox) {
-      errorBox.textContent = message;
-      errorBox.classList.remove('d-none');
-      errorBox.focus();
-    }
-  }
-
-  function waitForClerk(attempts, delayMs) {
+  function waitForGlobals(max, ms) {
     return new Promise(function (resolve) {
       var tries = 0;
       (function check() {
-        if (window.Clerk) return resolve(window.Clerk);
-        if (++tries >= attempts) return resolve(null);
-        setTimeout(check, delayMs);
+        tries += 1;
+        if (window.Clerk && window.__internal_ClerkUICtor) {
+          resolve({ Clerk: window.Clerk, ClerkUI: window.__internal_ClerkUICtor });
+        } else if (tries >= max) {
+          resolve(null);
+        } else {
+          setTimeout(check, ms);
+        }
       })();
     });
   }
 
-  function callbackUrl() {
-    return (cfg.callbackUrl || '/auth/clerk/callback') + '?next=' + encodeURIComponent(cfg.nextUrl || '/');
+  function showSignedIn(Clerk) {
+    var user = Clerk.user;
+    var who = user.fullName || (user.primaryEmailAddress && user.primaryEmailAddress.emailAddress) || '';
+    var info = document.createElement('p');
+    info.className = 'mb-2';
+    info.textContent = 'Sessione attiva come ' + who;
+    var go = document.createElement('a');
+    go.className = 'btn btn-primary btn-sm me-2';
+    go.href = nextUrl;
+    go.textContent = 'Continua';
+    var other = document.createElement('button');
+    other.type = 'button';
+    other.className = 'btn btn-outline-secondary btn-sm';
+    other.textContent = 'Cambia account';
+    other.addEventListener('click', function () {
+      Clerk.signOut().then(function () { window.location.reload(); });
+    });
+    statusEl.className = 'text-center mb-2';
+    statusEl.replaceChildren(info, go, other);
   }
 
-  button.addEventListener('click', function () {
-    if (errorBox) errorBox.classList.add('d-none');
-    state(true, 'Apertura accesso Google…', true);
-    waitForClerk(100, 100)
-      .then(function (clerk) {
-        if (!clerk) throw new Error('Clerk non disponibile');
-        return Promise.resolve(clerk.loaded ? null : clerk.load()).then(function () {
-          if (clerk.user) {
-            state(true, 'Reindirizzamento…', true);
-            window.location.replace(callbackUrl());
-            return null;
-          }
-          return clerk.redirectToSignIn({
-            signInForceRedirectUrl: callbackUrl(),
-            signUpForceRedirectUrl: callbackUrl(),
-          });
+  waitForGlobals(120, 100).then(function (globals) {
+    if (!globals) return say('text-warning', 'Accesso con Google non disponibile — usa email e password');
+    return Promise.resolve(globals.Clerk.load({ ui: { ClerkUI: globals.ClerkUI } }))
+      .then(function () {
+        var Clerk = globals.Clerk;
+        if (Clerk.user) {
+          var token = Clerk.session ? Clerk.session.getToken() : Promise.resolve(null);
+          return Promise.resolve(token)
+            .then(function (value) {
+              if (!value) return null;
+              return fetch(sessionUrl, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + value },
+                body: JSON.stringify({ token: value }),
+                credentials: 'same-origin',
+              });
+            })
+            .then(function () { showSignedIn(Clerk); });
+        }
+        statusEl.style.display = 'none';
+        return Clerk.mountSignIn(mountEl, {
+          fallbackRedirectUrl: callbackUrl + '?next=' + encodeURIComponent(nextUrl),
         });
-      })
-      .catch(function (error) {
-        console.error('Clerk sign-in error:', error);
-        fail('Accesso con Google non disponibile. Usa nome utente e password.');
       });
+  }).catch(function (error) {
+    console.error('Clerk init failed', error);
+    say('text-warning', 'Accesso con Google non disponibile — usa email e password');
   });
 })();

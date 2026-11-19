@@ -51,10 +51,16 @@ async def login_page(request: Request, next: str | None = None, next_url: str | 
     target = _safe_next(next or next_url)
     if await _signed_in(request):
         return RedirectResponse(target, status_code=303)
-    # Clerk SSO next to the local accounts (AUTH_MODE=clerk_and_local); the key also makes aecs4u-theme load clerk-js.
+    # Clerk SSO next to the local accounts (AUTH_MODE=clerk_and_local); the page loads clerk-js itself (auth_scripts).
     auth_config = getattr(request.app.state, "auth_config", None)
     clerk_key = auth_config.clerk_publishable_key if auth_config and auth_config.clerk_enabled else None
-    response = _render(request, "auth_login.html", next_url=target, clerk_publishable_key=clerk_key)
+    response = _render(
+        request,
+        "auth_login.html",
+        next_url=target,
+        clerk_enabled=bool(clerk_key),
+        publishable_key=clerk_key or "",
+    )
     if deprecated:
         response.headers["Deprecation"] = "true"
     return response
