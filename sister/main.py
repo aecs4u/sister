@@ -659,12 +659,12 @@ try:
             async def _redirect_to_login(request: Request, exc: RedirectToLogin):
                 url = "/auth/login"
                 if exc.return_url:
-                    # The login page reads ?next_url= and only accepts relative targets: pass path + query.
+                    # The login page reads ?next= and only accepts relative targets: pass path + query.
                     from urllib.parse import urlsplit as _urlsplit
 
                     _target = _urlsplit(exc.return_url)
                     _next = _target.path + (f"?{_target.query}" if _target.query else "")
-                    url = f"{url}?next_url={_urlquote(_next, safe='')}"
+                    url = f"{url}?next={_urlquote(_next, safe='')}"
                 return RedirectResponse(url=url, status_code=302)
 
         # Register file-backed local password authentication. Each non-comment

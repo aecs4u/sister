@@ -82,7 +82,7 @@ RUN /app/.venv/bin/python -m playwright install --with-deps chromium && \
     mkdir -p /app/data /app/logs /app/outputs /ms-playwright && \
     chown -R appuser:appuser /app /ms-playwright && \
     SITE_PACKAGES=$(ls -d /app/.venv/lib/python*/site-packages | head -1) && \
-    printf "#!/bin/sh\nexport PYTHONPATH=%s:/app\nexec python -m uvicorn sister.main:app --host 0.0.0.0 --port 8080 --workers 1\n" "$SITE_PACKAGES" > /app/entrypoint.sh && \
+    printf "#!/bin/sh\nexport PYTHONPATH=%s:/app\nexec python -m uvicorn sister.main:app --host 0.0.0.0 --port 8080 --workers 1 --proxy-headers --forwarded-allow-ips '*'\n" "$SITE_PACKAGES" > /app/entrypoint.sh && \
     chmod +x /app/entrypoint.sh
 
 USER appuser

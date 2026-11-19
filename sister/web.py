@@ -15686,7 +15686,7 @@ async def _render_subject_index(request: Request, user, kind: str, code: str = "
     codes = None if _is_admin(user) else await get_subject_access_codes(_principal_keys(user), kind)
     overview = await subject_overview(kind, allowed_codes=codes)
     response = _get_theme(request).render(
-        "subject_index.html",
+        "aecs4u_theme:subject_index.html",
         request,
         user=user,
         kind=kind,

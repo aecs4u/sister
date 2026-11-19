@@ -360,10 +360,13 @@ def test_persons_index_render_exposes_live_burdens_card_and_column():
     from pathlib import Path
     from types import SimpleNamespace
 
-    from jinja2 import ChoiceLoader, DictLoader, Environment, FileSystemLoader
+    from jinja2 import ChoiceLoader, DictLoader, Environment, FileSystemLoader, PrefixLoader
+
+    import aecs4u_theme
 
     sister_root = Path(__file__).resolve().parents[1] / "sister"
     templates = sister_root / "templates"
+    theme_templates = Path(aecs4u_theme.__file__).resolve().parent / "templates"
     env = Environment(
         loader=ChoiceLoader(
             [
@@ -376,12 +379,15 @@ def test_persons_index_render_exposes_live_burdens_card_and_column():
                         ),
                     }
                 ),
+                PrefixLoader({"aecs4u_theme": FileSystemLoader(str(theme_templates))}),
                 FileSystemLoader(str(templates)),
+                FileSystemLoader(str(theme_templates)),
             ]
         ),
         autoescape=True,
     )
-    html = env.get_template("subject_index.html").render(
+    env.globals["_"] = lambda message: message
+    html = env.get_template("aecs4u_theme:subject_index.html").render(
         request=SimpleNamespace(url=SimpleNamespace(path="/persons")),
         kind="person",
         kind_label="Persone",

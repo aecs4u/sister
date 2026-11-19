@@ -1,12 +1,12 @@
 # CLI architecture plan
 
-Status: code phases 0–7 implemented, reviewed 2026-11-17. Full live verification remains pending authenticated
-query, workflow, and batch checks. Scope: the `sister` command line (`sister/cli/`,
+Status: code phases 0–7 implemented, reviewed 2026-11-18. Local, mocked, and read-only checks are recorded below;
+authenticated live verification remains pending. Scope: the `sister` command line (`sister/cli/`,
 `sister/command_tools/`, and the shell helpers it forwards to). The original `sister/cli.py` has moved into the
 `sister/cli/` package. `_commands.py` assembles the root app and defines root commands; group modules own most other
 commands. The service, client contract, and `query_forms.py` change only where a phase says so.
 
-### Implementation snapshot (2026-11-17)
+### Implementation snapshot (2026-11-18)
 
 | Phase | Current state in this checkout |
 |---|---|
@@ -15,20 +15,25 @@ commands. The service, client contract, and `query_forms.py` change only where a
 | 2 — Shared runtime | Implemented: all API requests use `run_api`; `run_db` handles local async database operations; the two `VisuraAPIError` catches are in `_runtime.py` and the multi-request query path. `emit` owns data-result `--output` writes. Hidden legacy artifact flags on `batch convert-list` and `documents define-workflow` retain their old destinations with warnings; their canonical names are `--destination` and `--manifest`. The remaining direct `asyncio.run` calls are local login and floor-plan work. Pure renderers and exit handling are covered by focused tests. |
 | 3 — Machine-readable output | Implemented: root `--json` and `SISTER_CLI_JSON=1` route Rich progress and hints to stderr. Data commands emit one JSON document. Local tools whose report was text use a shared `{command, exit_code, output}` envelope, including module-level Rich consoles; commands with structured reports emit those reports directly. Coverage includes health, `queries`, requests/history, every generated query dry-run, batch execution/schema, workflow run/status/cancel, mortgage status/quote, database migration/status/backfill, AdE imports/linking, floor-plan validation, receipt imports (including an empty directory), P7M/workflow reports, password hashes, and local tool reports. |
 | 4 — One definition per query | Implemented: paid immobile/company/note inspections are `QueryForm` entries with fixed `tipo_ricerca`, `auto_confirm=false`, paid help/list markers, and hidden ignored `--yes` compatibility. The free persona-fisica preview is the shared target of hidden `query ipotecaria-persona` and `mortgage start` aliases. Paid forms are excluded from batch schemas/plans and MCP submission; `list_queries` marks them. `queries` builds form rows from `QUERY_FORMS` and other API rows from registered Typer callback metadata. |
-| 5 — One workflow engine | Implemented in the SISTER and OpenData checkouts: OpenData accepts `preset=custom` and ordered `custom_steps`; SISTER prepares the four start shapes, exposes `workflow run` with repeatable `--with`, and keeps `query workflow` as a hidden deprecated alias. The OpenData run endpoint persists and returns a queued workflow ID before background execution; wait mode polls status. Live service verification remains pending. |
+| 5 — One workflow engine | Implemented in the SISTER and OpenData checkouts: OpenData accepts `preset=custom` and ordered `custom_steps`; SISTER prepares the four start shapes, exposes `workflow run` with repeatable `--with`, and keeps `query workflow` as a hidden deprecated alias. `test_workflows.py` pins the expected legacy start sequences, including parcel searches with and without a subalterno, and checks ordered optional steps. The old client-side flow is no longer runnable, so a direct old-versus-new execution comparison cannot now be made. The OpenData run endpoint persists and returns a queued workflow ID before background execution; wait mode polls status. Live service verification remains pending. |
 | 6 — Command tree cleanup | Implemented: `requests get|wait|list`, migration revision/status comparison, `documents floor-plan-validate`, root help panels, Italian CLI messages, and hidden compatibility aliases are implemented and covered. The active CLI service at `http://localhost:8025` returned matching rows for pending/completed/failed status queries, so the client-side fallback has been removed. |
 | 7 — Port forwarded tools | Implemented: batch session/progress/list/PDF-parseable/Recrowd workflows, all app commands, all document tools, both build commands, and all UI audits have Typer entry points. `app start` delegates Uvicorn startup to `scripts/start.sh`; retained batch shell scripts are compatibility launchers to the CLI, and `dev fixture-payloads` is the only developer shell command. Standalone `python -m sister.command_tools...` entry points remain where they existed. Input-list and document maintenance commands preview by default and write only with `--apply`. |
 
-Verification: the focused SISTER CLI/query-form/batch/workflow/render/runtime/JSON/MCP set passed 528 tests. The run
-reported the existing pytest-asyncio configuration notice and a Logfire-not-configured warning. Ruff passed for
-`sister/cli/`, the focused test modules, and the added batch, PDF/PVP, and audit runner
-modules. A read-only `sister --json health` probe against the local service returned valid JSON on stdout and a
-`degraded` status with authentication unavailable because the browser was not running. OpenData's focused workflow
-route/custom-step tests passed 9 tests, and Ruff passed for the changed router and tests. The active CLI service at
+Verification: the last aggregate focused SISTER CLI/query-form/batch/workflow/render/runtime/JSON/MCP run passed
+533 tests. It reported the existing pytest-asyncio configuration notice and a Logfire-not-configured warning; two
+runtime tests added afterward were not part of that aggregate run. Ruff passed for `sister/cli/`, the focused test
+modules, and the added batch, PDF/PVP, and audit runner modules in the preceding review. The wheel build succeeded,
+included `sister.cli`, and `python -m sister.cli --help` worked from the built wheel. A read-only
+`sister --json health` probe against the local service returned valid JSON on stdout and a `degraded` status with
+authentication unavailable because the browser was not running. OpenData's focused workflow route/custom-step
+tests passed 11 tests with coverage disabled for that focused run, and Ruff passed for the changed workflow files.
+The active CLI service at
 `http://localhost:8025` returned five matching rows for each of `pending`, `completed`, and `failed` using both the
 API endpoint and `sister --json requests list --status STATUS --limit 5`; the CLI no longer re-filters those results.
-Login-bound query/workflow/batch checks remain pending because the service reports no authenticated browser session.
-This is not a full-suite or release claim.
+Authenticated-session checks have not run: query, workflow, `batch run-list`, `batch run-session`, and the
+resulting `query batch` execution remain pending. The health probe reported no authenticated browser session, so
+only local, mocked, and read-only paths are confirmed here. The focused test result above predates two later runtime
+test additions; it must not be treated as their aggregate test result. This is not a full-suite or release claim.
 Update the snapshot when a phase changes state.
 
 ## 1. Why
@@ -473,11 +478,12 @@ command; and `sister batch run-session --help` plus the §6 internal-command con
   JSON, stderr may have text.
 - **Renderers.** Unit tests on `render.py` with `Console(record=True)`, no CLI runner needed.
 - **Ported tools.** Test `run(...)` directly; one `CliRunner` test per command for option wiring.
-- **Live checks** (cannot be unit tested; do them after Phases 2, 5 and 7):
+- **Live checks** (cannot be unit tested; do them after Phases 2, 5 and 7, after SISTER login):
   - `sister health`;
   - `sister query search ... --richiedi-documenti false --wait`;
   - `sister workflow run --preset due-diligence ... --depth light`;
-  - one `sister batch run-session` on a small plan right after a login.
+  - `sister batch run-list` on a small Markdown input, then `sister batch run-session` on its plan;
+  - the resulting `sister query batch` execution, plus one direct `query batch` run from a prepared small plan.
 
 ## 7. Risks
 
@@ -486,9 +492,9 @@ command; and `sister batch run-session --help` plus the §6 internal-command con
 | Scripts, cron jobs and docs call the old names | Hidden aliases for one release with a stderr warning; grep `scripts/`, `docs/`, `CLAUDE.md`, `inputs/` and crontab for old names in the same PR that adds each alias, and update them. |
 | Phase 2's single event loop changes timing in long `--wait` runs | Only the connection pool changes; polling (`VISURA_LONG_POLL`) doesn't. Run the live checks of §6 before merging. |
 | A paid query becomes reachable by a new path in Phase 4 (batch, MCP) | `paid=True` is refused by `batch.py` and MCP `submit_query`, with tests for both; batch has no paid-query opt-in. |
-| The `custom` workflow preset differs from the client-side flow it replaces | Before deleting the CLI flow, compare their step lists for the four start shapes (CF, P.IVA, address, F/P with and without `-sub`) in a test. |
+| The `custom` workflow preset differs from the deleted client-side flow | A direct differential check can no longer run because the old flow is gone. `test_workflows.py::test_custom_workflow_matches_legacy_client_start_shapes` pins the recorded legacy start sequences for CF, P.IVA, address, and parcel with or without `subalterno`; this is a regression expectation, not an executable comparison against the old implementation. |
 | `app stop` in Python kills the wrong process | Match on the listening port **and** a `sister.main` command line; refuse non-SISTER listeners and require `--pid` when more than one SISTER listener matches. |
-| `run-session` stops seeing a running batch | Its `stop_stale_service()` check matches `sister.cli query batch` in the process list. If `query batch` is ever run in-process or by another command line, `--stop-stale-service` could stop a service a batch is using. Keep the subprocess call (§3.4), or change the detection in the same PR (for example a lock file in the batch folder). |
+| `run-session` mistakes a running batch for a stale service | This remains a known, unchanged limitation: `stop_stale_service()` matches the text `sister.cli query batch` in the process list. The check has only been reviewed locally; no authenticated `run-session` check has exercised this collision. Keep the subprocess call (§3.4), or replace text matching with an unambiguous ownership signal (for example a lock file in the batch folder) before relying on stale-service cleanup during a live run. |
 | Phase 1 breaks `python -m sister.cli` | `sister/cli/__main__.py` is part of Phase 1; the internal-API test of §6 runs `python -m sister.cli --help`. |
 | Moving `cli.py` loses `git blame` | `git mv` first in its own commit, then edit; use `git log --follow`. |
 

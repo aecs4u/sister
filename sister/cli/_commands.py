@@ -159,7 +159,7 @@ def queries():
     table.add_column("Comando", style="cyan", no_wrap=True)
     table.add_column("Metodo", style="dim", no_wrap=True)
     table.add_column("Endpoint", style="white")
-    table.add_column("Description")
+    table.add_column("Descrizione")
 
     # one row per single-step query, straight from the spec that also generates the commands
     rows = [

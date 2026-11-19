@@ -43,14 +43,21 @@ async def _signed_in(request: Request) -> bool:
 
 
 @router.get("/auth/login", response_class=HTMLResponse)
-async def login_page(request: Request, next_url: str | None = None, next: str | None = None):
-    target = _safe_next(next_url or next)
+async def login_page(request: Request, next: str | None = None, next_url: str | None = None):
+    """Sign-in page. ``?next=`` is the return target; ``?next_url=`` is **deprecated** (still read, ``next`` wins)."""
+    deprecated = next_url is not None
+    if deprecated:
+        logger.warning("Deprecated login parameter next_url used; use next instead")
+    target = _safe_next(next or next_url)
     if await _signed_in(request):
         return RedirectResponse(target, status_code=303)
     # Clerk SSO next to the local accounts (AUTH_MODE=clerk_and_local); the key also makes aecs4u-theme load clerk-js.
     auth_config = getattr(request.app.state, "auth_config", None)
     clerk_key = auth_config.clerk_publishable_key if auth_config and auth_config.clerk_enabled else None
-    return _render(request, "auth_login.html", next_url=target, clerk_publishable_key=clerk_key)
+    response = _render(request, "auth_login.html", next_url=target, clerk_publishable_key=clerk_key)
+    if deprecated:
+        response.headers["Deprecation"] = "true"
+    return response
 
 
 @router.get("/auth/logout", response_class=HTMLResponse)
