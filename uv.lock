@@ -5379,7 +5379,7 @@ name = "sister"
 version = "1.2.0"
 source = { editable = "." }
 dependencies = [
-    { name = "aecs4u-auth", extra = ["browser"] },
+    { name = "aecs4u-auth" },
     { name = "aecs4u-crypto" },
     { name = "aecs4u-domain" },
     { name = "aecs4u-email" },
@@ -5401,7 +5401,7 @@ dependencies = [
     { name = "python-dotenv" },
     { name = "python-multipart" },
     { name = "rich" },
-    { name = "sqlalchemy" },
+    { name = "sqlalchemy", extra = ["asyncio"] },
     { name = "sqlmodel" },
     { name = "starlette" },
     { name = "structlog" },
@@ -5411,6 +5411,9 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
+browser = [
+    { name = "aecs4u-auth", extra = ["browser"] },
+]
 dev = [
     { name = "black" },
     { name = "pytest" },
@@ -5427,6 +5430,7 @@ mcp = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "aecs4u-auth", extra = ["browser"] },
     { name = "pytest" },
     { name = "pytest-asyncio" },
     { name = "pytest-cov" },
@@ -5434,7 +5438,8 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "aecs4u-auth", extras = ["browser"], git = "https://github.com/aecs4u/aecs4u-auth.git?branch=main" },
+    { name = "aecs4u-auth", git = "https://github.com/aecs4u/aecs4u-auth.git?branch=main" },
+    { name = "aecs4u-auth", extras = ["browser"], marker = "extra == 'browser'", git = "https://github.com/aecs4u/aecs4u-auth.git?branch=main" },
     { name = "aecs4u-crypto", git = "https://github.com/aecs4u/aecs4u-crypto.git?branch=main" },
     { name = "aecs4u-domain", git = "https://github.com/aecs4u/aecs4u-domain.git?branch=main" },
     { name = "aecs4u-email", git = "https://github.com/aecs4u/aecs4u-email.git?branch=main" },
@@ -5463,7 +5468,7 @@ requires-dist = [
     { name = "python-multipart", specifier = ">=0.0.32" },
     { name = "rich", specifier = ">=13.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.1.0" },
-    { name = "sqlalchemy", specifier = ">=2.0.50" },
+    { name = "sqlalchemy", extras = ["asyncio"], specifier = ">=2.0.50" },
     { name = "sqlmodel", specifier = ">=0.0.8" },
     { name = "starlette", specifier = ">=1.6.0" },
     { name = "structlog", specifier = ">=26.0.0" },
@@ -5471,10 +5476,11 @@ requires-dist = [
     { name = "typst", specifier = ">=0.14" },
     { name = "uvicorn", specifier = ">=0.32.0" },
 ]
-provides-extras = ["floor-plan-ocr", "mcp", "dev"]
+provides-extras = ["floor-plan-ocr", "mcp", "browser", "dev"]
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "aecs4u-auth", extras = ["browser"], git = "https://github.com/aecs4u/aecs4u-auth.git?branch=main" },
     { name = "pytest", specifier = ">=9.0.3" },
     { name = "pytest-asyncio", specifier = ">=1.4.0" },
     { name = "pytest-cov", specifier = ">=7.1.0" },
@@ -5586,6 +5592,11 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/16/9e/b86c9b7e02bb3142d6bf464262b3cf617522561515cebae298be35bd6f97/sqlalchemy-2.1.9-cp315-cp315t-win_amd64.whl", hash = "sha256:65b8257c62c6151f8c5f03680fe6e470153a94c92196e9e5d00be3f1510edae3", size = 2521333, upload-time = "2026-11-16T21:19:57.177Z" },
     { url = "https://files.pythonhosted.org/packages/8f/13/a7dd1788974530f5e402656d310e32b97606b684d82dbc57c885c97f518b/sqlalchemy-2.1.9-cp315-cp315t-win_arm64.whl", hash = "sha256:c7d8e10c1f9b82c21be141a21f3fb94469eec820d946c14544e0734de42e7614", size = 2443055, upload-time = "2026-11-16T21:53:43.918Z" },
     { url = "https://files.pythonhosted.org/packages/7a/ee/9926603a1f7e88b41bc0d1e068e889fc84981553fb4e6037426d6b174da3/sqlalchemy-2.1.9-py3-none-any.whl", hash = "sha256:449fed5c2caa3b278cc57499d09db001fb3f28dc7f18affc48142aee4dcc0cdf", size = 2071860, upload-time = "2026-11-16T21:16:28.413Z" },
+]
+
+[package.optional-dependencies]
+asyncio = [
+    { name = "greenlet" },
 ]
 
 [[package]]

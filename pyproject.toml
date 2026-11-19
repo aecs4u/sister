@@ -25,7 +25,7 @@ classifiers = [
 ]
 
 dependencies = [
-    "aecs4u-auth[browser]>=1.19.0",
+    "aecs4u-auth>=1.19.0",  # no [browser]: Playwright is not a production dependency (see the browser extra / dev group)
     "aecs4u-domain>=0.12.0",
     "aecs4u-email>=1.0.0",
     "aecs4u-storage>=0.2.0",  # company Google Drive for the shared reports (drive_share.py)
@@ -49,7 +49,7 @@ dependencies = [
     "land_registry>=0.1.4",
     "aecs4u-theme>=1.6.0",
     "lxml>=6.1.1",
-    "sqlalchemy>=2.0.50",
+    "sqlalchemy[asyncio]>=2.0.50",  # greenlet: async engine (it used to arrive only through Playwright)
     "starlette>=1.6.0",
     "python-multipart>=0.0.32",
     "ezdxf>=1.4.4",
@@ -62,6 +62,10 @@ floor-plan-ocr = [
 ]
 mcp = [
     "mcp>=2.0.0,<3",
+]
+# Portal automation and UI audits need Playwright; they run on a workstation next to the shared Chrome, never in production.
+browser = [
+    "aecs4u-auth[browser]>=1.19.0",
 ]
 dev = [
     "pytest>=7.0",
@@ -135,11 +139,12 @@ DEP002 = [
     "aecs4u-theme>=1.6.0",    # static files via importlib / mount
 ]
 DEP001 = [
-    "playwright",      # optional, comes via aecs4u-auth[browser] — not a direct dep
+    "playwright",      # optional, comes via the browser extra / dev group (aecs4u-auth[browser]) — not a direct dep
 ]
 
 [dependency-groups]
 dev = [
+    "aecs4u-auth[browser]>=1.19.0",  # Playwright for local portal sessions and UI audits
     "pytest>=9.0.3",
     "pytest-asyncio>=1.4.0",
     "pytest-cov>=7.1.0",

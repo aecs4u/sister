@@ -1,5 +1,7 @@
 """Browser lifecycle manager — wraps aecs4u-auth for SISTER portal automation."""
 
+from __future__ import annotations
+
 import asyncio
 import functools
 import inspect
@@ -10,12 +12,14 @@ import time
 from contextlib import suppress
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 from aecs4u_auth.browser import BrowserConfig
 from aecs4u_auth.browser import BrowserManager as AuthBrowserManager
 from aecs4u_auth.browser.page_logger import PageLogger
-from playwright.async_api import Page
+
+if TYPE_CHECKING:  # Playwright is a development/local-session dependency, not installed in the production image
+    from playwright.async_api import Page
 
 from .models import (
     AuthenticationError,

@@ -67,8 +67,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONPATH=/app \
     PATH="/app/.venv/bin:${PATH}" \
     VIRTUAL_ENV=/app/.venv \
-    PORT=8080 \
-    PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+    PORT=8080
 
 WORKDIR /app
 
@@ -78,9 +77,9 @@ COPY --from=builder --chown=appuser:appuser /app/alembic /app/alembic
 COPY --from=builder --chown=appuser:appuser /app/alembic.ini /app/
 COPY --from=builder --chown=appuser:appuser /app/pyproject.toml /app/
 
-RUN /app/.venv/bin/python -m playwright install --with-deps chromium && \
-    mkdir -p /app/data /app/logs /app/outputs /ms-playwright && \
-    chown -R appuser:appuser /app /ms-playwright && \
+# No Playwright/Chromium here: portal automation runs on a workstation, the service only reads stored data.
+RUN mkdir -p /app/data /app/logs /app/outputs && \
+    chown -R appuser:appuser /app && \
     SITE_PACKAGES=$(ls -d /app/.venv/lib/python*/site-packages | head -1) && \
     printf "#!/bin/sh\nexport PYTHONPATH=%s:/app\nexec python -m uvicorn sister.main:app --host 0.0.0.0 --port 8080 --workers 1 --proxy-headers --forwarded-allow-ips '*'\n" "$SITE_PACKAGES" > /app/entrypoint.sh && \
     chmod +x /app/entrypoint.sh

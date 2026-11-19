@@ -1,3 +1,7 @@
+"""SISTER portal browser automation."""
+
+from __future__ import annotations
+
 import asyncio
 import contextlib
 import contextvars
@@ -9,11 +13,13 @@ import unicodedata
 import weakref
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from aecs4u_auth.browser import PageLogger as _BasePageLogger
 from bs4 import BeautifulSoup
-from playwright.async_api import Page
+
+if TYPE_CHECKING:  # Playwright is a development/local-session dependency, not installed in the production image
+    from playwright.async_api import Page
 
 from .models import CaptchaRequired
 from .result_parsers import omonimo_details, parse_intestato_value, parse_soggetto_selezionato
