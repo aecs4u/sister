@@ -51,10 +51,10 @@ def app_hash_password(username: str = typer.Argument(..., help="Nome utente loca
 
 @app_tools_app.command("import-local-users")
 def app_import_local_users(
-    file: Path = typer.Option(None, "--file", help="local_users.txt (default: LOCAL_USERS_FILE)"),
-    apply: bool = typer.Option(False, "--apply", help="Scrive nella tabella local_user (default: solo anteprima)"),
+    file: Path = typer.Option(None, "--file", help="Legacy hashed-account file (default: LOCAL_USERS_FILE)"),
+    apply: bool = typer.Option(False, "--apply", help="Scrive nella tabella users (default: solo anteprima)"),
 ):
-    """Importa gli utenti con password hash di local_users.txt nella tabella local_user (idempotente)."""
+    """Importa gli account legacy nella tabella aecs4u-auth users (idempotente)."""
     import asyncio
 
     from ..command_tools import import_local_users
@@ -67,8 +67,8 @@ def app_import_local_users(
         _runtime.emit_data(result)
         return
     typer.echo("APPLICATO" if apply else "ANTEPRIMA (usa --apply per scrivere)")
-    for label in ("create", "update", "unchanged", "skipped_plaintext"):
-        typer.echo(f"{label}: {len(result[label])}" + (f" ({', '.join(result[label])})" if result[label] else ""))
+    for label in ("created", "updated", "unchanged", "skipped_plaintext", "invalid_email", "conflicts"):
+        typer.echo(f"{label}: {result[label]}")
 
 
 @app_tools_app.command("start")

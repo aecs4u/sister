@@ -2,8 +2,8 @@
 
 Used by the parcel maps for a parcel the cadastre has no geometry for: the visura gives the address
 (``VIA PAZIENZA n. 27-29 Piano T - 1 - 2``), ANNCSU gives the coordinates of the house number, which is
-better than a geocoder guess. Data: local ``anncsu`` database (``anncsu.r19__addresses`` / ``r19__streets``);
-connection ``ANNCSU_POSTGRES_DSN``, otherwise the database part of the cadastral DSN (like ``omi_quotes``).
+better than a geocoder guess. Data: local ``anncsu`` database, export schema ``anncsu_v2_ref`` (view
+``v_address``, the only supported interface); connection ``ANNCSU_POSTGRES_DSN``, otherwise the database part of the cadastral DSN (like ``omi_quotes``).
 A missing database, a timeout or no match simply return ``None``: the caller falls back to the geocoder.
 """
 from __future__ import annotations
@@ -21,10 +21,9 @@ from .database_config import database_dsn_suffix
 logger = logging.getLogger("sister")
 
 _SQL = """
-SELECT a.civic_number, a.exponent, a.latitude, a.longitude, s.odonimo
-FROM anncsu.r19__addresses a
-JOIN anncsu.r19__streets s ON s.street_id = a.street_id AND s.comune_code = a.comune_code
-WHERE a.comune_code = $1 AND upper(s.odonimo) = $2 AND a.civic_number = ANY($3::text[])
+SELECT a.civic_number, a.exponent, a.latitude, a.longitude, a.street AS odonimo
+FROM anncsu_v2_ref.v_address a
+WHERE a.cadastral_code = $1 AND upper(a.street) = $2 AND a.civic_number = ANY($3::int[])
   AND a.latitude IS NOT NULL AND a.longitude IS NOT NULL
 LIMIT 20
 """
@@ -94,7 +93,7 @@ async def anncsu_position(municipality_code: str, address: str, *, timeout: floa
             timeout=timeout + 1,
         )
         try:
-            rows = await connection.fetch(_SQL, code, street, civics)
+            rows = await connection.fetch(_SQL, code, street, [int(civic) for civic in civics])
         finally:
             await connection.close()
     except Exception as exc:  # noqa: BLE001 - optional source: the geocoder is the fallback
@@ -106,7 +105,7 @@ async def anncsu_position(municipality_code: str, address: str, *, timeout: floa
         # a "27-29" range covers two house numbers: the point between them; a plain civic number is one point
         latitude = sum(float(row["latitude"]) for row in rows) / len(rows)
         longitude = sum(float(row["longitude"]) for row in rows) / len(rows)
-        numbers = sorted({row["civic_number"] for row in rows}, key=lambda value: int(value) if value.isdigit() else 0)
+        numbers = [str(number) for number in sorted({row["civic_number"] for row in rows})]
         hit = {"lat": latitude, "lng": longitude, "label": f"{rows[0]['odonimo']} {'-'.join(numbers)}"}
     _CACHE[key] = hit
     return hit

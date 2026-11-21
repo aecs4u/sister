@@ -61,7 +61,7 @@ SELECT DISTINCT ON (
        coalesce(nullif(btrim(m.italian_name), ''), m.name) AS municipality,
        coalesce(m.province_abbreviation, '') AS province
 FROM sister.cadastral_unit cu
-JOIN sister.municipalities m ON m.numeric_code = cu.comune_id
+JOIN sister.ft_municipalities m ON m.numeric_code = cu.comune_id
 WHERE nullif(btrim(m.cadastral_code), '') IS NOT NULL
   AND nullif(btrim(cu.sheet), '') IS NOT NULL
   AND nullif(btrim(cu.parcel), '') IS NOT NULL
@@ -105,7 +105,7 @@ SELECT DISTINCT
        nullif(btrim(a.civic_number), '') AS civic_number
 FROM address_candidates a
 JOIN sister.cadastral_unit cu ON cu.id = a.cadastral_unit_id
-JOIN sister.municipalities m ON m.numeric_code = cu.comune_id
+JOIN sister.ft_municipalities m ON m.numeric_code = cu.comune_id
 WHERE cu.cadastre_type = 'F'
   AND nullif(btrim(m.cadastral_code), '') IS NOT NULL
   AND nullif(btrim(cu.sheet), '') IS NOT NULL
@@ -121,9 +121,9 @@ WHERE cu.cadastre_type = 'F'
 """
 
 _ANNCSU_COVERAGE_CODES = """\
-SELECT DISTINCT upper(btrim(comune_code))
-FROM anncsu.r19__addresses
-WHERE nullif(btrim(comune_code), '') IS NOT NULL
+SELECT DISTINCT upper(btrim(cadastral_code))
+FROM anncsu_v2_ref.v_municipality
+WHERE total_accesses > 0 AND nullif(btrim(cadastral_code), '') IS NOT NULL
 """
 
 _ANNCSU_MATCH_QUERY = """\
@@ -135,15 +135,12 @@ WITH wanted AS (
          AS requested(cadastral_code, street_name, civic_number)
 )
 SELECT w.comune_code, w.street_name, w.civic_number,
-       a.access_id, a.latitude, a.longitude, a.coordinate_method, s.odonimo
+       a.access_id, a.latitude, a.longitude, a.coordinate_method, a.street AS odonimo
 FROM wanted w
-JOIN anncsu.r19__addresses a
-  ON upper(btrim(a.comune_code)) = w.comune_code
- AND btrim(a.civic_number) = w.civic_number
-JOIN anncsu.r19__streets s
-  ON s.street_id = a.street_id
- AND upper(btrim(s.comune_code)) = w.comune_code
-WHERE upper(translate(s.odonimo,
+JOIN anncsu_v2_ref.v_address a
+  ON upper(btrim(a.cadastral_code)) = w.comune_code
+ AND a.civic_number::text = w.civic_number
+WHERE upper(translate(a.street,
       'ÀÁÂÃÄÅÈÉÊËÌÍÎÏÒÓÔÕÖÙÚÛÜ',
       'AAAAAAEEEEIIIIOOOOOUUUU')) = w.street_name
   AND a.latitude IS NOT NULL AND a.longitude IS NOT NULL

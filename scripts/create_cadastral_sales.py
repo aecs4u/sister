@@ -27,6 +27,7 @@ from sister.environment import load_environment  # noqa: E402
 load_environment()
 
 SUPPORT = "_cadastral_sales"
+SISTER_REFERENCE_VIEW = "v_cadastral_source_references"
 MARKER = "cadastral_sales migration v1; managed by scripts/create_cadastral_sales.py"
 RELATIONS = ("cadastral_parcel", "cadastral_sheet")
 
@@ -203,7 +204,7 @@ $$;
 CREATE OR REPLACE VIEW _cadastral_sales.reference_audit AS
 WITH raw AS (
     SELECT * FROM _cadastral_sales_pvp.raw_references
-    UNION ALL SELECT * FROM _cadastral_sales_sister.raw_references
+    UNION ALL SELECT * FROM _cadastral_sales_sister.v_cadastral_source_references
     UNION ALL SELECT * FROM _cadastral_sales_opendata.raw_references
 ), parsed AS MATERIALIZED (
     SELECT *, _cadastral_sales.components(sheet) AS sheets,
@@ -238,17 +239,30 @@ FROM _cadastral_sales.reference_audit WHERE sheet_reference IS NOT NULL;
 
 
 def prepare():
-    for database, query in (("pvp_enriched", PVP_RAW), ("sister", SISTER_RAW), ("opendata", OPENDATA_RAW)):
+    sources = (
+        ("pvp_enriched", SUPPORT, "raw_references", PVP_RAW),
+        ("sister", "sister", SISTER_REFERENCE_VIEW, SISTER_RAW),
+        ("opendata", SUPPORT, "raw_references", OPENDATA_RAW),
+    )
+    for database, source_schema, view_name, query in sources:
         with local(database) as connection:
-            owned_schema(connection, SUPPORT)
+            if source_schema == SUPPORT:
+                owned_schema(connection, SUPPORT)
             connection.execute(
-                sql.SQL("CREATE OR REPLACE VIEW {}.raw_references AS ").format(sql.Identifier(SUPPORT)) + sql.SQL(query)
+                sql.SQL("CREATE OR REPLACE VIEW {}.{} AS ").format(
+                    sql.Identifier(source_schema), sql.Identifier(view_name)
+                )
+                + sql.SQL(query)
             )
         log(f"Installed {database} live reference view")
     with local("cadastral") as connection:
         owned_schema(connection, SUPPORT)
-        for database, schema in (("pvp_enriched", "pvp"), ("sister", "sister"), ("opendata", "opendata")):
-            foreign_source(connection, database, SUPPORT, ["raw_references"], f"{SUPPORT}_{schema}")
+        for database, source_schema, source_name, target in (
+            ("pvp_enriched", SUPPORT, "raw_references", "pvp"),
+            ("sister", "sister", SISTER_REFERENCE_VIEW, "sister"),
+            ("opendata", SUPPORT, "raw_references", "opendata"),
+        ):
+            foreign_source(connection, database, source_schema, [source_name], f"{SUPPORT}_{target}")
         connection.execute(NORMALIZE)
         tables = connection.execute("""
             SELECT c.relname FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace

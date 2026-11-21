@@ -67,9 +67,11 @@ Local connections use `127.0.0.1:5432`, `postgres`, and libpq's existing
 or the root `.env`; the configured database must be `cadastral_sales` on a
 `neon.tech` host. No credentials are written to the snapshot or report.
 
-`prepare` adds private `_cadastral_sales*` schemas with reference views and
-foreign tables to the source databases, plus `_cadastral_source` in the new
-database. The public data interface consists of the two `spatial` views;
+`prepare` adds private `_cadastral_sales` reference views to the PVP and
+OpenData source databases, and exposes SISTER references as
+`sister.v_cadastral_source_references`. It imports those sources as foreign
+tables in the private `_cadastral_sales_*` schemas of the `cadastral` database,
+plus `_cadastral_source` there. The public data interface consists of the two `spatial` views;
 regional cadastral source tables and source records remain unchanged. Filtering
 runs inside `cadastral` using its existing regional identity indexes, before
 geometry crosses the foreign-data connection. Private-schema access is revoked

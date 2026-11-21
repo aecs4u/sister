@@ -64,7 +64,6 @@ from .routes import (
     resume_section_extraction,
     visura_history,
 )
-from .passwords import plaintext_users_allowed, require_hashed_passwords
 from .services import PageLogger, VisuraService
 from .territory import (
     get_conservatoria,
@@ -674,59 +673,24 @@ try:
                     url = f"{url}?next={_urlquote(_next, safe='')}"
                 return RedirectResponse(url=url, status_code=302)
 
-        # Register file-backed local password authentication. Each non-comment
-        # line in local_users.txt is ``username password``.
+        # Register local password authentication against the canonical users table.
         from aecs4u_auth import set_password_verify_callback
         from aecs4u_auth import set_user_by_id_callback
         from aecs4u_auth.dependencies import set_user_by_username_callback
 
-        _local_users_path = Path(
-            os.getenv(
-                "LOCAL_USERS_FILE",
-                str(Path(__file__).resolve().parents[2] / "local_users.txt"),
-            )
-        ).expanduser()
+        from .local_users import LocalUserDirectory
 
-        from .local_users import LocalUserDirectory, normalize_source, parse_users_file
-
-        _local_source = normalize_source(os.getenv("SISTER_LOCAL_USERS_SOURCE"))
-        _local_users = {} if _local_source == "db" else parse_users_file(_local_users_path)
-        # Plain-text passwords are refused only for the file; the table only accepts hashes (check constraint).
-        _allow_plaintext = plaintext_users_allowed(os.getenv("ALLOW_PLAINTEXT_USERS"))
-        try:
-            plaintext_count = require_hashed_passwords(
-                (password for _, password in _local_users.values()),
-                allow_plaintext=_allow_plaintext,
-            )
-        except ValueError as exc:
-            logger.critical("Refusing local authentication startup for %s: %s", _local_users_path, exc)
-            raise RuntimeError(str(exc)) from exc
-        if plaintext_count:
-            logger.warning(
-                "%d local user(s) have a plain-text password in %s (use sister app hash-password)",
-                plaintext_count,
-                _local_users_path.name,
-            )
-        logger.info("Local users: source=%s, %d in %s", _local_source, len(_local_users), _local_users_path.name)
-
-        # Local users receive the admin role from the table, or when their username is listed in SISTER_ADMIN_USERS.
+        # Environment overrides supplement the role stored on canonical user rows.
         _admin_usernames = {
             name.strip().casefold() for name in os.getenv("SISTER_ADMIN_USERS", "").split(",") if name.strip()
         }
-        if not _admin_usernames:
-            logger.warning(
-                "SISTER_ADMIN_USERS non configurata: solo gli utenti con ruolo admin nella tabella local_user sono admin"
-            )
         _local_directory = LocalUserDirectory(
-            file_users=_local_users,
             admin_usernames=_admin_usernames,
-            source=_local_source,
             cache_seconds=float(os.getenv("SISTER_LOCAL_USERS_CACHE_SECONDS", "30")),
         )
         app.state.local_user_directory = _local_directory
-        # Account keys (never passwords) the admin purchase form offers: purchases match on ``id:<username>``.
-        # The file's users are known now; table users are added by the lifespan (``refresh_local_user_keys``).
-        app.state.local_user_keys = sorted({f"id:{name.casefold()}" for name, _ in _local_users.values()})
+        app.state.local_user_keys = []
+        logger.info("Local authentication source: aecs4u-auth users table")
 
         async def _get_local_user(username: str, _db=None):
             return await _local_directory.get(username)

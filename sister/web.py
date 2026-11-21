@@ -7742,7 +7742,7 @@ async def _write_visura_cadastral_map_cache(records: list[tuple]) -> None:
                 istat_schema = os.getenv(
                     "DATABASE_ISTAT_SCHEMA", os.getenv("DATABASE_SCHEMA", "sister")
                 )
-                municipalities = sql.SQL("{}.municipalities").format(sql.Identifier(istat_schema))
+                municipalities = sql.SQL("{}.ft_municipalities").format(sql.Identifier(istat_schema))
                 await cursor.executemany(
                     sql.SQL("""WITH target AS (
                            SELECT numeric_code FROM {}

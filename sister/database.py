@@ -158,7 +158,7 @@ DATABASE_SCHEMA = os.getenv("DATABASE_SCHEMA", "sister")
 DATABASE_ISTAT_SCHEMA = os.getenv("DATABASE_ISTAT_SCHEMA", DATABASE_SCHEMA)
 # raw payloads (response JSON, XML tree, extraction JSON) live in their own schema; tests point it at a throwaway one
 DATABASE_ARCHIVE_SCHEMA = os.getenv("DATABASE_ARCHIVE_SCHEMA", "sister_archive")
-DATABASE_REVISION = "20261209_local_users"
+DATABASE_REVISION = "20261211_foreign_table_ft_prefix"
 
 # ---------------------------------------------------------------------------
 # Engine and session
@@ -284,6 +284,8 @@ async def init_db() -> None:
             "cadastral_parcel_coordinate",
             "sister_request_jobs",
             "sezioni_extraction_jobs",
+            "users",
+            "user_roles",
             *LOOKUP_TABLES,
         }
         missing = sorted(required_tables - table_names)
@@ -297,14 +299,14 @@ async def init_db() -> None:
         istat_table_result = await conn.execute(
             text(
                 "SELECT 1 FROM information_schema.tables "
-                "WHERE table_schema = :schema AND table_name = 'municipalities'"
+                "WHERE table_schema = :schema AND table_name = 'ft_municipalities'"
             ),
             {"schema": DATABASE_ISTAT_SCHEMA},
         )
         istat_table_exists = istat_table_result.scalar_one_or_none()
         if istat_table_exists is None:
             raise RuntimeError(
-                f"Shared ISTAT table {DATABASE_ISTAT_SCHEMA}.municipalities was not found. "
+                f"Shared ISTAT table {DATABASE_ISTAT_SCHEMA}.ft_municipalities was not found. "
                 "Set DATABASE_ISTAT_SCHEMA to the schema containing the shared municipality table."
             )
         istat_columns = set(
@@ -312,7 +314,7 @@ async def init_db() -> None:
                 await conn.execute(
                     text(
                         "SELECT column_name FROM information_schema.columns "
-                        "WHERE table_schema = :schema AND table_name = 'municipalities'"
+                        "WHERE table_schema = :schema AND table_name = 'ft_municipalities'"
                     ),
                     {"schema": DATABASE_ISTAT_SCHEMA},
                 )
@@ -331,7 +333,7 @@ async def init_db() -> None:
         )
         if missing_istat:
             raise RuntimeError(
-                f"Shared ISTAT table {DATABASE_ISTAT_SCHEMA}.municipalities is incomplete (missing: "
+                f"Shared ISTAT table {DATABASE_ISTAT_SCHEMA}.ft_municipalities is incomplete (missing: "
                 + ", ".join(missing_istat)
                 + ")."
             )
@@ -2878,7 +2880,7 @@ async def get_comune_centroids(cadastral_codes: Iterable[str]) -> dict[str, tupl
         "SELECT upper(btrim(m.cadastral_code)), "
         "COALESCE(avg(ST_Y(ST_Centroid(g.geom))), m.ci_latitude), "
         "COALESCE(avg(ST_X(ST_Centroid(g.geom))), m.ci_longitude) "
-        f"FROM {schema}.municipalities m "
+        f"FROM {schema}.ft_municipalities m "
         "LEFT JOIN parcel_geometry_cache g ON g.comune_id = m.numeric_code AND g.geom IS NOT NULL "
         "WHERE upper(btrim(m.cadastral_code)) = ANY(CAST(:codes AS text[])) "
         "GROUP BY 1, m.ci_latitude, m.ci_longitude "
@@ -3149,7 +3151,7 @@ def _subject_profile_ctes(istat: str) -> str:
         "         coalesce(m.name, s.birth_municipality_text) AS birth_place,"
         "         coalesce(nullif(s.birth_province_code, ''), m.province_abbreviation) AS birth_province"
         "  FROM subject s"
-        f"  LEFT JOIN {istat}.municipalities m ON m.numeric_code = s.birth_comune_id"
+        f"  LEFT JOIN {istat}.ft_municipalities m ON m.numeric_code = s.birth_comune_id"
         "  WHERE length(btrim(s.fiscal_code)) = :length"
         "  AND (CAST(:code AS text) IS NULL OR upper(btrim(s.fiscal_code)) = CAST(:code AS text))"
         "  AND (CAST(:codes AS text[]) IS NULL OR upper(btrim(s.fiscal_code)) = ANY(CAST(:codes AS text[])))"

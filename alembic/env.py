@@ -10,6 +10,7 @@ from sqlalchemy.engine import make_url
 from sqlmodel import SQLModel
 
 from alembic import context
+from aecs4u_auth.users.models import User as AuthUser  # noqa: F401
 
 # Add project root to path so sister package is importable
 project_root = Path(__file__).resolve().parents[1]
