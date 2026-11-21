@@ -158,7 +158,7 @@ dependencies = [
 [[package]]
 name = "aecs4u-theme"
 version = "1.6.2"
-source = { git = "https://github.com/aecs4u/aecs4u-theme.git?branch=main#9ff1a9e2c973fd85c6c8a77fe7d619fd94c15a32" }
+source = { git = "https://github.com/aecs4u/aecs4u-theme.git?branch=main#c7e04660e78ecf69b2728fa99432ac5061f787ab" }
 dependencies = [
     { name = "aecs4u-i18n" },
     { name = "fastapi" },
