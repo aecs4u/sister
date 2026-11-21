@@ -10,7 +10,7 @@ from sister.passwords import hash_password
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def _auth_process(tmp_path, stored_password, script):
+def _auth_process(tmp_path, stored_password, script, clerk_key_var="NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY"):
     users = tmp_path / "users.txt"
     users.write_text(f"startup-test {stored_password}\n")
     environment = dict(os.environ)
@@ -21,9 +21,11 @@ def _auth_process(tmp_path, stored_password, script):
         ALLOW_PLAINTEXT_USERS="false",
         SECRET_KEY="isolated-auth-startup-test-secret-32-characters",
         USE_CLERK_AUTH="true",
-        NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY="pk_test_ZXhhbXBsZS5jbGVyay5hY2NvdW50cy5kZXYk",
         CLERK_SECRET_KEY="sk_test_isolated_startup_test",
     )
+    environment.pop("CLERK_PUBLISHABLE_KEY", None)
+    environment.pop("NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY", None)
+    environment[clerk_key_var] = "pk_test_ZXhhbXBsZS5jbGVyay5hY2NvdW50cy5kZXYk"
     environment["PYTHONPATH"] = str(ROOT) + os.pathsep + environment.get("PYTHONPATH", "")
     return subprocess.run(
         [sys.executable, "-c", script],
@@ -70,3 +72,15 @@ print('LOCAL_LOGIN_AND_SESSION_OK')
 """)
     assert result.returncode == 0, result.stderr
     assert "LOCAL_LOGIN_AND_SESSION_OK" in result.stdout
+
+
+def test_canonical_clerk_publishable_key_enables_clerk_alongside_local(tmp_path):
+    """CLERK_PUBLISHABLE_KEY (canonical) works without the deprecated NEXT_PUBLIC_ alias."""
+    result = _auth_process(tmp_path, hash_password("test-password"), """
+import sister.main as main
+
+assert main.app.state.auth_config.auth_mode == 'clerk_and_local', main.app.state.auth_config.auth_mode
+print('CANONICAL_CLERK_KEY_OK')
+""", clerk_key_var="CLERK_PUBLISHABLE_KEY")
+    assert result.returncode == 0, result.stderr
+    assert "CANONICAL_CLERK_KEY_OK" in result.stdout

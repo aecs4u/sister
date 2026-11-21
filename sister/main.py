@@ -586,10 +586,12 @@ try:
         from aecs4u_auth import AuthConfig, setup_auth
 
         # Like crowdaction: Clerk SSO next to the local (file-backed) accounts when the Clerk keys are configured
-        # (NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY / CLERK_SECRET_KEY are read from the environment), local only otherwise.
-        _clerk_configured = bool(
-            os.getenv("NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY", "").strip() and os.getenv("CLERK_SECRET_KEY", "").strip()
+        # (CLERK_PUBLISHABLE_KEY, or its deprecated NEXT_PUBLIC_ alias, and CLERK_SECRET_KEY are read from the
+        # environment), local only otherwise.
+        _clerk_publishable_key = (
+            os.getenv("CLERK_PUBLISHABLE_KEY") or os.getenv("NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY") or ""
         )
+        _clerk_configured = bool(_clerk_publishable_key.strip() and os.getenv("CLERK_SECRET_KEY", "").strip())
         auth_config = AuthConfig(
             AECS4U_SITE_ID="sister",
             AECS4U_SITE_NAME="SISTER",
