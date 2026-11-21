@@ -95,6 +95,8 @@ def _apply_table_migrations(engine, schema: str, istat_schema: str) -> None:
         "20261206_ade_statement_ledger.py",
         "20261207_mortgage_charge_allocation.py",
         "20261209_local_users.py",
+        "20261210_aecs4u_users.py",
+        "20261212_ft_municipalities_view.py",
     ):
         path = migration_dir / name
         spec = importlib.util.spec_from_file_location(f"_{path.stem}_migration", path)
@@ -206,16 +208,27 @@ def pg_test_schema():
     try:
         with admin.connect() as conn:
             conn.execute(text("SELECT 1"))
-            if conn.execute(
-                text("SELECT to_regclass(:relation)"), {"relation": f'{source_istat_schema}.municipalities'}
-            ).scalar_one() is None:
-                pytest.skip(f"DB tests need {source_istat_schema}.municipalities for ISTAT references")
+            # The shared ISTAT table is ``ft_municipalities`` (foreign table, or a view over a plain table in production);
+            # databases that have not been renamed yet still call it ``municipalities``.
+            source_municipalities = next(
+                (
+                    name
+                    for name in ("ft_municipalities", "municipalities")
+                    if conn.execute(
+                        text("SELECT to_regclass(:relation)"), {"relation": f"{source_istat_schema}.{name}"}
+                    ).scalar_one()
+                    is not None
+                ),
+                None,
+            )
+            if source_municipalities is None:
+                pytest.skip(f"DB tests need {source_istat_schema}.ft_municipalities for ISTAT references")
             orphans = conn.execute(
                 text("SELECT schema_name FROM information_schema.schemata WHERE schema_name LIKE 'sister\\_test\\_%'")
             ).scalars().all()
     except Exception as exc:  # server down, bad credentials, ...
         admin.dispose()
-        pytest.skip(f"PostgreSQL not reachable for DB tests: {type(exc).__name__}")
+        pytest.skip(f"PostgreSQL not reachable for DB tests: {type(exc).__name__}: {str(exc).splitlines()[0][:160]}")
 
     for orphan in orphans:  # leftovers of a crashed earlier run
         if _SCHEMA_RE.fullmatch(orphan):
@@ -234,7 +247,7 @@ def pg_test_schema():
             text(
                 f'CREATE TABLE "{istat_schema}".municipalities AS '
                 f'SELECT numeric_code, name, italian_name, other_language_name, province_abbreviation, cadastral_code '
-                f'FROM {source}.municipalities'
+                f'FROM {source}.{source_municipalities}'
             )
         )
         conn.execute(text(f'ALTER TABLE "{istat_schema}".municipalities ADD PRIMARY KEY (numeric_code)'))

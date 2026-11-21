@@ -1,9 +1,9 @@
-"""Local accounts: the ``local_user`` table with the users file as fallback (sister/local_users.py)."""
+"""Local accounts live in the canonical aecs4u-auth ``users`` table (sister/local_users.py, import_local_users)."""
 
 import pytest
 
 from sister.command_tools import import_local_users
-from sister.local_users import LocalUserDirectory, normalize_source, parse_users_file
+from sister.local_users import LocalUserDirectory, parse_users_file
 from sister.passwords import hash_password
 
 ALICE = hash_password("alice-secret", iterations=1000)
@@ -17,109 +17,94 @@ def _file(tmp_path, text):
 
 
 def test_parse_users_file_skips_comments_duplicates_and_malformed(tmp_path):
-    path = _file(tmp_path, f"# c\nAlice {ALICE}\nalice {BOB}\nbroken\n\nBob {BOB}\n")
-    users = parse_users_file(path)
-    assert set(users) == {"alice", "bob"}
-    assert users["alice"] == ("Alice", ALICE)
+    users = parse_users_file(_file(tmp_path, f"# c\nAlice@x.it {ALICE}\nalice@x.it {BOB}\nbroken\n\nBob@x.it {BOB}\n"))
+    assert set(users) == {"alice@x.it", "bob@x.it"}
+    assert users["alice@x.it"] == ("Alice@x.it", ALICE)
 
 
-def test_unknown_source_falls_back_to_auto():
-    assert normalize_source("nonsense") == "auto"
-    assert normalize_source(" DB ") == "db"
-
-
-async def test_file_mode_verifies_and_assigns_admin(tmp_path):
-    users = parse_users_file(_file(tmp_path, f"Alice {ALICE}\nBob {BOB}\n"))
-    directory = LocalUserDirectory(users, admin_usernames={"alice"}, source="file")
-    alice = await directory.verify("ALICE", "alice-secret")
-    assert alice and alice.is_superuser and alice.role == "admin" and alice.id == "alice"
-    bob = await directory.verify("bob", "bob-secret")
-    assert bob and not bob.is_superuser
-    assert await directory.verify("alice", "wrong") is None
-    assert await directory.verify("nobody", "x") is None
-    assert await directory.get("") is None
-
-
-async def test_unknown_user_still_costs_a_hash(tmp_path, monkeypatch):
-    calls = []
-    import sister.local_users as module
-
-    real = module.verify_local_password
-    monkeypatch.setattr(module, "verify_local_password", lambda p, s: calls.append(1) or real(p, s))
-    directory = LocalUserDirectory({}, source="file")
-    assert await directory.verify("ghost", "x") is None
-    assert calls == [1]
+def test_missing_file_gives_no_users(tmp_path):
+    assert parse_users_file(tmp_path / "absent.txt") == {}
 
 
 @pytest.mark.usefixtures("fresh_db")
-class TestTable:
-    async def _add(self, username, stored, role="user", active=True):
-        from sister import database
-        from sister.db_models import LocalUser
+class TestCanonicalUsers:
+    async def _add(self, email, stored, *, superuser=False, active=True, local=True):
+        from aecs4u_auth.users.models import User
 
+        from sister import database
+
+        user = User.from_local_credentials(email=email, hashed_password=stored, is_superuser=superuser, is_active=active)
+        if not local:  # a Clerk-only account: no password
+            user.hashed_password = None
         async with database._get_session_factory()() as session:
-            session.add(
-                LocalUser(username_key=username.casefold(), username=username, password_hash=stored, role=role,
-                          is_active=active)
-            )
+            session.add(user)
             await session.commit()
+        return user
 
-    async def test_db_user_verifies_and_records_login(self):
+    async def test_verifies_pbkdf2_and_package_hashes_case_insensitively(self):
+        from aecs4u_auth.password import get_password_hash
+
+        await self._add("Alice@x.it", ALICE)
+        await self._add("carol@x.it", get_password_hash("carol-secret"))
+        directory = LocalUserDirectory(cache_seconds=0)
+        assert (await directory.verify("ALICE@x.it", "alice-secret")).email == "alice@x.it"
+        assert await directory.verify("carol@x.it", "carol-secret")
+        assert await directory.verify("alice@x.it", "wrong") is None
+        assert await directory.verify("nobody@x.it", "x") is None
+        assert await directory.verify("", "x") is None
+
+    async def test_unknown_user_costs_a_hash(self, monkeypatch):
+        import sister.local_users as module
+
+        calls = []
+        real = module.verify_local_password
+        monkeypatch.setattr(module, "verify_local_password", lambda p, s: calls.append(1) or real(p, s))
+        assert await LocalUserDirectory(cache_seconds=0).verify("ghost@x.it", "x") is None
+        assert calls == [1]
+
+    async def test_inactive_and_passwordless_accounts_cannot_sign_in(self):
+        await self._add("off@x.it", ALICE, active=False)
+        await self._add("clerk@x.it", ALICE, local=False)
+        directory = LocalUserDirectory(cache_seconds=0)
+        assert await directory.verify("off@x.it", "alice-secret") is None
+        assert await directory.verify("clerk@x.it", "alice-secret") is None
+        assert await directory.get("off@x.it") is None
+
+    async def test_admin_comes_from_the_row_or_the_allow_list(self):
+        await self._add("root@x.it", ALICE, superuser=True)
+        await self._add("ops@x.it", BOB)
+        await self._add("plain@x.it", BOB)
+        directory = LocalUserDirectory(admin_usernames={"OPS@x.it"}, cache_seconds=0)
+        assert (await directory.get("root@x.it")).is_superuser
+        assert (await directory.get("ops@x.it")).is_superuser
+        assert not (await directory.get("plain@x.it")).is_superuser
+
+    async def test_usernames_lists_only_active_password_accounts(self):
+        await self._add("a@x.it", ALICE)
+        await self._add("off@x.it", ALICE, active=False)
+        await self._add("clerk@x.it", ALICE, local=False)
+        assert await LocalUserDirectory().usernames() == {"a@x.it"}
+
+    async def test_successful_login_records_the_sign_in(self):
+        from aecs4u_auth.users.models import User
+
         from sister import database
-        from sister.db_models import LocalUser
 
-        await self._add("Alice", ALICE, role="admin")
-        directory = LocalUserDirectory({}, source="db", cache_seconds=0)
-        account = await directory.verify("alice", "alice-secret")
-        assert account and account.is_superuser
+        user = await self._add("a@x.it", ALICE)
+        assert await LocalUserDirectory(cache_seconds=0).verify("a@x.it", "alice-secret")
         async with database._get_session_factory()() as session:
-            assert (await session.get(LocalUser, "alice")).last_login_at is not None
-        assert await directory.verify("alice", "nope") is None
-
-    async def test_inactive_user_cannot_sign_in_and_file_cannot_override(self, tmp_path):
-        await self._add("Alice", ALICE, active=False)
-        users = parse_users_file(_file(tmp_path, f"Alice {BOB}\n"))
-        directory = LocalUserDirectory(users, source="auto", cache_seconds=0)
-        assert await directory.verify("alice", "alice-secret") is None
-        assert await directory.verify("alice", "bob-secret") is None  # the file's password is not a way around it
-        assert await directory.get("alice") is None
-
-    async def test_auto_falls_back_to_file_for_users_not_in_table(self, tmp_path):
-        await self._add("Alice", ALICE)
-        users = parse_users_file(_file(tmp_path, f"Bob {BOB}\n"))
-        directory = LocalUserDirectory(users, source="auto", cache_seconds=0)
-        assert await directory.verify("alice", "alice-secret")
-        assert await directory.verify("bob", "bob-secret")
-        assert await directory.usernames() == {"Alice", "Bob"}
-        db_only = LocalUserDirectory(users, source="db", cache_seconds=0)
-        assert await db_only.verify("bob", "bob-secret") is None
-
-    async def test_table_rejects_plaintext(self):
-        from sqlalchemy.exc import IntegrityError
-
-        with pytest.raises(IntegrityError):
-            await self._add("Eve", "plain-text")
+            assert (await session.get(User, user.id)).last_sign_in_at is not None
 
     async def test_import_is_dry_run_then_idempotent(self, tmp_path):
-        path = _file(tmp_path, f"Alice {ALICE}\nBob {BOB}\nEve plain\n")
-        preview = await import_local_users.run(path, {"alice"}, apply=False)
-        assert preview["create"] == ["Alice", "Bob"] and preview["skipped_plaintext"] == ["Eve"]
-        assert await LocalUserDirectory({}, source="db").usernames() == set()
-        applied = await import_local_users.run(path, {"alice"}, apply=True)
-        assert applied["create"] == ["Alice", "Bob"]
-        again = await import_local_users.run(path, {"alice"}, apply=True)
-        assert again["create"] == [] and again["unchanged"] == ["Alice", "Bob"]
-        directory = LocalUserDirectory({}, source="db", cache_seconds=0)
-        assert (await directory.verify("alice", "alice-secret")).is_superuser
-        assert not (await directory.verify("bob", "bob-secret")).is_superuser
-        assert "hash" not in str(preview).lower() and ALICE not in str(applied)
-
-    async def test_unreachable_table_falls_back_to_file_in_auto(self, tmp_path, monkeypatch):
-        users = parse_users_file(_file(tmp_path, f"Bob {BOB}\n"))
-        directory = LocalUserDirectory(users, source="auto", cache_seconds=0)
-
-        async def boom(key):
-            raise RuntimeError("relation does not exist")
-
-        monkeypatch.setattr(directory, "_db_row", boom)
-        assert await directory.verify("bob", "bob-secret")
+        path = _file(tmp_path, f"Alice@x.it {ALICE}\nbob@x.it {BOB}\neve@x.it plain\nnot-an-email {BOB}\n")
+        preview = await import_local_users.run(path, {"alice@x.it"}, apply=False)
+        assert (preview["created"], preview["skipped_plaintext"], preview["invalid_email"]) == (2, 1, 1)
+        assert await LocalUserDirectory().usernames() == set()  # nothing written
+        applied = await import_local_users.run(path, {"alice@x.it"}, apply=True)
+        assert applied["created"] == 2
+        again = await import_local_users.run(path, {"alice@x.it"}, apply=True)
+        assert (again["created"], again["unchanged"]) == (0, 2)
+        directory = LocalUserDirectory(cache_seconds=0)
+        assert (await directory.verify("alice@x.it", "alice-secret")).is_superuser
+        assert not (await directory.verify("bob@x.it", "bob-secret")).is_superuser
+        assert ALICE not in str(preview) and ALICE not in str(applied)

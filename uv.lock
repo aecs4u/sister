@@ -9,8 +9,8 @@ resolution-markers = [
 
 [[package]]
 name = "aecs4u-auth"
-version = "1.25.0"
-source = { git = "https://github.com/aecs4u/aecs4u-auth.git?branch=main#61991fde1b715a80c5ba5f493b2d31c0e925ac68" }
+version = "1.26.1"
+source = { git = "https://github.com/aecs4u/aecs4u-auth.git?branch=main#e6b32353af3d78c3ebcefa280499f88e8a68485d" }
 dependencies = [
     { name = "aiosqlite" },
     { name = "bcrypt" },

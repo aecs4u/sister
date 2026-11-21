@@ -37,34 +37,46 @@ def _auth_process(tmp_path, stored_password, script, clerk_key_var="NEXT_PUBLIC_
     )
 
 
-def test_required_auth_refuses_partial_startup_for_plaintext_passwords(tmp_path):
+def test_legacy_users_file_is_not_read_at_startup(tmp_path):
+    """Accounts live in the canonical ``users`` table; a plaintext legacy file neither blocks startup nor signs anyone in
+    (``sister app import-local-users`` skips plaintext entries)."""
     result = _auth_process(tmp_path, "test-password", """
-try:
-    import sister.main
-except RuntimeError as exc:
-    assert str(exc) == 'Authentication setup failed; refusing startup'
-    assert 'not hashed' in str(exc.__cause__)
-    print('EXPECTED_AUTH_STARTUP_FAILURE')
-else:
-    raise AssertionError('Invalid auth configuration was silently accepted')
+import sister.main as main
+assert main.app.state.auth_config is not None
+print('STARTUP_IGNORES_LEGACY_FILE')
 """)
     assert result.returncode == 0, result.stderr
-    assert "EXPECTED_AUTH_STARTUP_FAILURE" in result.stdout
+    assert "STARTUP_IGNORES_LEGACY_FILE" in result.stdout
 
 
 def test_hashed_local_login_works_alongside_clerk(tmp_path):
+    # The directory is stubbed with a canonical User row: the real lookup needs the migrated ``users`` table.
     result = _auth_process(tmp_path, hash_password("test-password"), """
-from fastapi.testclient import TestClient
 from aecs4u_auth import get_password_verify_callback
+from aecs4u_auth.users.models import User
+from fastapi.testclient import TestClient
 import sister.main as main
+from sister.local_users import LocalUserDirectory
+from sister.passwords import hash_password
+
+user = User.from_local_credentials(email='startup-test@example.it', hashed_password=hash_password('test-password', iterations=1000))
+
+async def find(self, identifier, *, local_only=False):
+    return user if str(identifier).strip().casefold() in {'startup-test@example.it', user.id} else None
+
+async def touch(user_id):
+    return None
+
+LocalUserDirectory._find = find
+LocalUserDirectory._touch_last_login = staticmethod(touch)
 
 assert main.app.state.auth_config.auth_mode == 'clerk_and_local'
 assert get_password_verify_callback() is not None
 client = TestClient(main.app)
-bad = client.post('/auth/login', json={'username': 'startup-test', 'password': 'wrong'})
+bad = client.post('/auth/login', json={'username': 'startup-test@example.it', 'password': 'wrong'})
 assert bad.status_code == 401, bad.status_code
-good = client.post('/auth/login', json={'username': 'startup-test', 'password': 'test-password'})
-assert good.status_code == 200, good.status_code
+good = client.post('/auth/login', json={'username': 'startup-test@example.it', 'password': 'test-password'})
+assert good.status_code == 200, (good.status_code, good.text[:200])
 assert main.app.state.auth_config.session_cookie_name in good.cookies
 me = client.get('/auth/me')
 assert me.status_code == 200, me.status_code
