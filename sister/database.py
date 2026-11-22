@@ -52,15 +52,15 @@ from .environment import load_environment
 
 load_environment()
 
-from .db_models import (
+from .db_models import (  # noqa: E402
     PROPERTY_FIELD_MAP,
     PROPERTY_LOCATION_FIELD_MAP,
     PROPERTY_SUBJECT_FIELD_MAP,
     ActivityLog,
     ActivityLogAttribute,
     ActivityLogPayload,
-    CadastralUnit,
     CadastralParcelCoordinate,
+    CadastralUnit,
     CalculationSnapshot,
     CalculationSnapshotPayload,
     Document,
@@ -112,9 +112,9 @@ from .db_models import (
     WalletGiftCoupon,
     WalletGiftCouponRedemption,
 )
-from .property_identity import IDENTITY_FIELDS, canonical_property_identity
-from .provinces import province_code, province_name
-from .reference import (
+from .property_identity import IDENTITY_FIELDS, canonical_property_identity  # noqa: E402
+from .provinces import province_code, province_name  # noqa: E402
+from .reference import (  # noqa: E402
     LOOKUP_TABLES,
     cadastre_type_code,
     clean,
@@ -127,8 +127,8 @@ from .reference import (
     get_or_create_subject_record,
     place_name,
 )
-from .request_types import request_type_info
-from .result_parsers import (
+from .request_types import request_type_info  # noqa: E402
+from .result_parsers import (  # noqa: E402
     clean_amount,
     format_amount_it,
     format_consistency,
@@ -147,7 +147,7 @@ from .result_parsers import (
     parse_vis_imm_sel,
     split_foglio,
 )
-from .visura_xml_models import DocumentSubject
+from .visura_xml_models import DocumentSubject  # noqa: E402
 
 logger = logging.getLogger("sister")
 

@@ -33,9 +33,7 @@ from sqlalchemy.engine import make_url
 from starlette.concurrency import run_in_threadpool
 from starlette.responses import StreamingResponse
 
-from . import database
-from . import document_storage
-from .database_config import database_dsn_suffix
+from . import database, document_storage
 from .database import (
     count_result_rows,
     count_total_result_rows,
@@ -72,6 +70,7 @@ from .database import (
     record_activity,
     save_cadastral_parcel_coordinate,
 )
+from .database_config import database_dsn_suffix
 from .document_scope import subject_search_scope as _subject_search_scope
 from .form_config import get_available_form_groups, get_single_step_groups, get_workflow_groups
 from .omi_zones import omi_boundary_geometries, omi_zone_code, omi_zone_for_parcel

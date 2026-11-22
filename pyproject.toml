@@ -96,6 +96,16 @@ land_registry = { git = "https://github.com/aecs4u/land-registry.git", branch = 
 aecs4u-workflow = { git = "https://github.com/aecs4u/aecs4u-workflow.git", branch = "main" }
 ocular = { git = "https://github.com/aecs4u/ocular.git", branch = "main" }
 
+[tool.uv]
+# Keep the OCR extra's older upstream caps from locking vulnerable releases.
+# Logfire 5.6 supports OpenTelemetry <1.46; PromptFlow uses Pillow for icon encoding.
+override-dependencies = [
+    "opentelemetry-api>=1.45.2,<1.46.0",
+    "opentelemetry-sdk>=1.45.2,<1.46.0",
+    "opentelemetry-exporter-otlp-proto-http>=1.45.2,<1.46.0",
+    "pillow>=13.0.0,<14.0.0",
+]
+
 [tool.setuptools]
 packages = ["sister", "sister.cli", "sister.command_tools", "sister.command_tools.ui_audit"]
 
