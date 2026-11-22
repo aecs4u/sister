@@ -5,12 +5,12 @@ import sys
 from logging.config import fileConfig
 from pathlib import Path
 
+from aecs4u_auth.users.models import User as AuthUser  # noqa: F401
 from sqlalchemy import engine_from_config, event, pool
 from sqlalchemy.engine import make_url
 from sqlmodel import SQLModel
 
 from alembic import context
-from aecs4u_auth.users.models import User as AuthUser  # noqa: F401
 
 # Add project root to path so sister package is importable
 project_root = Path(__file__).resolve().parents[1]
@@ -46,8 +46,8 @@ from sister.db_models import (  # noqa: F401, E402
     AdeStatementRow,
     CalculationSnapshot,
     CalculationSnapshotPayload,
-    CadastralParcelCoordinate,
     CadastralCategory,
+    CadastralParcelCoordinate,
     CadastralUnit,
     ConservatoriaMunicipality,
     ConservatoriaOffice,
@@ -67,25 +67,25 @@ from sister.db_models import (  # noqa: F401, E402
     MortgageInspection,
     MortgageInspectionParty,
     MortgageInspectionProperty,
+    MortgageLienType,
+    MortgageNoteType,
     MortgagePaidAction,
+    MortgagePartyQuality,
     MortgageSearch,
     MortgageSearchAnnotation,
     MortgageSearchCharge,
-    MortgageSearchFormality,
     MortgageSearchFlow,
+    MortgageSearchFormality,
     MortgageSearchRequest,
-    MortgageLienType,
-    MortgageNoteType,
-    MortgagePartyQuality,
     MortgageTitleType,
-    PagoPAPaymentHistory,
     OwnershipRight,
-    PropertyAsset,
-    PropertyActualSize,
     PageVisit,
     PageVisitError,
     PageVisitFormElement,
+    PagoPAPaymentHistory,
     Property,
+    PropertyActualSize,
+    PropertyAsset,
     PropertyOmiOverride,
     PropertyOmiSelection,
     Request,
@@ -95,16 +95,16 @@ from sister.db_models import (  # noqa: F401, E402
     RequestType,
     RequestTypeTag,
     ResultOwner,
-    SubjectFavorite,
-    SubjectAccess,
-    SubjectPurchase,
-    SubjectHolding,
-    SubjectHoldingProvince,
-    SubjectProfile,
-    SubjectNote,
-    SubjectTag,
     RightKind,
     Subject,
+    SubjectAccess,
+    SubjectFavorite,
+    SubjectHolding,
+    SubjectHoldingProvince,
+    SubjectNote,
+    SubjectProfile,
+    SubjectPurchase,
+    SubjectTag,
     TerritoryProvince,
     WalletGiftCoupon,
     WalletGiftCouponRedemption,
