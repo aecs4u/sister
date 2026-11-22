@@ -455,7 +455,7 @@ def test_persons_index_render_exposes_live_burdens_card_and_column():
     )
     js = (sister_root / "static" / "js" / "subject_index.js").read_text(encoding="utf-8")
 
-    assert "With active encumbrances 1" in html
+    assert 'aria-label="With active encumbrances: 1"' in html
     assert "f_live_burdens=%3E0" in html
     assert 'data-route="/persons"' in html
     assert 'numCol("Formalità attive", "live_burdens"' in js
