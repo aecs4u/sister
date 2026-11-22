@@ -35,7 +35,9 @@ def test_purchase_identity_rejects_malformed_keys(raw):
 
 def test_purchase_identity_normalises_prefix_and_mail_case():
     assert web._purchase_identity(" EMAIL:Demo@AECS4U.com ") == "email:demo@aecs4u.com"
-    assert web._purchase_identity("ID:user_2AbC") == "id:user_2AbC"  # ids keep their case (Clerk ids are case-sensitive)
+    assert (
+        web._purchase_identity("ID:user_2AbC") == "id:user_2AbC"
+    )  # ids keep their case (Clerk ids are case-sensitive)
 
 
 @pytest.mark.parametrize("raw", ["abc", "0", "-3", "", "99999999999999999999", "１２"])
@@ -127,9 +129,7 @@ async def test_concurrent_fulfilments_do_not_reuse_a_payment_reference(doc_id):
         other_document_id = other_document.id
 
     outcomes = await asyncio.gather(
-        database.create_document_purchase(
-            "id:first", doc_id, NOW, "billing", source="stripe", payment_ref="cs_shared"
-        ),
+        database.create_document_purchase("id:first", doc_id, NOW, "billing", source="stripe", payment_ref="cs_shared"),
         database.create_document_purchase(
             "id:second", other_document_id, NOW, "billing", source="stripe", payment_ref="cs_shared"
         ),
@@ -148,7 +148,9 @@ async def test_expired_and_scheduled_purchases_give_no_access(doc_id):
         "id:expired", doc_id, NOW - timedelta(days=2), "admin", expires_at=NOW - timedelta(days=1)
     )
     await database.create_document_purchase("id:scheduled", doc_id, NOW + timedelta(days=1), "admin")
-    await database.create_document_purchase("id:valid", doc_id, NOW - timedelta(days=1), "admin", expires_at=NOW + timedelta(days=1))
+    await database.create_document_purchase(
+        "id:valid", doc_id, NOW - timedelta(days=1), "admin", expires_at=NOW + timedelta(days=1)
+    )
     assert not await database.has_document_purchase(["id:expired"], doc_id)
     assert not await database.has_document_purchase(["id:scheduled"], doc_id)
     assert await database.has_document_purchase(["id:valid"], doc_id)
@@ -158,8 +160,14 @@ async def test_expired_and_scheduled_purchases_give_no_access(doc_id):
 
 async def test_a_payment_reference_fulfils_only_once(doc_id):
     await database.create_document_purchase(
-        "id:buyer", doc_id, NOW - timedelta(seconds=5), "stripe", source="stripe", amount_cents=1290,
-        currency="eur", payment_ref="cs_test_123",
+        "id:buyer",
+        doc_id,
+        NOW - timedelta(seconds=5),
+        "stripe",
+        source="stripe",
+        amount_cents=1290,
+        currency="eur",
+        payment_ref="cs_test_123",
     )
     with pytest.raises(PurchaseError) as replay:
         await database.create_document_purchase(
@@ -167,7 +175,12 @@ async def test_a_payment_reference_fulfils_only_once(doc_id):
         )
     assert replay.value.code == "duplicate_payment"
     (row,) = await database.list_document_purchases()
-    assert (row["source"], row["amount_cents"], row["currency"], row["payment_ref"]) == ("stripe", 1290, "EUR", "cs_test_123")
+    assert (row["source"], row["amount_cents"], row["currency"], row["payment_ref"]) == (
+        "stripe",
+        1290,
+        "EUR",
+        "cs_test_123",
+    )
 
 
 async def test_unknown_document_and_update_conflicts_use_error_codes(doc_id):
@@ -217,7 +230,10 @@ def _session(doc_id, **overrides):
     from sister import purchases_billing as pb
 
     base = {
-        "id": "cs_test_abc", "payment_status": "paid", "amount_total": 1290, "currency": "eur",
+        "id": "cs_test_abc",
+        "payment_status": "paid",
+        "amount_total": 1290,
+        "currency": "eur",
         "metadata": pb.checkout_metadata("id:buyer@example.it", doc_id),
     }
     return {**base, **overrides}
@@ -230,7 +246,12 @@ async def test_a_paid_session_creates_the_access_once(doc_id):
     assert await pb.fulfil_checkout_session(_session(doc_id)) == "replay"  # Stripe re-delivers: nothing changes
     (row,) = await database.list_document_purchases()
     assert (row["user_id"], row["source"], row["amount_cents"], row["currency"], row["payment_ref"]) == (
-        "id:buyer@example.it", "stripe", 1290, "EUR", "cs_test_abc")
+        "id:buyer@example.it",
+        "stripe",
+        1290,
+        "EUR",
+        "cs_test_abc",
+    )
     assert await database.has_document_purchase(["id:buyer@example.it"], doc_id)
 
 
@@ -246,20 +267,27 @@ async def test_a_second_payment_for_an_owned_document_is_flagged_for_refund_not_
     await pb.fulfil_checkout_session(_session(doc_id))
     assert await pb.fulfil_checkout_session(_session(doc_id, id="cs_test_other")) == "already_owned"
     assert len(await database.list_document_purchases()) == 1
-    assert activity == [{
-        "action": "admin.document_purchase.refund_required",
-        "actor": "Stripe",
-        "source": "stripe_webhook",
-        "status": "review",
-        "target": f"document:{doc_id}",
-        "params": {"document_id": doc_id, "payment_ref": "cs_test_other"},
-        "result": {"refund_required": True, "amount_cents": 1290, "currency": "EUR"},
-    }]
+    assert activity == [
+        {
+            "action": "admin.document_purchase.refund_required",
+            "actor": "Stripe",
+            "source": "stripe_webhook",
+            "status": "review",
+            "target": f"document:{doc_id}",
+            "params": {"document_id": doc_id, "payment_ref": "cs_test_other"},
+            "result": {"refund_required": True, "amount_cents": 1290, "currency": "EUR"},
+        }
+    ]
 
 
 @pytest.mark.parametrize(
     "change",
-    [{"payment_status": "unpaid"}, {"metadata": {"item_type": "subscription"}}, {"metadata": {"item_type": "document"}}, {"id": ""}],
+    [
+        {"payment_status": "unpaid"},
+        {"metadata": {"item_type": "subscription"}},
+        {"metadata": {"item_type": "document"}},
+        {"id": ""},
+    ],
 )
 async def test_sessions_that_are_not_a_paid_document_purchase_are_ignored(doc_id, change):
     from sister import purchases_billing as pb
@@ -364,10 +392,12 @@ def test_query_price_catalog_omits_conflicting_duplicate_products():
     from sister import purchases_billing as pb
 
     prices = pb.parse_query_price_catalog(
-        {"pricing": [
-            {"endpoint": "POST /visura/soggetto", "customer_credits": 30},
-            {"endpoint": "/visura/soggetto", "customer_credits": 35},
-        ]}
+        {
+            "pricing": [
+                {"endpoint": "POST /visura/soggetto", "customer_credits": 30},
+                {"endpoint": "/visura/soggetto", "customer_credits": 35},
+            ]
+        }
     )
     assert prices == {}
 
@@ -410,7 +440,9 @@ async def test_credits_are_off_without_a_cost_or_a_durable_wallet(monkeypatch):
     monkeypatch.setattr(database, "DATABASE_DSN", "postgresql://test@localhost/sister_test")
     assert pb.credits_enabled() is False and await pb.pay_with_credits("id:a", 1) == "disabled"  # no cost set
     monkeypatch.setenv("SISTER_DOCUMENT_CREDITS", "10")
-    assert pb.wallet_backend() == "sql" and pb.credits_enabled() is True  # SISTER's own PostgreSQL is the default wallet
+    assert (
+        pb.wallet_backend() == "sql" and pb.credits_enabled() is True
+    )  # SISTER's own PostgreSQL is the default wallet
     monkeypatch.setenv("REDIS_URL", "redis://localhost:6379/0")
     assert pb.wallet_backend() == "redis"
     monkeypatch.setenv("SISTER_WALLET_ALLOW_VOLATILE", "true")
@@ -426,7 +458,9 @@ async def test_credits_are_off_without_a_cost_or_a_durable_wallet(monkeypatch):
 async def test_paying_with_credits_debits_once_and_grants_access(doc_id, wallet):
     pb = wallet
     assert await pb.pay_with_credits("id:buyer@example.it", doc_id) == "insufficient"
-    assert await pb.grant_credits("email:Buyer@Example.it", Decimal("25"), "test", "admin") == Decimal("25")  # same person
+    assert await pb.grant_credits("email:Buyer@Example.it", Decimal("25"), "test", "admin") == Decimal(
+        "25"
+    )  # same person
     assert await pb.pay_with_credits("id:buyer@example.it", doc_id) == "created"
     assert await pb.credit_balance("id:buyer@example.it") == Decimal("15")
     assert await database.has_document_purchase(["id:buyer@example.it"], doc_id)

@@ -37,17 +37,35 @@ async def _exec(sql: str, **params):
 
 async def _seed():
     """Three persons and two companies, each with one successful search (so they are in the archive)."""
-    for code, name in ((ROSSI, "ROSSI MARIO"), (VERDI, "VERDI LUIGI"), (BIANCHI, "BIANCHI LAURA"), (ACME, "ACME SRL"), (BETA, "BETA SPA")):
+    for code, name in (
+        (ROSSI, "ROSSI MARIO"),
+        (VERDI, "VERDI LUIGI"),
+        (BIANCHI, "BIANCHI LAURA"),
+        (ACME, "ACME SRL"),
+        (BETA, "BETA SPA"),
+    ):
         await _exec("INSERT INTO subject (fiscal_code, name) VALUES (:c, :n)", c=code, n=name)
         await _exec(
             "INSERT INTO request (request_ref, created_at, responded_at, success, subject_query) "
-            "VALUES (:r, now(), now(), true, :c)", r=f"soggetto_E_{code}", c=code,
+            "VALUES (:r, now(), now(), true, :c)",
+            r=f"soggetto_E_{code}",
+            c=code,
         )
 
 
 def _request(query: str = "", path: str = "/persons/tags/bulk"):
-    return Request({"type": "http", "method": "POST", "path": path, "query_string": query.encode(), "headers": [],
-                    "scheme": "http", "server": ("localhost", 8025), "client": ("127.0.0.1", 1)})
+    return Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": path,
+            "query_string": query.encode(),
+            "headers": [],
+            "scheme": "http",
+            "server": ("localhost", 8025),
+            "client": ("127.0.0.1", 1),
+        }
+    )
 
 
 def _with_body(request, payload):
@@ -61,13 +79,18 @@ def _with_body(request, payload):
 @pytest.mark.usefixtures("fresh_db")
 async def test_set_subject_tags_replaces_the_list_and_keeps_the_first_spelling():
     await _seed()
-    assert await database.set_subject_tags("person", ROSSI, ["Politici", "politici", " Sicilia "], "id:a") == ["Politici", "Sicilia"]
+    assert await database.set_subject_tags("person", ROSSI, ["Politici", "politici", " Sicilia "], "id:a") == [
+        "Politici",
+        "Sicilia",
+    ]
     # a later edit keeps the stored spelling and drops what is no longer listed
     assert await database.set_subject_tags("person", ROSSI, ["POLITICI", "Milano"], "id:b") == ["Milano", "Politici"]
     assert await database.get_subject_tags("person", ROSSI) == ["Milano", "Politici"]
     assert await database.set_subject_tags("person", ROSSI, []) == []
     with pytest.raises(ValueError):
-        await database.set_subject_tags("person", ROSSI, [f"t{i}" for i in range(database.SUBJECT_TAGS_PER_SUBJECT + 1)])
+        await database.set_subject_tags(
+            "person", ROSSI, [f"t{i}" for i in range(database.SUBJECT_TAGS_PER_SUBJECT + 1)]
+        )
     with pytest.raises(ValueError):
         await database.set_subject_tags("organisation", ROSSI, ["x"])
 
@@ -78,7 +101,10 @@ async def test_tags_belong_to_the_kind_of_subject():
     await database.set_subject_tags("person", ROSSI, ["gruppo"])
     await database.set_subject_tags("company", ACME, ["gruppo", "grandi"])
     assert await database.list_subject_tags("person") == [{"tag": "gruppo", "count": 1}]
-    assert await database.list_subject_tags("company") == [{"tag": "grandi", "count": 1}, {"tag": "gruppo", "count": 1}]  # ties: A-Z
+    assert await database.list_subject_tags("company") == [
+        {"tag": "grandi", "count": 1},
+        {"tag": "gruppo", "count": 1},
+    ]  # ties: A-Z
     rows, _ = await database.query_subject_profiles("company", tag="gruppo")
     assert [r["fiscal_code"] for r in rows] == [ACME] and rows[0]["tags"] == ["grandi", "gruppo"]
 
@@ -123,7 +149,9 @@ async def test_tag_and_untag_many_subjects():
 @pytest.mark.usefixtures("fresh_db")
 async def test_replace_endpoint_validates_the_code_and_the_body():
     await _seed()
-    response = await web._subject_tags_replace(_with_body(_request(), {"tags": ["Gruppo", "gruppo", "Altro"]}), "person", ROSSI.lower(), User)
+    response = await web._subject_tags_replace(
+        _with_body(_request(), {"tags": ["Gruppo", "gruppo", "Altro"]}), "person", ROSSI.lower(), User
+    )
     assert json.loads(response.body) == {"subject_type": "person", "subject_code": ROSSI, "tags": ["Altro", "Gruppo"]}
     for code, kind in (("short", "person"), (ROSSI, "company")):
         with pytest.raises(HTTPException) as error:
@@ -146,7 +174,9 @@ async def test_bulk_tags_exactly_the_rows_the_table_shows():
     await _seed()
     await database.set_subject_tags("person", ROSSI, ["vip"])
     query = "q=laura"  # one match
-    ok = await web._subject_tags_bulk(_with_body(_request(query), {"action": "add", "tag": "Nuovo", "expected": 1}), "person", User)
+    ok = await web._subject_tags_bulk(
+        _with_body(_request(query), {"action": "add", "tag": "Nuovo", "expected": 1}), "person", User
+    )
     body = json.loads(ok.body)
     assert (body["matched"], body["changed"]) == (1, 1)
     assert await database.get_subject_tags("person", BIANCHI) == ["Nuovo"]
@@ -154,11 +184,15 @@ async def test_bulk_tags_exactly_the_rows_the_table_shows():
 
     # every person (no filter): the count the user saw must still be right
     with pytest.raises(HTTPException) as stale:
-        await web._subject_tags_bulk(_with_body(_request(""), {"action": "add", "tag": "tutti", "expected": 2}), "person", User)
+        await web._subject_tags_bulk(
+            _with_body(_request(""), {"action": "add", "tag": "tutti", "expected": 2}), "person", User
+        )
     assert stale.value.status_code == 409
     assert await database.get_subject_tags("person", ROSSI) == ["vip"]  # nothing was written
 
-    done = await web._subject_tags_bulk(_with_body(_request(""), {"action": "add", "tag": "tutti", "expected": 3}), "person", User)
+    done = await web._subject_tags_bulk(
+        _with_body(_request(""), {"action": "add", "tag": "tutti", "expected": 3}), "person", User
+    )
     assert json.loads(done.body)["changed"] == 3
     removed = await web._subject_tags_bulk(
         _with_body(_request("tag=nuovo"), {"action": "remove", "tag": "tutti", "expected": 1}), "person", User
@@ -166,13 +200,19 @@ async def test_bulk_tags_exactly_the_rows_the_table_shows():
     assert json.loads(removed.body)["changed"] == 1 and await database.get_subject_tags("person", BIANCHI) == ["Nuovo"]
     assert await database.get_subject_tags("company", ACME) == []  # the other kind is never touched
 
-    for payload in ({"action": "drop", "tag": "x", "expected": 1}, {"action": "add", "tag": 5, "expected": 1},
-                    {"action": "add", "tag": "x"}, {"action": "add", "tag": "x", "expected": "1"}):
+    for payload in (
+        {"action": "drop", "tag": "x", "expected": 1},
+        {"action": "add", "tag": 5, "expected": 1},
+        {"action": "add", "tag": "x"},
+        {"action": "add", "tag": "x", "expected": "1"},
+    ):
         with pytest.raises(HTTPException) as error:
             await web._subject_tags_bulk(_with_body(_request(""), payload), "person", User)
         assert error.value.status_code == 422
     with pytest.raises(HTTPException) as error:
-        await web._subject_tags_bulk(_with_body(_request("q=laura"), {"action": "add", "tag": "  ", "expected": 1}), "person", User)
+        await web._subject_tags_bulk(
+            _with_body(_request("q=laura"), {"action": "add", "tag": "  ", "expected": 1}), "person", User
+        )
     assert error.value.status_code == 422
 
 
@@ -183,8 +223,18 @@ async def test_index_json_and_csv_carry_the_tags_and_follow_the_tag_filter():
     await database.set_subject_tags("person", VERDI, ["Altro"])
 
     def index(query: str):
-        return Request({"type": "http", "method": "GET", "path": "/persons/index.json", "query_string": query.encode(),
-                        "headers": [], "scheme": "http", "server": ("localhost", 8025), "client": ("127.0.0.1", 1)})
+        return Request(
+            {
+                "type": "http",
+                "method": "GET",
+                "path": "/persons/index.json",
+                "query_string": query.encode(),
+                "headers": [],
+                "scheme": "http",
+                "server": ("localhost", 8025),
+                "client": ("127.0.0.1", 1),
+            }
+        )
 
     payload = json.loads((await web._subject_index_json(index("tag=politici"), "person", User)).body)
     assert [(r["fiscal_code"], r["tags"]) for r in payload["data"]] == [(ROSSI, ["Politici", "Sicilia"])]
@@ -223,14 +273,18 @@ def _render_tags_partial(**context):
 
 def test_profile_strip_links_each_tag_to_the_filtered_list_and_escapes_it():
     html = _render_tags_partial(
-        subject_fiscal_code=ACME, subject_route_prefix="/companies", subject_tags=["Grandi & ricchi", "<b>x</b>"],
+        subject_fiscal_code=ACME,
+        subject_route_prefix="/companies",
+        subject_tags=["Grandi & ricchi", "<b>x</b>"],
         subject_favorite_enabled=True,
     )
     assert 'href="/companies/?tag=Grandi%20%26%20ricchi"' in html
     assert "&lt;b&gt;x&lt;/b&gt;" in html and "<b>x</b>" not in html
     assert 'data-tags-url="/companies/01234567890/tags"' in html
-    assert 'data-tags-edit' in html and '<script nonce="N0NCE">' in html
-    assert "hidden" in html.split("data-tags-empty")[1].split(">")[0]  # the "nessun tag" note is hidden when there are tags
+    assert "data-tags-edit" in html and '<script nonce="N0NCE">' in html
+    assert (
+        "hidden" in html.split("data-tags-empty")[1].split(">")[0]
+    )  # the "nessun tag" note is hidden when there are tags
 
 
 def test_profile_strip_is_read_only_without_a_signed_in_key_and_says_when_there_are_no_tags():
@@ -244,14 +298,29 @@ def test_profile_strip_is_read_only_without_a_signed_in_key_and_says_when_there_
 @pytest.mark.usefixtures("fresh_db")
 async def test_companies_can_be_filtered_by_name_status_too():
     await _seed()
-    await _exec("UPDATE subject SET name = fiscal_code WHERE fiscal_code = :c", c=BETA)  # a name that only repeats the code
+    await _exec(
+        "UPDATE subject SET name = fiscal_code WHERE fiscal_code = :c", c=BETA
+    )  # a name that only repeats the code
 
     def index(query: str):
-        return Request({"type": "http", "method": "GET", "path": "/companies/index.json", "query_string": query.encode(),
-                        "headers": [], "scheme": "http", "server": ("localhost", 8025), "client": ("127.0.0.1", 1)})
+        return Request(
+            {
+                "type": "http",
+                "method": "GET",
+                "path": "/companies/index.json",
+                "query_string": query.encode(),
+                "headers": [],
+                "scheme": "http",
+                "server": ("localhost", 8025),
+                "client": ("127.0.0.1", 1),
+            }
+        )
 
     async def codes(query: str):
-        return [r["fiscal_code"] for r in json.loads((await web._subject_index_json(index(query), "company", User)).body)["data"]]
+        return [
+            r["fiscal_code"]
+            for r in json.loads((await web._subject_index_json(index(query), "company", User)).body)["data"]
+        ]
 
     assert sorted(await codes("")) == [ACME, BETA]
     assert await codes("name_status=named") == [ACME]

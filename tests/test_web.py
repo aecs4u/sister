@@ -79,16 +79,14 @@ def test_hub_map_geocoding_retries_rural_address_without_unit_details():
         "CALA FRANCESE, LAMPEDUSA E LINOSA, Agrigento, Italia",
         "CALA FRANCESE, LAMPEDUSA, Agrigento, Italia",
     ]
-    assert web._hub_map_geocode_query(
-        "VIA FRANCESCO CRISPI n. 26 Piano T", "LAMPEDUSA E LINOSA", "AG"
-    ) == "VIA FRANCESCO CRISPI 26, LAMPEDUSA E LINOSA, Agrigento, Italia"
+    assert (
+        web._hub_map_geocode_query("VIA FRANCESCO CRISPI n. 26 Piano T", "LAMPEDUSA E LINOSA", "AG")
+        == "VIA FRANCESCO CRISPI 26, LAMPEDUSA E LINOSA, Agrigento, Italia"
+    )
 
 
 def test_document_pagination_is_newest_first_and_clamps_out_of_range_pages():
-    documents = [
-        {"id": document_id, "created_at": f"2026-10-{document_id:02d}"}
-        for document_id in range(1, 6)
-    ]
+    documents = [{"id": document_id, "created_at": f"2026-10-{document_id:02d}"} for document_id in range(1, 6)]
 
     selected, page, page_count, offset = web._paginate_documents(documents, 99, page_size=2)
 
@@ -126,7 +124,9 @@ def test_location_page_keeps_owner_visura_links_from_other_pages():
         owner_subject_docs=[],
         owner_fiscal_codes_by_document_id={1: [owner_cf]},
     )
-    hidden_owner_links = hidden_owner_map["immobili"][0]["fogli"][0]["particelle"][0]["subalternos"][0]["docs"][0]["owner_docs"]
+    hidden_owner_links = hidden_owner_map["immobili"][0]["fogli"][0]["particelle"][0]["subalternos"][0]["docs"][0][
+        "owner_docs"
+    ]
     assert hidden_owner_links == []
 
 
@@ -396,9 +396,7 @@ async def test_documents_location_page_keeps_owner_links_after_catalog_release(m
     owner_subject_ids_by_page = []
 
     def _capture_property_map(docs, **kwargs):
-        owner_subject_ids_by_page.append(
-            [document["id"] for document in kwargs.get("owner_subject_docs") or []]
-        )
+        owner_subject_ids_by_page.append([document["id"] for document in kwargs.get("owner_subject_docs") or []])
         return original_build_property_map(docs, **kwargs)
 
     monkeypatch.setattr(web, "iter_all_documents", _iter_documents)
@@ -407,9 +405,7 @@ async def test_documents_location_page_keeps_owner_links_after_catalog_release(m
     monkeypatch.setattr(web, "get_document_group_siblings", _get_group_siblings)
     monkeypatch.setattr(web, "_build_property_map", _capture_property_map)
 
-    result = await web.web_documents(
-        _fake_request(), view="map", page=1, user=SimpleNamespace(role="admin")
-    )
+    result = await web.web_documents(_fake_request(), view="map", page=1, user=SimpleNamespace(role="admin"))
 
     context = result["context"]
     assert context["total"] == 101
@@ -418,9 +414,7 @@ async def test_documents_location_page_keeps_owner_links_after_catalog_release(m
     assert [document["id"] for document in property_doc["owner_docs"]] == [102]
     assert [document["id"] for document in property_doc["related_soggetto_docs"]] == [102]
 
-    later_result = await web.web_documents(
-        _fake_request(), view="map", page=2, user=SimpleNamespace(role="admin")
-    )
+    later_result = await web.web_documents(_fake_request(), view="map", page=2, user=SimpleNamespace(role="admin"))
     subject_doc = later_result["context"]["prop_map"]["soggetti"][0]["docs"][0]
     assert [document["id"] for document in subject_doc["related_immobile_docs"]] == [1]
     assert owner_subject_ids_by_page == [[102], []]
@@ -534,6 +528,7 @@ async def test_web_result_detail_renders_pending_request(monkeypatch):
         }
 
     monkeypatch.setattr(web, "get_result_record", _get_result_record)
+
     async def _no_docs(*_, **__):
         return []
 
@@ -1466,14 +1461,20 @@ def test_admin_activity_shows_duplicate_stripe_payment_for_refund(main_module, m
     async def _recent_activity(*, limit, action_prefix):
         assert limit == 100
         if action_prefix == "subject.purchase.":
-            return [{
-                "action": "subject.purchase.completed",
-                "actor": "Stripe",
-                "status": "success",
-                "started_at": "2026-10-30T10:01:00+00:00",
-                "params": {"user_id": "email:buyer@example.test", "subject_type": "company", "subject_code": "00112580535"},
-                "result": {"amount_cents": 1490, "currency": "EUR"},
-            }]
+            return [
+                {
+                    "action": "subject.purchase.completed",
+                    "actor": "Stripe",
+                    "status": "success",
+                    "started_at": "2026-10-30T10:01:00+00:00",
+                    "params": {
+                        "user_id": "email:buyer@example.test",
+                        "subject_type": "company",
+                        "subject_code": "00112580535",
+                    },
+                    "result": {"amount_cents": 1490, "currency": "EUR"},
+                }
+            ]
         if action_prefix == "admin.subject_access.":
             return []
         if action_prefix in {"admin.wallet.", "wallet.gift_coupon."}:
@@ -1650,7 +1651,12 @@ def test_dossier_result_is_marked_as_dossier_without_request_only_counters():
 def test_dossier_cards_get_a_readable_title_but_keep_the_file_name_searchable():
     meta = web._dossier_meta(
         "soggetto_T_f6201f83672e41069532dd3eadbd374f_20260606_183040.json",
-        {"request_id": "soggetto_T_f6201", "success": True, "tipo_catasto": "T", "data": {"soggetto": "RSSMRA80A01H501U"}},
+        {
+            "request_id": "soggetto_T_f6201",
+            "success": True,
+            "tipo_catasto": "T",
+            "data": {"soggetto": "RSSMRA80A01H501U"},
+        },
         100,
         0,
     )
@@ -1709,15 +1715,42 @@ async def test_results_offset_past_the_end_redirects_to_the_last_page(monkeypatc
 
 def _search_rows():
     return [
-        {"id": 1, "document_type": "visura_fabbricati", "file_format": "P7M", "filename": "vi_sto_RA_FG103_PT730_2026-11-03.p7m",
-         "oggetto": "VISURA FG. 103 PART. 730 DI LUGO", "comune": "LUGO", "provincia": "Ravenna", "foglio": "103",
-         "particella": "730", "created_at": "2026-11-03T10:00:00+01:00"},
-        {"id": 2, "document_type": "visura_fabbricati", "file_format": "PDF", "filename": "vi_sto_RA_FG103_PT730_2026-11-03.pdf",
-         "oggetto": "VISURA FG. 103 PART. 730 DI LUGO", "comune": "LUGO", "provincia": "Ravenna", "foglio": "103",
-         "particella": "730", "created_at": "2026-11-03T10:00:01+01:00"},
-        {"id": 3, "document_type": "visura_fabbricati", "file_format": "P7M", "filename": "vi_sto_MI_FG357_PT262_2026-10-29.p7m",
-         "oggetto": "VISURA FG. 357 PART. 262 DI MILANO", "comune": "MILANO", "provincia": "Milano", "foglio": "357",
-         "particella": "262", "created_at": "2026-10-29T10:00:00+01:00"},
+        {
+            "id": 1,
+            "document_type": "visura_fabbricati",
+            "file_format": "P7M",
+            "filename": "vi_sto_RA_FG103_PT730_2026-11-03.p7m",
+            "oggetto": "VISURA FG. 103 PART. 730 DI LUGO",
+            "comune": "LUGO",
+            "provincia": "Ravenna",
+            "foglio": "103",
+            "particella": "730",
+            "created_at": "2026-11-03T10:00:00+01:00",
+        },
+        {
+            "id": 2,
+            "document_type": "visura_fabbricati",
+            "file_format": "PDF",
+            "filename": "vi_sto_RA_FG103_PT730_2026-11-03.pdf",
+            "oggetto": "VISURA FG. 103 PART. 730 DI LUGO",
+            "comune": "LUGO",
+            "provincia": "Ravenna",
+            "foglio": "103",
+            "particella": "730",
+            "created_at": "2026-11-03T10:00:01+01:00",
+        },
+        {
+            "id": 3,
+            "document_type": "visura_fabbricati",
+            "file_format": "P7M",
+            "filename": "vi_sto_MI_FG357_PT262_2026-10-29.p7m",
+            "oggetto": "VISURA FG. 357 PART. 262 DI MILANO",
+            "comune": "MILANO",
+            "provincia": "Milano",
+            "foglio": "357",
+            "particella": "262",
+            "created_at": "2026-10-29T10:00:00+01:00",
+        },
     ]
 
 
@@ -1780,8 +1813,14 @@ def test_landing_shows_the_signed_in_user_in_the_header(main_module, monkeypatch
     from fastapi.testclient import TestClient
 
     async def signed_in(_request):
-        return SimpleNamespace(id="u1", username="mario", email="mario@example.com", full_name="Mario Rossi",
-                               role="user", is_superuser=False)
+        return SimpleNamespace(
+            id="u1",
+            username="mario",
+            email="mario@example.com",
+            full_name="Mario Rossi",
+            role="user",
+            is_superuser=False,
+        )
 
     monkeypatch.setattr(web, "_optional_user", signed_in)
     page = TestClient(main_module.app).get("/landing")

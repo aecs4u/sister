@@ -147,9 +147,7 @@ def test_run_session_internal_cli_contract_is_pinned():
     query = root.commands["query"]
     batch_command = query.commands["batch"]
     batch_flags = {flag for param in batch_command.params for flag in [*param.opts, *param.secondary_opts]}
-    assert {
-        "--input", "-I", "--resume", "--output-dir", "-O", "--output", "-o", "--stop-at"
-    } <= batch_flags
+    assert {"--input", "-I", "--resume", "--output-dir", "-O", "--output", "-o", "--stop-at"} <= batch_flags
 
     subject_command = query.commands["soggetto"]
     subject_flags = {flag for param in subject_command.params for flag in [*param.opts, *param.secondary_opts]}
@@ -279,7 +277,9 @@ def test_batch_progress_uses_in_process_run_function(monkeypatch, tmp_path):
 
     monkeypatch.setattr(batch_progress, "run", fake_run)
     directories = [tmp_path / "one", tmp_path / "two"]
-    result = runner.invoke(app, ["batch", "progress", *(str(path) for path in directories), "--once", "--interval", "1"])
+    result = runner.invoke(
+        app, ["batch", "progress", *(str(path) for path in directories), "--once", "--interval", "1"]
+    )
 
     assert result.exit_code == 0, result.output
     assert captured == {"directories": directories, "once": True, "interval": 1.0}
@@ -414,7 +414,9 @@ def test_batch_convert_list_legacy_output_warns_and_forwards(monkeypatch, tmp_pa
     from sister.command_tools import convert_code_list
 
     captured = {}
-    monkeypatch.setattr(convert_code_list, "run", lambda *args, **kwargs: captured.update(args=args, kwargs=kwargs) or 0)
+    monkeypatch.setattr(
+        convert_code_list, "run", lambda *args, **kwargs: captured.update(args=args, kwargs=kwargs) or 0
+    )
     source, destination = tmp_path / "legacy.txt", tmp_path / "converted.md"
     result = runner.invoke(app, ["batch", "convert-list", str(source), "--output", str(destination)])
 
@@ -508,12 +510,19 @@ def test_app_start_passes_typed_options_to_start_wrapper(monkeypatch, tmp_path):
 
     calls = []
     monkeypatch.setattr(app_tools._runtime, "project_root", lambda: tmp_path)
-    monkeypatch.setattr(app_tools.subprocess, "run", lambda command, **kwargs: calls.append((command, kwargs)) or SimpleNamespace(returncode=0))
+    monkeypatch.setattr(
+        app_tools.subprocess,
+        "run",
+        lambda command, **kwargs: calls.append((command, kwargs)) or SimpleNamespace(returncode=0),
+    )
     result = runner.invoke(app, ["app", "start", "--port", "8123", "--no-reload"])
 
     assert result.exit_code == 0, result.output
     assert calls == [
-        (["bash", str(tmp_path / "scripts" / "start.sh"), "--port", "8123", "--no-reload"], {"cwd": tmp_path, "check": False})
+        (
+            ["bash", str(tmp_path / "scripts" / "start.sh"), "--port", "8123", "--no-reload"],
+            {"cwd": tmp_path, "check": False},
+        )
     ]
 
 
@@ -550,7 +559,9 @@ def test_app_stop_refuses_listener_that_is_not_sister(monkeypatch):
         ("rename-date", "rename_documents_with_date", ["--revert", "plan.json"], {"apply": False}),
     ],
 )
-def test_document_maintenance_commands_call_run_with_dry_run_default(monkeypatch, tmp_path, command, module_name, options, expected):
+def test_document_maintenance_commands_call_run_with_dry_run_default(
+    monkeypatch, tmp_path, command, module_name, options, expected
+):
     from sister.command_tools import (
         cleanup_extracted_xml,
         normalize_documents,
@@ -613,8 +624,18 @@ def test_documents_import_ocular_calls_run_in_process(monkeypatch, tmp_path):
 @pytest.mark.parametrize(
     ("command", "module_name", "options", "expected"),
     [
-        ("smart-ocr", "process_sister_pdf_smart_ocr", ["--output-root", "out", "--workers", "3"], {"output_root": Path("out"), "workers": 3}),
-        ("download-missing-p7m", "download_missing_p7m", ["--documents", "docs", "--sister-url", "http://sister.test"], {"documents": Path("docs"), "base_url": "http://sister.test"}),
+        (
+            "smart-ocr",
+            "process_sister_pdf_smart_ocr",
+            ["--output-root", "out", "--workers", "3"],
+            {"output_root": Path("out"), "workers": 3},
+        ),
+        (
+            "download-missing-p7m",
+            "download_missing_p7m",
+            ["--documents", "docs", "--sister-url", "http://sister.test"],
+            {"documents": Path("docs"), "base_url": "http://sister.test"},
+        ),
     ],
 )
 def test_documents_ocr_and_p7m_tools_call_run_in_process(monkeypatch, command, module_name, options, expected):
@@ -625,6 +646,7 @@ def test_documents_ocr_and_p7m_tools_call_run_in_process(monkeypatch, command, m
         "download_missing_p7m": download_missing_p7m,
     }
     captured = {}
+
     def fake_run(**kwargs):
         captured.update(kwargs)
         return (0, {"results": []}) if module_name == "download_missing_p7m" else 0
@@ -686,7 +708,16 @@ def test_build_dossier_graph_calls_run_in_process(monkeypatch, tmp_path):
     batch_dir, graph_file = tmp_path / "batch", tmp_path / "graph.json"
     result = runner.invoke(
         app,
-        ["build", "dossier-graph", "--seed", "RSSMRA85M01H501Z", "--from-batch", str(batch_dir), "--out", str(graph_file)],
+        [
+            "build",
+            "dossier-graph",
+            "--seed",
+            "RSSMRA85M01H501Z",
+            "--from-batch",
+            str(batch_dir),
+            "--out",
+            str(graph_file),
+        ],
     )
 
     assert result.exit_code == 0, result.output
@@ -862,7 +893,11 @@ def test_run_pdf_parseable_reuses_the_query_batch_callback(monkeypatch, tmp_path
 
     assert result == 0
     assert calls["build"] == [
-        {"documents_dir": build_pdf_parseable_batch.DEFAULT_DOCUMENTS, "batch_csv": csv_path, "inventory_csv": inventory}
+        {
+            "documents_dir": build_pdf_parseable_batch.DEFAULT_DOCUMENTS,
+            "batch_csv": csv_path,
+            "inventory_csv": inventory,
+        }
     ]
     assert calls["batch"][0]["input_file"] == str(csv_path)
     assert calls["batch"][0]["command"] == "auto"
@@ -1089,7 +1124,9 @@ def test_legacy_ipotecaria_persona_alias_uses_free_preview(monkeypatch):
 
     assert result.exit_code == 0, result.output
     assert "è deprecato" in result.stderr
-    assert calls == [{"provincia": "Trieste", "codice_fiscale": "RSSMRA85M01H501Z", "form_fields": None, "force": False}]
+    assert calls == [
+        {"provincia": "Trieste", "codice_fiscale": "RSSMRA85M01H501Z", "form_fields": None, "force": False}
+    ]
 
 
 def test_mortgage_start_is_a_deprecated_alias(monkeypatch):
@@ -1504,7 +1541,9 @@ def test_db_backfill_runs_both_projections_and_xml_and_records_activity(monkeypa
     async def fake_history():
         return {"answers": 0}
 
-    monkeypatch.setattr(database, "backfill_ownership_history", fake_history)  # the real one wipes and rebuilds the live history
+    monkeypatch.setattr(
+        database, "backfill_ownership_history", fake_history
+    )  # the real one wipes and rebuilds the live history
     monkeypatch.setattr(database, "backfill_projections", fake_projections)
     monkeypatch.setattr(database, "backfill_mortgage_searches", fake_mortgage_searches)
     monkeypatch.setattr(xml_ingest, "backfill_documents", fake_xml)
@@ -1531,7 +1570,13 @@ def test_db_backfill_runs_both_projections_and_xml_and_records_activity(monkeypa
     assert calls["activity"][1]["params"] == {"what": "all", "force": True, "limit": 12}
     assert calls["activity"][1]["result"] == {
         "projections": 3,
-        "mortgage_searches": {"responses": 2, "searches": 2, "formalities": 4, "annotations": 1, "document_requests": 0},
+        "mortgage_searches": {
+            "responses": 2,
+            "searches": 2,
+            "formalities": 4,
+            "annotations": 1,
+            "document_requests": 0,
+        },
         "mortgage_notes": {"candidates": 1, "projected": 1},
         "xml": 5,
         "names": {"nameless": 0},

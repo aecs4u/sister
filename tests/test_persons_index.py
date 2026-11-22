@@ -14,7 +14,7 @@ CF_B = "VRDLGU75B12F205X"
 
 def test_names_in_text_reads_code_and_name_columns():
     text_md = (
-        "# Lista\n\n<!-- sister-batch-table {\"command\": \"soggetto\"} -->\n"
+        '# Lista\n\n<!-- sister-batch-table {"command": "soggetto"} -->\n'
         "| id | codice_fiscale | intestatario | fonte |\n|---|---|---|---|\n"
         f"| pf-{CF_A} | {CF_A} | ROSSI MARIO | pvp |\n"
         f"| pf-{CF_B} | `{CF_B}` |  | opendata |\n"
@@ -62,7 +62,9 @@ async def test_refresh_subject_holdings_persists_counts_and_values():
             cf=CF_A,
         )
     ).scalar_one()
-    subject_pk = (await _exec("INSERT INTO subject (fiscal_code, name) VALUES (:cf, :cf) RETURNING id", cf=CF_A)).scalar_one()
+    subject_pk = (
+        await _exec("INSERT INTO subject (fiscal_code, name) VALUES (:cf, :cf) RETURNING id", cf=CF_A)
+    ).scalar_one()
     await _exec(
         "INSERT INTO request_province (request_id, province_index, fiscal_code, province_code, province_name, "
         "buildings_count, land_parcels_count) VALUES (:r, 0, :cf, 'RM', 'ROMA', 1, 1)",
@@ -76,24 +78,36 @@ async def test_refresh_subject_holdings_persists_counts_and_values():
     ):
         result_pk = (
             await _exec(
-                "INSERT INTO request_result (request_id, result_index) VALUES (:r, :i) RETURNING id", r=request_pk, i=index
+                "INSERT INTO request_result (request_id, result_index) VALUES (:r, :i) RETURNING id",
+                r=request_pk,
+                i=index,
             )
         ).scalar_one()
         await _exec(
             "INSERT INTO property (request_id, result_id, property_type, category, income_eur, dominical_income_eur) "
             "VALUES (:r, :res, :t, :c, :inc, :dom)",
-            r=request_pk, res=result_pk, t=kind, c=category, inc=income, dom=dominical,
+            r=request_pk,
+            res=result_pk,
+            t=kind,
+            c=category,
+            inc=income,
+            dom=dominical,
         )
         right_pk = (
             await _exec(
                 "INSERT INTO ownership_right (right_kind_id, share_numerator, share_denominator) VALUES (:k, :n, :d) RETURNING id",
-                k=kind_pk, n=num, d=den,
+                k=kind_pk,
+                n=num,
+                d=den,
             )
         ).scalar_one()
         await _exec(
             "INSERT INTO result_owner (request_id, result_id, owner_index, subject_id, right_id) "
             "VALUES (:r, :res, 0, :s, :right)",
-            r=request_pk, res=result_pk, s=subject_pk, right=right_pk,
+            r=request_pk,
+            res=result_pk,
+            s=subject_pk,
+            right=right_pk,
         )
 
     third_result = (
@@ -101,12 +115,15 @@ async def test_refresh_subject_holdings_persists_counts_and_values():
     ).scalar_one()
     await _exec(
         "INSERT INTO property (request_id, result_id, property_type) VALUES (:r, :res, 'building')",
-        r=request_pk, res=third_result,
+        r=request_pk,
+        res=third_result,
     )
 
     assert await database.refresh_subject_holdings([CF_A]) == 1
     row = (await _exec("SELECT * FROM subject_holding WHERE fiscal_code = :cf", cf=CF_A)).mappings().one()
-    provinces = (await _exec("SELECT province FROM subject_holding_province WHERE fiscal_code = :cf", cf=CF_A)).scalars().all()
+    provinces = (
+        (await _exec("SELECT province FROM subject_holding_province WHERE fiscal_code = :cf", cf=CF_A)).scalars().all()
+    )
     assert (row["properties"], row["buildings"], row["land_parcels"], provinces) == (3, 1, 1, ["RM"])
     assert (row["unvalued"], row["unknown_share"]) == (1, 1)  # the third has no value and no recorded quota
     assert row["searched_at"] is not None
@@ -127,12 +144,15 @@ PIVA = "01234567890"
 
 @pytest.mark.usefixtures("fresh_db")
 async def test_list_subject_profiles_company_has_no_birth_fields_and_rejects_unknown_kind():
-    await _exec("INSERT INTO subject (fiscal_code, name) VALUES (:p, 'ACME SRL'), (:cf, 'ROSSI MARIO')", p=PIVA, cf=CF_A)
+    await _exec(
+        "INSERT INTO subject (fiscal_code, name) VALUES (:p, 'ACME SRL'), (:cf, 'ROSSI MARIO')", p=PIVA, cf=CF_A
+    )
     for code in (PIVA, CF_A):
         await _exec(
             "INSERT INTO request (request_ref, created_at, responded_at, success, subject_query) "
             "VALUES (:ref, now(), now(), true, :code)",
-            ref=f"soggetto_E_{code}", code=code,
+            ref=f"soggetto_E_{code}",
+            code=code,
         )
     companies = await database.list_subject_profiles("company")
     assert [(c["fiscal_code"], c["name"]) for c in companies] == [(PIVA, "ACME SRL")]
@@ -160,8 +180,18 @@ async def test_index_json_is_revalidated_with_an_etag():
     )
 
     def request(headers=()):
-        return Request({"type": "http", "method": "GET", "path": "/persons/index.json", "query_string": b"",
-                        "headers": list(headers), "scheme": "http", "server": ("localhost", 8025), "client": ("127.0.0.1", 1)})
+        return Request(
+            {
+                "type": "http",
+                "method": "GET",
+                "path": "/persons/index.json",
+                "query_string": b"",
+                "headers": list(headers),
+                "scheme": "http",
+                "server": ("localhost", 8025),
+                "client": ("127.0.0.1", 1),
+            }
+        )
 
     class User:
         email = "reader@example.com"
@@ -198,7 +228,8 @@ async def test_subject_facts_for_the_profile_header():
     await _exec(
         "INSERT INTO subject (fiscal_code, name, last_name, first_name, gender, birth_date, birth_municipality_text, "
         "birth_province_code) VALUES (:cf, 'ROSSI MARIO', 'ROSSI', 'MARIO', 'M', :b, 'ROMA', 'RM')",
-        cf=CF_A, b=born,
+        cf=CF_A,
+        b=born,
     )
     await _exec(
         "INSERT INTO request (request_ref, created_at, responded_at, success, subject_query) "
@@ -218,8 +249,18 @@ async def test_subject_facts_for_the_profile_header():
 def _sql_request(query: str):
     from starlette.requests import Request
 
-    return Request({"type": "http", "method": "GET", "path": "/persons/index.json", "query_string": query.encode(),
-                    "headers": [], "scheme": "http", "server": ("localhost", 8025), "client": ("127.0.0.1", 1)})
+    return Request(
+        {
+            "type": "http",
+            "method": "GET",
+            "path": "/persons/index.json",
+            "query_string": query.encode(),
+            "headers": [],
+            "scheme": "http",
+            "server": ("localhost", 8025),
+            "client": ("127.0.0.1", 1),
+        }
+    )
 
 
 async def _seed_people():
@@ -232,16 +273,27 @@ async def _seed_people():
     for code, name, gender, born, place, prov, properties, value, provinces in people:
         await _exec(
             "INSERT INTO subject (fiscal_code, name, gender, birth_date, birth_municipality_text, birth_province_code) "
-            "VALUES (:c, :n, :g, CAST(:b AS date), :pl, :pr)", c=code, n=name, g=gender, b=born, pl=place, pr=prov,
+            "VALUES (:c, :n, :g, CAST(:b AS date), :pl, :pr)",
+            c=code,
+            n=name,
+            g=gender,
+            b=born,
+            pl=place,
+            pr=prov,
         )
         await _exec(
             "INSERT INTO request (request_ref, created_at, responded_at, success, subject_query) "
-            "VALUES (:r, now(), now(), true, :c)", r=f"soggetto_E_{code}", c=code,
+            "VALUES (:r, now(), now(), true, :c)",
+            r=f"soggetto_E_{code}",
+            c=code,
         )
         if properties is not None:
             await _exec(
                 "INSERT INTO subject_holding (fiscal_code, properties, cadastral_value_share_eur) "
-                "VALUES (:c, :p, :v)", c=code, p=properties, v=value,
+                "VALUES (:c, :p, :v)",
+                c=code,
+                p=properties,
+                v=value,
             )
             for province in filter(None, (value.strip() for value in (provinces or "").split(","))):
                 await _exec(
@@ -279,7 +331,9 @@ async def test_query_subject_profiles_pages_sorts_and_filters_in_sql():
     assert [r["fiscal_code"] for r in rows] == [bianchi]
     rows, _ = await database.query_subject_profiles("person", filters={"properties": "not a number"})
     assert len(rows) == 3  # an unparsable numeric filter does not filter
-    rows, _ = await database.query_subject_profiles("person", filters={"name": "100%"})  # wildcard characters are literal
+    rows, _ = await database.query_subject_profiles(
+        "person", filters={"name": "100%"}
+    )  # wildcard characters are literal
     assert rows == []
 
     rows, _ = await database.query_subject_profiles("person", favorites=[verdi])
@@ -374,7 +428,7 @@ def test_persons_index_render_exposes_live_burdens_card_and_column():
                         "_base.html": "{% block extra_css %}{% endblock %}{% block content %}{% endblock %}{% block extra_js %}{% endblock %}",
                         "_macros.html": (
                             "{% macro metric_card(label, value, icon, color, href) %}"
-                            "<a href=\"{{ href }}\">{{ label }} {{ value }}</a>{% endmacro %}"
+                            '<a href="{{ href }}">{{ label }} {{ value }}</a>{% endmacro %}'
                         ),
                     }
                 ),
@@ -430,15 +484,23 @@ async def test_index_json_pages_and_csv_follows_the_same_query():
     class User:
         email = "reader@example.com"
 
-    first = await web._subject_index_json(_sql_request("page=1&size=2&sort=cadastral_value_share&dir=desc"), "person", User())
+    first = await web._subject_index_json(
+        _sql_request("page=1&size=2&sort=cadastral_value_share&dir=desc"), "person", User()
+    )
     payload = json.loads(first.body)
     assert (payload["total"], payload["last_page"], len(payload["data"])) == (3, 2, 2)
-    second = await web._subject_index_json(_sql_request("page=2&size=2&sort=cadastral_value_share&dir=desc"), "person", User())
+    second = await web._subject_index_json(
+        _sql_request("page=2&size=2&sort=cadastral_value_share&dir=desc"), "person", User()
+    )
     assert [r["fiscal_code"] for r in json.loads(second.body)["data"]] == [bianchi]
-    filtered = await web._subject_index_json(_sql_request("f_properties=%3E5&q=rossi&f_nonsense=1&size=9999"), "person", User())
+    filtered = await web._subject_index_json(
+        _sql_request("f_properties=%3E5&q=rossi&f_nonsense=1&size=9999"), "person", User()
+    )
     assert [r["fiscal_code"] for r in json.loads(filtered.body)["data"]] == [rossi]
 
-    csv_response = await web._subject_index_csv(_sql_request("sort=cadastral_value_share&dir=desc&f_gender=M"), "person", User())
+    csv_response = await web._subject_index_csv(
+        _sql_request("sort=cadastral_value_share&dir=desc&f_gender=M"), "person", User()
+    )
     text_csv = csv_response.body.decode("utf-8")
     lines = text_csv.lstrip("\ufeff").strip().splitlines()
     assert lines[0].startswith("Codice;Nome;Sesso")
@@ -452,34 +514,55 @@ async def test_index_json_pages_and_csv_follows_the_same_query():
 @pytest.mark.usefixtures("fresh_db")
 async def test_holdings_count_a_unit_listed_under_two_quotas_once_but_add_both_quotas():
     await _exec("INSERT INTO cadastral_category (code) VALUES ('A/2') ON CONFLICT DO NOTHING")
-    await _exec("INSERT INTO request_type (code, label, description) VALUES ('soggetto', 'Soggetto', 'Soggetto') ON CONFLICT DO NOTHING")
+    await _exec(
+        "INSERT INTO request_type (code, label, description) VALUES ('soggetto', 'Soggetto', 'Soggetto') ON CONFLICT DO NOTHING"
+    )
     request_pk = (
         await _exec(
             "INSERT INTO request (request_ref, request_type, created_at, responded_at, success, subject_query) "
-            "VALUES ('soggetto_E_1', 'soggetto', now(), now(), true, :cf) RETURNING id", cf=CF_A,
+            "VALUES ('soggetto_E_1', 'soggetto', now(), now(), true, :cf) RETURNING id",
+            cf=CF_A,
         )
     ).scalar_one()
-    subject_pk = (await _exec("INSERT INTO subject (fiscal_code, name) VALUES (:cf, 'ROSSI MARIO') RETURNING id", cf=CF_A)).scalar_one()
+    subject_pk = (
+        await _exec("INSERT INTO subject (fiscal_code, name) VALUES (:cf, 'ROSSI MARIO') RETURNING id", cf=CF_A)
+    ).scalar_one()
     kind_pk = (await _exec("INSERT INTO right_kind (right_type) VALUES (:t) RETURNING id", t="Proprieta'")).scalar_one()
-    unit_pk = (await _exec("INSERT INTO cadastral_unit (cadastre_type, sheet, parcel, subunit) VALUES ('F', '7', '758', '1') RETURNING id")).scalar_one()
+    unit_pk = (
+        await _exec(
+            "INSERT INTO cadastral_unit (cadastre_type, sheet, parcel, subunit) VALUES ('F', '7', '758', '1') RETURNING id"
+        )
+    ).scalar_one()
     # the same unit twice (an ownership entry each, 1/2 and 1/4); A/2 rendita 1000 -> 168.000 for the whole unit
     for index, (num, den) in enumerate([(1, 2), (1, 4)]):
         result_pk = (
-            await _exec("INSERT INTO request_result (request_id, result_index) VALUES (:r, :i) RETURNING id", r=request_pk, i=index)
+            await _exec(
+                "INSERT INTO request_result (request_id, result_index) VALUES (:r, :i) RETURNING id",
+                r=request_pk,
+                i=index,
+            )
         ).scalar_one()
         await _exec(
             "INSERT INTO property (request_id, result_id, cadastral_unit_id, property_type, category, income_eur) "
-            "VALUES (:r, :res, :u, 'building', 'A/2', 1000)", r=request_pk, res=result_pk, u=unit_pk,
+            "VALUES (:r, :res, :u, 'building', 'A/2', 1000)",
+            r=request_pk,
+            res=result_pk,
+            u=unit_pk,
         )
         right_pk = (
             await _exec(
                 "INSERT INTO ownership_right (right_kind_id, share_numerator, share_denominator) VALUES (:k, :n, :d) RETURNING id",
-                k=kind_pk, n=num, d=den,
+                k=kind_pk,
+                n=num,
+                d=den,
             )
         ).scalar_one()
         await _exec(
             "INSERT INTO result_owner (request_id, result_id, owner_index, subject_id, right_id) VALUES (:r, :res, 0, :s, :right)",
-            r=request_pk, res=result_pk, s=subject_pk, right=right_pk,
+            r=request_pk,
+            res=result_pk,
+            s=subject_pk,
+            right=right_pk,
         )
 
     await database.refresh_subject_holdings([CF_A])

@@ -10,7 +10,12 @@ from tests.test_batch import FakeClient, make, run
 
 IDENT = "80208450587"
 RECORDS_PAGE = [
-    {"Denominazione": f"ENTE {n}", "Sede": f"SEDE {n} (XX)", "Codice Fiscale": IDENT, "omonimoSelezionato": f"{n}#0#ENTE {n}#SEDE {n} (XX)#{IDENT}"}
+    {
+        "Denominazione": f"ENTE {n}",
+        "Sede": f"SEDE {n} (XX)",
+        "Codice Fiscale": IDENT,
+        "omonimoSelezionato": f"{n}#0#ENTE {n}#SEDE {n} (XX)#{IDENT}",
+    }
     for n in (1, 2, 3, 4)
 ]
 
@@ -47,7 +52,8 @@ def portal(monkeypatch):
         return {
             "soggetto": identificativo,
             "province": [{"provincia": "ROMA", "codice": "058", "fabbricati": omonimo_index + 1, "terreni": 1}],
-            "immobili": [{"Foglio": "1", "Particella": str(omonimo_index), "visImmSel": f"v{omonimo_index}"}] * (omonimo_index + 1),
+            "immobili": [{"Foglio": "1", "Particella": str(omonimo_index), "visImmSel": f"v{omonimo_index}"}]
+            * (omonimo_index + 1),
             "total_results": omonimo_index + 1,
             "page_visits": [{"step": f"record{omonimo_index}"}],
         }
@@ -72,7 +78,9 @@ def test_every_record_is_opened_and_appended_into_one_result(portal):
     assert out["omonimi_totale"] == 4 and out["omonimi_elaborati"] == 4 and out["incompleta"] is False
     assert out["omonimo_prossimo"] is None and out["total_results"] == 1 + 2 + 3 + 4
     # each property keeps the record it was found under
-    assert {(r["omonimo"], r["omonimo_denominazione"]) for r in out["immobili"]} == {(n, f"ENTE {n}") for n in (1, 2, 3, 4)}
+    assert {(r["omonimo"], r["omonimo_denominazione"]) for r in out["immobili"]} == {
+        (n, f"ENTE {n}") for n in (1, 2, 3, 4)
+    }
     assert [s["immobili"] for s in out["omonimi"]] == [1, 2, 3, 4]
     assert out["province"] == [{"provincia": "ROMA", "codice": "058", "fabbricati": 10, "terreni": 4}]  # counts summed
     assert len(out["page_visits"]) == 4 and "error" not in out
@@ -107,7 +115,12 @@ def test_one_failing_record_does_not_lose_the_others(portal):
 
 
 def test_no_match_is_returned_as_it_is(portal):
-    portal["search"] = {"soggetto": IDENT, "immobili": [], "total_results": 0, "error": "NESSUNA CORRISPONDENZA TROVATA"}
+    portal["search"] = {
+        "soggetto": IDENT,
+        "immobili": [],
+        "total_results": 0,
+        "error": "NESSUNA CORRISPONDENZA TROVATA",
+    }
     assert go()["error"] == "NESSUNA CORRISPONDENZA TROVATA"
 
 
@@ -246,13 +259,17 @@ def test_a_lost_session_stops_the_split_and_resume_finishes_the_other_provinces(
     client = provinces_client({None: TOO_MANY, "AG": "ok", "BG": "ok", "BI": lost}, calls)
     entry = run(client, by_name(), journal=journal, wait=True, retries=0).entries[0]
     assert entry["status"] == batch.INCOMPLETE and "da completare" in entry["error"]
-    assert entry["split_pending"][0] == "BI" and len(calls) < len(batch.SEDE_PROVINCES)  # it stopped at the lost session
+    assert entry["split_pending"][0] == "BI" and len(calls) < len(
+        batch.SEDE_PROVINCES
+    )  # it stopped at the lost session
 
     again: list = []
     client = provinces_client({None: TOO_MANY, "BI": "ok", "BL": "ok"}, again)
     entry = run(client, by_name(), journal=journal, resume=True, wait=True, retries=0).entries[0]
     sent = [c.get("provincia_sede") for c in again]
-    assert entry["status"] == batch.COMPLETED and "AG" not in sent and "BG" not in sent  # answered provinces are not asked again
+    assert (
+        entry["status"] == batch.COMPLETED and "AG" not in sent and "BG" not in sent
+    )  # answered provinces are not asked again
     assert sent[0] == "BI"
 
 
@@ -289,9 +306,14 @@ def test_the_immobili_rows_are_classified_with_one_call():
 
 
 def test_a_long_table_is_parsed_into_the_same_rows_as_before():
-    html = "<table><tr><th></th><th>Foglio</th><th>Particella</th></tr>" + "".join(
-        f"<tr><td><input type='radio' name='visImmSel' value='v{n}'/></td><td>{n}</td><td>{n + 1}</td></tr>" for n in range(3000)
-    ) + "</table>"
+    html = (
+        "<table><tr><th></th><th>Foglio</th><th>Particella</th></tr>"
+        + "".join(
+            f"<tr><td><input type='radio' name='visImmSel' value='v{n}'/></td><td>{n}</td><td>{n + 1}</td></tr>"
+            for n in range(3000)
+        )
+        + "</table>"
+    )
     rows = utils._extract_result_tables(html)
     assert len(rows) == 3000 and rows[0] == {"Foglio": "0", "Particella": "1", "visImmSel": "v0"}
     assert rows == utils.parse_table(html)  # the page is parsed once, the table is not parsed again from a string
@@ -318,10 +340,12 @@ def test_a_forced_row_is_never_pruned_as_already_answered(tmp_path):
     drop, counts = available_lines(table, answered, set())
     assert len(drop) == 1 and counts["subject"] == 2  # only the row without reuse=force goes
 
-    plan = {"queries": [
-        {"id": "a", "command": "soggetto", "reuse": "force", "params": {"codice_fiscale": code}},
-        {"id": "b", "command": "soggetto", "params": {"codice_fiscale": other}},
-    ]}
+    plan = {
+        "queries": [
+            {"id": "a", "command": "soggetto", "reuse": "force", "params": {"codice_fiscale": code}},
+            {"id": "b", "command": "soggetto", "params": {"codice_fiscale": other}},
+        ]
+    }
     (tmp_path / "batch.json").write_text(json.dumps(plan))
     kept, done, invalid = prune_plan(tmp_path, answered)
     assert (kept, done, invalid) == (1, 1, 0)
@@ -392,7 +416,10 @@ def _batch(tmp_path, statuses):
     tmp_path.mkdir(parents=True, exist_ok=True)
     (tmp_path / "batch.json").write_text(json.dumps({"queries": [{"id": i} for i in statuses]}))
     (tmp_path / "batch_journal.jsonl").write_text(
-        "".join(json.dumps({"id": i, "status": s, "error": e, "updated_at": "2026-11-05T14:00:00+00:00"}) + "\n" for i, (s, e) in statuses.items())
+        "".join(
+            json.dumps({"id": i, "status": s, "error": e, "updated_at": "2026-11-05T14:00:00+00:00"}) + "\n"
+            for i, (s, e) in statuses.items()
+        )
     )
     return tmp_path
 

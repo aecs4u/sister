@@ -14,21 +14,60 @@ from sister.omi_zone_overview import (
 )
 
 
-def row(anno, semestre, zona="D4", code=20, label="Abitazioni civili", state="NORMALE", prevalent="P", low=6000.0,
-        high=9000.0, rent_low="15,0", rent_high="23,0", description="'MARINA PICCOLA, CASTELLO,'", comune="CAPRI"):
+def row(
+    anno,
+    semestre,
+    zona="D4",
+    code=20,
+    label="Abitazioni civili",
+    state="NORMALE",
+    prevalent="P",
+    low=6000.0,
+    high=9000.0,
+    rent_low="15,0",
+    rent_high="23,0",
+    description="'MARINA PICCOLA, CASTELLO,'",
+    comune="CAPRI",
+):
     return {
-        "anno": anno, "semestre": semestre, "zona": zona, "fascia": zona[0], "zona_descrizione": description,
-        "link_zona": "NA1", "comune": comune, "provincia": "NA", "regione": "CAMPANIA", "cod_comune_amm": "B696",
-        "cod_comune_istat": 15063014.0, "cod_tipologia": code, "tipologia": label, "stato_conservazione": state,
-        "stato_prevalente": prevalent, "prezzo_min": low, "prezzo_max": high, "superficie_nl_compravendita": "L",
-        "locazione_min": rent_low, "locazione_max": rent_high, "superficie_nl_locazione": "L",
+        "anno": anno,
+        "semestre": semestre,
+        "zona": zona,
+        "fascia": zona[0],
+        "zona_descrizione": description,
+        "link_zona": "NA1",
+        "comune": comune,
+        "provincia": "NA",
+        "regione": "CAMPANIA",
+        "cod_comune_amm": "B696",
+        "cod_comune_istat": 15063014.0,
+        "cod_tipologia": code,
+        "tipologia": label,
+        "stato_conservazione": state,
+        "stato_prevalente": prevalent,
+        "prezzo_min": low,
+        "prezzo_max": high,
+        "superficie_nl_compravendita": "L",
+        "locazione_min": rent_low,
+        "locazione_max": rent_high,
+        "superficie_nl_locazione": "L",
     }
 
 
-@pytest.mark.parametrize("raw, expected", [
-    ("15,2", 15.2), ("1.234,5", 1234.5), (7400.0, 7400.0), ("4", 4.0), ("", None), ("-", None), (None, None),
-    ("n.d.", None), (True, None),
-])
+@pytest.mark.parametrize(
+    "raw, expected",
+    [
+        ("15,2", 15.2),
+        ("1.234,5", 1234.5),
+        (7400.0, 7400.0),
+        ("4", 4.0),
+        ("", None),
+        ("-", None),
+        (None, None),
+        ("n.d.", None),
+        (True, None),
+    ],
+)
 def test_parse_number(raw, expected):
     assert parse_number(raw) == expected
 
@@ -66,9 +105,12 @@ def test_duplicated_zone_rows_count_once():
 
 def test_trend_uses_the_state_prevalent_in_most_periods():
     rows = [
-        row(2020, 1, state="NORMALE"), row(2020, 1, state="OTTIMO", prevalent="", low=9000.0, high=12000.0),
-        row(2020, 2, state="NORMALE"), row(2020, 2, state="OTTIMO", prevalent="", low=9000.0, high=12000.0),
-        row(2021, 1, state="NORMALE", prevalent=""), row(2021, 1, state="OTTIMO", prevalent="P", low=9500.0, high=12500.0),
+        row(2020, 1, state="NORMALE"),
+        row(2020, 1, state="OTTIMO", prevalent="", low=9000.0, high=12000.0),
+        row(2020, 2, state="NORMALE"),
+        row(2020, 2, state="OTTIMO", prevalent="", low=9000.0, high=12000.0),
+        row(2021, 1, state="NORMALE", prevalent=""),
+        row(2021, 1, state="OTTIMO", prevalent="P", low=9500.0, high=12500.0),
     ]
     typology = build_zone_overview(rows, "D4")["typologies"][0]
     assert typology["state"] == "NORMALE"
@@ -90,7 +132,8 @@ def test_zone_missing_from_newest_release_is_discontinued_and_gaps_are_listed():
 
 def test_successor_needs_a_similar_description_or_the_same_quote():
     rows = [
-        row(2024, 1), row(2025, 1, zona="D5", description="'MARINA PICCOLA, CASTELLO'"),
+        row(2024, 1),
+        row(2025, 1, zona="D5", description="'MARINA PICCOLA, CASTELLO'"),
         row(2025, 1, zona="B1", description="'CENTRO STORICO'", low=9000.0, high=14000.0),
     ]
     result = build_zone_overview(rows, "D4")
@@ -101,7 +144,8 @@ def test_successor_needs_a_similar_description_or_the_same_quote():
 
 def test_active_zone_has_no_successor_and_is_ranked_against_the_comune():
     rows = [
-        row(2025, 1, zona="D4", low=6000.0, high=8000.0), row(2025, 1, zona="B1", low=8000.0, high=12000.0),
+        row(2025, 1, zona="D4", low=6000.0, high=8000.0),
+        row(2025, 1, zona="B1", low=8000.0, high=12000.0),
         row(2025, 1, zona="D3", low=3000.0, high=5000.0),
     ]
     result = build_zone_overview(rows, "D4")
@@ -160,11 +204,23 @@ def test_istat_code_from_the_omi_regional_code():
 
 
 def test_ntn_skips_years_without_any_value():
-    empty = dict.fromkeys((
-        "ntn_totale", "ntn_fino_50mq", "ntn_50_85mq", "ntn_85_115mq", "ntn_115_145mq", "ntn_oltre_145mq",
-        "ntn_uffici", "ntn_negozi_lab", "ntn_depositi_comm_autorimesse", "ntn_depositi_comm", "ntn_produttivo",
-        "ntn_box", "ntn_depositi_pertinenziali",
-    ))
+    empty = dict.fromkeys(
+        (
+            "ntn_totale",
+            "ntn_fino_50mq",
+            "ntn_50_85mq",
+            "ntn_85_115mq",
+            "ntn_115_145mq",
+            "ntn_oltre_145mq",
+            "ntn_uffici",
+            "ntn_negozi_lab",
+            "ntn_depositi_comm_autorimesse",
+            "ntn_depositi_comm",
+            "ntn_produttivo",
+            "ntn_box",
+            "ntn_depositi_pertinenziali",
+        )
+    )
     filled = empty | {"anno": 2023, "ntn_totale": "35,4", "ntn_negozi_lab": "4"}
     summary = overview._ntn_summary([empty | {"anno": 2022}, filled])
     assert [item["year"] for item in summary["series"]] == [2023]
@@ -201,6 +257,7 @@ def _client():
 
 def _loaded(monkeypatch, rows, zona):
     seen = []
+
     async def fake_loader(comune, zone, refresh=False):
         seen.append(refresh)
         result = build_zone_overview(rows, zone)
@@ -362,6 +419,13 @@ def test_transaction_volume_query_reads_the_normalised_sales_tables():
     assert "omi_flat" not in sql and "omi_core" not in sql and "public." not in sql
     for table in ("omi.municipality_version", "omi.sales_record", "omi.sales_measure", "omi.sales_indicator"):
         assert table in sql
-    for column in ("ntn_totale", "ntn_oltre_145mq", "ntn_uffici", "ntn_produttivo", "ntn_box", "ntn_depositi_pertinenziali"):
+    for column in (
+        "ntn_totale",
+        "ntn_oltre_145mq",
+        "ntn_uffici",
+        "ntn_produttivo",
+        "ntn_box",
+        "ntn_depositi_pertinenziali",
+    ):
         assert f"AS {column}" in sql
     assert sql.count("$1") == 1
