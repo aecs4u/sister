@@ -179,9 +179,7 @@ def run_migrations_online() -> None:
             connection=connection,
             target_metadata=target_metadata,
             sister_schema=SISTER_SCHEMA,
-            istat_schema=os.getenv(
-                "DATABASE_ISTAT_SCHEMA", SISTER_SCHEMA
-            ),
+            istat_schema=os.getenv("DATABASE_ISTAT_SCHEMA", SISTER_SCHEMA),
             version_table_schema=SISTER_SCHEMA,
         )
         with context.begin_transaction():
