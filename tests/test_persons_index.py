@@ -387,7 +387,7 @@ def test_persons_index_render_exposes_live_burdens_card_and_column():
         autoescape=True,
     )
     env.globals["_"] = lambda message: message
-    html = env.get_template("aecs4u_theme:subject_index.html").render(
+    html = env.get_template("aecs4u_theme/subject_index.html").render(
         request=SimpleNamespace(url=SimpleNamespace(path="/persons")),
         kind="person",
         kind_label="Persone",
