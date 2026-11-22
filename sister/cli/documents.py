@@ -168,6 +168,20 @@ def documents_cleanup_xml(
         raise typer.Exit(result)
 
 
+@documents_app.command("sync-gcs")
+def documents_sync_gcs(
+    dry_run: bool = typer.Option(True, "--dry-run/--apply", help="Mostra i file mancanti senza caricarli"),
+):
+    """Carica nel bucket GCS privato i documenti che non ci sono ancora (mai sovrascritti)."""
+    from ..command_tools import sync_documents_to_gcs
+
+    result = _runtime.run_local_tool(
+        "documents sync-gcs", lambda: sync_documents_to_gcs.run(apply=not dry_run)
+    )
+    if result:
+        raise typer.Exit(result)
+
+
 @documents_app.command("rename-date")
 def documents_rename_date(
     documents: Path = typer.Option(..., "--documents", help="Cartella dei documenti"),

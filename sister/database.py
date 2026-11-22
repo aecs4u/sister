@@ -2572,7 +2572,14 @@ async def get_document_by_id(doc_id: int) -> dict | None:
     if row is None:
         return None
     doc, unit, comune, content, ref = row
-    return _document_record(doc, unit, comune, request_ref=ref, content=content)
+    record = _document_record(doc, unit, comune, request_ref=ref, content=content)
+    # Without the file on disk (a deployed container) read it from the private bucket: every reader of
+    # ``file_path`` (view, download, planimetrie, OCR) then gets a local copy.
+    from . import document_storage
+
+    if document_storage.enabled() and record.get("file_path") and not Path(record["file_path"]).is_file():
+        record["file_path"] = await document_storage.ensure_local(doc.file_name, record["file_path"]) or record["file_path"]
+    return record
 
 
 async def get_documents_by_ids(document_ids: Iterable[int], *, include_content: bool = False) -> list[dict]:

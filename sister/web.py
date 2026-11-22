@@ -34,6 +34,8 @@ from starlette.concurrency import run_in_threadpool
 from starlette.responses import StreamingResponse
 
 from . import database
+from . import document_storage
+from .database_config import database_dsn_suffix
 from .database import (
     count_result_rows,
     count_total_result_rows,
@@ -8583,7 +8585,10 @@ async def _google_maps_context_uncached(doc: dict, *, refresh_only: bool = False
     # source DSN is configured, cadastral_sales is on the same PostgreSQL server
     # as SISTER (live views locally, a published snapshot on Neon). Hub maps can
     # still use the SISTER FDW views when no direct source DSN is configured.
-    direct_cadastral_dsn = os.getenv("CADASTRAL_POSTGRES_DSN", "").strip()
+    direct_cadastral_dsn = (
+        os.getenv("CADASTRAL_POSTGRES_DSN", "").strip()
+        or os.getenv(f"CADASTRAL_DATABASE_DSN_{database_dsn_suffix()}", "").strip()
+    )
     use_sister_cadastral_views = (
         is_subject_visura and document_id is None and not direct_cadastral_dsn
     )
@@ -13806,6 +13811,14 @@ async def _subject_document_archive(
     # load scale with the entire catalogue even though unrelated results were
     # never rendered.
     extracted_ids = await find_documents_with_extraction(subject_group_file_ids)
+    # Files not on this disk may still be in the private bucket (``document_storage``).
+    remote_names = await document_storage.remote_available(
+        str(physical_by_id[file_id].get("filename") or "")
+        for _logical, ids in subject_logical
+        for file_id in ids
+        if file_id in physical_by_id
+        and not (physical_by_id[file_id].get("file_path") and Path(physical_by_id[file_id]["file_path"]).is_file())
+    )
     documents = []
     for logical, file_ids in subject_logical:
         sources: set[str] = set()
@@ -13836,7 +13849,7 @@ async def _subject_document_archive(
             document_id = int(collapsed_file["id"])
             physical = physical_by_id.get(document_id) or {}
             file_path = physical.get("file_path")
-            available = bool(file_path and Path(file_path).is_file())
+            available = bool(file_path and Path(file_path).is_file()) or str(physical.get("filename") or "") in remote_names
             files.append(
                 {
                     **collapsed_file,

@@ -58,6 +58,9 @@ original_file.pdf
 .playwright-mcp/
 *.jpeg
 *.png
+# App icons are source assets (the deployed image needs them: apple-touch-icon.png was missing in production)
+!sister/static/icons/*.png
+!sister/static/images/*.png
 
 # Docker
 docker-compose.override.yaml
