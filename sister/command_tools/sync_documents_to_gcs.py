@@ -62,7 +62,9 @@ async def _run(apply: bool) -> int:
             await provider.upload(
                 key=document_storage.object_key(name) or "",
                 data=path.read_bytes(),
-                content_type=_MEDIA.get(path.suffix.lower()) or mimetypes.guess_type(name)[0] or "application/octet-stream",
+                content_type=_MEDIA.get(path.suffix.lower())
+                or mimetypes.guess_type(name)[0]
+                or "application/octet-stream",
                 filename=name,
             )
         except Exception as exc:  # noqa: BLE001

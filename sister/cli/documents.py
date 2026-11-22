@@ -24,9 +24,13 @@ def documents_floor_plan_validate(
     calibration: Optional[Path] = typer.Option(None, "--calibration", help="File JSON di calibrazione"),
     rooms: Optional[Path] = typer.Option(None, "--rooms", help="File JSON con locali e poligoni"),
     property_index: int = typer.Option(0, "--property-index", min=0, help="Immobile in data.immobili da confrontare"),
-    visura_area_m2: Optional[float] = typer.Option(None, "--visura-area-m2", min=0, help="Sostituisce la superficie estratta"),
+    visura_area_m2: Optional[float] = typer.Option(
+        None, "--visura-area-m2", min=0, help="Sostituisce la superficie estratta"
+    ),
     tolerance_m2: float = typer.Option(1.0, "--tolerance-m2", min=0, help="Tolleranza assoluta in metri quadrati"),
-    tolerance_percent: float = typer.Option(0.05, "--tolerance-percent", min=0, help="Tolleranza relativa (0.05 = 5%%)"),
+    tolerance_percent: float = typer.Option(
+        0.05, "--tolerance-percent", min=0, help="Tolleranza relativa (0.05 = 5%%)"
+    ),
     output: OutputOpt = None,
 ):
     """Confronta la superficie catastale di una visura con la stima della planimetria."""
@@ -74,8 +78,14 @@ def documents_import_receipts(path: Path = typer.Argument(..., exists=True, read
     """Importa una ricevuta AdE o tutti i file PDF/TXT di una cartella."""
     from .. import ade_ledger
 
-    paths = [path] if path.is_file() else sorted(
-        child for child in path.iterdir() if child.is_file() and child.suffix.casefold() in {".pdf", ".txt", ".text"}
+    paths = (
+        [path]
+        if path.is_file()
+        else sorted(
+            child
+            for child in path.iterdir()
+            if child.is_file() and child.suffix.casefold() in {".pdf", ".txt", ".text"}
+        )
     )
     if not paths:
         if _runtime.json_output_enabled():
@@ -132,7 +142,9 @@ def documents_reconcile(
     documents: Path = typer.Option(..., "--documents", help="Cartella dei documenti"),
     links: Path | None = typer.Option(None, "--links", help="Cartella degli alias"),
     backup_dir: Path | None = typer.Option(None, "--backup-dir", help="Cartella di backup"),
-    dry_run: bool = typer.Option(True, "--dry-run/--apply", help="Mostra le righe da rimuovere senza modificare il database"),
+    dry_run: bool = typer.Option(
+        True, "--dry-run/--apply", help="Mostra le righe da rimuovere senza modificare il database"
+    ),
 ):
     """Riconcilia righe documentali senza file locali equivalenti."""
     from ..command_tools import reconcile_missing_documents
@@ -175,9 +187,7 @@ def documents_sync_gcs(
     """Carica nel bucket GCS privato i documenti che non ci sono ancora (mai sovrascritti)."""
     from ..command_tools import sync_documents_to_gcs
 
-    result = _runtime.run_local_tool(
-        "documents sync-gcs", lambda: sync_documents_to_gcs.run(apply=not dry_run)
-    )
+    result = _runtime.run_local_tool("documents sync-gcs", lambda: sync_documents_to_gcs.run(apply=not dry_run))
     if result:
         raise typer.Exit(result)
 
@@ -270,7 +280,11 @@ def documents_download_missing_p7m(
     """Richiede le P7M mancanti per i PDF senza un compagno firmato."""
     from ..command_tools import download_missing_p7m
 
-    kwargs = {key: value for key, value in {"documents": documents, "output": output, "base_url": sister_url}.items() if value is not None}
+    kwargs = {
+        key: value
+        for key, value in {"documents": documents, "output": output, "base_url": sister_url}.items()
+        if value is not None
+    }
     if _runtime.json_output_enabled():
         with redirect_stdout(sys.stderr):
             status, report = download_missing_p7m.run(**kwargs, return_report=True)

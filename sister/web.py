@@ -116,8 +116,7 @@ def _cache_complete_data(
     now = time.monotonic()
     with _COMPLETE_DATA_CACHE_LOCK:
         expired = [
-            key for key, item in _COMPLETE_DATA_CACHE.items()
-            if now - item["created"] > _COMPLETE_DATA_CACHE_TTL
+            key for key, item in _COMPLETE_DATA_CACHE.items() if now - item["created"] > _COMPLETE_DATA_CACHE_TTL
         ]
         for key in expired:
             _COMPLETE_DATA_CACHE.pop(key, None)
@@ -172,8 +171,11 @@ def _subject_page_data_payload(
             "visuraTablesSelector": "[data-visura-group-tables]",
             "documentUrlTemplate": "/documents/{id}",
             "omiValuationUrl": "/omi/valuation",
-            "labels": ({"attributedOmi": "Stima attribuibile · fonte preferita"}
-                       if assessment.get("preferred_source_used") else {}),
+            "labels": (
+                {"attributedOmi": "Stima attribuibile · fonte preferita"}
+                if assessment.get("preferred_source_used")
+                else {}
+            ),
         },
         "manual_property_valuations": (kpis or {}).get("manual_valuation_assets") or [],
         "category_descriptions": category_descriptions or {},
@@ -216,29 +218,35 @@ def _prior_ownership_table_rows(profile: dict | None, formalities: list[dict] | 
         for property_row in extraction.get("properties") or []:
             municipality = property_row.get("municipality") or "Comune non indicato"
             raw_cadastre = str(property_row.get("cadastre_type") or "")
-            cadastre = "F" if raw_cadastre.strip().casefold() in {"f", "fabbricati"} else (
-                "T" if raw_cadastre.strip().casefold() in {"t", "terreni"} else raw_cadastre
+            cadastre = (
+                "F"
+                if raw_cadastre.strip().casefold() in {"f", "fabbricati"}
+                else ("T" if raw_cadastre.strip().casefold() in {"t", "terreni"} else raw_cadastre)
             )
             sheet = str(property_row["sheet"]) if property_row.get("sheet") is not None else ""
             group_key = f"{municipality}|{cadastre}|{sheet.zfill(5)}"
-            grouped.setdefault(group_key, []).append({
-                "document": document,
-                "extraction": extraction,
-                "property": property_row,
-                "municipality": municipality,
-                "municipality_code": property_row.get("municipality_code") or "",
-                "cadastre": cadastre,
-                "sheet": sheet,
-                "group_key": group_key,
-            })
+            grouped.setdefault(group_key, []).append(
+                {
+                    "document": document,
+                    "extraction": extraction,
+                    "property": property_row,
+                    "municipality": municipality,
+                    "municipality_code": property_row.get("municipality_code") or "",
+                    "cadastre": cadastre,
+                    "sheet": sheet,
+                    "group_key": group_key,
+                }
+            )
 
     rows = []
     for group_key in sorted(grouped, key=str.casefold):
-        rows.extend(sorted(
-            grouped[group_key],
-            key=lambda row: str(row["extraction"].get("title_date") or ""),
-            reverse=True,
-        ))
+        rows.extend(
+            sorted(
+                grouped[group_key],
+                key=lambda row: str(row["extraction"].get("title_date") or ""),
+                reverse=True,
+            )
+        )
     return rows
 
 
@@ -260,22 +268,27 @@ def _prior_ownership_map_parcels(
         if not all((province, municipality_code, sheet, parcel)) or cadastre not in {"F", "T"}:
             continue
         identity = (province, municipality_code, section, sheet, parcel, cadastre)
-        parcels.setdefault(identity, {
-            "province": prop.get("province") or province,
-            "province_code": province,
-            "municipality": row["municipality"],
-            "municipality_code": municipality_code,
-            "section": section,
-            "sheet": sheet,
-            "parcel": parcel,
-            "is_building": cadastre == "F",
-            "map_address": str(prop.get("address") or "").strip(),
-            "units": [{
-                "property_type": "building" if cadastre == "F" else "land",
-                "category": prop.get("category") or prop.get("nature") or "",
-                "subunit": prop.get("subunit"),
-            }],
-        })
+        parcels.setdefault(
+            identity,
+            {
+                "province": prop.get("province") or province,
+                "province_code": province,
+                "municipality": row["municipality"],
+                "municipality_code": municipality_code,
+                "section": section,
+                "sheet": sheet,
+                "parcel": parcel,
+                "is_building": cadastre == "F",
+                "map_address": str(prop.get("address") or "").strip(),
+                "units": [
+                    {
+                        "property_type": "building" if cadastre == "F" else "land",
+                        "category": prop.get("category") or prop.get("nature") or "",
+                        "subunit": prop.get("subunit"),
+                    }
+                ],
+            },
+        )
     return list(parcels.values())
 
 
@@ -292,20 +305,23 @@ async def _prior_ownership_omi_data(
     groups_by_key: dict[str, dict] = {}
     for row in rows:
         key = row["group_key"]
-        group = groups_by_key.setdefault(key, {
-            "key": key,
-            "municipality": row["municipality"],
-            "municipality_code": row["municipality_code"],
-            "cadastre": row["cadastre"],
-            "sheet": row["sheet"],
-            "rows": [],
-            "xml": {
-                "Descrizione": row["municipality"],
-                "CodiceComune": row["municipality_code"],
-                "ImmobileFabbricatiS": [],
-                "ImmobileTerreniS": [],
+        group = groups_by_key.setdefault(
+            key,
+            {
+                "key": key,
+                "municipality": row["municipality"],
+                "municipality_code": row["municipality_code"],
+                "cadastre": row["cadastre"],
+                "sheet": row["sheet"],
+                "rows": [],
+                "xml": {
+                    "Descrizione": row["municipality"],
+                    "CodiceComune": row["municipality_code"],
+                    "ImmobileFabbricatiS": [],
+                    "ImmobileTerreniS": [],
+                },
             },
-        })
+        )
         group["rows"].append(row)
 
     ordered_groups = [groups_by_key[key] for key in sorted(groups_by_key, key=str.casefold)]
@@ -348,12 +364,16 @@ async def _prior_ownership_omi_data(
                 cadastral_row["SuperficieF"] = {"Totale": as_number(prop.get("area_sqm"))}
                 group["xml"]["ImmobileFabbricatiS"].append(cadastral_row)
             else:
-                cadastral_row["DatiClassamentoT"] = {"ClassamentoT": [{
-                    "Qualita": prop.get("nature") or prop.get("category") or "",
-                    "SuperficieMQ": as_number(prop.get("area_sqm")),
-                    "RedditoDominicaleEuro": current.get("dominical_income", current.get("income")),
-                    "RedditoAgrarioEuro": current.get("agricultural_income"),
-                }]}
+                cadastral_row["DatiClassamentoT"] = {
+                    "ClassamentoT": [
+                        {
+                            "Qualita": prop.get("nature") or prop.get("category") or "",
+                            "SuperficieMQ": as_number(prop.get("area_sqm")),
+                            "RedditoDominicaleEuro": current.get("dominical_income", current.get("income")),
+                            "RedditoAgrarioEuro": current.get("agricultural_income"),
+                        }
+                    ]
+                }
                 group["xml"]["ImmobileTerreniS"].append(cadastral_row)
 
     try:
@@ -391,7 +411,8 @@ def _cache_subject_page_data(
     now = time.monotonic()
     with _SUBJECT_PAGE_DATA_CACHE_LOCK:
         expired = [
-            key for key, item in _SUBJECT_PAGE_DATA_CACHE.items()
+            key
+            for key, item in _SUBJECT_PAGE_DATA_CACHE.items()
             if now - item["created"] > _SUBJECT_PAGE_DATA_CACHE_TTL
         ]
         for key in expired:
@@ -408,6 +429,8 @@ def _cache_subject_page_data(
             "data": data,
         }
         return key
+
+
 _QUERY_PRICE_CACHE_SECONDS = 60.0
 _QUERY_PRICE_FAILURE_CACHE_SECONDS = 30.0
 _query_price_cache_until = 0.0
@@ -483,6 +506,7 @@ def optional_data_degradation_summary() -> dict[str, Any]:
         "active_components": active,
     }
 
+
 # The UI is authored in Italian: pin <html lang="it"> and the theme's own strings to Italian unless the visitor chose
 # a language explicitly (?lang= or the language cookie). Without this the theme follows Accept-Language.
 
@@ -524,15 +548,57 @@ _DOCUMENT_CATEGORIES = (
     ("visura_immobile", "Visura per Immobile", "fa-house", "success", _VISURA_TYPES),
     ("visura_soggetto", "Visura per Soggetto", "fa-user-group", "info", {"visura_soggetto"}),
     ("elenco_immobili", "Elenco degli Immobili", "fa-list", "primary", {"elenco_immobili", "intestati"}),
-    ("planimetria", "Planimetria Catastale", "fa-ruler-combined", "secondary", {"planimetria", "planimetria_catastale"}),
-    ("elaborato_planimetrico", "Elaborato Planimetrico (EPA)", "fa-drafting-compass", "secondary", {"elaborato_planimetrico", "epa"}),
+    (
+        "planimetria",
+        "Planimetria Catastale",
+        "fa-ruler-combined",
+        "secondary",
+        {"planimetria", "planimetria_catastale"},
+    ),
+    (
+        "elaborato_planimetrico",
+        "Elaborato Planimetrico (EPA)",
+        "fa-drafting-compass",
+        "secondary",
+        {"elaborato_planimetrico", "epa"},
+    ),
     ("richieste", "Richieste", "fa-clock-rotate-left", "secondary", {"richieste"}),
-    ("estratto_mappa", "Estratto di Mappa o Visura di Mappa", "fa-map", "secondary", {"estratto_mappa", "estratto_di_mappa", "visura_mappa", "mappa"}),
-    ("elenco_subalterni", "Elenco Subalterni", "fa-layer-group", "secondary", {"elenco_subalterni", "elenco_subalterno"}),
-    ("ispezione_ipotecaria", "Ispezione / Visura Ipotecaria", "fa-file-circle-check", "primary", {"ispezione_ipotecaria", "visura_ipotecaria"}),
+    (
+        "estratto_mappa",
+        "Estratto di Mappa o Visura di Mappa",
+        "fa-map",
+        "secondary",
+        {"estratto_mappa", "estratto_di_mappa", "visura_mappa", "mappa"},
+    ),
+    (
+        "elenco_subalterni",
+        "Elenco Subalterni",
+        "fa-layer-group",
+        "secondary",
+        {"elenco_subalterni", "elenco_subalterno"},
+    ),
+    (
+        "ispezione_ipotecaria",
+        "Ispezione / Visura Ipotecaria",
+        "fa-file-circle-check",
+        "primary",
+        {"ispezione_ipotecaria", "visura_ipotecaria"},
+    ),
     ("fiduciali", "Punti Fiduciali", "fa-crosshairs", "secondary", {"fiduciali"}),
-    ("nota_trascrizione_iscrizione", "Nota di Trascrizione o Iscrizione", "fa-file-signature", "primary", {"nota_trascrizione", "nota_iscrizione", "nota_trascrizione_iscrizione", "nota_annotazione"}),
-    ("titolo_telematico", "Titolo Telematico (Atto Notarile)", "fa-file-contract", "primary", {"titolo_telematico", "titolo_notarile", "atto_notarile"}),
+    (
+        "nota_trascrizione_iscrizione",
+        "Nota di Trascrizione o Iscrizione",
+        "fa-file-signature",
+        "primary",
+        {"nota_trascrizione", "nota_iscrizione", "nota_trascrizione_iscrizione", "nota_annotazione"},
+    ),
+    (
+        "titolo_telematico",
+        "Titolo Telematico (Atto Notarile)",
+        "fa-file-contract",
+        "primary",
+        {"titolo_telematico", "titolo_notarile", "atto_notarile"},
+    ),
 )
 _DOCUMENT_CATEGORY_TYPES = {key: types for key, _label, _icon, _color, types in _DOCUMENT_CATEGORIES}
 _CLASSIFIED_DOCUMENT_TYPES = set().union(*_DOCUMENT_CATEGORY_TYPES.values())
@@ -1351,22 +1417,16 @@ async def _page_streamed_documents(
                             (first_root, root),
                         )
 
-            connection.execute(
-                "CREATE TABLE group_roots (group_id INTEGER PRIMARY KEY, root_id INTEGER NOT NULL)"
-            )
+            connection.execute("CREATE TABLE group_roots (group_id INTEGER PRIMARY KEY, root_id INTEGER NOT NULL)")
             root_batch = []
             for (group_id,) in connection.execute("SELECT id FROM logical_groups ORDER BY id"):
                 group_id = int(group_id)
                 root_batch.append((group_id, _find_root(group_id)))
                 if len(root_batch) >= 500:
-                    connection.executemany(
-                        "INSERT INTO group_roots (group_id, root_id) VALUES (?, ?)", root_batch
-                    )
+                    connection.executemany("INSERT INTO group_roots (group_id, root_id) VALUES (?, ?)", root_batch)
                     root_batch.clear()
             if root_batch:
-                connection.executemany(
-                    "INSERT INTO group_roots (group_id, root_id) VALUES (?, ?)", root_batch
-                )
+                connection.executemany("INSERT INTO group_roots (group_id, root_id) VALUES (?, ?)", root_batch)
             connection.execute("CREATE INDEX ix_group_roots_root ON group_roots(root_id)")
 
             connection.executescript(
@@ -1426,9 +1486,7 @@ async def _page_streamed_documents(
             )
             inspection_rows = []
             if include_all_ipotecari:
-                for root_id, primary_json in connection.execute(
-                    "SELECT root_id, primary_json FROM logical_documents"
-                ):
+                for root_id, primary_json in connection.execute("SELECT root_id, primary_json FROM logical_documents"):
                     primary = json.loads(primary_json)
                     if (primary.get("document_type") or "").casefold() in {
                         "ispezione_ipotecaria",
@@ -1442,7 +1500,9 @@ async def _page_streamed_documents(
                 """
                 SELECT root_id, primary_json
                 FROM logical_documents
-                WHERE 1 = 1""" + match_sql + """
+                WHERE 1 = 1"""
+                + match_sql
+                + """
                 ORDER BY primary_created_at DESC, primary_document_id DESC, first_sequence
                 LIMIT ? OFFSET ?
                 """,
@@ -1472,10 +1532,7 @@ async def _page_streamed_documents(
             def materialize(rows):
                 result = []
                 for root_id, primary in rows:
-                    ordered_files = [
-                        item
-                        for _, item in sorted(files_by_root[int(root_id)], key=lambda row: row[0])
-                    ]
+                    ordered_files = [item for _, item in sorted(files_by_root[int(root_id)], key=lambda row: row[0])]
                     result.append(_finalize_logical_document(dict(primary), ordered_files))
                 return result
 
@@ -1765,11 +1822,7 @@ def _build_property_map(
                             "comune": pt_data["comune"],
                             "sezione_urbana": pt_data["sezione_urbana"],
                             "subalternos": subs_list,
-                            "total_docs": sum(
-                                1 + len(d.get("owner_docs", []))
-                                for s in subs_list
-                                for d in s["docs"]
-                            ),
+                            "total_docs": sum(1 + len(d.get("owner_docs", [])) for s in subs_list for d in s["docs"]),
                         }
                     )
                 fogli_list.append(
@@ -1851,18 +1904,12 @@ def _build_property_map(
     for subject in soggetti_tree:
         represented_ids.update(document["id"] for document in subject["docs"] if document.get("id") is not None)
 
-    other_docs = [
-        _decorate_one(d)
-        for d in docs
-        if d.get("id") not in represented_ids
-    ]
+    other_docs = [_decorate_one(d) for d in docs if d.get("id") not in represented_ids]
     other_docs.sort(key=lambda d: (d.get("created_at") or "", d.get("id") or 0), reverse=True)
     return {"immobili": immobili_tree, "soggetti": soggetti_tree, "altri": other_docs}
 
 
-def _build_document_tree(
-    docs: list[dict], *, all_ispezioni: list[dict] | None = None
-) -> list[dict]:
+def _build_document_tree(docs: list[dict], *, all_ispezioni: list[dict] | None = None) -> list[dict]:
     """Build the hierarchical document index using the unified query-type taxonomy.
 
     Single-step query groups (top-level):
@@ -1877,14 +1924,19 @@ def _build_document_tree(
     """
     tree = []
     empty_categories = {
-        "estratto_mappa", "elenco_subalterni", "fiduciali",
-        "nota_trascrizione_iscrizione", "titolo_telematico",
+        "estratto_mappa",
+        "elenco_subalterni",
+        "fiduciali",
+        "nota_trascrizione_iscrizione",
+        "titolo_telematico",
     }
     for key, label, icon, color, type_codes in _DOCUMENT_CATEGORIES:
         full_catalog = key == "ispezione_ipotecaria" and all_ispezioni is not None
-        items = all_ispezioni if full_catalog else [
-            document for document in docs if (document.get("document_type") or "") in type_codes
-        ]
+        items = (
+            all_ispezioni
+            if full_catalog
+            else [document for document in docs if (document.get("document_type") or "") in type_codes]
+        )
         if not items and key not in empty_categories:
             continue
         rows = sorted(items, key=lambda d: (d.get("created_at") or "", d.get("id") or 0), reverse=True)
@@ -1899,13 +1951,20 @@ def _build_document_tree(
                         document["tipo_catasto"] = "F" if cadastre == "fabbricati" else "T"
                 if not document.get("visura_subtype"):
                     document["visura_subtype"] = _doc_visura_subtype(document) or None
-        tree.append({
-            "key": key, "label": label, "icon": icon, "color": color,
-            "count": len(rows), "docs": rows, "children": [],
-            "is_soggetto": key == "visura_soggetto",
-            "empty_message": "Nessun documento in questa categoria.",
-            "full_catalog": full_catalog,
-        })
+        tree.append(
+            {
+                "key": key,
+                "label": label,
+                "icon": icon,
+                "color": color,
+                "count": len(rows),
+                "docs": rows,
+                "children": [],
+                "is_soggetto": key == "visura_soggetto",
+                "empty_message": "Nessun documento in questa categoria.",
+                "full_catalog": full_catalog,
+            }
+        )
 
     # Keep unexpected and newly imported document codes visible as well.
     unclassified = [document for document in docs if _document_matches_type_filter(document, "altro")]
@@ -1915,14 +1974,24 @@ def _build_document_tree(
             document.setdefault("size_human", _human_size(document["file_size"]) if document.get("file_size") else "")
             document["created_display"] = (document.get("created_at") or "")[:16].replace("T", " ")
             document.setdefault("viewable", False)
-        tree.append({
-            "key": "altro", "label": "Altri documenti", "icon": "fa-file", "color": "secondary",
-            "count": len(rows), "docs": rows, "children": [], "is_soggetto": False,
-        })
+        tree.append(
+            {
+                "key": "altro",
+                "label": "Altri documenti",
+                "icon": "fa-file",
+                "color": "secondary",
+                "count": len(rows),
+                "docs": rows,
+                "children": [],
+                "is_soggetto": False,
+            }
+        )
     return tree
 
 
-def _paginate_documents(docs: list[dict], page: int, page_size: int = _DOCUMENTS_PAGE_SIZE) -> tuple[list[dict], int, int, int]:
+def _paginate_documents(
+    docs: list[dict], page: int, page_size: int = _DOCUMENTS_PAGE_SIZE
+) -> tuple[list[dict], int, int, int]:
     """Return a stable newest-first document page and its display bounds."""
     ordered = sorted(
         docs,
@@ -2478,7 +2547,7 @@ def _parse_batch_dossier(data: list) -> dict:
             }
         )
 
-        for imm in (imm_list if isinstance(imm_list, list) else []):
+        for imm in imm_list if isinstance(imm_list, list) else []:
             if not isinstance(imm, dict):
                 continue
             row: dict = {"idx": idx, "organization_name": org}
@@ -2563,9 +2632,7 @@ def _dossier_to_result(name: str, data: Any) -> dict:
 
     if isinstance(data, dict) and "steps" in data:
         steps = data.get("steps") if isinstance(data.get("steps"), list) else []
-        failed_steps = [
-            step for step in steps if isinstance(step, dict) and step.get("success") is False
-        ]
+        failed_steps = [step for step in steps if isinstance(step, dict) and step.get("success") is False]
         base.update(
             {
                 "request_id": data.get("workflow_id") or name,
@@ -2728,8 +2795,10 @@ def _admin_input_reorder_tables(source: str) -> list[dict[str, Any]]:
         if index >= len(lines) or not _ADMIN_INPUT_TABLE_ROW.fullmatch(lines[index]):
             continue
         index += 1  # header
-        if index < len(lines) and _ADMIN_INPUT_TABLE_ROW.fullmatch(lines[index]) and re.fullmatch(
-            r"\s*\|\s*:?-{3,}:?(?:\s*\|\s*:?-{3,}:?)*\s*\|\s*", lines[index]
+        if (
+            index < len(lines)
+            and _ADMIN_INPUT_TABLE_ROW.fullmatch(lines[index])
+            and re.fullmatch(r"\s*\|\s*:?-{3,}:?(?:\s*\|\s*:?-{3,}:?)*\s*\|\s*", lines[index])
         ):
             index += 1  # separator
         row_indexes: list[int] = []
@@ -2739,8 +2808,11 @@ def _admin_input_reorder_tables(source: str) -> list[dict[str, Any]]:
         if not row_indexes:
             continue
         heading = next(
-            (lines[previous][3:].strip() for previous in range(marker_index - 1, -1, -1)
-             if lines[previous].startswith("## ")),
+            (
+                lines[previous][3:].strip()
+                for previous in range(marker_index - 1, -1, -1)
+                if lines[previous].startswith("## ")
+            ),
             f"Tabella {len(tables) + 1}",
         )
         tables.append(
@@ -2833,8 +2905,13 @@ def _write_admin_input(path: Path, content: str) -> Path | None:
     temporary_path: Path | None = None
     try:
         with tempfile.NamedTemporaryFile(
-            mode="w", encoding="utf-8", newline="", dir=path.parent,
-            prefix=f".{path.name}.", suffix=".tmp", delete=False,
+            mode="w",
+            encoding="utf-8",
+            newline="",
+            dir=path.parent,
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            delete=False,
         ) as temporary:
             temporary.write(content)
             temporary_path = Path(temporary.name)
@@ -3104,8 +3181,7 @@ def _is_admin(user) -> bool:
     if not configured_admins:
         return False
     user_identities = {
-        str(getattr(user, attribute, "") or "").strip().casefold()
-        for attribute in ("username", "email", "id")
+        str(getattr(user, attribute, "") or "").strip().casefold() for attribute in ("username", "email", "id")
     }
     return bool(configured_admins & user_identities)
 
@@ -3324,13 +3400,15 @@ async def _apply_user_manual_valuations(kpis: dict[str, Any] | None, user) -> di
                     except (TypeError, ValueError):
                         typology_code = None
                     legacy_zone_code = estimate.pop("_omi_legacy_zone_code", None)
-                    guessed_selections.append({
-                        "asset_key": identity["asset_key"],
-                        "asset_identity": identity,
-                        "zone_code": estimate.get("omi_zona"),
-                        "typology_code": typology_code,
-                        "legacy_zone_code": legacy_zone_code,
-                    })
+                    guessed_selections.append(
+                        {
+                            "asset_key": identity["asset_key"],
+                            "asset_identity": identity,
+                            "zone_code": estimate.get("omi_zona"),
+                            "typology_code": typology_code,
+                            "legacy_zone_code": legacy_zone_code,
+                        }
+                    )
             await ensure_user_property_omi_selections(user_key, guessed_selections)
             _clear_optional_data_degradation("manual_property_valuations")
         except Exception as exc:  # The official valuation page remains available if this optional data is unavailable.
@@ -3490,7 +3568,11 @@ def _audited(action: str):
         async def wrapper(*args, **kwargs):
             request = kwargs.get("request") or next((a for a in args if isinstance(a, Request)), None)
             user = kwargs.get("user")
-            params = {k: v for k, v in kwargs.items() if k not in {"request", "user"} and isinstance(v, (str, int, float, bool))}
+            params = {
+                k: v
+                for k, v in kwargs.items()
+                if k not in {"request", "user"} and isinstance(v, (str, int, float, bool))
+            }
             started = datetime.now(timezone.utc)
 
             def _with_details() -> dict:
@@ -3517,18 +3599,12 @@ def _audited(action: str):
             code = getattr(response, "status_code", 200)
             response_headers = getattr(response, "headers", {})
             redirect_query = urlsplit(response_headers.get("location", "")).query
-            rejected_redirect = code < 400 and (
-                "error=" in redirect_query or "status=not_found" in redirect_query
-            )
+            rejected_redirect = code < 400 and ("error=" in redirect_query or "status=not_found" in redirect_query)
             await record_activity(
                 action,
                 actor=_actor(user),
                 status=(
-                    "rejected"
-                    if rejected_redirect or 400 <= code < 500
-                    else "error"
-                    if code >= 500
-                    else "success"
+                    "rejected" if rejected_redirect or 400 <= code < 500 else "error" if code >= 500 else "success"
                 ),
                 params=_with_details(),
                 result=_summary(response),
@@ -3864,7 +3940,7 @@ def _build_result_sections(data: Optional[dict]) -> list[dict]:
                     _agg: list[dict] = []
                     for _doc in docs:
                         _doc_label = _doc.get("oggetto") or _doc.get("filename") or "-"
-                        for _row in (_doc.get("intestati_rows") or []):
+                        for _row in _doc.get("intestati_rows") or []:
                             _agg.append({"Subalterno": _doc_label, **_row})
                     if _agg:
                         _pri = ["Subalterno", "Nominativo", "Codice Fiscale", "Quota", "Diritto"]
@@ -3966,11 +4042,7 @@ def _build_result_sections(data: Optional[dict]) -> list[dict]:
                                 elif isinstance(_v, dict):
                                     for _sk, _sv in _v.items():
                                         if _sk:
-                                            _flat[_sk] = (
-                                                "" if _sv is None
-                                                else _sv if _is_scalar(_sv)
-                                                else str(_sv)
-                                            )
+                                            _flat[_sk] = "" if _sv is None else _sv if _is_scalar(_sv) else str(_sv)
                                 elif isinstance(_v, list):
                                     _flat[f"{_k}_n"] = len(_v)
                             _flat_rows.append({_c: _flat.get(_c, "") for _c in _col_order})
@@ -3992,7 +4064,7 @@ def _build_result_sections(data: Optional[dict]) -> list[dict]:
                             _cc_order: list[str] = [_jk]
                             _cc_set: set[str] = {_jk}
                             for _i, _item in enumerate(value):
-                                for _child in (_item.get(_lf) or []):
+                                for _child in _item.get(_lf) or []:
                                     if isinstance(_child, dict):
                                         for _ck in _child:
                                             if _ck and _ck not in _cc_set:
@@ -4001,16 +4073,12 @@ def _build_result_sections(data: Optional[dict]) -> list[dict]:
                             _child_rows: list[dict] = []
                             for _i, _item in enumerate(value):
                                 _jv = _item.get(_join_key, _i) if _join_key else _i
-                                for _child in (_item.get(_lf) or []):
+                                for _child in _item.get(_lf) or []:
                                     if isinstance(_child, dict):
                                         _crow: dict = {_jk: _jv}
                                         for _ck, _cv in _child.items():
                                             if _ck:
-                                                _crow[_ck] = (
-                                                    "" if _cv is None
-                                                    else _cv if _is_scalar(_cv)
-                                                    else str(_cv)
-                                                )
+                                                _crow[_ck] = "" if _cv is None else _cv if _is_scalar(_cv) else str(_cv)
                                         _child_rows.append({_c: _crow.get(_c, "") for _c in _cc_order})
                             if _child_rows:
                                 sections.append(
@@ -4306,11 +4374,7 @@ async def _run_missing_pair_batch(job: dict[str, Any], batch: dict[str, Any], se
 def _missing_pair_job_view(job: dict[str, Any] | None) -> dict[str, Any]:
     if not job:
         return {"status": "idle"}
-    return {
-        key: value
-        for key, value in job.items()
-        if key not in {"_task"}
-    }
+    return {key: value for key, value in job.items() if key not in {"_task"}}
 
 
 @router.post("/documents/retrieve-missing-pairs", response_class=JSONResponse)
@@ -4394,8 +4458,14 @@ def _examples_as_placeholders(groups):
     for group in groups:
         params = []
         for param in group.params:
-            if param.example and param.input_type not in {"hidden", "select", "checkbox", "radio"} and not param.options:
-                param = dataclasses.replace(param, placeholder=param.placeholder or f"es. {param.example}", example=None)
+            if (
+                param.example
+                and param.input_type not in {"hidden", "select", "checkbox", "radio"}
+                and not param.options
+            ):
+                param = dataclasses.replace(
+                    param, placeholder=param.placeholder or f"es. {param.example}", example=None
+                )
             params.append(param)
         fixed.append(dataclasses.replace(group, params=params))
     return fixed
@@ -4643,9 +4713,7 @@ async def web_results(
             "value": (
                 request_type_labels.get(value, request_type_info(value).label)
                 if key == "request_type"
-                else str(value).replace("_", " ").title()
-                if key in {"source", "status"}
-                else value
+                else str(value).replace("_", " ").title() if key in {"source", "status"} else value
             ),
             "remove_url": _filter_remove_url(key, current_filters),
         }
@@ -5096,9 +5164,7 @@ async def web_admin_extractions(
 async def web_admin_users(request: Request, q: str = Query("", max_length=200), user=Depends(_require_admin)):
     """List configured local accounts for administrators without exposing credentials."""
     configured_admins = {
-        identity.strip().casefold()
-        for identity in os.getenv("SISTER_ADMIN_USERS", "").split(",")
-        if identity.strip()
+        identity.strip().casefold() for identity in os.getenv("SISTER_ADMIN_USERS", "").split(",") if identity.strip()
     }
     users = []
     for key in getattr(request.app.state, "local_user_keys", []) or []:
@@ -5403,9 +5469,7 @@ async def web_admin_subject_access(
     profiles = []
     profile_query = search.strip()
     if profile_query:
-        profiles, _ = await query_subject_profiles(
-            kind, q=profile_query, sort="name", direction="asc", limit=50
-        )
+        profiles, _ = await query_subject_profiles(kind, q=profile_query, sort="name", direction="asc", limit=50)
     purchases = await list_document_purchases("", status="all")
     subject_purchases = await list_subject_purchases(query, limit=500)
     known_users = {
@@ -5503,9 +5567,7 @@ async def web_admin_subject_access_grant(request: Request, user=Depends(_require
             for key in (getattr(request.app.state, "local_user_keys", []) or [])
             if isinstance(key, str) and key.strip()
         }
-        registered_users.update(
-            row["user_id"].casefold() for row in await list_document_purchases("", status="all")
-        )
+        registered_users.update(row["user_id"].casefold() for row in await list_document_purchases("", status="all"))
         registered_users.update(
             row["user_id"].casefold() for row in await list_subject_access(status="all", limit=1000)
         )
@@ -5519,9 +5581,7 @@ async def web_admin_subject_access_grant(request: Request, user=Depends(_require
             note=note[:200],
             operation=operation,
         )
-        changed = await grant_subject_access(
-            user_id, kind, code, _favorite_user_key(user) or _actor(user), note
-        )
+        changed = await grant_subject_access(user_id, kind, code, _favorite_user_key(user) or _actor(user), note)
         if not changed:
             _subject_access_audit(request, error_code="already_active")
             return _subject_access_redirect(kind=kind, search=search, q=query, state=state, error="already_active")
@@ -5531,9 +5591,12 @@ async def web_admin_subject_access_grant(request: Request, user=Depends(_require
         if isinstance(exc, PurchaseError):
             error = exc.code
         else:
-            error = str(exc) if str(exc) in {
-                "bad_subject_type", "bad_subject_code", "subject_not_found", "note_too_long", "user_not_registered"
-            } else "failed"
+            error = (
+                str(exc)
+                if str(exc)
+                in {"bad_subject_type", "bad_subject_code", "subject_not_found", "note_too_long", "user_not_registered"}
+                else "failed"
+            )
         _subject_access_audit(request, error_code=error)
         return _subject_access_redirect(kind=kind, search=search, q=query, state=state, error=error)
     return _subject_access_redirect(kind=kind, search=search, q=query, state=state, status="granted")
@@ -5559,18 +5622,20 @@ async def web_admin_subject_access_revoke(request: Request, user=Depends(_requir
         pattern = r"\d{11}" if kind == "company" else r"[A-Z0-9]{16}"
         if not re.fullmatch(pattern, code):
             raise ValueError("bad_request")
-        _subject_access_audit(
-            request, user_id=user_id, subject_type=kind, subject_code=code, reason=reason[:200]
-        )
-        changed = await revoke_subject_access(
-            user_id, kind, code, _favorite_user_key(user) or _actor(user), reason
-        )
+        _subject_access_audit(request, user_id=user_id, subject_type=kind, subject_code=code, reason=reason[:200])
+        changed = await revoke_subject_access(user_id, kind, code, _favorite_user_key(user) or _actor(user), reason)
         if not changed:
             _subject_access_audit(request, error_code="not_found")
             return _subject_access_redirect(kind=kind, search=search, q=query, state=state, error="not_found")
     except Exception as exc:
         _subject_access_audit(request, error_code="bad_request" if isinstance(exc, ValueError) else "failed")
-        return _subject_access_redirect(kind=kind, search=search, q=query, state=state, error="bad_request" if isinstance(exc, ValueError) else "failed")
+        return _subject_access_redirect(
+            kind=kind,
+            search=search,
+            q=query,
+            state=state,
+            error="bad_request" if isinstance(exc, ValueError) else "failed",
+        )
     return _subject_access_redirect(kind=kind, search=search, q=query, state=state, status="frozen")
 
 
@@ -5656,7 +5721,8 @@ def _admin_list_runs_snapshot() -> dict[str, Any]:
         return {
             "updated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
             "summary": {"active": 0, "needs_resume": 0, "completed": 0, "batches": 0, "done": 0, "total": 0},
-            "batches": [], "history": [],
+            "batches": [],
+            "history": [],
         }
 
     directories = []
@@ -5682,7 +5748,19 @@ def _admin_list_runs_snapshot() -> dict[str, Any]:
             continue
         progress = {
             key: snap.get(key)
-            for key in ("total", "done", "processed", "found", "no_match", "refine", "failed", "session", "pending", "rate", "last")
+            for key in (
+                "total",
+                "done",
+                "processed",
+                "found",
+                "no_match",
+                "refine",
+                "failed",
+                "session",
+                "pending",
+                "rate",
+                "last",
+            )
         }
         status = _admin_list_run_json(directory / "run_list_status.json")
         report = _admin_list_run_json(directory / "report.json")
@@ -5712,15 +5790,18 @@ def _admin_list_runs_snapshot() -> dict[str, Any]:
                     str(event.get("current_batch") or ""),
                     str(event.get("updated_at") or ""),
                 )
-                aggregated = history_by_key.setdefault(key, {
-                    "task_id": event_task_id,
-                    "event": str(event.get("event") or ""),
-                    "phase": str(event.get("phase") or ""),
-                    "outcome": str(event.get("outcome") or ""),
-                    "updated_at": str(event.get("updated_at") or ""),
-                    "current_batch": str(event.get("current_batch") or ""),
-                    "batch_dirs": [],
-                })
+                aggregated = history_by_key.setdefault(
+                    key,
+                    {
+                        "task_id": event_task_id,
+                        "event": str(event.get("event") or ""),
+                        "phase": str(event.get("phase") or ""),
+                        "outcome": str(event.get("outcome") or ""),
+                        "updated_at": str(event.get("updated_at") or ""),
+                        "current_batch": str(event.get("current_batch") or ""),
+                        "batch_dirs": [],
+                    },
+                )
                 if directory.name not in aggregated["batch_dirs"]:
                     aggregated["batch_dirs"].append(directory.name)
         else:
@@ -5751,22 +5832,27 @@ def _admin_list_runs_snapshot() -> dict[str, Any]:
                 "batch_dirs": [directory.name],
             }
 
-        batch_rows.append({
-            "name": str(snap.get("name") or directory.name)[:200],
-            "dir": directory.name,
-            "state": state,
-            "phase": phase,
-            "outcome": outcome,
-            "task_id": task_id,
-            "current_batch": str(status.get("current_batch") or ""),
-            "started_at": str(status.get("started_at") or report.get("started_at") or ""),
-            "updated_at": updated_at,
-            "progress": progress,
-        })
+        batch_rows.append(
+            {
+                "name": str(snap.get("name") or directory.name)[:200],
+                "dir": directory.name,
+                "state": state,
+                "phase": phase,
+                "outcome": outcome,
+                "task_id": task_id,
+                "current_batch": str(status.get("current_batch") or ""),
+                "started_at": str(status.get("started_at") or report.get("started_at") or ""),
+                "updated_at": updated_at,
+                "progress": progress,
+            }
+        )
 
     batch_rows.sort(key=lambda row: row["updated_at"], reverse=True)
     history = sorted(history_by_key.values(), key=lambda event: str(event.get("updated_at") or ""), reverse=True)[:100]
-    counts = {state: sum(row["state"] == state for row in batch_rows) for state in ("needs_resume", "interrupted", "failed", "completed")}
+    counts = {
+        state: sum(row["state"] == state for row in batch_rows)
+        for state in ("needs_resume", "interrupted", "failed", "completed")
+    }
     summary = {
         "active": len(live_tasks),
         "needs_resume": counts["needs_resume"] + counts["interrupted"] + counts["failed"],
@@ -5787,9 +5873,7 @@ def _admin_list_runs_snapshot() -> dict[str, Any]:
 async def web_admin_list_runs(request: Request, user=Depends(_require_admin)):
     """Live status and durable history for run-list batch sessions."""
     initial_state = await asyncio.to_thread(_admin_list_runs_snapshot)
-    return _get_theme(request).render(
-        "admin/list_runs.html", request, user=user, initial_state=initial_state
-    )
+    return _get_theme(request).render("admin/list_runs.html", request, user=user, initial_state=initial_state)
 
 
 @router.get("/admin/list-runs/state", response_class=JSONResponse)
@@ -5870,7 +5954,11 @@ _ADMIN_INPUT_MAX_ISSUES = 200
 
 def _admin_input_parse_error(exc: ValueError) -> str:
     errors = exc.errors() if hasattr(exc, "errors") else None
-    message = "; ".join(str(error.get("msg", "")).removeprefix("Value error, ") for error in errors[:3]) if errors else str(exc)
+    message = (
+        "; ".join(str(error.get("msg", "")).removeprefix("Value error, ") for error in errors[:3])
+        if errors
+        else str(exc)
+    )
     return message[:500]
 
 
@@ -5998,9 +6086,7 @@ async def web_admin_inputs_edit(request: Request, user=Depends(_require_admin)):
     try:
         path = _admin_input_path(filename)
     except ValueError:
-        return RedirectResponse(
-            url=f"/admin/inputs?error=invalid_file{show_subfolders_query}", status_code=303
-        )
+        return RedirectResponse(url=f"/admin/inputs?error=invalid_file{show_subfolders_query}", status_code=303)
 
     if action not in {"save", "prune", "reorder"}:
         return RedirectResponse(
@@ -6075,19 +6161,22 @@ async def web_admin_inputs_edit(request: Request, user=Depends(_require_admin)):
                 process.kill()
                 await process.wait()
                 return RedirectResponse(
-                    url=f"/admin/inputs?file={quote(filename)}&error=prune_failed{show_subfolders_query}", status_code=303
+                    url=f"/admin/inputs?file={quote(filename)}&error=prune_failed{show_subfolders_query}",
+                    status_code=303,
                 )
             if process.returncode != 0:
                 logger.warning("Admin prune failed for %s with exit code %s", filename, process.returncode)
                 return RedirectResponse(
-                    url=f"/admin/inputs?file={quote(filename)}&error=prune_failed{show_subfolders_query}", status_code=303
+                    url=f"/admin/inputs?file={quote(filename)}&error=prune_failed{show_subfolders_query}",
+                    status_code=303,
                 )
             pruned_content = staged_path.read_text(encoding="utf-8")
             try:
                 backup = _write_admin_input(path, pruned_content)
             except (OSError, UnicodeError):
                 return RedirectResponse(
-                    url=f"/admin/inputs?file={quote(filename)}&error=save_failed{show_subfolders_query}", status_code=303
+                    url=f"/admin/inputs?file={quote(filename)}&error=save_failed{show_subfolders_query}",
+                    status_code=303,
                 )
             status = "pruned" if backup else "unchanged"
             if status == "unchanged":
@@ -6217,9 +6306,7 @@ async def web_admin_command_job(job_id: str, user=Depends(_require_admin)):
 
 
 @router.get("/admin/documents", response_class=HTMLResponse)
-async def web_admin_documents(
-    request: Request, q: str = "", page: int = 1, user=Depends(_require_admin)
-):
+async def web_admin_documents(request: Request, q: str = "", page: int = 1, user=Depends(_require_admin)):
     """Browse the indexed document catalog and open ownership management for a document."""
     from .database import list_admin_documents
 
@@ -6263,6 +6350,7 @@ async def web_admin_document_reconciliation(
     directory_available = base.is_dir()
 
     if directory_available:
+
         def on_walk_error(_error: OSError) -> None:
             nonlocal scan_errors
             scan_errors += 1
@@ -6272,8 +6360,7 @@ async def web_admin_document_reconciliation(
             directories[:] = [
                 directory
                 for directory in directories
-                if not (current_path == base and directory == "named")
-                and not (current_path / directory).is_symlink()
+                if not (current_path == base and directory == "named") and not (current_path / directory).is_symlink()
             ]
             for filename in filenames:
                 path = current_path / filename
@@ -6435,8 +6522,7 @@ async def web_admin_document_reconciliation(
     start = (page - 1) * page_size
     page_issues = filtered_issues[start : start + page_size]
     issue_counts = {
-        issue_status: sum(issue["status"] == issue_status for issue in issues)
-        for issue_status in allowed_statuses
+        issue_status: sum(issue["status"] == issue_status for issue in issues) for issue_status in allowed_statuses
     }
     return _get_theme(request).render(
         "admin/document_reconciliation.html",
@@ -6474,10 +6560,7 @@ async def web_admin_document_reconciliation_rescan(request: Request, user=Depend
         await _DOCUMENT_RESCAN_LOCK.acquire()
 
         for old_job_id, old_job in list(_DOCUMENT_RESCAN_JOBS.items()):
-            if (
-                old_job.get("status") != "running"
-                and time.monotonic() - old_job.get("updated_monotonic", 0) > 3600
-            ):
+            if old_job.get("status") != "running" and time.monotonic() - old_job.get("updated_monotonic", 0) > 3600:
                 _DOCUMENT_RESCAN_JOBS.pop(old_job_id, None)
 
         job_id = uuid4().hex
@@ -6654,9 +6737,7 @@ async def web_admin_activity(request: Request, user=Depends(_require_admin)):
                 parsed = datetime.fromisoformat(str(started_at).replace("Z", "+00:00"))
                 if parsed.tzinfo is None:
                     parsed = parsed.replace(tzinfo=timezone.utc)
-                event["started_at_local"] = parsed.astimezone(ZoneInfo("Europe/Rome")).strftime(
-                    "%Y-%m-%d %H:%M:%S"
-                )
+                event["started_at_local"] = parsed.astimezone(ZoneInfo("Europe/Rome")).strftime("%Y-%m-%d %H:%M:%S")
             except ValueError:
                 event["started_at_local"] = str(started_at)
     return _get_theme(request).render("admin/activity.html", request, user=user, events=events)
@@ -6723,6 +6804,7 @@ async def web_admin_document_purchases(
         | set(getattr(request.app.state, "local_user_keys", []) or [])
     )
     from . import purchases_billing
+
     all_query_prices = await _query_product_prices() or {}
     query_prices = {
         path: cost for path, cost in all_query_prices.items() if path == "/visura" or path.startswith("/visura/")
@@ -6731,7 +6813,9 @@ async def web_admin_document_purchases(
     purchase_link = ""
     if document_id:
         try:
-            purchase_link = str(request.base_url).rstrip("/") + "/buy/" + purchases_billing.purchase_link_token(document_id)
+            purchase_link = (
+                str(request.base_url).rstrip("/") + "/buy/" + purchases_billing.purchase_link_token(document_id)
+            )
         except RuntimeError:  # no SECRET_KEY: links cannot be signed
             purchase_link = ""
     return _get_theme(request).render(
@@ -6753,10 +6837,7 @@ async def web_admin_document_purchases(
         credits_enabled=purchases_billing.credits_enabled(),
         credit_cost=purchases_billing.credit_cost(),
         query_credits_enabled=purchases_billing.query_credits_enabled(bool(query_prices)),
-        query_price_list=[
-            {"endpoint": path, "credits": str(cost)}
-            for path, cost in sorted(query_prices.items())
-        ],
+        query_price_list=[{"endpoint": path, "credits": str(cost)} for path, cost in sorted(query_prices.items())],
         wallet_enabled=purchases_billing.credit_grants_enabled(),
         credit_balance=_numeric_text(request.query_params.get("balance")),
     )
@@ -6852,7 +6933,9 @@ async def _revoke_purchase(request: Request) -> RedirectResponse:
             raise PurchaseError("reason_too_long")
         _purchase_audit(request, user_id=user_key, document_id=document_id, reason=reason[:200])
         actor = getattr(request.state, "audit_user", None)
-        revoked = await revoke_document_purchase(user_key, document_id, _favorite_user_key(actor) or _actor(actor), reason)
+        revoked = await revoke_document_purchase(
+            user_key, document_id, _favorite_user_key(actor) or _actor(actor), reason
+        )
     except PurchaseError as exc:
         _purchase_audit(request, error_code=exc.code)
         return _purchase_redirect(error=exc.code)
@@ -6883,9 +6966,7 @@ async def web_admin_subject_formalities_download(request: Request, user=Depends(
     form = await request.form()
     route_prefix = str(form.get("route_prefix") or "").strip()
     subject_code = str(form.get("subject_code") or "").strip().upper()
-    valid_subject = (
-        route_prefix == "/persons" and re.fullmatch(r"[A-Z0-9]{16}", subject_code)
-    ) or (
+    valid_subject = (route_prefix == "/persons" and re.fullmatch(r"[A-Z0-9]{16}", subject_code)) or (
         route_prefix == "/companies" and re.fullmatch(r"\d{11}", subject_code)
     )
     if not valid_subject:
@@ -7217,7 +7298,10 @@ async def web_building_3d_kmz(
     return Response(
         payload,
         media_type="application/vnd.google-earth.kmz",
-        headers={"Content-Disposition": f'attachment; filename="{filename}_3d.kmz"', "Cache-Control": "private, max-age=600"},
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}_3d.kmz"',
+            "Cache-Control": "private, max-age=600",
+        },
     )
 
 
@@ -7260,7 +7344,14 @@ async def _full_group_titolarita(xml_parsed: dict) -> None:
 
     Properties without a stored storica are left as they are; any failure leaves the page untouched.
     """
-    body = next((v for k, v in (xml_parsed or {}).items() if k in ("VisuraSoggettoAttuale", "VisuraSoggetto") and isinstance(v, dict)), None)
+    body = next(
+        (
+            v
+            for k, v in (xml_parsed or {}).items()
+            if k in ("VisuraSoggettoAttuale", "VisuraSoggetto") and isinstance(v, dict)
+        ),
+        None,
+    )
     if not isinstance(body, dict):
         return
     groups = body.get("GruppoUnitaImmobiliari")
@@ -7313,14 +7404,20 @@ async def _full_group_titolarita(xml_parsed: dict) -> None:
             {"comuni": sorted(set(comune_ids.values()))},
         )
         for comune_id, sheet, parcel, subunit, doc_id in rows.all():
-            storica_ids.setdefault((comune_id, str(sheet or ""), str(parcel or ""), str(subunit or "")), []).append(doc_id)
+            storica_ids.setdefault((comune_id, str(sheet or ""), str(parcel or ""), str(subunit or "")), []).append(
+                doc_id
+            )
 
     async def history_of(session, ident: dict, group_code: str) -> list:
         """The longest stored ``StoriaIntestazione`` of the property (oldest act first), or []."""
         if not isinstance(ident, dict) or not ident.get("Foglio"):
             return []
-        key = (ident.get("CodiceComune") or group_code, ident.get("Foglio"), ident.get("ParticellaNum") or ident.get("Particella"),
-               ident.get("Subalterno") or "")
+        key = (
+            ident.get("CodiceComune") or group_code,
+            ident.get("Foglio"),
+            ident.get("ParticellaNum") or ident.get("Particella"),
+            ident.get("Subalterno") or "",
+        )
         if key in cache:
             return cache[key]
         cache[key] = []
@@ -7333,8 +7430,14 @@ async def _full_group_titolarita(xml_parsed: dict) -> None:
             stored = await get_document_by_id(int(doc_id))
             parsed = _parse_xml_to_dict((stored or {}).get("xml_content", "")) if stored else {}
             body_s = next((v for v in (parsed or {}).values() if isinstance(v, dict)), {})
-            history = as_list(((body_s.get("VisuraFabbricatiStorica") or body_s.get("VisuraTerreniStorica") or body_s)
-                               .get("StoriaIntestazione") or {}).get("MutazioneSoggettiva"))
+            history = as_list(
+                (
+                    (body_s.get("VisuraFabbricatiStorica") or body_s.get("VisuraTerreniStorica") or body_s).get(
+                        "StoriaIntestazione"
+                    )
+                    or {}
+                ).get("MutazioneSoggettiva")
+            )
             if len(history) > len(best):
                 best = history
         cache[key] = best
@@ -7351,7 +7454,9 @@ async def _full_group_titolarita(xml_parsed: dict) -> None:
             if group.get("FonteElenco"):
                 for unit in units:
                     if isinstance(unit, dict):
-                        ident = next(iter(as_list((unit.get("DatiIdentificativi") or {}).get("IdentificativoDefinitivo"))), None)
+                        ident = next(
+                            iter(as_list((unit.get("DatiIdentificativi") or {}).get("IdentificativoDefinitivo"))), None
+                        )
                         history = await history_of(session, ident, group.get("CodiceComune") or "")
                         if history:
                             unit["StoriaTitolarita"] = history
@@ -7468,7 +7573,12 @@ async def _render_doc_from_db(
 
     if any(
         key in xml_p
-        for key in ("VisuraFabbricatiStorica", "VisuraFabbricatiAttuale", "VisuraFabbricatiSintetica", "VisuraFabbricati")
+        for key in (
+            "VisuraFabbricatiStorica",
+            "VisuraFabbricatiAttuale",
+            "VisuraFabbricatiSintetica",
+            "VisuraFabbricati",
+        )
     ):
         land_map_kind = "fabbricati"
     elif any(
@@ -7526,8 +7636,11 @@ async def _render_doc_from_db(
         if subject_hub:
             hub_map = await _hub_parcel_map_for_valuation(subject_hub, hub_map)  # also what the page then draws
         land_registry_kpis = await _subject_land_registry_calculation(
-            xml_shown, _valuation_map(map_lookup, hub_map), user,
-            scope_type="document", scope_id=doc.get("id") or doc.get("filename"),
+            xml_shown,
+            _valuation_map(map_lookup, hub_map),
+            user,
+            scope_type="document",
+            scope_id=doc.get("id") or doc.get("filename"),
         )
     from .display import merge_identifiers, readable_owners, subject_for_theme
 
@@ -7560,7 +7673,9 @@ async def _render_doc_from_db(
                 if subject_hub:
                     pdf_lookup = await _hub_parcel_map_for_pdf(subject_hub) or pdf_lookup
         return await _subject_pdf_response(
-            {**doc, "xml_parsed": xml_shown}, land_registry_kpis, pdf_lookup,
+            {**doc, "xml_parsed": xml_shown},
+            land_registry_kpis,
+            pdf_lookup,
             subject_fiscal_code or "",
             subject_report=subject_report,
         )
@@ -7626,9 +7741,11 @@ async def _render_doc_from_db(
         subject_is_favorite=subject_is_favorite,
         subject_facts=subject_facts,
         subject_parcel_anchor=_subject_parcel_anchor,
-        subject_visura_view=build_subject_visura_view(
-            doc["xml_parsed"], subject_hub, subject_fiscal_code
-        ) if land_map_kind == "soggetto" else None,
+        subject_visura_view=(
+            build_subject_visura_view(doc["xml_parsed"], subject_hub, subject_fiscal_code)
+            if land_map_kind == "soggetto"
+            else None
+        ),
         complete_data_url=complete_data_url,
         subject_page_data_url=subject_page_data_url,
         prior_ownership_omi_indexes=prior_ownership_omi["indexes"],
@@ -7738,15 +7855,24 @@ async def _write_visura_cadastral_map_cache(records: list[tuple]) -> None:
                         "prov": province_code(province),
                         "code": belfiore_code(municipality_code),
                     }
-                    for (feature_type, _key, municipality, province, municipality_code, section, sheet, parcel,
-                         source_reference, geojson) in records
+                    for (
+                        feature_type,
+                        _key,
+                        municipality,
+                        province,
+                        municipality_code,
+                        section,
+                        sheet,
+                        parcel,
+                        source_reference,
+                        geojson,
+                    ) in records
                 ]
-                istat_schema = os.getenv(
-                    "DATABASE_ISTAT_SCHEMA", os.getenv("DATABASE_SCHEMA", "sister")
-                )
+                istat_schema = os.getenv("DATABASE_ISTAT_SCHEMA", os.getenv("DATABASE_SCHEMA", "sister"))
                 municipalities = sql.SQL("{}.ft_municipalities").format(sql.Identifier(istat_schema))
                 await cursor.executemany(
-                    sql.SQL("""WITH target AS (
+                    sql.SQL(
+                        """WITH target AS (
                            SELECT numeric_code FROM {}
                            WHERE (%(code)s::text IS NOT NULL AND upper(btrim(cadastral_code)) = upper(btrim(%(code)s::text)))
                               OR (%(name)s::text IS NOT NULL
@@ -7764,7 +7890,8 @@ async def _write_visura_cadastral_map_cache(records: list[tuple]) -> None:
                        ON CONFLICT (feature_type, comune_id, section, sheet, parcel) DO UPDATE SET
                            source_reference = EXCLUDED.source_reference,
                            geom = COALESCE(EXCLUDED.geom, sister.parcel_geometry_cache.geom),
-                           checked_at = now()""").format(municipalities),
+                           checked_at = now()"""
+                    ).format(municipalities),
                     rows,
                 )
             await connection.commit()
@@ -7877,8 +8004,11 @@ async def _read_subject_map_features_from_sister_views(
 
     parcel_rows = []
     if parcel_branches:
-        query = """WITH matched AS (
-                        """ + " UNION ALL ".join(parcel_branches) + """
+        query = (
+            """WITH matched AS (
+                        """
+            + " UNION ALL ".join(parcel_branches)
+            + """
                     ), ranked AS (
                         SELECT *, max(section_rank) OVER (PARTITION BY parcel_index) AS best_section_rank
                         FROM matched
@@ -7893,6 +8023,7 @@ async def _read_subject_map_features_from_sister_views(
                     FROM ranked
                     WHERE section_rank = best_section_rank
                     GROUP BY parcel_index"""
+        )
         cursor = await connection.execute(query, tuple(parcel_params))
         parcel_rows = await cursor.fetchall()
 
@@ -7980,8 +8111,11 @@ async def _read_subject_map_features_from_sister_views(
 
     sheet_rows = []
     if sheet_branches:
-        query = """WITH matched AS (
-                        """ + " UNION ALL ".join(sheet_branches) + """
+        query = (
+            """WITH matched AS (
+                        """
+            + " UNION ALL ".join(sheet_branches)
+            + """
                     ), ranked AS (
                         SELECT *, max(reference_rank) OVER (PARTITION BY sheet_index) AS best_reference_rank
                         FROM matched
@@ -7994,6 +8128,7 @@ async def _read_subject_map_features_from_sister_views(
                     FROM ranked
                     WHERE reference_rank = best_reference_rank
                     GROUP BY sheet_index"""
+        )
         cursor = await connection.execute(query, tuple(sheet_params))
         sheet_rows = await cursor.fetchall()
 
@@ -8016,7 +8151,10 @@ def _schedule_map_refresh(doc: dict) -> None:
         return
     document_id = int(document_id)
     now = time.monotonic()
-    if document_id in _MAP_REFRESH_INFLIGHT or now - _MAP_REFRESH_LAST.get(document_id, -1e9) < _MAP_REFRESH_MIN_INTERVAL:
+    if (
+        document_id in _MAP_REFRESH_INFLIGHT
+        or now - _MAP_REFRESH_LAST.get(document_id, -1e9) < _MAP_REFRESH_MIN_INTERVAL
+    ):
         return
     _MAP_REFRESH_INFLIGHT.add(document_id)
     _MAP_REFRESH_LAST[document_id] = now
@@ -8061,7 +8199,9 @@ def _adjacent_parcels_memo(reference: str, dsn: str, options: str, sql: str) -> 
                     rows = await cursor.fetchall()
                     _ADJACENT_UNAVAILABLE.discard(reference)
                     _clear_optional_data_degradation("adjacent_parcels")
-            except Exception as exc:  # noqa: BLE001 - optional data: remember the miss so it is not retried on every view
+            except (
+                Exception
+            ) as exc:  # noqa: BLE001 - optional data: remember the miss so it is not retried on every view
                 logger.warning("Adjacent cadastral parcels unavailable: %s", type(exc).__name__)
                 _ADJACENT_UNAVAILABLE.add(reference)
                 _record_optional_data_degradation("adjacent_parcels")
@@ -8113,23 +8253,31 @@ async def _google_maps_context_uncached(doc: dict, *, refresh_only: bool = False
     unit = units[0] if units and isinstance(units[0], dict) else {}
     identifier = unit.get("identifier") or {}
     xml_parsed = doc.get("xml_parsed") or {}
-    xml_body = next(
-        (
-            value for key, value in xml_parsed.items()
-            if str(key).startswith("Visura") and isinstance(value, dict)
-        ),
-        {},
-    ) if isinstance(xml_parsed, dict) else {}
+    xml_body = (
+        next(
+            (value for key, value in xml_parsed.items() if str(key).startswith("Visura") and isinstance(value, dict)),
+            {},
+        )
+        if isinstance(xml_parsed, dict)
+        else {}
+    )
     request = view.get("request") or xml_body.get("DatiRichiesta") or {}
     request_identifier = request.get("identifier") or {}
 
     subject_keys = (
-        "VisuraSoggettoAttuale", "VisuraSoggettoStorica", "VisuraSoggettoSintetica", "VisuraSoggetto",
+        "VisuraSoggettoAttuale",
+        "VisuraSoggettoStorica",
+        "VisuraSoggettoSintetica",
+        "VisuraSoggetto",
     )
-    subject_body = next(
-        (xml_parsed.get(key) for key in subject_keys if isinstance(xml_parsed.get(key), dict)),
-        {},
-    ) if isinstance(xml_parsed, dict) else {}
+    subject_body = (
+        next(
+            (xml_parsed.get(key) for key in subject_keys if isinstance(xml_parsed.get(key), dict)),
+            {},
+        )
+        if isinstance(xml_parsed, dict)
+        else {}
+    )
     is_subject_visura = bool(subject_body)
 
     def as_items(value):
@@ -8155,8 +8303,13 @@ async def _google_maps_context_uncached(doc: dict, *, refresh_only: bool = False
                     if isinstance(classamento, dict):
                         item["Categoria"] = classamento.get("Categoria") or ""
                     address_value = property_row.get("IndirizzoImm") or next(
-                        (entry.get("IndirizzoImm") for entry in as_items(property_row.get("DatiIndirizzo"))
-                         if entry.get("IndirizzoImm")), "")
+                        (
+                            entry.get("IndirizzoImm")
+                            for entry in as_items(property_row.get("DatiIndirizzo"))
+                            if entry.get("IndirizzoImm")
+                        ),
+                        "",
+                    )
                     if isinstance(address_value, dict):
                         address_value = address_value.get("_text") or ""
                     item["Indirizzo"] = str(address_value or "").strip()
@@ -8180,8 +8333,10 @@ async def _google_maps_context_uncached(doc: dict, *, refresh_only: bool = False
         elif isinstance(value, dict):
             for key in ("IdentificativoDefinitivo", "IdentificativoDefinitivoRiferimento"):
                 candidate = value.get(key)
-                if isinstance(candidate, dict) and candidate.get("Foglio") and (
-                    candidate.get("ParticellaNum") or candidate.get("Particella")
+                if (
+                    isinstance(candidate, dict)
+                    and candidate.get("Foglio")
+                    and (candidate.get("ParticellaNum") or candidate.get("Particella"))
                 ):
                     found.append(candidate)
             for item in value.values():
@@ -8191,32 +8346,41 @@ async def _google_maps_context_uncached(doc: dict, *, refresh_only: bool = False
     xml_identifiers = all_xml_parcels(xml_body)
     xml_identifier = xml_identifiers[0] if xml_identifiers else {}
     primary_xml_identifier = (
-        subject_table_identifiers[0] if is_subject_visura and subject_table_identifiers
-        else xml_identifier
+        subject_table_identifiers[0] if is_subject_visura and subject_table_identifiers else xml_identifier
     )
     address = str(unit.get("address") or doc.get("indirizzo") or "").strip()
     address = re.sub(r"\s+n\.?\s*SNC\b", "", address, flags=re.IGNORECASE)
     address = re.sub(r"\s+Piano\s+[A-Z0-9]+\s*$", "", address, flags=re.IGNORECASE)
     address = re.sub(r"\s+", " ", address).strip(" ,")
     municipality = str(
-        identifier.get("municipality") or primary_xml_identifier.get("Comune")
-        or doc.get("comune") or request.get("Comune") or ""
+        identifier.get("municipality")
+        or primary_xml_identifier.get("Comune")
+        or doc.get("comune")
+        or request.get("Comune")
+        or ""
     ).strip()
     province = str(
-        identifier.get("province") or primary_xml_identifier.get("Provincia")
-        or doc.get("provincia") or request.get("Provincia") or ""
+        identifier.get("province")
+        or primary_xml_identifier.get("Provincia")
+        or doc.get("provincia")
+        or request.get("Provincia")
+        or ""
     ).strip()
     sheet = str(
         identifier.get("sheet")
         or (primary_xml_identifier.get("Foglio") if is_subject_visura else "")
-        or doc.get("foglio") or request_identifier.get("sheet") or request.get("Foglio")
-        or primary_xml_identifier.get("Foglio") or ""
+        or doc.get("foglio")
+        or request_identifier.get("sheet")
+        or request.get("Foglio")
+        or primary_xml_identifier.get("Foglio")
+        or ""
     ).strip()
     parcel = str(
         identifier.get("parcel")
         or (
             (primary_xml_identifier.get("ParticellaNum") or primary_xml_identifier.get("Particella"))
-            if is_subject_visura else ""
+            if is_subject_visura
+            else ""
         )
         or doc.get("particella")
         or request_identifier.get("parcel")
@@ -8235,14 +8399,18 @@ async def _google_maps_context_uncached(doc: dict, *, refresh_only: bool = False
         or doc.get("sezione_urbana")
         or ""
     ).strip()
-    municipality_code = str(
-        identifier.get("municipality_code")
-        or primary_xml_identifier.get("CodiceComune")
-        or request_identifier.get("municipality_code")
-        or doc.get("codice_comune")
-        or request.get("CodiceComune")
-        or ""
-    ).strip().upper()
+    municipality_code = (
+        str(
+            identifier.get("municipality_code")
+            or primary_xml_identifier.get("CodiceComune")
+            or request_identifier.get("municipality_code")
+            or doc.get("codice_comune")
+            or request.get("CodiceComune")
+            or ""
+        )
+        .strip()
+        .upper()
+    )
 
     def parcel_field(identifier: dict, *names: str) -> str:
         return str(next((identifier.get(name) for name in names if identifier.get(name)), "")).strip()
@@ -8253,15 +8421,18 @@ async def _google_maps_context_uncached(doc: dict, *, refresh_only: bool = False
             continue
         if isinstance(current_unit.get("identifier"), dict):
             classification = current_unit.get("classification") or {}
-            unit_identifiers.append({
-                **current_unit["identifier"],
-                "category": classification.get("category", "") if isinstance(classification, dict) else "",
-            })
+            unit_identifiers.append(
+                {
+                    **current_unit["identifier"],
+                    "category": classification.get("category", "") if isinstance(classification, dict) else "",
+                }
+            )
         classification = current_unit.get("classification") or {}
         category = classification.get("category", "") if isinstance(classification, dict) else ""
         unit_identifiers.extend(
             {**related, "category": category}
-            for related in current_unit.get("related", []) if isinstance(related, dict)
+            for related in current_unit.get("related", [])
+            if isinstance(related, dict)
         )
     if is_subject_visura:
         candidates = subject_table_identifiers
@@ -8276,9 +8447,9 @@ async def _google_maps_context_uncached(doc: dict, *, refresh_only: bool = False
         candidate_municipality = parcel_field(candidate, "municipality", "Comune") or municipality
         candidate_province = parcel_field(candidate, "province", "Provincia") or province
         candidate_code = parcel_field(candidate, "municipality_code", "CodiceComune") or municipality_code
-        candidate_section = parcel_field(
-            candidate, "urban_section", "SezUrbana", "census_section", "SezCensuaria"
-        ) or section
+        candidate_section = (
+            parcel_field(candidate, "urban_section", "SezUrbana", "census_section", "SezCensuaria") or section
+        )
         candidate_sheet = parcel_field(candidate, "sheet", "Foglio")
         candidate_parcel = parcel_field(candidate, "parcel", "ParticellaNum", "Particella")
         candidate_subunit = parcel_field(candidate, "subunit", "Subalterno")
@@ -8288,50 +8459,70 @@ async def _google_maps_context_uncached(doc: dict, *, refresh_only: bool = False
         if not (candidate_municipality and candidate_province and candidate_sheet and candidate_parcel):
             continue
         key = (
-            candidate_municipality.casefold(), candidate_province.upper(), candidate_code.upper(),
-            candidate_section.upper(), candidate_sheet.upper(), candidate_parcel.upper(),
+            candidate_municipality.casefold(),
+            candidate_province.upper(),
+            candidate_code.upper(),
+            candidate_section.upper(),
+            candidate_sheet.upper(),
+            candidate_parcel.upper(),
         )
         existing_item = next((item for item in parcel_identifiers if item["key"] == key), None)
         if existing_item:
             if candidate_subunit and all(
-                candidate_subunit.casefold() != value.casefold()
-                for value in existing_item["subunits"]
+                candidate_subunit.casefold() != value.casefold() for value in existing_item["subunits"]
             ):
                 existing_item["subunits"].append(candidate_subunit)
             continue
-        parcel_identifiers.append({
-            "key": key,
-            "municipality": candidate_municipality,
-            "province": candidate_province,
-            "municipality_code": candidate_code.upper(),
-            "section": candidate_section.upper(),
-            "sheet": candidate_sheet,
-            "parcel": candidate_parcel,
-            "subunits": [candidate_subunit] if candidate_subunit else [],
-            "category": candidate_category,
-            "address": parcel_field(candidate, "address", "Indirizzo"),
-            "reference": parcel_field(candidate, "reference") or " · ".join(
-                part for part in (
-                    f"{candidate_municipality} ({candidate_code.upper()})" if candidate_code else candidate_municipality,
-                    f"FG {candidate_sheet}", f"PT {candidate_parcel}",
-                ) if part
-            ),
-        })
+        parcel_identifiers.append(
+            {
+                "key": key,
+                "municipality": candidate_municipality,
+                "province": candidate_province,
+                "municipality_code": candidate_code.upper(),
+                "section": candidate_section.upper(),
+                "sheet": candidate_sheet,
+                "parcel": candidate_parcel,
+                "subunits": [candidate_subunit] if candidate_subunit else [],
+                "category": candidate_category,
+                "address": parcel_field(candidate, "address", "Indirizzo"),
+                "reference": parcel_field(candidate, "reference")
+                or " · ".join(
+                    part
+                    for part in (
+                        (
+                            f"{candidate_municipality} ({candidate_code.upper()})"
+                            if candidate_code
+                            else candidate_municipality
+                        ),
+                        f"FG {candidate_sheet}",
+                        f"PT {candidate_parcel}",
+                    )
+                    if part
+                ),
+            }
+        )
 
     selected_key = (
-        municipality.casefold(), province.upper(), municipality_code.upper(), section.upper(), sheet.upper(), parcel.upper(),
+        municipality.casefold(),
+        province.upper(),
+        municipality_code.upper(),
+        section.upper(),
+        sheet.upper(),
+        parcel.upper(),
     )
     if not is_subject_visura and not parcel_identifiers and municipality and province and sheet and parcel:
-        parcel_identifiers.append({
-            "key": selected_key,
-            "municipality": municipality,
-            "province": province,
-            "municipality_code": municipality_code,
-            "section": section.upper(),
-            "sheet": sheet,
-            "parcel": parcel,
-            "reference": f"FG {sheet} · PT {parcel}",
-        })
+        parcel_identifiers.append(
+            {
+                "key": selected_key,
+                "municipality": municipality,
+                "province": province,
+                "municipality_code": municipality_code,
+                "section": section.upper(),
+                "sheet": sheet,
+                "parcel": parcel,
+                "reference": f"FG {sheet} · PT {parcel}",
+            }
+        )
     selected_parcel_reference = next(
         (item["reference"] for item in parcel_identifiers if item["key"] == selected_key),
         f"FG {sheet} · PT {parcel}",
@@ -8345,9 +8536,7 @@ async def _google_maps_context_uncached(doc: dict, *, refresh_only: bool = False
         return "https://www.google.com/maps/search/?" + urlencode({"api": "1", "query": query})
 
     def map_embed_url(query: str) -> str:
-        return "https://maps.google.com/maps?" + urlencode(
-            {"q": query, "z": 18, "output": "embed"}
-        )
+        return "https://maps.google.com/maps?" + urlencode({"q": query, "z": 18, "output": "embed"})
 
     def street_view_embed_url(point: str) -> str:
         return "https://maps.google.com/maps?" + urlencode(
@@ -8409,8 +8598,11 @@ async def _google_maps_context_uncached(doc: dict, *, refresh_only: bool = False
         seen_sheet_keys = set()
         for item in parcel_identifiers:
             key = (
-                item["municipality"].casefold(), item["province"].upper(),
-                item["municipality_code"].upper(), item["section"].upper(), item["sheet"].upper(),
+                item["municipality"].casefold(),
+                item["province"].upper(),
+                item["municipality_code"].upper(),
+                item["section"].upper(),
+                item["sheet"].upper(),
             )
             if key not in seen_sheet_keys:
                 seen_sheet_keys.add(key)
@@ -8421,22 +8613,12 @@ async def _google_maps_context_uncached(doc: dict, *, refresh_only: bool = False
         if not is_subject_visura:
             return False
         cached_by_key = {(row[0], row[1]): row for row in cached_rows}
-        expected = {
-            ("parcel", _cadastral_map_lookup_key(item, feature_type="parcel"))
-            for item in parcel_identifiers
-        }
-        expected.update(
-            ("sheet", _cadastral_map_lookup_key(item, feature_type="sheet"))
-            for item in sheet_identifiers
-        )
+        expected = {("parcel", _cadastral_map_lookup_key(item, feature_type="parcel")) for item in parcel_identifiers}
+        expected.update(("sheet", _cadastral_map_lookup_key(item, feature_type="sheet")) for item in sheet_identifiers)
         if require_fresh:
-            if not expected or not all(
-                pair in cached_by_key and bool(cached_by_key[pair][9]) for pair in expected
-            ):
+            if not expected or not all(pair in cached_by_key and bool(cached_by_key[pair][9]) for pair in expected):
                 return False
-        elif not any(
-            pair in cached_by_key and bool(cached_by_key[pair][10]) for pair in expected
-        ):
+        elif not any(pair in cached_by_key and bool(cached_by_key[pair][10]) for pair in expected):
             return False
 
         import json
@@ -8454,41 +8636,45 @@ async def _google_maps_context_uncached(doc: dict, *, refresh_only: bool = False
             except (TypeError, ValueError, json.JSONDecodeError):
                 continue
             matched_indices.add(index)
-            context["parcel_features"].append({
-                "type": "Feature",
-                "properties": {
-                    "reference": item["reference"],
-                    "sheet": item["sheet"],
-                    "parcel": item["parcel"],
-                    "subunits": item.get("subunits", []),
-                    "section": item["section"],
-                    "municipality": item["municipality"],
-                    "municipality_code": item["municipality_code"],
-                    "province": item["province"],
-                    "category": item.get("category", ""),
-                },
-                "geometry": geometry,
-            })
+            context["parcel_features"].append(
+                {
+                    "type": "Feature",
+                    "properties": {
+                        "reference": item["reference"],
+                        "sheet": item["sheet"],
+                        "parcel": item["parcel"],
+                        "subunits": item.get("subunits", []),
+                        "section": item["section"],
+                        "municipality": item["municipality"],
+                        "municipality_code": item["municipality_code"],
+                        "province": item["province"],
+                        "category": item.get("category", ""),
+                    },
+                    "geometry": geometry,
+                }
+            )
             try:
                 longitude, latitude = float(row[12]), float(row[13])
             except (TypeError, ValueError):
                 continue
             if not (-180 <= longitude <= 180 and -90 <= latitude <= 90):
                 continue
-            context["parcel_markers"].append({
-                "latitude": latitude,
-                "longitude": longitude,
-                "reference": item["reference"],
-                "municipality": item["municipality"],
-                "municipality_code": item["municipality_code"],
-                "province": item["province"],
-                "section": item["section"],
-                "sheet": item["sheet"],
-                "parcel": item["parcel"],
-                "subunits": item.get("subunits", []),
-                "category": item.get("category", ""),
-                "selected": item["key"] == selected_key,
-            })
+            context["parcel_markers"].append(
+                {
+                    "latitude": latitude,
+                    "longitude": longitude,
+                    "reference": item["reference"],
+                    "municipality": item["municipality"],
+                    "municipality_code": item["municipality_code"],
+                    "province": item["province"],
+                    "section": item["section"],
+                    "sheet": item["sheet"],
+                    "parcel": item["parcel"],
+                    "subunits": item.get("subunits", []),
+                    "category": item.get("category", ""),
+                    "selected": item["key"] == selected_key,
+                }
+            )
 
         context["sheet_count"] = len(sheet_identifiers)
         for item in sheet_identifiers:
@@ -8501,30 +8687,31 @@ async def _google_maps_context_uncached(doc: dict, *, refresh_only: bool = False
                     continue
             except (TypeError, ValueError, json.JSONDecodeError):
                 continue
-            context["sheet_features"].append({
-                "type": "Feature",
-                "properties": {
-                    "reference": (
-                        f"{item['municipality']} ({item['municipality_code']}) · "
-                        + (f"Sezione {item['section']} · " if item["section"] else "")
-                        + f"Foglio {item['sheet']}"
-                    ),
-                    "sheet": item["sheet"],
-                    "section": item["section"],
-                    "municipality": item["municipality"],
-                    "municipality_code": item["municipality_code"],
-                    "province": item["province"],
-                },
-                "geometry": geometry,
-            })
+            context["sheet_features"].append(
+                {
+                    "type": "Feature",
+                    "properties": {
+                        "reference": (
+                            f"{item['municipality']} ({item['municipality_code']}) · "
+                            + (f"Sezione {item['section']} · " if item["section"] else "")
+                            + f"Foglio {item['sheet']}"
+                        ),
+                        "sheet": item["sheet"],
+                        "section": item["section"],
+                        "municipality": item["municipality"],
+                        "municipality_code": item["municipality_code"],
+                        "province": item["province"],
+                    },
+                    "geometry": geometry,
+                }
+            )
 
         context["mapped_sheet_count"] = len(context["sheet_features"])
         context["unmapped_parcels"] = [
             item["reference"] for index, item in enumerate(parcel_identifiers) if index not in matched_indices
         ]
         context["unmapped_parcel_items"] = [
-            parcel_map_reference(item)
-            for index, item in enumerate(parcel_identifiers) if index not in matched_indices
+            parcel_map_reference(item) for index, item in enumerate(parcel_identifiers) if index not in matched_indices
         ]
         context["mapped_parcel_count"] = len(context["parcel_markers"])
         if context["parcel_markers"] and not any(marker["selected"] for marker in context["parcel_markers"]):
@@ -8589,17 +8776,13 @@ async def _google_maps_context_uncached(doc: dict, *, refresh_only: bool = False
         os.getenv("CADASTRAL_POSTGRES_DSN", "").strip()
         or os.getenv(f"CADASTRAL_DATABASE_DSN_{database_dsn_suffix()}", "").strip()
     )
-    use_sister_cadastral_views = (
-        is_subject_visura and document_id is None and not direct_cadastral_dsn
-    )
+    use_sister_cadastral_views = is_subject_visura and document_id is None and not direct_cadastral_dsn
     if use_sister_cadastral_views:
         dsn = database.DATABASE_DSN
     elif direct_cadastral_dsn:
         dsn = direct_cadastral_dsn
     elif database.DATABASE_DSN:
-        dsn = make_url(database.DATABASE_DSN).set(database="cadastral_sales").render_as_string(
-            hide_password=False
-        )
+        dsn = make_url(database.DATABASE_DSN).set(database="cadastral_sales").render_as_string(hide_password=False)
     else:
         dsn = ""
     if not dsn or not (municipality and province and sheet and parcel):
@@ -8870,21 +9053,30 @@ async def _google_maps_context_uncached(doc: dict, *, refresh_only: bool = False
                             for code_prefix in code_prefixes:
                                 for sheet_suffix in sheet_suffixes:
                                     for parcel_value in parcel_candidates:
-                                        reference_candidates.add((
-                                            f"{code_prefix}{sheet_suffix}.{parcel_value}".upper(), section_rank,
-                                        ))
+                                        reference_candidates.add(
+                                            (
+                                                f"{code_prefix}{sheet_suffix}.{parcel_value}".upper(),
+                                                section_rank,
+                                            )
+                                        )
                     if _exact_lookup_recently_timed_out(item["municipality_code"]):
                         reference_candidates = set()  # straight to the fallback: the exact query would time out again
                     exact_reference_wanted.extend(
-                        (index, reference, section_rank)
-                        for reference, section_rank in sorted(reference_candidates)
+                        (index, reference, section_rank) for reference, section_rank in sorted(reference_candidates)
                     )
                     for sheet_value in sorted(sheet_values):
                         for parcel_value in sorted(parcel_values):
-                            wanted_rows.append((
-                                index, item["municipality"], item["province"], item["municipality_code"],
-                                item["section"], sheet_value, parcel_value,
-                            ))
+                            wanted_rows.append(
+                                (
+                                    index,
+                                    item["municipality"],
+                                    item["province"],
+                                    item["municipality_code"],
+                                    item["section"],
+                                    sheet_value,
+                                    parcel_value,
+                                )
+                            )
                 exact_indices = set()
                 if exact_reference_wanted:
                     try:
@@ -8949,26 +9141,38 @@ async def _google_maps_context_uncached(doc: dict, *, refresh_only: bool = False
                             padded_sheet = numeric_sheet.zfill(4) if numeric_sheet.isdigit() else numeric_sheet
                             for section_prefix, section_rank in section_prefixes:
                                 for suffix, suffix_rank in (("00", 2), ("", 1)):
-                                    references = [(f"{item['municipality_code']}{section_prefix}{padded_sheet}{suffix}", 1)]
+                                    references = [
+                                        (f"{item['municipality_code']}{section_prefix}{padded_sheet}{suffix}", 1)
+                                    ]
                                     if section_prefix:
-                                        references.append((
-                                            f"{item['municipality_code']}{section_prefix}_{padded_sheet}{suffix}", 0,
-                                        ))
+                                        references.append(
+                                            (
+                                                f"{item['municipality_code']}{section_prefix}_{padded_sheet}{suffix}",
+                                                0,
+                                            )
+                                        )
                                     else:
                                         references.append((f"{item['municipality_code']}_{padded_sheet}{suffix}", 0))
                                     for reference, separator_rank in references:
                                         # Prefer the exact section and sheet spelling, then the standard 00 suffix;
                                         # legacy numeric aliases are considered only if no closer reference exists.
-                                        rank = section_rank * 10000 + sheet_rank * 1000 + suffix_rank * 10 + separator_rank
+                                        rank = (
+                                            section_rank * 10000 + sheet_rank * 1000 + suffix_rank * 10 + separator_rank
+                                        )
                                         key = (index, reference)
                                         sheet_reference_ranks[key] = max(sheet_reference_ranks.get(key, -1), rank)
-                        sheet_wanted.append((
-                            index, item["municipality"], item["province"], item["municipality_code"], section,
-                        ))
+                        sheet_wanted.append(
+                            (
+                                index,
+                                item["municipality"],
+                                item["province"],
+                                item["municipality_code"],
+                                section,
+                            )
+                        )
 
                     sheet_reference_wanted = [
-                        (index, reference, rank)
-                        for (index, reference), rank in sorted(sheet_reference_ranks.items())
+                        (index, reference, rank) for (index, reference), rank in sorted(sheet_reference_ranks.items())
                     ]
 
                     if sheet_wanted and sheet_reference_wanted:
@@ -9018,58 +9222,70 @@ async def _google_maps_context_uncached(doc: dict, *, refresh_only: bool = False
         except (TypeError, ValueError, IndexError):
             continue
         if (
-            reference_count < 1 or srid != 4326 or max_srid != 4326
-            or not (-180 <= longitude <= 180) or not (-90 <= latitude <= 90)
+            reference_count < 1
+            or srid != 4326
+            or max_srid != 4326
+            or not (-180 <= longitude <= 180)
+            or not (-90 <= latitude <= 90)
             or not (0 <= index < len(parcel_identifiers))
         ):
             continue
         item = parcel_identifiers[index]
         matched_indices.add(index)
-        context["parcel_markers"].append({
-            "latitude": latitude,
-            "longitude": longitude,
-            "reference": item["reference"],
-            "municipality": item["municipality"],
-            "municipality_code": item["municipality_code"],
-            "province": item["province"],
-            "section": item["section"],
-            "sheet": item["sheet"],
-            "parcel": item["parcel"],
-            "subunits": item.get("subunits", []),
-            "selected": item["key"] == selected_key,
-        })
+        context["parcel_markers"].append(
+            {
+                "latitude": latitude,
+                "longitude": longitude,
+                "reference": item["reference"],
+                "municipality": item["municipality"],
+                "municipality_code": item["municipality_code"],
+                "province": item["province"],
+                "section": item["section"],
+                "sheet": item["sheet"],
+                "parcel": item["parcel"],
+                "subunits": item.get("subunits", []),
+                "selected": item["key"] == selected_key,
+            }
+        )
         if marker_row[6]:
             try:
                 geometry = json.loads(marker_row[6]) if isinstance(marker_row[6], str) else marker_row[6]
                 if isinstance(geometry, dict):
                     parcel_geometries[index] = geometry
                     if context["listed_only"]:
-                        context["parcel_features"].append({
-                            "type": "Feature",
-                            "properties": {
-                                "reference": item["reference"],
-                                "sheet": item["sheet"],
-                                "parcel": item["parcel"],
-                                "subunits": item.get("subunits", []),
-                                "section": item["section"],
-                                "municipality": item["municipality"],
-                                "municipality_code": item["municipality_code"],
-                                "province": item["province"],
-                                "category": item.get("category", ""),
-                            },
-                            "geometry": geometry,
-                        })
+                        context["parcel_features"].append(
+                            {
+                                "type": "Feature",
+                                "properties": {
+                                    "reference": item["reference"],
+                                    "sheet": item["sheet"],
+                                    "parcel": item["parcel"],
+                                    "subunits": item.get("subunits", []),
+                                    "section": item["section"],
+                                    "municipality": item["municipality"],
+                                    "municipality_code": item["municipality_code"],
+                                    "province": item["province"],
+                                    "category": item.get("category", ""),
+                                },
+                                "geometry": geometry,
+                            }
+                        )
             except (TypeError, ValueError, json.JSONDecodeError):
                 logger.warning("Cadastral parcel geometry could not be decoded")
 
     if context["listed_only"]:
-        context["sheet_count"] = len({
-            (
-                item["municipality"].casefold(), item["province"].upper(), item["municipality_code"],
-                item["section"], item["sheet"],
-            )
-            for item in parcel_identifiers
-        })
+        context["sheet_count"] = len(
+            {
+                (
+                    item["municipality"].casefold(),
+                    item["province"].upper(),
+                    item["municipality_code"],
+                    item["section"],
+                    item["sheet"],
+                )
+                for item in parcel_identifiers
+            }
+        )
         for sheet_row in sheet_rows:
             try:
                 index = int(sheet_row[0])
@@ -9083,22 +9299,24 @@ async def _google_maps_context_uncached(doc: dict, *, refresh_only: bool = False
                 continue
             item = sheet_identifiers[index]
             sheet_geometries[index] = geometry
-            context["sheet_features"].append({
-                "type": "Feature",
-                "properties": {
-                    "reference": (
-                        f"{item['municipality']} ({item['municipality_code']}) · "
-                        + (f"Sezione {item['section']} · " if item["section"] else "")
-                        + f"Foglio {item['sheet']}"
-                    ),
-                    "sheet": item["sheet"],
-                    "section": item["section"],
-                    "municipality": item["municipality"],
-                    "municipality_code": item["municipality_code"],
-                    "province": item["province"],
-                },
-                "geometry": geometry,
-            })
+            context["sheet_features"].append(
+                {
+                    "type": "Feature",
+                    "properties": {
+                        "reference": (
+                            f"{item['municipality']} ({item['municipality_code']}) · "
+                            + (f"Sezione {item['section']} · " if item["section"] else "")
+                            + f"Foglio {item['sheet']}"
+                        ),
+                        "sheet": item["sheet"],
+                        "section": item["section"],
+                        "municipality": item["municipality"],
+                        "municipality_code": item["municipality_code"],
+                        "province": item["province"],
+                    },
+                    "geometry": geometry,
+                }
+            )
         context["mapped_sheet_count"] = len(context["sheet_features"])
 
     if document_id is not None:
@@ -9107,42 +9325,45 @@ async def _google_maps_context_uncached(doc: dict, *, refresh_only: bool = False
             geometry = parcel_geometries.get(index)
             if geometry is None and parcel_lookup_failed:
                 continue
-            cache_records.append((
-                "parcel",
-                _cadastral_map_lookup_key(item, feature_type="parcel"),
-                item["municipality"],
-                item["province"],
-                item["municipality_code"],
-                item["section"],
-                item["sheet"],
-                item["parcel"],
-                None,
-                json.dumps(geometry, separators=(",", ":")) if geometry else None,
-            ))
+            cache_records.append(
+                (
+                    "parcel",
+                    _cadastral_map_lookup_key(item, feature_type="parcel"),
+                    item["municipality"],
+                    item["province"],
+                    item["municipality_code"],
+                    item["section"],
+                    item["sheet"],
+                    item["parcel"],
+                    None,
+                    json.dumps(geometry, separators=(",", ":")) if geometry else None,
+                )
+            )
         for index, item in enumerate(sheet_identifiers):
             geometry = sheet_geometries.get(index)
             if geometry is None and sheet_lookup_failed:
                 continue
-            cache_records.append((
-                "sheet",
-                _cadastral_map_lookup_key(item, feature_type="sheet"),
-                item["municipality"],
-                item["province"],
-                item["municipality_code"],
-                item["section"],
-                item["sheet"],
-                "",
-                None,
-                json.dumps(geometry, separators=(",", ":")) if geometry else None,
-            ))
+            cache_records.append(
+                (
+                    "sheet",
+                    _cadastral_map_lookup_key(item, feature_type="sheet"),
+                    item["municipality"],
+                    item["province"],
+                    item["municipality_code"],
+                    item["section"],
+                    item["sheet"],
+                    "",
+                    None,
+                    json.dumps(geometry, separators=(",", ":")) if geometry else None,
+                )
+            )
         await _write_visura_cadastral_map_cache(cache_records)
 
     context["unmapped_parcels"] = [
         item["reference"] for index, item in enumerate(parcel_identifiers) if index not in matched_indices
     ]
     context["unmapped_parcel_items"] = [
-        parcel_map_reference(item)
-        for index, item in enumerate(parcel_identifiers) if index not in matched_indices
+        parcel_map_reference(item) for index, item in enumerate(parcel_identifiers) if index not in matched_indices
     ]
     if context["parcel_markers"] and not any(marker["selected"] for marker in context["parcel_markers"]):
         context["parcel_markers"][0]["selected"] = True
@@ -9173,12 +9394,7 @@ async def _google_maps_context_uncached(doc: dict, *, refresh_only: bool = False
         srid, max_srid = int(row[4]), int(row[5])
     except (TypeError, ValueError):
         return context
-    if (
-        srid != 4326
-        or max_srid != 4326
-        or not (-180 <= longitude <= 180)
-        or not (-90 <= latitude <= 90)
-    ):
+    if srid != 4326 or max_srid != 4326 or not (-180 <= longitude <= 180) or not (-90 <= latitude <= 90):
         logger.warning("Cadastral parcel has invalid WGS84 coordinates")
         context["lookup_status"] = "invalid_coordinates"
         context["lookup_message"] = (
@@ -9290,7 +9506,6 @@ def _remember_exact_lookup_timeout(municipality_codes: set[str]) -> None:
         _EXACT_LOOKUP_TIMEOUTS[str(code or "").upper()] = now
 
 
-
 async def _land_registry_map_context(lookup: dict[str, Any] | None) -> dict[str, Any] | None:
     """Build an embeddable map, using a municipality center if parcel coordinates are unknown."""
     if not lookup or not (lookup.get("sheet") and lookup.get("parcel")):
@@ -9322,8 +9537,7 @@ async def _land_registry_map_context(lookup: dict[str, Any] | None) -> dict[str,
         "mapped_parcel_count": lookup.get("mapped_parcel_count") or 0,
         "sheet_count": lookup.get("sheet_count") or 0,
         "mapped_sheet_count": lookup.get("mapped_sheet_count") or 0,
-        "message": lookup.get("lookup_message")
-        or "La geometria catastale non è disponibile nella cartografia locale.",
+        "message": lookup.get("lookup_message") or "La geometria catastale non è disponibile nella cartografia locale.",
     }
     centroid = lookup.get("centroid")
     center_kind = "parcel"
@@ -9331,15 +9545,19 @@ async def _land_registry_map_context(lookup: dict[str, Any] | None) -> dict[str,
         try:
             marker_latitude, marker_longitude = map(float, str(centroid).split(",", 1))
             if -90 <= marker_latitude <= 90 and -180 <= marker_longitude <= 180:
-                context["parcel_markers"] = [{
-                    "latitude": marker_latitude,
-                    "longitude": marker_longitude,
-                    "reference": lookup.get("selected_parcel_reference") or f"FG {context['sheet']} · PT {context['parcel']}",
-                    "selected": True,
-                }]
+                context["parcel_markers"] = [
+                    {
+                        "latitude": marker_latitude,
+                        "longitude": marker_longitude,
+                        "reference": lookup.get("selected_parcel_reference")
+                        or f"FG {context['sheet']} · PT {context['parcel']}",
+                        "selected": True,
+                    }
+                ]
                 context["mapped_parcel_count"] = max(context["mapped_parcel_count"], 1)
                 context["unmapped_parcels"] = [
-                    reference for reference in context["unmapped_parcels"]
+                    reference
+                    for reference in context["unmapped_parcels"]
                     if reference != lookup.get("selected_parcel_reference")
                 ]
         except (TypeError, ValueError):
@@ -9388,7 +9606,8 @@ async def _land_registry_map_context(lookup: dict[str, Any] | None) -> dict[str,
             municipality_key = context["municipality"].casefold()
             match = next(
                 (
-                    item for item in matches
+                    item
+                    for item in matches
                     if str(item.get("canonical_name") or "").strip().casefold() == municipality_key
                 ),
                 matches[0] if len(matches) == 1 else None,
@@ -9413,7 +9632,7 @@ async def _land_registry_map_context(lookup: dict[str, Any] | None) -> dict[str,
             "available": True,
             "latitude": latitude,
             "longitude": longitude,
-        "zoom": 17 if center_kind in ("parcel", "parcels") else 14,
+            "zoom": 17 if center_kind in ("parcel", "parcels") else 14,
             "center_kind": center_kind,
             "message": (
                 "La posizione esatta della particella non è disponibile; la mappa è centrata sul comune."
@@ -9560,7 +9779,12 @@ async def web_document_view(request: Request, path: str, user=Depends(_require_a
     is_fabbricati = False
     if any(
         key in xml_parsed
-        for key in ("VisuraFabbricatiStorica", "VisuraFabbricatiAttuale", "VisuraFabbricatiSintetica", "VisuraFabbricati")
+        for key in (
+            "VisuraFabbricatiStorica",
+            "VisuraFabbricatiAttuale",
+            "VisuraFabbricatiSintetica",
+            "VisuraFabbricati",
+        )
     ):
         template = "catasto/visura_immobile.html"
         is_fabbricati = True
@@ -9754,8 +9978,10 @@ async def web_document_pdf(request: Request, doc_id: int, user=Depends(_require_
     doc["view"] = build_visura_view(xml_content)
     lookup = await _google_maps_context(doc)
     kpis = None
-    if any(key in doc["xml_parsed"] for key in ("VisuraSoggettoAttuale", "VisuraSoggettoStorica",
-                                                "VisuraSoggettoSintetica", "VisuraSoggetto")):
+    if any(
+        key in doc["xml_parsed"]
+        for key in ("VisuraSoggettoAttuale", "VisuraSoggettoStorica", "VisuraSoggettoSintetica", "VisuraSoggetto")
+    ):
         kpis = await _subject_land_registry_calculation(
             doc["xml_parsed"], lookup, user, scope_type="document", scope_id=doc.get("id")
         )
@@ -9766,7 +9992,10 @@ async def web_document_pdf(request: Request, doc_id: int, user=Depends(_require_
         logger.warning("PDF export of document %s failed: %s", doc_id, exc)
         raise HTTPException(status_code=422, detail=f"PDF export not available: {exc}") from exc
     stem = Path(str(doc.get("filename") or "")).stem
-    headers = {"Content-Disposition": f'attachment; filename="{pdf_filename(stem, doc_id)}"', "Cache-Control": "no-store"}
+    headers = {
+        "Content-Disposition": f'attachment; filename="{pdf_filename(stem, doc_id)}"',
+        "Cache-Control": "no-store",
+    }
     return Response(content=content, media_type="application/pdf", headers=headers)
 
 
@@ -9872,8 +10101,10 @@ def _read_planimetria_geojson(file_path: str) -> dict | None:
 
     # Monte Mario / Gauss-Boaga (3003 Ovest, 3004 Est) is what SISTER exports by default; without it the
     # fallback (UTM 32) put a Bologna sheet in Bulgaria. towgs84 = IGM's national 7-parameter shift.
-    _GAUSS_BOAGA = "+proj=tmerc +lat_0=0 +lon_0={lon0} +k=0.9996 +x_0={x0} +y_0=0 +ellps=intl " \
+    _GAUSS_BOAGA = (
+        "+proj=tmerc +lat_0=0 +lon_0={lon0} +k=0.9996 +x_0={x0} +y_0=0 +ellps=intl "
         "+towgs84=-104.1,-49.1,-9.9,0.971,-2.917,0.714,-11.68 +units=m +no_defs"
+    )
     _PROJ4 = {
         3003: _GAUSS_BOAGA.format(lon0=9, x0=1500000),
         3004: _GAUSS_BOAGA.format(lon0=15, x0=2520000),
@@ -9951,12 +10182,14 @@ def _parse_cxf_entities(content: str) -> list[dict]:
         for nv in hole_verts:
             holes.append(all_coords[pos : pos + nv])
             pos += nv
-        entities.append({
-            "type": _classify_cad_label(label),
-            "label": label.strip(),
-            "coords": coords,
-            "holes": holes,
-        })
+        entities.append(
+            {
+                "type": _classify_cad_label(label),
+                "label": label.strip(),
+                "coords": coords,
+                "holes": holes,
+            }
+        )
     return entities
 
 
@@ -9987,12 +10220,14 @@ def _parse_cmf_entities(content: bytes) -> list[dict]:
         for nv in hole_verts:
             holes.append(all_coords[pos : pos + nv])
             pos += nv
-        entities.append({
-            "type": _classify_cad_label(label),
-            "label": label.strip(),
-            "coords": coords,
-            "holes": holes,
-        })
+        entities.append(
+            {
+                "type": _classify_cad_label(label),
+                "label": label.strip(),
+                "coords": coords,
+                "holes": holes,
+            }
+        )
     return entities
 
 
@@ -10283,7 +10518,12 @@ async def web_admin_mortgage_search_quote(flow_id: int, request: Request, user=D
             ordinals = [int(value) for value in raw_ordinals]
         except (TypeError, ValueError) as exc:
             raise HTTPException(status_code=422, detail="Invalid note ordinals") from exc
-        if not ordinals or len(ordinals) > 100 or any(value <= 0 for value in ordinals) or len(set(ordinals)) != len(ordinals):
+        if (
+            not ordinals
+            or len(ordinals) > 100
+            or any(value <= 0 for value in ordinals)
+            or len(set(ordinals)) != len(ordinals)
+        ):
             raise HTTPException(status_code=422, detail="Select 1 to 100 unique positive note ordinals")
         paid_quote = await quote_note_request(flow["search_id"], ordinals, "PDF")
     elif step == "title":
@@ -10584,7 +10824,11 @@ async def web_admin_mortgage_search_select_homonym(
 
     homonyms = last_portal_result.get("homonyms") if isinstance(last_portal_result.get("homonyms"), list) else []
     selected_index = expected_values.index(selected_value)
-    selected = homonyms[selected_index] if selected_index < len(homonyms) and isinstance(homonyms[selected_index], dict) else {}
+    selected = (
+        homonyms[selected_index]
+        if selected_index < len(homonyms) and isinstance(homonyms[selected_index], dict)
+        else {}
+    )
     request.state.audit_params = {
         "flow_id": flow_id,
         "homonym_index": selected_index + 1,
@@ -10765,9 +11009,7 @@ async def web_company_favorite(request: Request, fiscal_code: str, user=Depends(
     from .database import set_subject_favorite
 
     await set_subject_favorite(user_key, "company", normalized_code, payload["favorite"])
-    return JSONResponse(
-        {"subject_type": "company", "subject_code": normalized_code, "favorite": payload["favorite"]}
-    )
+    return JSONResponse({"subject_type": "company", "subject_code": normalized_code, "favorite": payload["favorite"]})
 
 
 @router.put("/persons/{fiscal_code}/favorite", response_class=JSONResponse)
@@ -10791,9 +11033,7 @@ async def web_person_favorite(request: Request, fiscal_code: str, user=Depends(_
     from .database import set_subject_favorite
 
     await set_subject_favorite(user_key, "person", normalized_code, payload["favorite"])
-    return JSONResponse(
-        {"subject_type": "person", "subject_code": normalized_code, "favorite": payload["favorite"]}
-    )
+    return JSONResponse({"subject_type": "person", "subject_code": normalized_code, "favorite": payload["favorite"]})
 
 
 _TAG_BULK_LIMIT = 5000
@@ -10806,7 +11046,9 @@ def _subject_tag_code(kind: str, fiscal_code: str) -> str:
     code = fiscal_code.strip().upper()
     pattern = r"[A-Z0-9]{16}" if kind == "person" else r"\d{11}"
     if not re.fullmatch(pattern, code):
-        raise HTTPException(status_code=404, detail="Persona non trovata" if kind == "person" else "Azienda non trovata")
+        raise HTTPException(
+            status_code=404, detail="Persona non trovata" if kind == "person" else "Azienda non trovata"
+        )
     return code
 
 
@@ -10875,7 +11117,9 @@ async def _subject_tags_bulk(request: Request, kind: str, user) -> JSONResponse:
     if total != expected:
         raise HTTPException(status_code=409, detail=f"I risultati sono cambiati: ora sono {total}, non {expected}")
     if total > _TAG_BULK_LIMIT:
-        raise HTTPException(status_code=413, detail=f"Troppi risultati ({total}): restringi i filtri (massimo {_TAG_BULK_LIMIT})")
+        raise HTTPException(
+            status_code=413, detail=f"Troppi risultati ({total}): restringi i filtri (massimo {_TAG_BULK_LIMIT})"
+        )
     codes = [row["fiscal_code"] for row in rows]
     try:
         changed = (
@@ -10886,12 +11130,14 @@ async def _subject_tags_bulk(request: Request, kind: str, user) -> JSONResponse:
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from None
     owned_codes = None if _is_admin(user) else await get_subject_access_codes(_principal_keys(user), kind)
-    return JSONResponse({
-        "action": action,
-        "matched": total,
-        "changed": changed,
-        "tags": await list_subject_tags(kind, allowed_codes=owned_codes),
-    })
+    return JSONResponse(
+        {
+            "action": action,
+            "matched": total,
+            "changed": changed,
+            "tags": await list_subject_tags(kind, allowed_codes=owned_codes),
+        }
+    )
 
 
 async def _subject_tags_for_page(code: str | None, route_prefix: str | None) -> list[str]:
@@ -11064,14 +11310,7 @@ def _manual_affrancation_decimal(value: Any) -> Decimal | None:
 def _manual_actual_size_decimal(value: Any) -> Decimal | None:
     if value is None or (isinstance(value, str) and not value.strip()):
         return None
-    text = (
-        str(value)
-        .strip()
-        .replace("m²", "")
-        .replace("m2", "")
-        .replace("M²", "")
-        .replace("M2", "")
-    )
+    text = str(value).strip().replace("m²", "").replace("m2", "").replace("M²", "").replace("M2", "")
     text = text.replace(" ", "")
     if "," in text:
         text = text.replace(".", "").replace(",", ".")
@@ -11124,8 +11363,7 @@ def _manual_valuation_source_url(provider: str, value: Any) -> str | None:
         raise ValueError("Il link non può contenere credenziali.")
     allowed_domains = _MANUAL_VALUATION_SOURCE_DOMAINS.get(provider)
     if allowed_domains and not any(
-        hostname.casefold() == domain or hostname.casefold().endswith("." + domain)
-        for domain in allowed_domains
+        hostname.casefold() == domain or hostname.casefold().endswith("." + domain) for domain in allowed_domains
     ):
         raise ValueError("Il link deve appartenere al portale selezionato.")
     return source_url
@@ -11204,7 +11442,9 @@ async def web_property_affrancation_amount(request: Request, asset_key: str, use
     raw_amount = payload.get("amount")
     amount = _manual_affrancation_decimal(raw_amount)
     if raw_amount is not None and str(raw_amount).strip() and amount is None:
-        raise HTTPException(status_code=422, detail="Inserisci un importo di affrancazione valido, pari o superiore a zero.")
+        raise HTTPException(
+            status_code=422, detail="Inserisci un importo di affrancazione valido, pari o superiore a zero."
+        )
 
     from .database import set_user_property_affrancation_amount
 
@@ -11249,12 +11489,14 @@ async def web_property_omi_override(request: Request, asset_key: str, user=Depen
     from .database import set_user_property_omi_override
 
     await set_user_property_omi_override(user_key, asset_key, value_min, value_max, identity=identity)
-    return JSONResponse({
-        "ok": True,
-        "asset_key": asset_key,
-        "value_min": str(value_min) if value_min is not None else None,
-        "value_max": str(value_max) if value_max is not None else None,
-    })
+    return JSONResponse(
+        {
+            "ok": True,
+            "asset_key": asset_key,
+            "value_min": str(value_min) if value_min is not None else None,
+            "value_max": str(value_max) if value_max is not None else None,
+        }
+    )
 
 
 @router.put("/manual-property-valuations/{asset_key}/omi-selection", response_class=JSONResponse)
@@ -11299,9 +11541,9 @@ async def web_property_omi_selection(request: Request, asset_key: str, user=Depe
 
     quotes = await omi_comune_quotes(comune_code)
     if quotes is not None:
-        zone_quotes = [
-            row for row in quotes if str(row.get("zona") or "").strip().upper() == zone_code
-        ] if zone_code else quotes
+        zone_quotes = (
+            [row for row in quotes if str(row.get("zona") or "").strip().upper() == zone_code] if zone_code else quotes
+        )
         if zone_code and not zone_quotes:
             raise HTTPException(status_code=422, detail="La zona OMI non è disponibile per questo comune.")
         if typology_code is not None and not any(
@@ -11313,12 +11555,14 @@ async def web_property_omi_selection(request: Request, asset_key: str, user=Depe
     from .database import set_user_property_omi_selection
 
     await set_user_property_omi_selection(user_key, asset_key, zone_code, typology_code, identity=identity)
-    return JSONResponse({
-        "ok": True,
-        "asset_key": asset_key,
-        "zone_code": zone_code,
-        "typology_code": typology_code,
-    })
+    return JSONResponse(
+        {
+            "ok": True,
+            "asset_key": asset_key,
+            "zone_code": zone_code,
+            "typology_code": typology_code,
+        }
+    )
 
 
 @router.put("/manual-property-valuations/{asset_key}/actual-size", response_class=JSONResponse)
@@ -11347,11 +11591,13 @@ async def web_property_actual_size(request: Request, asset_key: str, user=Depend
     from .database import set_user_property_actual_size
 
     await set_user_property_actual_size(user_key, asset_key, actual_size_sqm, identity=identity)
-    return JSONResponse({
-        "ok": True,
-        "asset_key": asset_key,
-        "actual_size_sqm": str(actual_size_sqm) if actual_size_sqm is not None else None,
-    })
+    return JSONResponse(
+        {
+            "ok": True,
+            "asset_key": asset_key,
+            "actual_size_sqm": str(actual_size_sqm) if actual_size_sqm is not None else None,
+        }
+    )
 
 
 @router.put("/manual-property-valuations/{asset_key}/preference", response_class=JSONResponse)
@@ -11397,12 +11643,14 @@ async def web_document_geojson(doc_id: int, request: Request, user=Depends(_requ
     if result is None or result.get("geojson") is None:
         raise HTTPException(status_code=422, detail="Not a planimetria GeoJSON document")
 
-    return JSONResponse({
-        "geojson": result["geojson"],
-        "epsg": result["epsg"],
-        "proj4": result["proj4"],
-        "crs_text": result["crs_text"],
-    })
+    return JSONResponse(
+        {
+            "geojson": result["geojson"],
+            "epsg": result["epsg"],
+            "proj4": result["proj4"],
+            "crs_text": result["crs_text"],
+        }
+    )
 
 
 @router.get("/documents/{doc_id}/parcel-map.json", response_class=JSONResponse)
@@ -11496,11 +11744,14 @@ def _omi_zone_features_for_properties(
         sigla = province_code(raw_province)
         province = province_name(sigla) if sigla else raw_province
         key = ((province or raw_province).casefold(), cadastral_code)
-        municipalities.setdefault(key, {
-            "province": province or raw_province,
-            "municipality": str(properties.get("municipality") or "").strip(),
-            "municipality_code": cadastral_code,
-        })
+        municipalities.setdefault(
+            key,
+            {
+                "province": province or raw_province,
+                "municipality": str(properties.get("municipality") or "").strip(),
+                "municipality_code": cadastral_code,
+            },
+        )
         return key
 
     for properties in (*parcel_markers, *unmapped_parcels):
@@ -11528,14 +11779,19 @@ def _omi_zone_features_for_properties(
 
     # parcels without a geometry: a point (geocoded marker, else the centre of their sheet) decides their zone
     with_geometry = {
-        tuple(str((f.get("properties") or {}).get(k) or "").strip().upper()
-              for k in ("municipality_code", "section", "sheet", "parcel"))
-        for f in parcel_features if isinstance(f, dict)
+        tuple(
+            str((f.get("properties") or {}).get(k) or "").strip().upper()
+            for k in ("municipality_code", "section", "sheet", "parcel")
+        )
+        for f in parcel_features
+        if isinstance(f, dict)
     }
     points_by_municipality: dict[tuple[str, str], list[tuple[float, float]]] = {}
 
     def parcel_identity(item: dict[str, Any]) -> tuple[str, ...]:
-        return tuple(str(item.get(k) or "").strip().upper() for k in ("municipality_code", "section", "sheet", "parcel"))
+        return tuple(
+            str(item.get(k) or "").strip().upper() for k in ("municipality_code", "section", "sheet", "parcel")
+        )
 
     sheet_centres: dict[tuple[str, str, str], tuple[float, float]] = {}
     try:
@@ -11544,9 +11800,12 @@ def _omi_zone_features_for_properties(
         for sheet in sheet_features or []:
             sheet_properties = (sheet or {}).get("properties") or {}
             centre = _shape(sheet["geometry"]).centroid
-            sheet_centres[tuple(
-                str(sheet_properties.get(k) or "").strip().upper() for k in ("municipality_code", "section", "sheet")
-            )] = (centre.x, centre.y)
+            sheet_centres[
+                tuple(
+                    str(sheet_properties.get(k) or "").strip().upper()
+                    for k in ("municipality_code", "section", "sheet")
+                )
+            ] = (centre.x, centre.y)
     except Exception:  # noqa: BLE001 - sheet centres are an optional refinement
         sheet_centres = {}
     for item in (*parcel_markers, *unmapped_parcels):
@@ -11558,9 +11817,9 @@ def _omi_zone_features_for_properties(
         try:
             point = (float(item["longitude"]), float(item["latitude"]))
         except (KeyError, TypeError, ValueError):
-            point = sheet_centres.get(tuple(
-                str(item.get(k) or "").strip().upper() for k in ("municipality_code", "section", "sheet")
-            ))
+            point = sheet_centres.get(
+                tuple(str(item.get(k) or "").strip().upper() for k in ("municipality_code", "section", "sheet"))
+            )
         if point:
             points_by_municipality.setdefault(key, []).append(point)
 
@@ -11799,7 +12058,8 @@ async def _parcel_map_payload(lookup: dict[str, Any]) -> dict[str, Any]:
             lookup.get("unmapped_parcel_items") or [],
             sheet_features,
         )
-        if lookup.get("listed_only") else []
+        if lookup.get("listed_only")
+        else []
     )
     return {
         "parcel_markers": parcel_markers,
@@ -12085,9 +12345,7 @@ async def _backfill_document_metadata(
                 document.view_subtype = clean(parsed.get("visura_subtype"))
             if parsed.get("situazione_al"):
                 document.reference_date = parse_it_date(parsed.get("situazione_al"))
-            document.requested_at = (
-                parse_it_datetime(parsed.get("requested_at")) or document.requested_at
-            )
+            document.requested_at = parse_it_datetime(parsed.get("requested_at")) or document.requested_at
             session.add(document)
             if xml_content:
                 # Another rescan/import can archive this document after the
@@ -12100,9 +12358,7 @@ async def _backfill_document_metadata(
                 )
             await session.flush()
             if is_elenco_immobili:
-                await _persist_elenco_immobili_extraction(
-                    session, doc_id, parsed, str(actual)
-                )
+                await _persist_elenco_immobili_extraction(session, doc_id, parsed, str(actual))
             await _persist_flattened_xml(session, doc_id, xml_content)
             await session.commit()
         backfilled += 1
@@ -12157,13 +12413,15 @@ async def _rescan_documents_dir(progress_callback=None) -> int | None:
     base = _files_base()
     if not base.exists():
         if progress_callback:
-            progress_callback({
-                "phase": "unavailable",
-                "current": None,
-                "total": None,
-                "percent": None,
-                "description": "La cartella documenti non è disponibile.",
-            })
+            progress_callback(
+                {
+                    "phase": "unavailable",
+                    "current": None,
+                    "total": None,
+                    "percent": None,
+                    "description": "La cartella documenti non è disponibile.",
+                }
+            )
         return None
 
     indexed_paths = set((await get_indexed_file_paths()).keys())
@@ -12391,9 +12649,7 @@ async def web_documents_import(request: Request, force: bool = False, user=Depen
 
     audit = {"actor": _actor(user), "params": {"force": force}, "client_ip": _client_ip(request)}
     if _documents_import_lock.locked():
-        await record_activity(
-            "documents.import", status="rejected", error="importazione gia' in corso", **audit
-        )
+        await record_activity("documents.import", status="rejected", error="importazione gia' in corso", **audit)
         return JSONResponse({"error": "Un'importazione e' gia' in corso"}, status_code=409)
     started = datetime.now(timezone.utc)
     async with _documents_import_lock:
@@ -12403,14 +12659,10 @@ async def web_documents_import(request: Request, force: bool = False, user=Depen
         except Exception as exc:  # noqa: BLE001
             logger.exception("Import documenti non riuscito")
             message = str(exc) or exc.__class__.__name__
-            await record_activity(
-                "documents.import", status="error", error=message, started_at=started, **audit
-            )
+            await record_activity("documents.import", status="error", error=message, started_at=started, **audit)
             return JSONResponse({"error": message}, status_code=500)
     logger.info("Import documenti: %s file indicizzati, XML %s (force=%s)", indexed, xml, force)
-    await record_activity(
-        "documents.import", result={"indexed": indexed, "xml": xml}, started_at=started, **audit
-    )
+    await record_activity("documents.import", result={"indexed": indexed, "xml": xml}, started_at=started, **audit)
     return JSONResponse({"indexed": indexed, "xml": xml, "force": force})
 
 
@@ -12418,9 +12670,7 @@ async def web_documents_import(request: Request, force: bool = False, user=Depen
 async def web_document_purchased(request: Request, user=Depends(_require_auth)):
     """Where Stripe Checkout returns after a payment (the webhook grants the access)."""
     template, _heading, icon, _public = "info_purchase_done.html", "", "fa-circle-check", False
-    return _get_theme(request).render(
-        template, request, user=user, page_heading="Pagamento ricevuto", page_icon=icon
-    )
+    return _get_theme(request).render(template, request, user=user, page_heading="Pagamento ricevuto", page_icon=icon)
 
 
 @router.get("/buy/{token}", response_class=HTMLResponse)
@@ -12733,7 +12983,10 @@ async def web_admin_wallet_gift_undo(request: Request, redemption_id: int, user=
 
     outcome = await purchases_billing.reverse_gift_coupon_redemption(redemption_id, _actor(user))
     _purchase_audit(request, redemption_id=redemption_id, outcome=outcome)
-    return _wallet_admin_redirect(status="gift_undone" if outcome in {"reversed", "already_reversed"} else "", error="gift_" + outcome if outcome not in {"reversed", "already_reversed"} else "")
+    return _wallet_admin_redirect(
+        status="gift_undone" if outcome in {"reversed", "already_reversed"} else "",
+        error="gift_" + outcome if outcome not in {"reversed", "already_reversed"} else "",
+    )
 
 
 @router.post("/wallet/gift-coupons/redeem")
@@ -12835,9 +13088,7 @@ async def web_documents(
                 candidate = _files_base() / doc["filename"]
                 if candidate.is_file():
                     elenco_path = candidate
-            extraction = await get_document_structured_extraction(
-                int(doc["id"]), schema_name="sister.elenco_immobili"
-            )
+            extraction = await get_document_structured_extraction(int(doc["id"]), schema_name="sister.elenco_immobili")
             parsed = (extraction or {}).get("extraction", {}).get("structured_data")
             if not isinstance(parsed, dict) or not parsed.get("records"):
                 parsed = None
@@ -12938,11 +13189,7 @@ async def web_documents(
                 siblings = [
                     sibling
                     for sibling in siblings
-                    if (
-                        int(doc["id"])
-                        if sibling.resolve() == source.resolve()
-                        else id_by_path.get(sibling.resolve())
-                    )
+                    if (int(doc["id"]) if sibling.resolve() == source.resolve() else id_by_path.get(sibling.resolve()))
                     in visible_document_ids
                 ]
 
@@ -12953,9 +13200,7 @@ async def web_documents(
                     "filename": path.name,
                     "id": file_id,
                     "parsed": parsed,
-                    "file_url": (
-                        f"/documents/{file_id}/view" if file_id else None
-                    ),
+                    "file_url": (f"/documents/{file_id}/view" if file_id else None),
                     "download_url": f"/documents/{file_id}/download" if file_id else None,
                 }
 
@@ -13008,13 +13253,7 @@ async def web_documents(
 
             raise HTTPException(status_code=404, detail="Not found")
 
-    active_view = (
-        "files"
-        if path or view == "files"
-        else "location"
-        if view in ("map", "tree")
-        else "categories"
-    )
+    active_view = "files" if path or view == "files" else "location" if view in ("map", "tree") else "categories"
     favorite_user = _favorite_user_key(user)
     favorites_only = bool(favorites and favorite_user)
     include_full_inspections = (
@@ -13062,15 +13301,10 @@ async def web_documents(
         inspection_documents = [
             document
             for document in logical
-            if (document.get("document_type") or "").casefold()
-            in {"ispezione_ipotecaria", "visura_ipotecaria"}
+            if (document.get("document_type") or "").casefold() in {"ispezione_ipotecaria", "visura_ipotecaria"}
         ]
     if logical is not None and document_type_filter:
-        logical = [
-            document
-            for document in logical
-            if _document_matches_type_filter(document, document_type_filter)
-        ]
+        logical = [document for document in logical if _document_matches_type_filter(document, document_type_filter)]
         raw_document_file_count = sum(document.get("n_files") or 1 for document in logical)
     if logical is not None and search_terms:
         logical = [document for document in logical if _logical_document_matches(document, search_terms)]
@@ -13141,9 +13375,7 @@ async def web_documents(
     page_logical_by_id = {
         int(document["id"]): document for document in page_documents if document.get("id") is not None
     }
-    property_file_ids_to_resolve = (
-        {int(file_id) for file_id in owner_codes_by_file_id} if page_subject_codes else set()
-    )
+    property_file_ids_to_resolve = {int(file_id) for file_id in owner_codes_by_file_id} if page_subject_codes else set()
     subject_codes_to_resolve: set[str] = set()
 
     for file_id, fiscal_codes in owner_codes_by_file_id.items():
@@ -13183,9 +13415,7 @@ async def web_documents(
 
     property_doc_by_file_id: dict[int, dict[str, Any]] = {}
     if property_file_ids_to_resolve:
-        related_property_groups = await _load_visible_logical_document_groups(
-            user, property_file_ids_to_resolve
-        )
+        related_property_groups = await _load_visible_logical_document_groups(user, property_file_ids_to_resolve)
         for document in related_property_groups:
             if (document.get("document_type") or "") not in _VISURA_TYPES:
                 continue
@@ -13258,21 +13488,24 @@ async def web_documents(
         page_end=document_page_end,
         document_type_filter=document_type_filter,
         document_categories=[
-            {"key": key, "label": label, "icon": icon}
-            for key, label, icon, _color, _types in _DOCUMENT_CATEGORIES
-        ] + [{"key": "altro", "label": "Altri documenti", "icon": "fa-file"}],
+            {"key": key, "label": label, "icon": icon} for key, label, icon, _color, _types in _DOCUMENT_CATEGORIES
+        ]
+        + [{"key": "altro", "label": "Altri documenti", "icon": "fa-file"}],
         search_query=search_query,
-        document_type_label=({key: label for key, label, *_ in _DOCUMENT_CATEGORIES} | {
-            "altro": "Altri documenti",
-            "ispezione_ipotecaria": "Ispezioni ipotecarie",
-            "nota_trascrizione_iscrizione": "Note di trascrizione e iscrizione",
-            "nota_iscrizione": "Note di iscrizione",
-            "nota_trascrizione": "Note di trascrizione",
-            "nota_annotazione": "Note di annotazione",
-            "elenco_immobili": "Elenco degli Immobili",
-            "elenco_subalterni": "Elenco Subalterni",
-            "fiduciali": "Punti Fiduciali",
-        }).get(document_type_filter, document_type_filter.replace("_", " ").capitalize()),
+        document_type_label=(
+            {key: label for key, label, *_ in _DOCUMENT_CATEGORIES}
+            | {
+                "altro": "Altri documenti",
+                "ispezione_ipotecaria": "Ispezioni ipotecarie",
+                "nota_trascrizione_iscrizione": "Note di trascrizione e iscrizione",
+                "nota_iscrizione": "Note di iscrizione",
+                "nota_trascrizione": "Note di trascrizione",
+                "nota_annotazione": "Note di annotazione",
+                "elenco_immobili": "Elenco degli Immobili",
+                "elenco_subalterni": "Elenco Subalterni",
+                "fiduciali": "Punti Fiduciali",
+            }
+        ).get(document_type_filter, document_type_filter.replace("_", " ").capitalize()),
     )
 
 
@@ -13289,13 +13522,20 @@ _PARCEL_DOCUMENT_KINDS = (
     ),
 )
 _PARCEL_REQUEST_KINDS = (
-    ("ispezioni_catastali", "Ispezioni catastali", "fa-magnifying-glass", {"ispezioni", "ispezioni_cart", "ispezioni_cartacee"}),
+    (
+        "ispezioni_catastali",
+        "Ispezioni catastali",
+        "fa-magnifying-glass",
+        {"ispezioni", "ispezioni_cart", "ispezioni_cartacee"},
+    ),
     ("mappe", "Mappe", "fa-map", {"mappa", "export_mappa", "fiduciali"}),
 )
 
 _HUB_MISSING_LISTED = 150  # parcels named per kind in the "still to request" lists (the counts are always complete)
 _HUB_OWNERSHIP_DOCUMENTS = 150  # visure parsed for the parcels of one hub page (each is a P7M read in memory)
-_HUB_PAGE_PARCELS = 100_000  # every parcel of the query is listed (the comuni are folded accordions); `?page=` still works
+_HUB_PAGE_PARCELS = (
+    100_000  # every parcel of the query is listed (the comuni are folded accordions); `?page=` still works
+)
 
 
 def _hub_document(item: dict) -> dict:
@@ -13303,7 +13543,10 @@ def _hub_document(item: dict) -> dict:
     formats = sorted({f.get("file_format") for f in item.get("files") or [] if f.get("file_format")})
     return {
         "id": item.get("id"),
-        "title": item.get("display_name") or item.get("oggetto") or item.get("filename") or f"Documento {item.get('id')}",
+        "title": item.get("display_name")
+        or item.get("oggetto")
+        or item.get("filename")
+        or f"Documento {item.get('id')}",
         "type": item.get("document_type") or "",
         "date": item.get("situazione_al") or item.get("richiesta_del") or "",
         "subunit": item.get("subalterno") or "",
@@ -13368,8 +13611,18 @@ def _extraction_has_details(extraction: dict | None) -> bool:
     """The readable extraction (``_hub_inspection_extraction``) says something beyond its own id."""
     if not extraction:
         return False
-    keys = ("property_count", "party_count", "title_type", "title_description", "lien_type", "lien_total_euro",
-            "section_a_other_data", "section_d_text", "registration", "presentation")
+    keys = (
+        "property_count",
+        "party_count",
+        "title_type",
+        "title_description",
+        "lien_type",
+        "lien_total_euro",
+        "section_a_other_data",
+        "section_d_text",
+        "registration",
+        "presentation",
+    )
     return any(extraction.get(key) for key in keys)
 
 
@@ -13400,7 +13653,9 @@ def _merge_inspections_into_formalities(hub: dict, formalities: list[dict]) -> i
             if attached:
                 item["archive_documents"] = attached
     if moved:
-        hub["subject_inspections"] = [d for d in hub["subject_inspections"] if d.get("id") is None or int(d["id"]) not in moved]
+        hub["subject_inspections"] = [
+            d for d in hub["subject_inspections"] if d.get("id") is None or int(d["id"]) not in moved
+        ]
     hub["subject_inspections_merged"] = len(moved)
     return len(moved)
 
@@ -13492,8 +13747,12 @@ async def _attach_omi_estimates(properties: list[dict]) -> None:
         low, high, mid = (area * quote_range[k] for k in ("prezzo_min", "prezzo_max", "prezzo_mid"))
         typology = quote_range.get("cod_tipologia")
         current["omi_zone"] = f"Intero comune ({quote_range['zone_count']} zone)"
-        current["omi_typology"] = omi_quotes.OMI_TYPOLOGY_LABELS.get(int(typology), f"Tipologia {typology}") if typology else ""
-        current["omi_price"] = f"€ {quote_range['prezzo_min']:,.0f} – {quote_range['prezzo_max']:,.0f}".replace(",", ".")
+        current["omi_typology"] = (
+            omi_quotes.OMI_TYPOLOGY_LABELS.get(int(typology), f"Tipologia {typology}") if typology else ""
+        )
+        current["omi_price"] = f"€ {quote_range['prezzo_min']:,.0f} – {quote_range['prezzo_max']:,.0f}".replace(
+            ",", "."
+        )
         current["omi_range"] = _format_value_range(Decimal(round(low)), Decimal(round(high)))
         current["omi_note"] = (
             f"Stima OMI indicativa · fascia dell'intero comune ({quote_range['zone_count']} zone), zona non nota · "
@@ -13632,9 +13891,7 @@ def _subject_cadastral_group_usage(profile: dict | None) -> dict[int, list[str]]
         for ownership in parcel.get("ownership") or []:
             document_id = ownership.get("document_id")
             if document_id is not None:
-                usage.setdefault(int(document_id), set()).add(
-                    "Dati catastali e titolarità dalla visura per immobile"
-                )
+                usage.setdefault(int(document_id), set()).add("Dati catastali e titolarità dalla visura per immobile")
         for document in (parcel.get("documents") or {}).get("ispezioni") or []:
             if document.get("id") is not None and document.get("extraction"):
                 usage.setdefault(int(document["id"]), set()).add(
@@ -13692,9 +13949,7 @@ async def _load_subject_profile_files(
         associations = await find_subject_document_associations(code)
     if allowed_document_ids is not None:
         associations = {
-            document_id: value
-            for document_id, value in associations.items()
-            if document_id in allowed_document_ids
+            document_id: value for document_id, value in associations.items() if document_id in allowed_document_ids
         }
 
     document_ids = set(associations) | {int(document_id) for document_id in seed_document_ids}
@@ -13708,8 +13963,7 @@ async def _load_subject_profile_files(
     visible_rows = {
         int(item["id"]): item
         for item in rows
-        if item.get("id") is not None
-        and (allowed_document_ids is None or int(item["id"]) in allowed_document_ids)
+        if item.get("id") is not None and (allowed_document_ids is None or int(item["id"]) in allowed_document_ids)
     }
     return associations, list(visible_rows.values())
 
@@ -13787,7 +14041,9 @@ async def _subject_document_archive(
     """
     associations = associations if associations is not None else await find_subject_document_associations(code)
     if allowed_document_ids is not None:
-        associations = {document_id: value for document_id, value in associations.items() if document_id in allowed_document_ids}
+        associations = {
+            document_id: value for document_id, value in associations.items() if document_id in allowed_document_ids
+        }
     complete_indexed = [dict(item) for item in indexed_files]
     indexed_ids = {int(item["id"]) for item in complete_indexed if item.get("id") is not None}
     missing_associated_ids = set(associations) - indexed_ids
@@ -13849,7 +14105,9 @@ async def _subject_document_archive(
             document_id = int(collapsed_file["id"])
             physical = physical_by_id.get(document_id) or {}
             file_path = physical.get("file_path")
-            available = bool(file_path and Path(file_path).is_file()) or str(physical.get("filename") or "") in remote_names
+            available = (
+                bool(file_path and Path(file_path).is_file()) or str(physical.get("filename") or "") in remote_names
+            )
             files.append(
                 {
                     **collapsed_file,
@@ -13862,11 +14120,7 @@ async def _subject_document_archive(
 
         document_type = logical.get("document_type") or ""
         group_usage_labels = sorted(
-            {
-                label
-                for document_id in file_ids
-                for label in cadastral_group_usage.get(document_id, [])
-            }
+            {label for document_id in file_ids for label in cadastral_group_usage.get(document_id, [])}
         )
         category = next(
             (key for key, _label, _icon, types in _SUBJECT_ARCHIVE_CATEGORIES if document_type in types),
@@ -13878,7 +14132,10 @@ async def _subject_document_archive(
         documents.append(
             {
                 "id": int(logical["id"]),
-                "title": logical.get("display_name") or logical.get("oggetto") or logical.get("filename") or f"Documento {logical['id']}",
+                "title": logical.get("display_name")
+                or logical.get("oggetto")
+                or logical.get("filename")
+                or f"Documento {logical['id']}",
                 "type": document_type,
                 "date": logical.get("situazione_al") or logical.get("richiesta_del") or logical.get("created_at") or "",
                 "category": category,
@@ -13894,9 +14151,9 @@ async def _subject_document_archive(
         )
 
     documents.sort(key=lambda item: item["id"], reverse=True)
-    category_specs = [
-        (key, label, icon) for key, label, icon, _types in _SUBJECT_ARCHIVE_CATEGORIES
-    ] + [("other", "Altri documenti", "fa-folder-open")]
+    category_specs = [(key, label, icon) for key, label, icon, _types in _SUBJECT_ARCHIVE_CATEGORIES] + [
+        ("other", "Altri documenti", "fa-folder-open")
+    ]
     categories = [
         {
             "key": key,
@@ -13908,9 +14165,7 @@ async def _subject_document_archive(
     ]
     categories = [category for category in categories if category["documents"]]
     file_count = sum(len(document["files"]) for document in documents)
-    available_file_count = sum(
-        1 for document in documents for file in document["files"] if file["available"]
-    )
+    available_file_count = sum(1 for document in documents for file in document["files"] if file["available"])
     return {
         "categories": categories,
         "document_count": len(documents),
@@ -13944,7 +14199,9 @@ def _hub_owner(owner: dict, own_code: str) -> dict:
         "right": owner.get("right") or "",
         "quota": owner.get("quota") or "",
         "period": (owner.get("period") or {}).get("label") or "",
-        "birth": " · ".join(x for x in (owner.get("birth_date"), owner.get("birth_place") or owner.get("registered_office")) if x),
+        "birth": " · ".join(
+            x for x in (owner.get("birth_date"), owner.get("birth_place") or owner.get("registered_office")) if x
+        ),
         "is_subject": bool(own_code) and (owner.get("fiscal_code") or "").upper() == own_code,
     }
 
@@ -13973,7 +14230,9 @@ async def _hub_parcel_ownership(documents: list[dict], own_code: str, budget: li
         if not view:
             continue
         units = view.get("units") or []
-        unit = next((u for u in units if (u.get("identifier") or {}).get("subunit", "") == subunit), units[0] if units else {})
+        unit = next(
+            (u for u in units if (u.get("identifier") or {}).get("subunit", "") == subunit), units[0] if units else {}
+        )
         acts = [
             {
                 "type": (m.get("act") or {}).get("type") or (m.get("act") or {}).get("text") or "",
@@ -13991,31 +14250,24 @@ async def _hub_parcel_ownership(documents: list[dict], own_code: str, budget: li
         consistency_value, consistency_unit = parse_consistency(raw_consistency)
         consistency_sqm = format_amount_it(consistency_value) if consistency_unit == "MQ" else ""
         consistency_rooms = format_amount_it(consistency_value) if consistency_unit == "VANI" else ""
-        consistency_other = (
-            raw_consistency if raw_consistency and consistency_unit not in {"MQ", "VANI"} else ""
-        )
+        consistency_other = raw_consistency if raw_consistency and consistency_unit not in {"MQ", "VANI"} else ""
         if view.get("family") == "fabbricati":
-            cadastral_value = building_cadastral_value(
-                classification.get("income_eur"), classification.get("category")
-            )
+            cadastral_value = building_cadastral_value(classification.get("income_eur"), classification.get("category"))
             financial = {
                 "base_label": "Rendita catastale",
                 "base_value": classification.get("income_eur") or "",
                 "cadastral_value": _format_currency_it(float(cadastral_value.value)) if cadastral_value else "",
-                "formula": (
-                    f"rendita × 1,05 × {cadastral_value.multiplier}"
-                    if cadastral_value else ""
-                ),
+                "formula": (f"rendita × 1,05 × {cadastral_value.multiplier}" if cadastral_value else ""),
                 "other_income": "",
                 "note": (
                     "Valore fiscale ai fini IMU, riferito all'intera unità; non è una stima di mercato e non applica la quota di proprietà."
-                    if cadastral_value else "Valore catastale non calcolabile: rendita o moltiplicatore catastale non disponibile."
+                    if cadastral_value
+                    else "Valore catastale non calcolabile: rendita o moltiplicatore catastale non disponibile."
                 ),
             }
         else:
             land_values = [
-                land_cadastral_value(row.get("dominical_income_eur"))
-                for row in unit.get("classifications") or []
+                land_cadastral_value(row.get("dominical_income_eur")) for row in unit.get("classifications") or []
             ]
             land_values = [value for value in land_values if value is not None]
             taxable_base = sum((value.value for value in land_values), Decimal("0"))
@@ -14027,7 +14279,8 @@ async def _hub_parcel_ownership(documents: list[dict], own_code: str, budget: li
                 "other_income": totals.get("agricultural_eur") or "",
                 "note": (
                     "Valore fiscale ai fini IMU, riferito all'intera particella; non è una stima di mercato e non applica la quota di proprietà. Il moltiplicatore ridotto per CD/IAP non è applicato."
-                    if land_values else "Valore catastale non calcolabile: reddito dominicale non disponibile."
+                    if land_values
+                    else "Valore catastale non calcolabile: reddito dominicale non disponibile."
                 ),
             }
         out.append(
@@ -14049,7 +14302,8 @@ async def _hub_parcel_ownership(documents: list[dict], own_code: str, budget: li
                     "consistency_rooms": consistency_rooms,
                     "consistency_other": consistency_other,
                     "income": classification.get("income_eur") or "",
-                    "area": (unit.get("surface") or {}).get("total") or (f"{totals['area_m2']} m²" if totals.get("area_m2") else ""),
+                    "area": (unit.get("surface") or {}).get("total")
+                    or (f"{totals['area_m2']} m²" if totals.get("area_m2") else ""),
                     "dominical_income": totals.get("dominical_eur") or "",
                     "agricultural_income": totals.get("agricultural_eur") or "",
                 },
@@ -14172,7 +14426,11 @@ async def _subject_query_profile(
         address = next((u.get("address") for u in units if u.get("address")), None)
         parcel["map_address"] = str(address or "").strip()
         parcel["map_query"] = f"{address}, {parcel['municipality']}" if address else ""
-        ids = {i for i in document_ids.get(parcel["key"], set()) if (indexed_by_id.get(i) or {}).get("document_type") != "visura_soggetto"}
+        ids = {
+            i
+            for i in document_ids.get(parcel["key"], set())
+            if (indexed_by_id.get(i) or {}).get("document_type") != "visura_soggetto"
+        }
         docs = _hub_documents(ids, indexed_by_id)
         # a building's parcel holds the visure of every subalterno, most of them other owners': keep this subject's own
         own_subunits = {str(u.get("subunit") or "").strip() for u in units if u.get("subunit")}
@@ -14230,12 +14488,16 @@ async def _subject_query_profile(
 
     ordered = sorted(
         parcels.values(),
-        key=lambda x: (not x["is_building"], x["province"], x["municipality"], x["sheet"].zfill(5), x["parcel"].zfill(6)),
+        key=lambda x: (
+            not x["is_building"],
+            x["province"],
+            x["municipality"],
+            x["sheet"].zfill(5),
+            x["parcel"].zfill(6),
+        ),
     )
     ownership_budget = [
-        sum(len(parcel["units"]) for parcel in parcels.values())
-        if exhaustive_ownership
-        else _HUB_OWNERSHIP_DOCUMENTS
+        sum(len(parcel["units"]) for parcel in parcels.values()) if exhaustive_ownership else _HUB_OWNERSHIP_DOCUMENTS
     ]
     municipality_totals: dict[tuple, int] = {}
     for parcel in ordered:
@@ -14271,10 +14533,7 @@ async def _subject_query_profile(
     tree = build_tree(page_parcels)
     # the parcels something is archived for (documents or full ownership): the enrichment section of the subject page
     documented_tree = build_tree(
-        [
-            p for p in page_parcels
-            if p.get("ownership") or any(p["documents"].values()) or any(p["requests"].values())
-        ]
+        [p for p in page_parcels if p.get("ownership") or any(p["documents"].values()) or any(p["requests"].values())]
     )
     parcel_anchor_index: dict[tuple[str, str, str, str, str], str] = {}
     parcel_ownership_anchor_index: dict[tuple[str, str, str, str, str], str] = {}
@@ -14332,11 +14591,15 @@ async def _subject_query_profile(
             room = _HUB_MISSING_LISTED - shown
             if room <= 0:
                 break
-            groups.append({"province": province, "municipality": municipality, "parcels": refs[:room], "total": len(refs)})
+            groups.append(
+                {"province": province, "municipality": municipality, "parcels": refs[:room], "total": len(refs)}
+            )
             shown += min(len(refs), room)
         return {"kind": kind, "label": label, "icon": icon, "count": count, "groups": groups, "more": count - shown}
 
-    missing = [missing_for(kind, label, icon) for kind, label, icon, _types in _PARCEL_DOCUMENT_KINDS if kind != "mappe"]
+    missing = [
+        missing_for(kind, label, icon) for kind, label, icon, _types in _PARCEL_DOCUMENT_KINDS if kind != "mappe"
+    ]
     return {
         "code": code,
         "name": name,
@@ -14379,14 +14642,14 @@ async def _subject_query_profile(
             "last": first + len(page_parcels),
             "query": "",  # extra query string the route keeps on the page links
         },
-        "other_queries": [
-            {**q, "responded_at_display": _format_timestamp(q["responded_at"])} for q in queries[1:]
-        ],
+        "other_queries": [{**q, "responded_at_display": _format_timestamp(q["responded_at"])} for q in queries[1:]],
     }
 
 
 _HUB_MAP_CACHE: dict[str, tuple[float, dict | None]] = {}
-_HUB_MAP_DATA: dict[str, dict] = {}  # map_key -> {"chunks": [map JSON per chunk], "done", "total"}, served by .../parcel-map.json?k=&after=
+_HUB_MAP_DATA: dict[str, dict] = (
+    {}
+)  # map_key -> {"chunks": [map JSON per chunk], "done", "total"}, served by .../parcel-map.json?k=&after=
 _HUB_MAP_CACHE_SECONDS = 3600
 # A lookup that lost chunks is not trusted for an hour, but rebuilding it on every page view (3-4 s of timeouts against the same
 # geometry source) helped nobody: reuse what it found for a few minutes, then try again.
@@ -14436,7 +14699,9 @@ def _elenco_number_unit(text: Any) -> tuple[str, str]:
     return (match.group(1), match.group(2)) if match else (str(text or "").strip(), "")
 
 
-def _elenco_row_key(province_code: str, municipality_code: str, section: Any, sheet: Any, parcel: Any, subunit: Any) -> tuple:
+def _elenco_row_key(
+    province_code: str, municipality_code: str, section: Any, sheet: Any, parcel: Any, subunit: Any
+) -> tuple:
     def plain(value: Any) -> str:
         text = str(value or "").strip().upper()
         return text.lstrip("0") or ("0" if text else "")
@@ -14455,16 +14720,25 @@ def _elenco_groups(profile: dict, known_keys: set[tuple] = frozenset()) -> list[
         for unit in parcel["units"]:
             is_building = unit.get("property_type") == "building"
             row_key = _elenco_row_key(
-                parcel.get("province_code"), parcel.get("municipality_code"), parcel.get("section"),
-                parcel.get("sheet"), parcel.get("parcel"), unit.get("subunit") if is_building else "",
+                parcel.get("province_code"),
+                parcel.get("municipality_code"),
+                parcel.get("section"),
+                parcel.get("sheet"),
+                parcel.get("parcel"),
+                unit.get("subunit") if is_building else "",
             )
             if row_key in known_keys:
                 continue
             # like a visura, a group is the units of one comune and type that the subject holds in the same way
             right, share = str(unit.get("right_type") or "").strip(), str(unit.get("ownership_share") or "").strip()
             group = groups.setdefault(
-                (parcel.get("province_code") or parcel["province"], parcel.get("municipality_code") or parcel["municipality"],
-                 "F" if is_building else "T", right, share),
+                (
+                    parcel.get("province_code") or parcel["province"],
+                    parcel.get("municipality_code") or parcel["municipality"],
+                    "F" if is_building else "T",
+                    right,
+                    share,
+                ),
                 {
                     "TipoCatasto": "F" if is_building else "T",
                     "CodiceComune": parcel.get("municipality_code") or "",
@@ -14474,11 +14748,21 @@ def _elenco_groups(profile: dict, known_keys: set[tuple] = frozenset()) -> list[
                     "TitolaritaElenco": {"Diritto": right, "Quota": share},
                     # what the search says about the subject's right, shaped like the visura's ownership heading so the
                     # valuation (valore catastale, quota, diritto) runs on it; the page shows it as a line, not a timeline
-                    "IntestazioneGruppo": {"MutazioneSoggettiva": [{"Intestazione": {"Intestato": [{
-                        "CF": profile.get("code") or "",
-                        "Nominativo": profile.get("name") or "",
-                        "DirittiReali": {"Descrizione": right, "Quota": share},
-                    }]}}]},
+                    "IntestazioneGruppo": {
+                        "MutazioneSoggettiva": [
+                            {
+                                "Intestazione": {
+                                    "Intestato": [
+                                        {
+                                            "CF": profile.get("code") or "",
+                                            "Nominativo": profile.get("name") or "",
+                                            "DirittiReali": {"Descrizione": right, "Quota": share},
+                                        }
+                                    ]
+                                }
+                            }
+                        ]
+                    },
                     "ImmobileFabbricatiS": [],
                     "ImmobileTerreniS": [],
                 },
@@ -14506,22 +14790,30 @@ def _elenco_groups(profile: dict, known_keys: set[tuple] = frozenset()) -> list[
                 }
                 if value:
                     classamento["Consistenza"] = {"Valore": value, "Unita": unit_name}
-                group["ImmobileFabbricatiS"].append({
-                    "DatiIdentificativi": {"IdentificativoDefinitivo": identifier},
-                    "DatiIndirizzo": {"IndirizzoImm": unit.get("address") or ""},
-                    "DatiClassamentoF": classamento,
-                })
+                group["ImmobileFabbricatiS"].append(
+                    {
+                        "DatiIdentificativi": {"IdentificativoDefinitivo": identifier},
+                        "DatiIndirizzo": {"IndirizzoImm": unit.get("address") or ""},
+                        "DatiClassamentoF": classamento,
+                    }
+                )
             else:
-                group["ImmobileTerreniS"].append({
-                    "DatiIdentificativi": {"IdentificativoDefinitivo": identifier},
-                    "DatiClassamentoT": {"ClassamentoT": {
-                        "Qualita": unit.get("quality") or "",
-                        "Classe": unit.get("cadastral_class") or "",
-                        "SuperficieMQ": unit.get("area") or unit.get("consistency") or "",  # a land's consistency is its m²
-                        "RedditoDominicaleEuro": unit.get("dominical_income") or "",
-                        "RedditoAgrarioEuro": unit.get("agricultural_income") or "",
-                    }},
-                })
+                group["ImmobileTerreniS"].append(
+                    {
+                        "DatiIdentificativi": {"IdentificativoDefinitivo": identifier},
+                        "DatiClassamentoT": {
+                            "ClassamentoT": {
+                                "Qualita": unit.get("quality") or "",
+                                "Classe": unit.get("cadastral_class") or "",
+                                "SuperficieMQ": unit.get("area")
+                                or unit.get("consistency")
+                                or "",  # a land's consistency is its m²
+                                "RedditoDominicaleEuro": unit.get("dominical_income") or "",
+                                "RedditoAgrarioEuro": unit.get("agricultural_income") or "",
+                            }
+                        },
+                    }
+                )
     return list(groups.values())
 
 
@@ -14546,12 +14838,16 @@ def _subject_tree_with_elenco(xml_parsed: dict, profile: dict | None) -> dict:
         for row_name in ("ImmobileFabbricatiS", "ImmobileTerreniS"):
             for row in items(group.get(row_name)):
                 for identifier in items((row.get("DatiIdentificativi") or {}).get("IdentificativoDefinitivo")):
-                    known.add(_elenco_row_key(
-                        identifier.get("Provincia"), identifier.get("CodiceComune") or group.get("CodiceComune"),
-                        identifier.get("SezUrbana"), identifier.get("Foglio"),
-                        identifier.get("ParticellaNum") or identifier.get("Particella"),
-                        identifier.get("Subalterno") if row_name == "ImmobileFabbricatiS" else "",
-                    ))
+                    known.add(
+                        _elenco_row_key(
+                            identifier.get("Provincia"),
+                            identifier.get("CodiceComune") or group.get("CodiceComune"),
+                            identifier.get("SezUrbana"),
+                            identifier.get("Foglio"),
+                            identifier.get("ParticellaNum") or identifier.get("Particella"),
+                            identifier.get("Subalterno") if row_name == "ImmobileFabbricatiS" else "",
+                        )
+                    )
     extra = _elenco_groups(profile, known)
     if not extra:
         return xml_parsed
@@ -14562,12 +14858,15 @@ def _subject_tree_with_elenco(xml_parsed: dict, profile: dict | None) -> dict:
 _CADASTRAL_VIEWS_TIMEOUT_MS = int(os.getenv("SISTER_CADASTRAL_VIEWS_TIMEOUT_MS", "40000"))
 _HUB_MAP_CHUNK_PARCELS = 120  # parcels per spatial lookup: one query over thousands of parcels outlives its timeout
 _HUB_MAP_FIRST_CHUNK_PARCELS = 40  # a small first chunk: something is on the map within seconds
-_HUB_MAP_WAIT_SECONDS = float(os.getenv("SISTER_HUB_MAP_WAIT_SECONDS", "2"))  # how long the page waits for the whole map before it shows up as "loading" (and fills in)
+_HUB_MAP_WAIT_SECONDS = float(
+    os.getenv("SISTER_HUB_MAP_WAIT_SECONDS", "2")
+)  # how long the page waits for the whole map before it shows up as "loading" (and fills in)
 _HUB_MAP_TASKS: dict[str, asyncio.Task] = {}
 
 
 def _hub_map_sheet_key(item: dict[str, Any]) -> tuple[str, str, str, str]:
     """Stable cadastral sheet identity shared by parcel chunks and rendered features."""
+
     def part(value: Any) -> str:
         text = str(value or "").strip().upper()
         return str(int(text)) if text.isdigit() else text
@@ -14661,7 +14960,9 @@ def _hub_map_geocode_queries(address: Any, municipality: Any, province: Any) -> 
     )
     place_words = [w for w in re.split(r"\s+", re.sub(r"\s*\d.*$", "", bare.partition(",")[0]).strip()) if w]
     variants = []
-    if len(queries) == 1 and len(place_words) >= 2:  # a one-word road name ("Via Roma") would only match unrelated places
+    if (
+        len(queries) == 1 and len(place_words) >= 2
+    ):  # a one-word road name ("Via Roma") would only match unrelated places
         variants = [bare, _hub_map_geocode_query(place_words[-1], municipality, province)]
     for variant in variants:
         # drop a house number left in the street part ("Funivie Giomein 42"): it cannot match a place name
@@ -14673,6 +14974,7 @@ def _hub_map_geocode_queries(address: Any, municipality: Any, province: Any) -> 
 
 def _hub_map_parcel_key(item: dict[str, Any]) -> tuple[str, str, str, str, str]:
     """Stable parcel identity shared by hub profile addresses and map lookup results."""
+
     def part(value: Any) -> str:
         text = str(value or "").strip().upper()
         return str(int(text)) if text.isdigit() else text
@@ -14683,7 +14985,9 @@ def _hub_map_parcel_key(item: dict[str, Any]) -> tuple[str, str, str, str, str]:
 
 def _hub_map_chunks(parcels: list[dict]) -> list[list[dict]]:
     """Parcels in lookup order (comune, then sheet) cut into chunks: a small one first, then the usual size."""
-    ordered = sorted(parcels, key=lambda p: (p.get("province_code") or "", p.get("municipality_code") or "", p["sheet"]))
+    ordered = sorted(
+        parcels, key=lambda p: (p.get("province_code") or "", p.get("municipality_code") or "", p["sheet"])
+    )
     chunks = [ordered[:_HUB_MAP_FIRST_CHUNK_PARCELS]]
     rest = ordered[_HUB_MAP_FIRST_CHUNK_PARCELS:]
     chunks.extend(rest[start : start + _HUB_MAP_CHUNK_PARCELS] for start in range(0, len(rest), _HUB_MAP_CHUNK_PARCELS))
@@ -14715,7 +15019,8 @@ async def _hub_map_lookup(parcels: list[dict], on_chunk=None) -> dict | None:
         # The cadastral source can return a municipality-level fallback outline alongside a requested sheet.
         # Keep only sheet identities that are actually referenced by this subject's owned parcels.
         lookup["sheet_features"] = [
-            feature for feature in lookup.get("sheet_features") or []
+            feature
+            for feature in lookup.get("sheet_features") or []
             if _hub_map_sheet_key(feature.get("properties") or {}) in chunk_sheet_keys
         ]
         if on_chunk is not None:
@@ -14727,8 +15032,7 @@ async def _hub_map_lookup(parcels: list[dict], on_chunk=None) -> dict | None:
         for key in ("parcel_markers", "parcel_features", "unmapped_parcels", "unmapped_parcel_items"):
             merged[key] = (merged.get(key) or []) + (lookup.get(key) or [])
         known_sheets = {
-            _hub_map_sheet_key(feature.get("properties") or {})
-            for feature in merged.get("sheet_features") or []
+            _hub_map_sheet_key(feature.get("properties") or {}) for feature in merged.get("sheet_features") or []
         }
         fresh_sheets = []
         for feature in lookup.get("sheet_features") or []:
@@ -14774,9 +15078,11 @@ def _hub_map_key(parcels: list[dict]) -> str:
                     p["sheet"],
                     p["parcel"],
                     p["is_building"],
-                    ";".join(_hub_map_geocode_queries(
-                        p.get("map_address"), p.get("municipality"), p.get("province_code") or p.get("province")
-                    )),
+                    ";".join(
+                        _hub_map_geocode_queries(
+                            p.get("map_address"), p.get("municipality"), p.get("province_code") or p.get("province")
+                        )
+                    ),
                 )
                 for p in parcels
             )
@@ -14923,8 +15229,12 @@ async def _build_hub_map(map_key: str, parcels: list[dict], data_url: str) -> di
     return parcel_map
 
 
-_HUB_MAP_CHUNKS_PER_ANSWER = 60  # one draw step of the browser per answer; markers placed by address come one chunk each
-_HUB_MAP_SETTLE_SECONDS = float(os.getenv("SISTER_HUB_MAP_SETTLE_SECONDS", "4"))  # wait for more chunks before answering
+_HUB_MAP_CHUNKS_PER_ANSWER = (
+    60  # one draw step of the browser per answer; markers placed by address come one chunk each
+)
+_HUB_MAP_SETTLE_SECONDS = float(
+    os.getenv("SISTER_HUB_MAP_SETTLE_SECONDS", "4")
+)  # wait for more chunks before answering
 
 
 async def _hub_map_increment(map_key: str, after: int, wait_seconds: float = 25.0) -> dict:
@@ -14977,10 +15287,18 @@ async def _hub_parcel_map(profile: dict) -> dict | None:
     map_key = _hub_map_key(parcels)
     data_url = _hub_data_url(profile, map_key)
     cached = _HUB_MAP_CACHE.get(map_key)
-    if cached and time.monotonic() - cached[0] < _HUB_MAP_CACHE_SECONDS and (_HUB_MAP_DATA.get(map_key) or {}).get("done"):
+    if (
+        cached
+        and time.monotonic() - cached[0] < _HUB_MAP_CACHE_SECONDS
+        and (_HUB_MAP_DATA.get(map_key) or {}).get("done")
+    ):
         return cached[1]
     partial = _HUB_MAP_PARTIAL.get(map_key)
-    if partial and time.monotonic() - partial[0] < _HUB_MAP_PARTIAL_SECONDS and (_HUB_MAP_DATA.get(map_key) or {}).get("done"):
+    if (
+        partial
+        and time.monotonic() - partial[0] < _HUB_MAP_PARTIAL_SECONDS
+        and (_HUB_MAP_DATA.get(map_key) or {}).get("done")
+    ):
         return partial[1]
     task = _HUB_MAP_TASKS.get(map_key)
     if task is None:
@@ -14989,16 +15307,18 @@ async def _hub_parcel_map(profile: dict) -> dict | None:
     if done:
         return task.result()
     first = parcels[0]
-    return await _land_registry_map_context({
-        "sheet": first["sheet"],
-        "parcel": first["parcel"],
-        "municipality": first["municipality"],
-        "province": first["province"],
-        "data_url": data_url,
-        "listed_only": True,
-        "parcel_count": len(parcels),
-        "lookup_message": f"Posizionamento di {len(parcels)} particelle in corso…",
-    })
+    return await _land_registry_map_context(
+        {
+            "sheet": first["sheet"],
+            "parcel": first["parcel"],
+            "municipality": first["municipality"],
+            "province": first["province"],
+            "data_url": data_url,
+            "listed_only": True,
+            "parcel_count": len(parcels),
+            "lookup_message": f"Posizionamento di {len(parcels)} particelle in corso…",
+        }
+    )
 
 
 _VALUATION_MAP_WAIT_SECONDS = float(os.getenv("SISTER_VALUATION_MAP_WAIT_SECONDS", "10"))
@@ -15052,8 +15372,14 @@ async def _hub_parcel_map_for_pdf(profile: dict) -> dict | None:
 def _lookup_from_hub_chunks(map_key: str, base: dict | None) -> dict | None:
     """A map lookup made of the chunks ``_build_hub_map`` has published so far, or None when there are none."""
     chunks = (_HUB_MAP_DATA.get(map_key) or {}).get("chunks") or []
-    merged = {**(base or {}), "parcel_markers": [], "parcel_features": [], "sheet_features": [],
-              "unmapped_parcel_items": [], "omi_zone_features": {"type": "FeatureCollection", "features": []}}
+    merged = {
+        **(base or {}),
+        "parcel_markers": [],
+        "parcel_features": [],
+        "sheet_features": [],
+        "unmapped_parcel_items": [],
+        "omi_zone_features": {"type": "FeatureCollection", "features": []},
+    }
     for chunk in chunks:
         merged["parcel_markers"].extend(chunk.get("parcel_markers") or [])
         merged["parcel_features"].extend((chunk.get("parcel_features") or {}).get("features") or [])
@@ -15089,10 +15415,15 @@ async def _subject_pdf_response(
     except PdfExportError as exc:
         logger.warning("PDF export of subject %s failed: %s", code, exc)
         raise HTTPException(status_code=422, detail=f"PDF export not available: {exc}") from exc
-    stem = f"report_soggetto_{code}" if subject_report is not None else (
-        Path(str(doc.get("filename") or "")).stem or f"elenco_immobili_{code}"
+    stem = (
+        f"report_soggetto_{code}"
+        if subject_report is not None
+        else (Path(str(doc.get("filename") or "")).stem or f"elenco_immobili_{code}")
     )
-    headers = {"Content-Disposition": f'attachment; filename="{pdf_filename(stem, doc.get("id") or 0)}"', "Cache-Control": "no-store"}
+    headers = {
+        "Content-Disposition": f'attachment; filename="{pdf_filename(stem, doc.get("id") or 0)}"',
+        "Cache-Control": "no-store",
+    }
     return Response(content=content, media_type="application/pdf", headers=headers)
 
 
@@ -15222,9 +15553,7 @@ def _attach_subject_parcel_histories(profile: dict, xml_parsed: dict) -> None:
             return [item for item in value if isinstance(item, dict)]
         return []
 
-    subject_keys = (
-        "VisuraSoggettoAttuale", "VisuraSoggettoStorica", "VisuraSoggettoSintetica", "VisuraSoggetto"
-    )
+    subject_keys = ("VisuraSoggettoAttuale", "VisuraSoggettoStorica", "VisuraSoggettoSintetica", "VisuraSoggetto")
     subject = next((xml_parsed.get(key) for key in subject_keys if isinstance(xml_parsed.get(key), dict)), {})
     seen: dict[str, set[str]] = {}
     for group in as_items(subject.get("GruppoUnitaImmobiliari")):
@@ -15234,17 +15563,19 @@ def _attach_subject_parcel_histories(profile: dict, xml_parsed: dict) -> None:
                 if not history:
                     continue
                 identity_data = as_items(row.get("DatiIdentificativi"))
-                identifiers = as_items(
-                    (identity_data[0] if identity_data else {}).get("IdentificativoDefinitivo")
-                )
+                identifiers = as_items((identity_data[0] if identity_data else {}).get("IdentificativoDefinitivo"))
                 identifier = identifiers[0] if identifiers else {}
                 anchor = _subject_parcel_anchor(
                     profile,
                     identifier.get("Provincia") or group.get("Provincia"),
-                    identifier.get("CodiceComune") or group.get("CodiceComune")
-                    or identifier.get("Comune") or group.get("Descrizione"),
-                    identifier.get("SezUrbana") or identifier.get("Sezione")
-                    or identifier.get("SezCensuaria") or group.get("Sezione"),
+                    identifier.get("CodiceComune")
+                    or group.get("CodiceComune")
+                    or identifier.get("Comune")
+                    or group.get("Descrizione"),
+                    identifier.get("SezUrbana")
+                    or identifier.get("Sezione")
+                    or identifier.get("SezCensuaria")
+                    or group.get("Sezione"),
                     identifier.get("Foglio"),
                     identifier.get("ParticellaNum") or identifier.get("Particella"),
                 )
@@ -15288,9 +15619,7 @@ async def _render_query_only_subject(
         logger.warning("Titolarita' completa non disponibile", exc_info=True)
 
     try:
-        land_registry_map = await (
-            _hub_parcel_map_for_pdf(profile) if as_pdf else _hub_parcel_map(profile)
-        )
+        land_registry_map = await (_hub_parcel_map_for_pdf(profile) if as_pdf else _hub_parcel_map(profile))
         if not as_pdf:
             land_registry_map = await _hub_parcel_map_for_valuation(profile, land_registry_map)
     except Exception as exc:  # noqa: BLE001 - the map and OMI estimate are optional additions to the subject archive
@@ -15299,7 +15628,10 @@ async def _render_query_only_subject(
     try:
         # The saved search has ownership and the hub map has parcel positions; visure may add cadastral surfaces later.
         land_registry_kpis = await _subject_land_registry_calculation(
-            doc["xml_parsed"], land_registry_map, user, scope_type="request",
+            doc["xml_parsed"],
+            land_registry_map,
+            user,
+            scope_type="request",
             scope_id=profile.get("request_id") or profile.get("code"),
         )
     except Exception as exc:  # noqa: BLE001 - the valuation is an addition: the archive must open without it
@@ -15319,9 +15651,7 @@ async def _render_query_only_subject(
         )
     from .cadastral_categories import CATEGORY_DESCRIPTIONS
 
-    prior_ownership_omi = await _prior_ownership_omi_data(
-        profile, subject_formalities or [], profile["code"], user
-    )
+    prior_ownership_omi = await _prior_ownership_omi_data(profile, subject_formalities or [], profile["code"], user)
     prior_map_parcels = _prior_ownership_map_parcels(profile, profile["code"], subject_formalities or [])
     prior_ownership_map_available = bool(prior_map_parcels)
     prior_ownership_map_url = (
@@ -15352,9 +15682,7 @@ async def _render_query_only_subject(
         subject_is_favorite=subject_is_favorite,
         subject_facts=subject_facts,
         subject_parcel_anchor=_subject_parcel_anchor,
-        subject_visura_view=build_subject_visura_view(
-            doc["xml_parsed"], profile, profile.get("code")
-        ),
+        subject_visura_view=build_subject_visura_view(doc["xml_parsed"], profile, profile.get("code")),
         land_registry_kpis=land_registry_kpis,
         subject_page_data_url=f"/subject-page-data/{subject_page_data_key}.json",
         prior_ownership_omi_indexes=prior_ownership_omi["indexes"],
@@ -15387,7 +15715,9 @@ async def _web_subject_profile(
     if not re.fullmatch(code_pattern, normalized_code):
         raise HTTPException(status_code=404, detail="Soggetto non trovato")
     if normalized_code != fiscal_code:
-        query = urlencode({k: v for k, v in (("document", document), ("page", page if page > 1 else None)) if v is not None})
+        query = urlencode(
+            {k: v for k, v in (("document", document), ("page", page if page > 1 else None)) if v is not None}
+        )
         return RedirectResponse(url=f"{route_prefix}/{normalized_code}{'?' + query if query else ''}", status_code=308)
 
     # The subject relation provides a canonical match for imported XML. Filenames
@@ -15421,7 +15751,9 @@ async def _web_subject_profile(
             subject_formalities = await get_subject_mortgage_formalities(
                 normalized_code, include_session_timeline=not as_pdf and _is_admin(user)
             )
-        except Exception as exc:  # noqa: BLE001 - the subject profile should remain available if an optional archive query fails.
+        except (
+            Exception
+        ) as exc:  # noqa: BLE001 - the subject profile should remain available if an optional archive query fails.
             logger.warning("Subject mortgage formalities unavailable: %s", type(exc).__name__)
 
     if can_view_subject_archive:
@@ -15591,9 +15923,7 @@ async def _web_subject_profile(
             subject_facts=subject_facts,
             subject_formalities=subject_formalities,
         )
-    cadastral_group_usage.setdefault(selected_id, []).append(
-        "Gruppi catastali dalla visura per soggetto selezionata"
-    )
+    cadastral_group_usage.setdefault(selected_id, []).append("Gruppi catastali dalla visura per soggetto selezionata")
     for source in subject_asset_documents:
         if source.get("id") is not None:
             cadastral_group_usage.setdefault(int(source["id"]), []).append(
@@ -15643,7 +15973,12 @@ async def web_company_pdf(request: Request, fiscal_code: str, document: int | No
 
 
 async def _share_subject_report(
-    request: Request, fiscal_code: str, document: int | None, user, route_prefix: str, code_pattern: str,
+    request: Request,
+    fiscal_code: str,
+    document: int | None,
+    user,
+    route_prefix: str,
+    code_pattern: str,
 ):
     """Render the subject report, save it to the company Drive and share it with the posted recipient only."""
     from fastapi import HTTPException
@@ -15675,12 +16010,16 @@ async def _share_subject_report(
 
 
 @router.post("/persons/{fiscal_code}/pdf/share")
-async def web_person_pdf_share(request: Request, fiscal_code: str, document: int | None = None, user=Depends(_require_auth)):
+async def web_person_pdf_share(
+    request: Request, fiscal_code: str, document: int | None = None, user=Depends(_require_auth)
+):
     return await _share_subject_report(request, fiscal_code, document, user, "/persons", r"[A-Z0-9]{16}")
 
 
 @router.post("/companies/{fiscal_code}/pdf/share")
-async def web_company_pdf_share(request: Request, fiscal_code: str, document: int | None = None, user=Depends(_require_auth)):
+async def web_company_pdf_share(
+    request: Request, fiscal_code: str, document: int | None = None, user=Depends(_require_auth)
+):
     return await _share_subject_report(request, fiscal_code, document, user, "/companies", r"\d{11}")
 
 
@@ -15793,14 +16132,31 @@ async def _subject_index_json(request: Request, kind: str, user):
 
 
 _SUBJECT_CSV_COLUMNS = (
-    ("fiscal_code", "Codice"), ("name", "Nome"), ("gender", "Sesso"), ("birth_date", "Data di nascita"), ("age", "Età"),
-    ("birth_place", "Luogo di nascita"), ("birth_province", "Provincia di nascita"), ("provinces", "Province immobili"),
-    ("province_count", "N. province"), ("properties", "Immobili"), ("buildings", "Fabbricati"), ("land", "Terreni"),
-    ("full_ownership", "Piena proprietà"), ("rendita", "Rendita €"), ("reddito_dominicale", "Reddito dominicale €"),
-    ("cadastral_value", "Valore catastale €"), ("cadastral_value_share", "Valore pro quota €"),
-    ("unvalued", "Non valutati"), ("unknown_share", "Senza quota"), ("live_burdens", "Formalità attive"),
-    ("visure", "Visure"), ("searches", "Ricerche"),
-    ("searched_at", "Dati del"), ("last_seen", "Aggiornato"), ("tags", "Tag"),
+    ("fiscal_code", "Codice"),
+    ("name", "Nome"),
+    ("gender", "Sesso"),
+    ("birth_date", "Data di nascita"),
+    ("age", "Età"),
+    ("birth_place", "Luogo di nascita"),
+    ("birth_province", "Provincia di nascita"),
+    ("provinces", "Province immobili"),
+    ("province_count", "N. province"),
+    ("properties", "Immobili"),
+    ("buildings", "Fabbricati"),
+    ("land", "Terreni"),
+    ("full_ownership", "Piena proprietà"),
+    ("rendita", "Rendita €"),
+    ("reddito_dominicale", "Reddito dominicale €"),
+    ("cadastral_value", "Valore catastale €"),
+    ("cadastral_value_share", "Valore pro quota €"),
+    ("unvalued", "Non valutati"),
+    ("unknown_share", "Senza quota"),
+    ("live_burdens", "Formalità attive"),
+    ("visure", "Visure"),
+    ("searches", "Ricerche"),
+    ("searched_at", "Dati del"),
+    ("last_seen", "Aggiornato"),
+    ("tags", "Tag"),
 )
 
 
@@ -15810,15 +16166,20 @@ async def _subject_index_csv(request: Request, kind: str, user):
     import io
 
     rows, _total, _size = await _subject_table_query(request, kind, user, paged=False)
-    columns = [(field, label) for field, label in _SUBJECT_CSV_COLUMNS if kind == "person" or field not in
-               ("gender", "birth_date", "age", "birth_place", "birth_province")]
+    columns = [
+        (field, label)
+        for field, label in _SUBJECT_CSV_COLUMNS
+        if kind == "person" or field not in ("gender", "birth_date", "age", "birth_place", "birth_province")
+    ]
     out = io.StringIO()
     writer = csv.writer(out, delimiter=";")
     writer.writerow([label for _field, label in columns])
     for row in rows:
         writer.writerow(
-            [" | ".join(row["tags"]) if field == "tags" else "" if row.get(field) is None else row.get(field)
-             for field, _label in columns]
+            [
+                " | ".join(row["tags"]) if field == "tags" else "" if row.get(field) is None else row.get(field)
+                for field, _label in columns
+            ]
         )
     filename = "persone.csv" if kind == "person" else "societa.csv"
     return Response(
@@ -15850,7 +16211,9 @@ async def web_persons_tags_json(user=Depends(_require_auth)):
     from .database import get_subject_access_codes, list_subject_tags
 
     codes = None if _is_admin(user) else await get_subject_access_codes(_principal_keys(user), "person")
-    return JSONResponse({"tags": await list_subject_tags("person", allowed_codes=codes)}, headers={"Cache-Control": "private, no-store"})
+    return JSONResponse(
+        {"tags": await list_subject_tags("person", allowed_codes=codes)}, headers={"Cache-Control": "private, no-store"}
+    )
 
 
 @router.post("/persons/tags/bulk", response_class=JSONResponse)
@@ -15880,7 +16243,10 @@ async def web_companies_tags_json(user=Depends(_require_auth)):
     from .database import get_subject_access_codes, list_subject_tags
 
     codes = None if _is_admin(user) else await get_subject_access_codes(_principal_keys(user), "company")
-    return JSONResponse({"tags": await list_subject_tags("company", allowed_codes=codes)}, headers={"Cache-Control": "private, no-store"})
+    return JSONResponse(
+        {"tags": await list_subject_tags("company", allowed_codes=codes)},
+        headers={"Cache-Control": "private, no-store"},
+    )
 
 
 @router.post("/companies/tags/bulk", response_class=JSONResponse)
@@ -16235,7 +16601,9 @@ async def web_api_batch(request: Request, user=Depends(_require_auth)):
         return JSONResponse({"detail": "Tipo di query non disponibile"}, status_code=422)
     if paid_user and len(rows) > 100:
         return JSONResponse({"detail": "Un batch può contenere al massimo 100 righe"}, status_code=422)
-    unit_cost, price_path = await _query_product_price(api_path, allow_shared_fallback=True) if paid_user else (None, None)
+    unit_cost, price_path = (
+        await _query_product_price(api_path, allow_shared_fallback=True) if paid_user else (None, None)
+    )
     access_error = await _query_access_error(user)
     if access_error is not None:
         return JSONResponse({"detail": access_error.detail}, status_code=access_error.status_code)
@@ -16245,9 +16613,7 @@ async def web_api_batch(request: Request, user=Depends(_require_auth)):
     if confirmation_error is not None:
         return confirmation_error
 
-    charge, error_response = await _charge_portal_query(
-        request, user, len(rows), uuid4().hex, unit_cost, price_path
-    )
+    charge, error_response = await _charge_portal_query(request, user, len(rows), uuid4().hex, unit_cost, price_path)
     if error_response is not None:
         return error_response
 
@@ -16264,9 +16630,7 @@ async def web_api_batch(request: Request, user=Depends(_require_auth)):
                             f"{base}/api/v1{api_path}", params=row, headers=_internal_api_headers()
                         )
                     else:
-                        resp = await client.post(
-                            f"{base}/api/v1{api_path}", json=row, headers=_internal_api_headers()
-                        )
+                        resp = await client.post(f"{base}/api/v1{api_path}", json=row, headers=_internal_api_headers())
                     data = resp.json()
                     if resp.is_success and user_key:
                         data = _query_poll_tokens(data, user_key)
@@ -16283,7 +16647,11 @@ async def web_api_batch(request: Request, user=Depends(_require_auth)):
                 except Exception as exc:  # noqa: BLE001
                     failed_rows += 1
                     results.append(
-                        {"row": i + 1, "status": "error", "error": "Richiesta non completata" if paid_user else str(exc)}
+                        {
+                            "row": i + 1,
+                            "status": "error",
+                            "error": "Richiesta non completata" if paid_user else str(exc),
+                        }
                     )
     except Exception as exc:  # noqa: BLE001 - client construction/teardown must not consume unsubmitted row charges
         pending = len(rows) - len(results)
@@ -16301,10 +16669,14 @@ async def web_api_batch(request: Request, user=Depends(_require_auth)):
 async def web_api_workflow_stream(request: Request, user=Depends(_require_auth)):
     """Run a workflow; paid users reserve one product price per planned step."""
     body = await request.json()
-    confirmed_quote = {
-        key: body.pop(key, None)
-        for key in ("_query_confirmed_price_path", "_query_confirmed_unit_cost", "_query_confirmed_units")
-    } if isinstance(body, dict) else {}
+    confirmed_quote = (
+        {
+            key: body.pop(key, None)
+            for key in ("_query_confirmed_price_path", "_query_confirmed_unit_cost", "_query_confirmed_units")
+        }
+        if isinstance(body, dict)
+        else {}
+    )
     try:
         from .workflows import _missing_required_fields, prepare_workflow
 
@@ -16510,19 +16882,32 @@ def _parse_batch_rows(body: dict) -> tuple[str, str, list[dict], set[str]]:
         raise ValueError("Il CSV deve contenere un’intestazione e almeno una riga di dati")
     reader = csv.DictReader(io.StringIO("\n".join(lines)))
     rows = [
-        {str(k).strip().lower(): str(v).strip() for k, v in row.items() if k and v and str(v).strip()}
-        for row in reader
+        {str(k).strip().lower(): str(v).strip() for k, v in row.items() if k and v and str(v).strip()} for row in reader
     ]
     if not rows:
         raise ValueError("Nessuna riga valida nel CSV")
 
     aliases = {
-        "p.iva": "identificativo", "piva": "identificativo", "partita_iva": "identificativo",
-        "vat": "identificativo", "organization": "identificativo", "company": "identificativo",
-        "denominazione": "identificativo", "ragione_sociale": "identificativo", "cf": "codice_fiscale",
-        "tax_code": "codice_fiscale", "province": "provincia", "municipality": "comune", "city": "comune",
-        "sheet": "foglio", "parcel": "particella", "sub": "subalterno", "type": "tipo_catasto",
-        "catasto": "tipo_catasto", "address": "indirizzo", "via": "indirizzo",
+        "p.iva": "identificativo",
+        "piva": "identificativo",
+        "partita_iva": "identificativo",
+        "vat": "identificativo",
+        "organization": "identificativo",
+        "company": "identificativo",
+        "denominazione": "identificativo",
+        "ragione_sociale": "identificativo",
+        "cf": "codice_fiscale",
+        "tax_code": "codice_fiscale",
+        "province": "provincia",
+        "municipality": "comune",
+        "city": "comune",
+        "sheet": "foglio",
+        "parcel": "particella",
+        "sub": "subalterno",
+        "type": "tipo_catasto",
+        "catasto": "tipo_catasto",
+        "address": "indirizzo",
+        "via": "indirizzo",
     }
     for row in rows:
         for alias, canonical in aliases.items():
@@ -16530,9 +16915,13 @@ def _parse_batch_rows(body: dict) -> tuple[str, str, list[dict], set[str]]:
                 row[canonical] = row.pop(alias)
 
     endpoint_map = {
-        "search": "/visura", "intestati": "/visura/intestati", "soggetto": "/visura/soggetto",
-        "persona-giuridica": "/visura/persona-giuridica", "elenco-immobili": "/visura/elenco-immobili",
-        "indirizzo": "/visura/indirizzo", "partita": "/visura/partita",
+        "search": "/visura",
+        "intestati": "/visura/intestati",
+        "soggetto": "/visura/soggetto",
+        "persona-giuridica": "/visura/persona-giuridica",
+        "elenco-immobili": "/visura/elenco-immobili",
+        "indirizzo": "/visura/indirizzo",
+        "partita": "/visura/partita",
     }
     api_path = endpoint_map.get(command, f"/visura/{command}")
     generic_commands = {form.command for form in QUERY_FORMS.values() if form.method == "generic_search"}
@@ -16560,13 +16949,14 @@ async def web_api_query_billing(request: Request, user=Depends(_require_auth)):
             "enabled": enabled,
             "admin": is_admin,
             "detail": access_error.detail if access_error is not None else None,
-            "prices": {
-                path: str(cost) for path, cost in (prices or {}).items() if path.startswith("/visura")
-            },
+            "prices": {path: str(cost) for path, cost in (prices or {}).items() if path.startswith("/visura")},
             "shared_fallback_path": purchases_billing.normalize_query_price_path(_QUERY_SHARED_PRICE_PATH),
-            "shared_fallback_cost": str(
-                (prices or {}).get(purchases_billing.normalize_query_price_path(_QUERY_SHARED_PRICE_PATH))
-            ) if (prices or {}).get(purchases_billing.normalize_query_price_path(_QUERY_SHARED_PRICE_PATH)) is not None else None,
+            "shared_fallback_cost": (
+                str((prices or {}).get(purchases_billing.normalize_query_price_path(_QUERY_SHARED_PRICE_PATH)))
+                if (prices or {}).get(purchases_billing.normalize_query_price_path(_QUERY_SHARED_PRICE_PATH))
+                is not None
+                else None
+            ),
             "balance": balance,
             "batch_basis": "per_row_command_price_or_shared_fallback",
             "workflow_basis": "shared_fallback_per_planned_step",
@@ -16626,7 +17016,9 @@ async def web_api_query_quote(request: Request, user=Depends(_require_auth)):
     if access_error is not None:
         return JSONResponse({"detail": access_error.detail}, status_code=access_error.status_code)
     cost, matched_price_path = (
-        await _query_product_price(cost_path, allow_shared_fallback=allow_shared_fallback) if cost_path else (None, None)
+        await _query_product_price(cost_path, allow_shared_fallback=allow_shared_fallback)
+        if cost_path
+        else (None, None)
     )
     balance = None
     if not _is_admin(user):
