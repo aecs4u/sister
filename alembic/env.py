@@ -5,7 +5,7 @@ import sys
 from logging.config import fileConfig
 from pathlib import Path
 
-from sqlalchemy import engine_from_config, pool
+from sqlalchemy import engine_from_config, event, pool
 from sqlalchemy.engine import make_url
 from sqlmodel import SQLModel
 
@@ -145,6 +145,7 @@ if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
 target_metadata = SQLModel.metadata
+SISTER_SCHEMA = os.getenv("DATABASE_SCHEMA", "sister")
 
 
 def run_migrations_offline() -> None:
@@ -154,6 +155,7 @@ def run_migrations_offline() -> None:
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
+        version_table_schema=SISTER_SCHEMA,
     )
     with context.begin_transaction():
         context.run_migrations()
@@ -165,14 +167,22 @@ def run_migrations_online() -> None:
         prefix="sqlalchemy.",
         poolclass=pool.NullPool,
     )
+
+    def set_search_path(connection) -> None:
+        quoted_schema = connection.dialect.identifier_preparer.quote_schema(SISTER_SCHEMA)
+        connection.exec_driver_sql(f"SET LOCAL search_path TO {quoted_schema}, public")
+
+    event.listen(connectable, "begin", set_search_path)
+
     with connectable.connect() as connection:
         context.configure(
             connection=connection,
             target_metadata=target_metadata,
-            sister_schema=os.getenv("DATABASE_SCHEMA", "sister"),
+            sister_schema=SISTER_SCHEMA,
             istat_schema=os.getenv(
-                "DATABASE_ISTAT_SCHEMA", os.getenv("DATABASE_SCHEMA", "sister")
+                "DATABASE_ISTAT_SCHEMA", SISTER_SCHEMA
             ),
+            version_table_schema=SISTER_SCHEMA,
         )
         with context.begin_transaction():
             context.run_migrations()
