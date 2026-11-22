@@ -360,9 +360,8 @@ def test_persons_index_render_exposes_live_burdens_card_and_column():
     from pathlib import Path
     from types import SimpleNamespace
 
-    from jinja2 import ChoiceLoader, DictLoader, Environment, FileSystemLoader, PrefixLoader
-
     import aecs4u_theme
+    from jinja2 import ChoiceLoader, DictLoader, Environment, FileSystemLoader, PrefixLoader
 
     sister_root = Path(__file__).resolve().parents[1] / "sister"
     templates = sister_root / "templates"
@@ -388,7 +387,7 @@ def test_persons_index_render_exposes_live_burdens_card_and_column():
     )
     env.globals["_"] = lambda message: message
     html = env.get_template("aecs4u_theme/subject_index.html").render(
-        request=SimpleNamespace(url=SimpleNamespace(path="/persons")),
+        request=SimpleNamespace(url=SimpleNamespace(path="/persons"), state=SimpleNamespace(user=None)),
         kind="person",
         kind_label="Persone",
         route="/persons",

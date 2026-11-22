@@ -263,8 +263,14 @@ def cache_dir(monkeypatch, tmp_path):
 def _fake_fetch(monkeypatch, calls, rows=None, context=None):
     async def fake(code, zone):
         calls.append((code, zone))
-        return {"format": overview.CACHE_FORMAT, "saved_at": __import__("time").time(),
-                "rows": rows if rows is not None else [row(2024, 1)], "ntn": [], "context": context}
+        return {
+            "format": overview.CACHE_FORMAT,
+            "saved_at": __import__("time").time(),
+            "rows": rows if rows is not None else [row(2024, 1)],
+            "ntn": [],
+            "benchmarks": [],
+            "context": context,
+        }
 
     monkeypatch.setattr(overview, "_fetch_payload", fake)
 

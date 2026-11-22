@@ -126,6 +126,27 @@
     ]
   },
   {
+    "path": "sister app import-local-users",
+    "params": [
+      {
+        "name": "file",
+        "flags": [
+          "--file"
+        ],
+        "required": false,
+        "hidden": false
+      },
+      {
+        "name": "apply",
+        "flags": [
+          "--apply"
+        ],
+        "required": false,
+        "hidden": false
+      }
+    ]
+  },
+  {
     "path": "sister app login",
     "params": [
       {
@@ -1308,6 +1329,20 @@
         "name": "workers",
         "flags": [
           "--workers"
+        ],
+        "required": false,
+        "hidden": false
+      }
+    ]
+  },
+  {
+    "path": "sister documents sync-gcs",
+    "params": [
+      {
+        "name": "dry_run",
+        "flags": [
+          "--dry-run",
+          "--apply"
         ],
         "required": false,
         "hidden": false

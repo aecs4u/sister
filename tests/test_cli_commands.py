@@ -1,6 +1,7 @@
 """Command-level tests for CLI surfaces not covered by the main query flow suite."""
 
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -13,6 +14,11 @@ from sister.cli import app
 from sister.query_forms import QUERY_FORMS, option_flags
 
 runner = CliRunner()
+
+
+def _plain(output):
+    """Remove Rich's ANSI color codes before checking CLI text."""
+    return re.sub(r"\x1b\[[0-9;]*m", "", output)
 
 
 def _dry_run_arguments(form):
@@ -111,7 +117,7 @@ def test_legacy_sub_flag_is_hidden_and_still_fills_subalterno():
 
     from typer.main import get_command
 
-    help_text = runner.invoke(app, ["query", "intestati", "--help"]).output
+    help_text = _plain(runner.invoke(app, ["query", "intestati", "--help"]).output)
     assert "--subalterno" in help_text
     query = get_command(app).commands["query"]
     intestati = query.commands["intestati"]
@@ -181,7 +187,7 @@ def test_run_session_internal_cli_contract_is_pinned():
         check=False,
     )
     assert result.returncode == 0, result.stderr
-    assert "Usage: python -m sister.cli" in result.stdout
+    assert "Usage: python -m sister.cli" in _plain(result.stdout)
 
 
 def test_run_session_batch_child_uses_output_dir_for_resume(monkeypatch, tmp_path):
@@ -256,8 +262,9 @@ def test_batch_run_session_help_is_typer_help():
     result = runner.invoke(app, ["batch", "run-session", "--help"])
 
     assert result.exit_code == 0, result.output
-    assert "Usage: sister batch run-session" in result.output
-    assert "--stop-stale-service" in result.output
+    output = _plain(result.output)
+    assert "Usage: sister batch run-session" in output
+    assert "--stop-stale-service" in output
 
 
 def test_batch_progress_uses_in_process_run_function(monkeypatch, tmp_path):
@@ -282,8 +289,9 @@ def test_batch_progress_help_is_typer_help():
     result = runner.invoke(app, ["batch", "progress", "--help"])
 
     assert result.exit_code == 0, result.output
-    assert "Usage: sister batch progress" in result.output
-    assert "--once" in result.output
+    output = _plain(result.output)
+    assert "Usage: sister batch progress" in output
+    assert "--once" in output
 
 
 def test_batch_build_list_uses_in_process_run_function(monkeypatch, tmp_path):
@@ -568,6 +576,7 @@ def test_document_maintenance_commands_call_run_with_dry_run_default(monkeypatch
 
 
 def test_documents_import_calls_async_run_in_process(monkeypatch, tmp_path):
+    from sister import database
     from sister.command_tools import import_documents
 
     calls = []
@@ -576,7 +585,11 @@ def test_documents_import_calls_async_run_in_process(monkeypatch, tmp_path):
         calls.append(kwargs)
         return 0
 
+    async def fake_init_db():
+        return None
+
     monkeypatch.setattr(import_documents, "run", fake_run)
+    monkeypatch.setattr(database, "init_db", fake_init_db)
     documents = tmp_path / "documents"
     result = runner.invoke(app, ["documents", "import", "--documents", str(documents)])
 
@@ -1252,7 +1265,7 @@ def test_workflow_paid_deep_run_requires_confirmation_before_request(monkeypatch
     )
 
     assert result.exit_code == 2, result.output
-    assert "--depth deep con --include-paid richiede --confirm-paid" in result.output
+    assert "--depth deep con --include-paid richiede --confirm-paid" in _plain(result.output)
     assert calls == []
 
 
@@ -1260,8 +1273,9 @@ def test_workflow_help_hides_legacy_paid_confirmation_flag():
     result = runner.invoke(app, ["query", "workflow", "--help"])
 
     assert result.exit_code == 0, result.output
-    assert "--confirm-paid" in result.output
-    assert "--yes" not in result.output
+    output = _plain(result.output)
+    assert "--confirm-paid" in output
+    assert "--yes" not in output
 
 
 def test_workflow_preset_submission_formats_results_and_writes_output(monkeypatch, tmp_path):

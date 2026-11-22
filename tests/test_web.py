@@ -1364,37 +1364,29 @@ class TestCountTotalResultRows:
 
 
 class TestIsDbWritable:
-    """Database write-mode detection."""
+    """PostgreSQL persistence and read-only mode detection."""
 
-    def test_writable_path(self, tmp_path):
+    def test_postgresql_configuration_is_writable(self, monkeypatch):
         from sister import database
 
-        db_file = tmp_path / "test.sqlite"
-        db_file.touch()
-        old = database._db_writable
-        database._db_writable = None  # reset cache
-        database.DB_PATH = str(db_file)
-        try:
-            assert database.is_db_writable() is True
-        finally:
-            database._db_writable = old
+        monkeypatch.setattr(database, "_db_writable", None)
+        monkeypatch.setattr(database, "DATABASE_DSN", "postgresql://test@localhost/sister_test")
+        monkeypatch.delenv("SISTER_DATABASE_READ_ONLY", raising=False)
+        assert database.is_db_writable() is True
 
-    def test_nonexistent_writable_parent(self, tmp_path):
+    def test_missing_database_dsn_is_not_writable(self, monkeypatch):
         from sister import database
 
-        old = database._db_writable
-        database._db_writable = None
-        database.DB_PATH = str(tmp_path / "new.sqlite")
-        try:
-            assert database.is_db_writable() is True
-        finally:
-            database._db_writable = old
+        monkeypatch.setattr(database, "_db_writable", None)
+        monkeypatch.setattr(database, "DATABASE_DSN", None)
+        monkeypatch.delenv("SISTER_DATABASE_READ_ONLY", raising=False)
+        assert database.is_db_writable() is False
 
 
 @pytest.mark.asyncio
 async def test_building_3d_geocodes_the_address_and_builds_a_google_earth_link(monkeypatch):
     async def _geocode(query):
-        assert query == "Via El Alamein, 48124 Ravenna"
+        assert query == "Via El Alamein, 48124 Ravenna, Italia"
         return {"lat": 44.406153, "lng": 12.196336, "label": "Via El Alamein, Ravenna", "kind": "residential"}
 
     monkeypatch.setattr(web, "_geocode_address", _geocode)
@@ -1571,7 +1563,7 @@ def test_quick_reference_help_and_browser_titles_are_italian(main_module, monkey
     assert "Browser Control" not in browser.text
 
 
-def test_direct_theme_sister_pages_hide_unsupported_language_controls(main_module, monkeypatch):
+def test_direct_theme_sister_pages_expose_only_supported_language_options(main_module, monkeypatch):
     from fastapi.testclient import TestClient
 
     user = SimpleNamespace(id="language-test", role="user", is_superuser=False)
@@ -1587,8 +1579,10 @@ def test_direct_theme_sister_pages_hide_unsupported_language_controls(main_modul
     assert ">About</a>" not in landing.text
     assert ">Informazioni</a>" in landing.text
     for response in (landing, privacy, settings):
-        assert "Seleziona lingua" not in response.text
-        assert "?lang=" not in response.text
+        assert 'title="Seleziona lingua"' in response.text
+        assert "?lang=it" in response.text and "?lang=en" in response.text
+        for code in ("de", "fr", "es"):
+            assert f"?lang={code}" not in response.text
     assert 'for="language"' in settings.text and 'id="language"' in settings.text
     assert 'href="/static/css/sister.css?v=20261030e"' in settings.text
     assert '#general .mb-3:has(> label[for="language"]) { display: none !important; }' in settings_css.text

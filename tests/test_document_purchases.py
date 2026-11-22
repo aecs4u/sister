@@ -407,6 +407,7 @@ async def test_credits_are_off_without_a_cost_or_a_durable_wallet(monkeypatch):
 
     for name in ("SISTER_DOCUMENT_CREDITS", "REDIS_URL", "SISTER_WALLET_ALLOW_VOLATILE", "SISTER_WALLET_STORAGE"):
         monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr(database, "DATABASE_DSN", "postgresql://test@localhost/sister_test")
     assert pb.credits_enabled() is False and await pb.pay_with_credits("id:a", 1) == "disabled"  # no cost set
     monkeypatch.setenv("SISTER_DOCUMENT_CREDITS", "10")
     assert pb.wallet_backend() == "sql" and pb.credits_enabled() is True  # SISTER's own PostgreSQL is the default wallet

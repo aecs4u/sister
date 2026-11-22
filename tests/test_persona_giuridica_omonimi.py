@@ -1,7 +1,6 @@
 """Persona giuridica: a code with many registry records is read record by record and appended into one result."""
 
 import asyncio
-
 import types
 
 import pytest
@@ -32,7 +31,16 @@ def portal(monkeypatch):
     async def search(page, identificativo, **kwargs):
         return state["search"]
 
-    async def immobili(page, identificativo, tipo_catasto="E", provincia=None, con_intestati=False, azienda=False, omonimo_index=0):
+    async def immobili(
+        page,
+        identificativo,
+        tipo_catasto="E",
+        provincia=None,
+        con_intestati=False,
+        azienda=False,
+        omonimo_index=0,
+        **kwargs,
+    ):
         calls.append(omonimo_index)
         if omonimo_index in state["fail"]:
             raise Exception(state["fail"][omonimo_index])
