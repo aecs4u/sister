@@ -209,7 +209,28 @@ def _get_engine():
                 }
             },
         )
+        _install_search_path(_engine, url)
     return _engine
+
+
+def _install_search_path(engine, url) -> None:
+    """Put the SISTER schema first on the search path of every transaction.
+
+    The ORM tables (SISTER's and the canonical aecs4u-auth ``users`` table) are not schema-qualified. A DSN
+    ``options=-csearch_path=...`` is rejected by Neon's PgBouncer pooler, and its role/database search_path is not
+    applied through it, so unqualified names failed in production (``relation "users" does not exist``).
+    ``SET LOCAL`` lasts one transaction, which is what transaction pooling allows. A DSN that carries its own
+    ``options`` (tests, direct connections) is left alone.
+    """
+    if "options" in url.query:
+        return
+    from sqlalchemy import event
+
+    def _set_search_path(conn) -> None:
+        quoted = conn.dialect.identifier_preparer.quote_schema(DATABASE_SCHEMA)
+        conn.exec_driver_sql(f"SET LOCAL search_path TO {quoted}, public")
+
+    event.listen(engine.sync_engine, "begin", _set_search_path)
 
 
 def _get_session_factory():
